@@ -14,4 +14,7 @@ Planned contents:
 - `analyzer/` — RTPS Analyzer (sniffer) integration + the JSON-Schema event contract.
 - `observability/` — RTI Observability collector-service + Grafana dashboards config.
 
-See [../docs/EMANE_SIMULATION_PLAN.md](../docs/EMANE_SIMULATION_PLAN.md) §2.5–2.8.
+See the plan [overview](../docs/EMANE_SIMULATION_PLAN.md) — most relevant here:
+[scope.md](../docs/scope.md) (this product: inspector, GUI B, viz),
+[sniffer.md](../docs/sniffer.md) (event contract + decode placement), and
+[architecture.md](../docs/architecture.md) (component map, tech stack, repo layout).

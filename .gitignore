@@ -24,3 +24,6 @@ rti_license.dat
 .vscode/
 .idea/
 .DS_Store
+
+# Reference repos (external, kept locally for analysis — not committed)
+references/

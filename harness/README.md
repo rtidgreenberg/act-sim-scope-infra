@@ -19,6 +19,10 @@ Planned contents:
 - `scenarios/` — S1–S6 definitions.
 
 > ⚠️ The current `docker/` + `compose/` files are early drafts and **not yet buildable** —
-> they predate the ACT-submodule + `overrides/` layout. See plan §2.4.
+> they predate the ACT-submodule + `overrides/` layout. See
+> [architecture.md](../docs/architecture.md) §2.4.
 
-See [../docs/EMANE_SIMULATION_PLAN.md](../docs/EMANE_SIMULATION_PLAN.md).
+See the plan [overview](../docs/EMANE_SIMULATION_PLAN.md) — most relevant here:
+[test-harness.md](../docs/test-harness.md) (this product: topology, node anatomy, control plane, QoS gaps),
+[roadmap.md](../docs/roadmap.md) (phased execution, milestones), and
+[architecture.md](../docs/architecture.md) (repo/override strategy).
