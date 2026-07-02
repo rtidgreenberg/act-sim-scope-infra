@@ -1,0 +1,53 @@
+# ACT — M0 bring-up: DDS node stack in containers over a PLAIN bridge (no EMANE yet).
+# Goal: prove Routing Service + Python sims discover and exchange all topics
+# inside containers before adding RF emulation (Phase 1).
+#
+# Usage (from repo root):
+#   export RTI_LICENSE_FILE=/absolute/path/to/rti_license.dat
+#   docker compose -f sim/compose/docker-compose.yml up --build
+#
+# NOTE: multicast discovery (LAN 239.255.0.1 / WAN 239.255.0.2) works on a single
+# user-defined bridge network. Phase 1 replaces the WAN path with an EMANE emane0 TAP.
+
+x-node: &node
+  build:
+    context: ../..
+    dockerfile: sim/docker/Dockerfile.node
+  image: act-node:latest
+  volumes:
+    # License mounted read-only; path inside image matches the rticom base workspace.
+    - ${RTI_LICENSE_FILE:?set RTI_LICENSE_FILE to your rti_license.dat}:/rti_license.dat:ro
+  environment:
+    RTI_LICENSE_FILE: /rti_license.dat
+    SIM_VERBOSITY: "2"
+  networks: [act_wan]
+  restart: unless-stopped
+
+services:
+  control-20:
+    <<: *node
+    container_name: act-control-20
+    environment:
+      RTI_LICENSE_FILE: /rti_license.dat
+      ROLE: control
+      ID: "20"
+
+  platform-30:
+    <<: *node
+    container_name: act-platform-30
+    environment:
+      RTI_LICENSE_FILE: /rti_license.dat
+      ROLE: platform
+      ID: "30"
+
+  platform-31:
+    <<: *node
+    container_name: act-platform-31
+    environment:
+      RTI_LICENSE_FILE: /rti_license.dat
+      ROLE: platform
+      ID: "31"
+
+networks:
+  act_wan:
+    driver: bridge

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / web
+node_modules/
+dist/
+
+# Docker / build
+*.log
+
+# EMANE / captures
+*.pcap
+*.pcapng
+*.eel.out
+
+# RTI
+rti_license.dat
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,41 @@
+# ACT remote-admin image (scenario S3: runtime team CRUD / detail-status enable).
+#
+# The remote_admin tool is C++ and must be COMPILED against the full Connext SDK
+# (headers, libs, rtiddsgen) — which the rticom/routing-service runtime image does
+# NOT include. So we build it in a stage that has the RTI *Debian dev packages*
+# (license-gated apt token), then copy just the binary into a thin runtime stage.
+#
+# Build:
+#   docker build -f sim/docker/Dockerfile.remote-admin \
+#     --build-arg RTI_APT_TOKEN=<license-gated-token> \
+#     -t act-remote-admin:latest .
+#
+# Run (ephemeral, on the admin network):
+#   docker run --rm --network <admin-net> act-remote-admin \
+#     -n Platform_30 -t A          # assign Platform_30 to team A
+#
+# NOTE: only needed for S3. M0/M1 baseline do not require this image.
+
+# ---------- builder: full RTI SDK via Debian dev packages -------------------
+FROM ubuntu:22.04 AS builder
+ARG RTI_APT_TOKEN
+ARG RTI_VERSION=7.3.0
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg cmake g++ make \
+    && rm -rf /var/lib/apt/lists/*
+# TODO(dgreenberg): add RTI apt repo (uses RTI_APT_TOKEN) and install the dev
+# packages that provide headers + libs + rtiddsgen, e.g.:
+#   rti-connext-dds-<ver>  (core + host tools)
+# Confirm exact names from the RTI Debian Packages manual.
+ENV NDDSHOME=/opt/rti.com/rti_connext_dds-${RTI_VERSION}
+COPY tools/remote_admin /src/remote_admin
+# RUN cmake -S /src/remote_admin -B /src/remote_admin/build && \
+#     cmake --build /src/remote_admin/build
+
+# ---------- runtime: thin, runtime libs only --------------------------------
+FROM rticom/routing-service:latest
+COPY --from=builder /src/remote_admin/build/RemoteAdmin /usr/local/bin/RemoteAdmin
+COPY tools/remote_admin/send_remote_cmd.sh /usr/local/bin/send_remote_cmd.sh
+COPY config/qos/remoteadmin_qos_lib.xml /act/config/qos/remoteadmin_qos_lib.xml
+ENTRYPOINT ["/usr/local/bin/send_remote_cmd.sh"]

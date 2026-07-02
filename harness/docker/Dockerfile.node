@@ -1,0 +1,45 @@
+# ACT node image
+# Runs one ACT node: RTI Routing Service + Python simulator (M0), and later EMANE.
+# Role (platform|control) is selected at runtime via the ROLE env var.
+#
+# Base: official RTI Routing Service image (Routing Service + NDDSHOME preconfigured).
+# Python API is added via the self-contained `rti.connext` pip wheel.
+# No RTI Debian packages / license-gated apt token needed — the runtime license
+# (rti_license.dat) is MOUNTED at run time (see docker-compose.yml).
+#
+# Build:
+#   docker build -f sim/docker/Dockerfile.node -t act-node:latest .
+#
+# TODO(dgreenberg): pin the base tag to the Connext 7.3.0 release and confirm its
+# underlying OS is Ubuntu 22.04 (Jammy) so EMANE .debs match in Phase 1.
+
+FROM rticom/routing-service:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+USER root
+
+# --- Tooling + Python DDS API ----------------------------------------------
+# gettext-base = envsubst (config templating); iproute2/iputils = net debugging.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip iproute2 iputils-ping gettext-base tini \
+    && pip3 install --no-cache-dir rti.connext \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- EMANE (Phase 1 — commented out for M0 plain-bridge bring-up) -----------
+# Install from adjacentlink/emane jammy release .debs:
+#   emane core + emane-model-rfpipe + emane transport daemon.
+# RUN curl -L <release-url>/emane-<ver>-release-1.ubuntu-22_04.amd64.tar.gz -o /tmp/e.tgz \
+#     && tar -C /tmp -xzf /tmp/e.tgz && dpkg -i /tmp/**/deb/ubuntu-22_04/amd64/*.deb ; \
+#        apt-get -f install -y
+
+# --- ACT repo content -------------------------------------------------------
+WORKDIR /act
+COPY config/    ./config/
+COPY params/    ./params/
+COPY node_sim/  ./node_sim/
+COPY scripts/   ./scripts/
+COPY sim/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh scripts/*.sh
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
