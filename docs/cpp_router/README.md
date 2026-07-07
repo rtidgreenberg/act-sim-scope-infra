@@ -14,6 +14,7 @@
 - [Code Architecture](code-architecture.md): C++ ownership model, controller/state design, AsyncWaitSet architecture, modules, and concurrency rules.
 - [Runtime Behavior](runtime-behavior.md): startup, discovery-driven route activation, dynamic readers/writers, forwarding, and instance-state mirroring.
 - [Implementation Plan](implementation-plan.md): phased implementation slices, tests, acceptance criteria, open questions, and roadmap relationship.
+- [Design Decisions Log](design-decisions.md): running per-phase decision log (starts where the tenets stop) — currently the Phase 1 contract: state model, transition table, revisioning, idempotency, and test seams (D1–D7).
 - [Connext Investigation Review](connext-investigation-review.md): Connext 7.7 API findings, design decisions, concerns, required spikes, and confidence updates.
 - [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
 - [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.

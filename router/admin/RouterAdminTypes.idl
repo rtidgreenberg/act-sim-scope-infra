@@ -1,0 +1,107 @@
+// RouterAdminTypes.idl — generated admin command/status types for the ACT C++ router.
+//
+// Transcribed from docs/cpp_router/command-status.md "Admin IDL Sketch" (authoritative).
+// These types ride the router's LAN-local participant (control plane is LAN-local;
+// see command-status.md) and are generated + loaded on both ends independently of the
+// ACT payload XML.
+//
+// Keying: RouterStatus is keyed by (target_node, target_router) so each router instance
+// is one instance on the status topic. Key idiom (@key on its own line, string keys)
+// matches the proven spikes (spikes/isc_recovery/IscState.idl, relay/cpp/ActState.idl).
+//
+// No IDL module wrapper: the sketch uses bare type names and status text refers to them
+// as such; kept flat to minimize divergence from the authoritative spec for this POC.
+
+enum RouterCommandKind {
+    ENABLE_ROUTE,
+    DISABLE_ROUTE,
+    UPDATE_ROUTE,
+    SET_PARTICIPANT_PARTITION,
+    DESCRIBE
+};
+
+enum RouterRouteOperationalState {
+    ROUTE_DISABLED,
+    ROUTE_WAITING_FOR_DISCOVERY,
+    ROUTE_RESOLVING,
+    ROUTE_ENABLED,
+    ROUTE_DEGRADED,
+    ROUTE_ERROR
+};
+
+struct RouterRouteTopicSpec {
+    string name;
+    string reader_qos;
+    string writer_qos;
+};
+
+struct RouterRouteEndpointSpec {
+    string participant;
+    string subscriber_partition;
+    string publisher_partition;
+    string reader_qos;
+    string writer_qos;
+    string filter_expression;
+    sequence<string> filter_parameters;
+};
+
+struct RouterRouteSpec {
+    string route_name;
+    boolean desired_enabled;
+    string forwarding_mode;
+    RouterRouteEndpointSpec input;
+    RouterRouteEndpointSpec output;
+    sequence<RouterRouteTopicSpec> topics;
+    boolean mirror_instance_state;
+    sequence<string> key_fields;
+};
+
+struct RouterCommand {
+    string target_node;
+    string target_router;
+    string command_id;
+    RouterCommandKind kind;
+    string route_name;
+    RouterRouteSpec route;
+    string payload_json;
+};
+
+struct RouterCommandAck {
+    string target_node;
+    string target_router;
+    string command_id;
+    string route_name;
+    boolean accepted;
+    string message;
+};
+
+struct RouterRouteStatus {
+    string route_name;
+    RouterRouteSpec desired;
+    RouterRouteOperationalState state;
+    string state_revision;
+    string caused_by_command_id;
+    uint64 samples_forwarded;
+    uint64 lifecycle_events_forwarded;
+    string last_error;
+};
+
+struct RouterParticipantStatus {
+    string name;
+    int32 domain;
+    string participant_partition;
+    string qos_profile_alias;
+};
+
+struct RouterStatus {
+    @key
+    string target_node;
+    @key
+    string target_router;
+    uint32 router_id;
+    string status_id;
+    string caused_by_command_id;
+    string state_revision;
+    sequence<RouterParticipantStatus> participants;
+    sequence<RouterRouteStatus> routes;
+};

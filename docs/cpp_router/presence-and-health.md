@@ -26,8 +26,13 @@ The single liveliness-bearing WAN topic. It lives on the **WAN participant** (me
 needs cross-WAN visibility) — distinct from the LAN-local admin command/status plane.
 
 - **Key:** `router_id`.
-- **Payload:** `router_id`, `node_name`, `role`, `heartbeat_seq`, `send_timestamp`, optional
-  brief status.
+- **Payload (compact summary — deliberately WAN-frugal):** `router_id`, `node_name`, `role`,
+  `heartbeat_seq`, `send_timestamp`, `state_revision` (matches the router's own `RouterStatus`
+  revision), and a rollup: `n_routes`, `n_degraded`, `n_error`, `overall_state`
+  (`ROUTER_OK` / `ROUTER_DEGRADED` / `ROUTER_ERROR`). It carries **summary** status, **not** the
+  full route table — full per-route detail stays on the LAN plane. This resolves the old "echo
+  status in the health payload?" open choice: **yes, but summary-only**, so the sample stays
+  small and scales safely with mesh size across a lossy/constrained WAN.
 - **QoS:** `RELIABLE`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (late joiners get last state),
   `DEADLINE ≈ 1.5–2×` heartbeat period, `LIVELINESS = AUTOMATIC` with a finite lease
   (≈ 2–3× period). Periodic heartbeat write (e.g. 1 s).
@@ -59,18 +64,40 @@ Each router **publishes** its own `RouterHealth` heartbeat and **subscribes** to
 build a mesh view:
 
 ```
-peer[router_id] = { node, role, last_seq, last_heartbeat_ts, state }
+peer[router_id] = { node, role, last_seq, last_heartbeat_ts, state,
+                    state_revision, n_routes, n_degraded, n_error, overall_state }
 state ∈ { ALIVE, STALE, DEAD }
   ALIVE  heartbeats fresh, liveliness ok
   STALE  liveliness ok but heartbeat delta > staleness threshold  (deadline missed)
   DEAD   liveliness lost / participant purged / NOT_ALIVE_NO_WRITERS
 ```
 
+Each peer entry keeps the last **compact summary** heard on `RouterHealth` (identity + presence
++ the rollup) — not the peer's full route table.
+
 - `on_liveliness_changed` / instance `NOT_ALIVE_NO_WRITERS` → mark `DEAD`.
 - `on_requested_deadline_missed` / `now - last_heartbeat_ts > threshold` → mark `STALE`.
-- The roster (connected routers, each with `state`, `last_seen`, and the **time delta since
-  last heartbeat**) is surfaced in **`RouterStatus`** (LAN admin plane) for local
-  observability — consistent with the decision that the control/status plane is LAN-local.
+
+## Aggregate mesh view, published over the LAN
+
+Each router **aggregates** every peer's compact `RouterHealth` summary into the roster above and
+**republishes the whole connected-router list over its LAN** on a dedicated topic,
+**`ActRouterMeshStatus`** — the "who's connected" view for local consumers/dashboards. This is
+distinct from the per-router `ActRouterStatus` (this router's own detailed route table):
+
+| Topic | Plane | Contents | Why here |
+|---|---|---|---|
+| `RouterHealth` | WAN | one compact summary per router (this router publishes its own) | single cross-link presence + summary signal; small on the constrained WAN |
+| `ActRouterStatus` | LAN | this router's own full route/participant detail | LAN-local control plane, WAN-independent |
+| `ActRouterMeshStatus` | LAN | aggregated list of **all** connected routers' summaries + presence | local mesh observability; LAN is unconstrained so the full peer list is cheap here |
+
+- The mesh-status sample carries, per connected router: identity, `presence` (`ALIVE`/`STALE`/
+  `DEAD`), `last_seen_delta`, and the compact rollup (`state_revision`, `n_routes`, `n_degraded`,
+  `n_error`, `overall_state`). Full per-route detail for a *specific* peer is obtained by asking
+  that peer's router directly (its own LAN `ActRouterStatus`) or over a future WAN remote-admin
+  channel — it is **not** fanned out over the WAN.
+- The aggregate is republished on roster change (peer appears/disappears, presence transition,
+  or a peer's `state_revision` advances), so LAN consumers see a coherent mesh snapshot per write.
 
 ## Interaction with instance state
 
@@ -194,17 +221,66 @@ may be logged for diagnostics — never crossing the WAN, never driving cross-li
 
 Either way it is a local diagnostic only; cross-link presence remains the `RouterHealth` topic.
 
+## Health/mesh IDL sketch
+
+Generated alongside `RouterAdminTypes.idl` (see [command-status.md](command-status.md)); wired
+in during the presence phase, after the P0–P3 core exists.
+
+```idl
+enum RouterOverallState { ROUTER_OK, ROUTER_DEGRADED, ROUTER_ERROR };
+enum RouterPresenceState { PRESENCE_ALIVE, PRESENCE_STALE, PRESENCE_DEAD };
+
+// WAN: one compact, liveliness-bearing summary per router. Small on purpose.
+struct RouterHealth {
+    @key
+    uint32 router_id;
+    string node_name;
+    string role;
+    uint64 heartbeat_seq;
+    int64  send_timestamp;      // ns since epoch
+    string state_revision;      // matches this router's RouterStatus revision
+    uint32 n_routes;
+    uint32 n_degraded;
+    uint32 n_error;
+    RouterOverallState overall_state;
+};
+
+// LAN: this router's aggregated view of every connected peer (the "connected router list").
+struct RouterMeshPeer {
+    RouterHealth        health;              // last compact summary heard from the peer
+    RouterPresenceState presence;
+    int64               last_seen_delta_ms;  // now - last_heartbeat_ts
+};
+
+struct RouterMeshStatus {
+    @key
+    string observer_node;       // the router publishing this aggregate
+    @key
+    string observer_router;
+    string state_revision;      // bumps when the roster changes
+    sequence<RouterMeshPeer> peers;
+};
+```
+
 ## Open choices
 
 - Heartbeat period and lease/deadline/participant-discovery numbers (demo vs. production).
 - Whether STALE should ever escalate to a forced teardown after a longer timeout.
-- Whether the roster is echoed in the `RouterHealth` payload (so peers see each other's views)
-  in addition to `RouterStatus`.
+- ~~Whether the roster is echoed in the `RouterHealth` payload in addition to `RouterStatus`.~~
+  **Resolved:** `RouterHealth` carries a **compact summary** (not full status); each router
+  aggregates peers' summaries and republishes the connected-router list on the LAN
+  `ActRouterMeshStatus` topic. Residual: whether a router's *aggregate mesh view* should also be
+  echoed over the WAN (so peers see each other's views), or stay LAN-local — currently LAN-local.
 
 ## Where it fits the build
 
-New admin/health types (`RouterHealth`) generated alongside `RouterAdminTypes.idl`. Presence
-tracking + roster is a small module feeding `RouterStatus`. Recommend proving it in a spike
-(N `RouterHealth` publishers on the WAN participant; kill one; confirm peers mark it DEAD with
-the right delta and that participant purge drives `NO_WRITERS` on a co-tested data topic)
-before wiring into the router — after the P0–P3 core exists.
+New health/mesh types (`RouterHealth`, `RouterMeshStatus`) generated alongside
+`RouterAdminTypes.idl`. The `PresenceMonitor` module (see
+[code-architecture.md](code-architecture.md)) publishes this router's compact `RouterHealth`
+over the WAN, subscribes to peers', maintains the roster, and publishes the aggregated
+`ActRouterMeshStatus` over the LAN; the roster also feeds presence-driven reset (Tenet 5).
+Recommend proving it in a spike (N `RouterHealth` publishers on the WAN participant; kill one;
+confirm peers mark it DEAD with the right delta, that the LAN `ActRouterMeshStatus` aggregate
+updates, and that participant purge drives `NO_WRITERS` on a co-tested data topic) before wiring
+into the router — after the P0–P3 core exists. Per project convention, that spike's driver and
+kill/verify tooling are Python.

@@ -97,8 +97,11 @@ Config implications:
 
 - The WAN participant QoS must set `resource_limits.type_object_max_serialized_length` to
   `LENGTH_AUTO` (not `0` — `0` disables TypeObject v2 entirely) and keep
-  `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. This is a
-  required edit to ACT `wan_qos_lib.xml`, which currently sets the value to `0`.
+  `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. The relay
+  ships this in **its own** WAN QoS library rather than editing ACT: the ACT submodule's
+  `wan_qos_lib.xml` (which sets the value to `0`) is left untouched for now, and reconciling
+  it is deferred to a single later pass. The relay QoS library takes precedence for the
+  relay's own participants.
 - Leave `type_code_max_serialized_length = 0` (legacy TypeCode, not used by v2).
 - Do **not** set `request_types_filter` to `*` on the WAN participant — the router is a type
   *source*, not a learner, so proactive fetching is unnecessary and only adds WAN traffic.

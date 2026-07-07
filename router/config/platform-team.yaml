@@ -1,0 +1,51 @@
+# platform-team router config (sample) — loaded by the `platform-team` router instance
+# on platform nodes. Defines concrete platform-to-platform team routes through team_wan;
+# team scope is set by team_wan.participant_partition (SET_PARTICIPANT_PARTITION).
+#
+# Source: docs/cpp_router/configuration.md "Platform/Team Config Example" (authoritative).
+# Phase 0 only reads node.* and router.* (identity).
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 30
+  name: platform-30-team
+  config_set: platform-team
+  default_forwarding_mode: dynamic_data
+
+participants:
+  platform_lan:
+    role: platform
+    domain: 30
+  team_wan:
+    role: platform
+    domain: 200
+    qos: platform_wan_udpv4_qos
+    participant_partition: PLATFORM_30
+
+routes:
+  - name: platform_team_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    input:
+      participant: platform_lan
+    output:
+      participant: team_wan
+      writer_qos: wan_status
+      publisher_partition: inherit_participant
+    topics:
+      - name: PlatformData
+
+  - name: wan_team_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    input:
+      participant: team_wan
+      reader_qos: wan_status
+      subscriber_partition: inherit_participant
+    output:
+      participant: platform_lan
+    topics:
+      - name: PlatformData

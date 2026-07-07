@@ -1,0 +1,149 @@
+# control-platform router config (sample) — loaded by the `control-platform` router
+# instance on the control node AND on each platform node. Each logical control/platform
+# route is defined once; the local node.role selects source_side vs destination_side.
+#
+# Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
+# Phase 0 only reads node.* and router.* (identity). The route/QoS/participant sections
+# below are the shipped shape for later phases and are not parsed yet.
+
+node:
+  name: Platform_30
+  role: platform   # control or platform
+
+router:
+  id: 30
+  name: platform-30-control-platform
+  config_set: control-platform
+  default_forwarding_mode: dynamic_data
+
+control:
+  domain: 100
+  command_topic: ActRouterCommand
+  status_topic: ActRouterStatus
+  target_node: Platform_30
+  target_router: platform-30-control-platform
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+qos_libraries:
+  - harness/act/config/qos/lan_qos_lib.xml
+  - harness/act/config/qos/wan_qos_lib.xml
+  - relay/qos_isc.xml
+
+qos_profiles:
+  control_wan_udpv4_qos: WAN_QOS_LIB::control_participant_udpv4_qos
+  platform_wan_udpv4_qos: WAN_QOS_LIB::platform_participant_udpv4_qos
+  wan_event: WAN_QOS_LIB::event_qos
+  wan_status: WAN_QOS_LIB::status_qos
+  lan_status_1hz: LAN_QOS_LIB::status_1hz_qos
+
+participants:
+  control_lan:
+    role: control
+    domain: 20
+  control_wan:
+    role: control
+    domain: 200
+    qos: control_wan_udpv4_qos
+  platform_lan:
+    role: platform
+    domain: 30
+  platform_wan:
+    role: platform
+    domain: 200
+    qos: platform_wan_udpv4_qos
+
+routes:
+  - name: control_command
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: control
+    destination: platform
+    topics:
+      - name: ControlCommand
+    source_side:
+      input:
+        participant: control_lan
+      output:
+        participant: control_wan
+        writer_qos: wan_event
+        publisher_partition: CONTROL
+    destination_side:
+      input:
+        participant: platform_wan
+        reader_qos: wan_event
+        subscriber_partition: CONTROL
+        filter:
+          expression: "msg.destination = %0"
+          parameters: ["${node.name}"]
+      output:
+        participant: platform_lan
+
+  - name: platform_primary_status
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformStatus
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: lan_status_1hz
+      output:
+        participant: platform_wan
+        writer_qos: wan_status
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_status
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan
+
+  - name: platform_detail_status
+    enabled: false
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformDetailStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: wan_status
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_status
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan
+
+  - name: platform_events
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformCommandAck
+      - name: ContactReport
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: wan_event
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_event
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan

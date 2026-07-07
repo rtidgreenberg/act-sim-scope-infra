@@ -11,6 +11,7 @@ dist/
 
 # Docker / build
 *.log
+build/
 
 # EMANE / captures
 *.pcap
@@ -27,3 +28,4 @@ rti_license.dat
 
 # Reference repos (external, kept locally for analysis — not committed)
 references/
+Testing/

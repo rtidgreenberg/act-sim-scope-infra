@@ -74,11 +74,12 @@ RouterInstance
 - `StatusPublisher` emits one aggregate `RouterStatus` sample after startup, accepted
   commands, discovery-driven activation/deactivation, and errors; it includes the presence
   roster.
-- `PresenceMonitor` publishes this router's `RouterHealth` heartbeat and subscribes to peers',
-  maintaining the `router_id → {state, last-seen, participant GUID}` roster. On a peer declared
-  `DEAD` it posts a presence-reset event to `RouterController` (unregister that peer's forwarded
-  instances). Never carries liveliness across the WAN. See
-  [Presence & Health](presence-and-health.md).
+- `PresenceMonitor` publishes this router's compact `RouterHealth` summary over the WAN and
+  subscribes to peers', maintaining the `router_id → {state, last-seen, participant GUID, summary}`
+  roster. It republishes the aggregated connected-router list over the LAN on `ActRouterMeshStatus`.
+  On a peer declared `DEAD` it posts a presence-reset event to `RouterController` (unregister that
+  peer's forwarded instances). Only the compact summary crosses the WAN — never liveliness, never
+  the full route table. See [Presence & Health](presence-and-health.md).
 - `Log` is the single structured log stream. The Connext logger is bridged into it at startup
   via `rti::config::Logger::instance().output_handler(...)` so middleware messages arrive tagged
   `source=connext` alongside `source=router`. The handler is `noexcept`, never calls back into
@@ -136,12 +137,13 @@ RouterStateSnapshot
 RouteView
   immutable desired route spec plus resolved local active side
   immutable topic list and endpoint policy references
-  current state_revision
+  entity_generation          # staleness check; no state_revision — see design-decisions.md D6
 
 RouteState
   desired: RouterRouteSpec
-  operational_state
-  discovery_state
+  operational_state          # lifecycle; carries "was forwarding" memory (DEGRADED)
+  discovery_facts            # input_writer_seen, output_reader_seen, type_resolved, qos_resolved
+  discovery_state            # pure rollup of discovery_facts, no memory — design-decisions.md D1
   resolved_type_name
   resolved_reader_qos_summary
   resolved_writer_qos_summary

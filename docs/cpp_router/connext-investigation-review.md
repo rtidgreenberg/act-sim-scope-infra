@@ -115,9 +115,12 @@ Decision:
   `type_object_max_serialized_length` to `LENGTH_AUTO` (or a sized cap) and keep
   `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. Leave
   `type_code_max_serialized_length = 0` (legacy).
-- This is a required edit to ACT `wan_qos_lib.xml` (submodule `harness/act`); the router must
-  not silently depend on it — validate at startup and fail the route loudly if a type cannot
-  be resolved.
+- **The relay carries this in its own QoS files, not by editing ACT.** The ACT submodule
+  (`harness/act`, `wan_qos_lib.xml` with `type_object_max_serialized_length = 0`) is left
+  untouched for now. The relay ships its own WAN QoS library (same pattern as `relay/qos_isc.xml`)
+  with v2 enabled, and reconciling the ACT repo is deferred to a single later pass.
+- The router must not silently depend on the setting — validate at startup and fail the route
+  loudly if a type cannot be resolved.
 - Keep the local type catalog (ACT XML / generated type support), keyed by discovered
   `(topic_name, type_name)`, as the **deterministic fallback** and as the source both ends use
   to register the *same* type so the equivalence hashes match (and no full type crosses the

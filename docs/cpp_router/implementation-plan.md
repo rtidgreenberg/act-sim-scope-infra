@@ -55,18 +55,33 @@ Evidence:
 
 ### Phase 1: Controller-Owned State Without DDS Data Routes
 
+> **Contract pinned** — transition table, `discovery_state` rollup, `state_revision`
+> semantics, idempotency bounds, and the Phase-1 fake seams are decided in
+> [design-decisions.md](design-decisions.md) D1–D7.
+
 Deliver:
 
-- `RouterController`, `MutableRouterState`, `RouterStateSnapshot`, `RouteView`, and
-  `RouterStatusView`.
-- route state machine transitions for disabled, waiting, resolving, enabled, degraded, and
-  error states.
-- bounded command history for duplicate `command_id` handling.
+- `RouterController`, `MutableRouterState`, `RouteState`, `RouterStateSnapshot`, `RouteView`,
+  and `RouterStatusView`.
+- the typed `ControllerEvent` queue drained on one strand, with `DiscoveryIndex`,
+  `EntityFactory`, and `StatusPublisher` behind interfaces and faked in tests (D3).
+- route state machine implementing the D2 transition table: `operational_state` lifecycle
+  guarded by the `discovery_state` rollup of per-route discovery facts (D1); `ROUTE_ERROR`
+  sticky until command re-arm (D2).
+- bounded command history: acks cached for accepted **and** rejected commands, FIFO 256,
+  dedup on `command_id` per router (D4). `ENABLE_ROUTE`/`DISABLE_ROUTE`/`DESCRIBE` handled;
+  `UPDATE_ROUTE`/`SET_PARTICIPANT_PARTITION` parsed-and-rejected (D7).
+- global `uint64 state_revision` with the D5 increment predicate; per-route revision stamps.
 
 Evidence:
 
 - unit tests cover startup snapshot, disabled routes visible in status, enable route waits
-  for discovery, duplicate command returns prior ack, and route error stores `last_error`.
+  for discovery, duplicate command returns prior ack (no revision bump), rejected-command
+  ack replay, and route error stores `last_error` and stays sticky until re-arm.
+- transition-table conformance tests drive every D2 edge via synthetic controller events,
+  including `ENABLED -> DEGRADED -> RESOLVING|WAITING` through the teardown-complete event.
+- honesty note: DDS-dependent behavior (real resolve timing, real endpoint loss) is
+  simulated by the fakes; Phases 2–3 implement the same D2 contract against Connext.
 
 ### Phase 2: Static Generated-Type Discovery Smoke
 

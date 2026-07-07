@@ -16,6 +16,10 @@ Command topic: `ActRouterCommand`
 
 Status topic: `ActRouterStatus`
 
+Mesh-status topic (LAN): `ActRouterMeshStatus` — this router's aggregated view of every
+connected router (the "connected router list"), built from the WAN `RouterHealth` topic. See
+[Presence & Health](presence-and-health.md#aggregate-mesh-view-published-over-the-lan).
+
 Transport (decided): the command/status topics ride the router's **local LAN participant**,
 not a dedicated admin domain/participant. `DomainParticipant`s are the expensive resource;
 topics/partitions are cheap — reusing the LAN participant keeps participant count minimal *and*
@@ -29,9 +33,12 @@ under a dedicated `ADMIN` partition — without a schema change. (This resolves 
 participant.)
 
 This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
-router/link presence across the mesh — see [Presence & Health](presence-and-health.md). The
-LAN-local `RouterStatus` additionally surfaces the **presence roster** (connected routers with
-ALIVE/STALE/DEAD + last-seen delta) for local observability.
+router/link presence + a **compact status summary** across the mesh — see
+[Presence & Health](presence-and-health.md). Each router aggregates the `RouterHealth` summaries
+it hears from all connected routers and republishes that connected-router list over the LAN on
+**`ActRouterMeshStatus`**. The split is deliberate: `RouterStatus` is this router's own full
+detail (LAN, WAN-independent); `ActRouterMeshStatus` is the aggregated mesh view (LAN); only the
+**compact summary** crosses the constrained WAN, never the full route table.
 
 Type: DynamicData or a tiny generated IDL type. For the POC, generated IDL is simpler and
 keeps command parsing independent of the ACT payload XML. (WAN type propagation being disabled
@@ -62,6 +69,12 @@ enum RouterRouteOperationalState {
     ROUTE_ENABLED,
     ROUTE_DEGRADED,
     ROUTE_ERROR
+};
+
+enum RouterRouteDiscoveryState {
+    DISCOVERY_NONE,      // required input writer not yet discovered
+    DISCOVERY_PARTIAL,   // input writer seen; type, QoS, or auto-QoS output reader missing
+    DISCOVERY_READY      // all prerequisites for entity creation available
 };
 
 struct RouterRouteTopicSpec {
@@ -114,7 +127,8 @@ struct RouterRouteStatus {
     string route_name;
     RouterRouteSpec desired;
     RouterRouteOperationalState state;
-    string state_revision;
+    RouterRouteDiscoveryState discovery_state;
+    uint64 state_revision;
     string caused_by_command_id;
     uint64 samples_forwarded;
     uint64 lifecycle_events_forwarded;
@@ -134,7 +148,7 @@ struct RouterStatus {
     uint32 router_id;
     string status_id;
     string caused_by_command_id;
-    string state_revision;
+    uint64 state_revision;
     sequence<RouterParticipantStatus> participants;
     sequence<RouterRouteStatus> routes;
 };
@@ -144,6 +158,12 @@ struct RouterStatus {
 execution. The role-aware YAML form with `source_side` / `destination_side` is accepted by
 startup config and by `ADD_ROUTE`; each router instance selects the side matching its local
 `node.role` and materializes DDS entities only after discovery finds the needed endpoints.
+
+`RouterRouteStatus.state` is the route lifecycle; `discovery_state` is a pure rollup of the
+current discovery facts with no memory of its own — "was forwarding" memory lives only in
+`ROUTE_DEGRADED` (see [design-decisions.md](design-decisions.md) D1). `state_revision` is a
+monotonic `uint64`: one global counter, with the per-route field stamped at that route's last
+externally visible change (D5).
 
 `RouterCommandAck` is the immediate result of accepting or rejecting a command.
 `RouterStatus` is the primary current-state publication and is keyed by `target_node` and
@@ -192,11 +212,17 @@ ROUTE_ENABLED
   reader/writer exist; ReadCondition attached to AsyncWaitSet; forwarding samples
 
 ROUTE_DEGRADED
-  route was enabled but lost a matched endpoint or write path; attempting rediscovery/rebuild
+  route was enabled but lost a matched endpoint or write path; entities (partially) exist;
+  teardown/rebuild in progress — distinct from WAITING_FOR_DISCOVERY, which is quiescent
+  with no route entities
 
 ROUTE_ERROR
-  route cannot activate without config, type, QoS, or entity changes
+  route cannot activate without config, type, QoS, or entity changes; STICKY — exits only
+  via ENABLE_ROUTE / UPDATE_ROUTE (re-arm) or DISABLE_ROUTE, never by auto-retry
 ```
+
+The authoritative (state × event → state) transition table, with `discovery_state` guards, is
+in [design-decisions.md](design-decisions.md) D2 — Phase 1 tests implement that table.
 
 State transitions should carry `caused_by_command_id` when a command triggered the change,
 and should carry a concise `last_error` when discovery, type resolution, QoS compatibility,

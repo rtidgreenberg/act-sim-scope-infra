@@ -44,6 +44,12 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   Reference build: `relay/cpp/CMakeLists.txt`.
 - Modern C++ (C++11) API. Proven entity/QoS/`key_value()` patterns live in
   `relay/cpp/isc_relay.cxx`.
+- **Generated types use DIRECT public data members, not accessors.** Connext 7.7 follows the
+  updated OMG IDL-to-C++11 mapping, so `rtiddsgen` emits struct fields as public members with
+  `{}` initializers — write `s.target_node = "x";` / `s.routes.push_back(r);` / `s.routes.at(0)`,
+  **not** the old getter/setter pairs (`s.target_node("x")`). Sequences are vector-like
+  `omg::types::bounded_sequence<T, N>` (unbounded IDL sequences default to cap `100`). Verified
+  against the `router/admin/RouterAdminTypes.idl` codegen.
 
 ## Validate Connext specifics — don't guess
 
