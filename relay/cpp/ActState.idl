@@ -1,0 +1,18 @@
+// ACT keyed state type — Modern C++ port of relay/act_state.py's @idl.struct ActState.
+//
+// Field order and types match the Python type exactly so the C++ relay is wire-
+// compatible with the Python PoC endpoints (path A/C interop across languages).
+//
+//   key_id  — the instance key (team id, track id, ...); its instance_state is the
+//             lifecycle signal ISC must recover.
+//   seq     — monotonic per-key sequence, so replayed transitions are distinguishable.
+//   send_ns — publisher wall-clock ns (one-way latency); 0 otherwise.
+//   payload — opaque app state; not interpreted by the relay.
+
+struct ActState {
+    @key
+    string key_id;
+    int64 seq;
+    int64 send_ns;
+    string payload;
+};

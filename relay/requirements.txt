@@ -1,0 +1,4 @@
+# Phase 1 ISC-relay PoC — pure rti.connextdds, no other deps.
+# Pin the wheel to the base image's Connext version (wire + Monitoring-Lib compat;
+# see decisions-and-risks.md). Validated on 7.6.0.
+rti.connext==7.6.0

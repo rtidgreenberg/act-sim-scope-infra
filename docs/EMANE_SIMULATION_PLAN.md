@@ -62,6 +62,7 @@ across the process docs by ownership.
 | **[decisions-and-risks.md](decisions-and-risks.md)** | §2, §9 | Locked technology/packaging decisions; risks & open questions |
 | **[roadmap.md](roadmap.md)** | §5, §10 | **Capability-phased roadmap (Phase 0–10): feature-sets + tests per phase**, incl. the **Phase 1 Python ISC-relay PoC (go/no-go)**; scenarios S1–S8; milestones M0–M4 |
 | **[product-gaps.md](product-gaps.md)** | — | **Long poles for RTI product** — gaps we can't work around that gate later phases (LP-1 ISC-through-RS is the headline). Feed to RTI so long-lead items start early. |
+| **[cpp_router/README.md](cpp_router/README.md)** | alternate exercise | Bare-minimum scope for a YAML-driven C++ DynamicData router that replaces Routing Service in the ACT POC node stack |
 
 ## Milestones (summary)
 

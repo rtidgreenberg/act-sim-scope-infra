@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "connext": {
+      "type": "http",
+      "url": "https://chatbot.rti.com/mcp"
+    }
+  }
+}
