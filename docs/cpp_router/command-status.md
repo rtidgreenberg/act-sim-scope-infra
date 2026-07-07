@@ -16,10 +16,26 @@ Command topic: `ActRouterCommand`
 
 Status topic: `ActRouterStatus`
 
-Domain: same admin domain as ACT remote admin, `100`, unless the harness overrides it.
+Transport (decided): the command/status topics ride the router's **local LAN participant**,
+not a dedicated admin domain/participant. `DomainParticipant`s are the expensive resource;
+topics/partitions are cheap — reusing the LAN participant keeps participant count minimal *and*
+keeps the control plane **independent of WAN health**, so the router stays commandable and
+observable during the degraded-link exercise. Control is therefore **local per node** (the ACT
+harness / local orchestration issues commands to the node's router). Keep it partition-ready:
+admin endpoints default to partition `*` (or a reserved `ADMIN` partition) so a future
+**central/remote admin over the WAN** can be added — co-locating admin on the WAN participant
+under a dedicated `ADMIN` partition — without a schema change. (This resolves the old
+"admin domain vs router-private domain" question in favor of *neither*: reuse the LAN
+participant.)
+
+This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
+router/link presence across the mesh — see [Presence & Health](presence-and-health.md). The
+LAN-local `RouterStatus` additionally surfaces the **presence roster** (connected routers with
+ALIVE/STALE/DEAD + last-seen delta) for local observability.
 
 Type: DynamicData or a tiny generated IDL type. For the POC, generated IDL is simpler and
-keeps command parsing independent of the ACT payload XML.
+keeps command parsing independent of the ACT payload XML. (WAN type propagation being disabled
+does not matter here — the admin type is generated and loaded on both ends.)
 
 The control plane should use one shared route shape for desired config, command updates,
 and reported status. The status topic should publish **one router-wide status sample** that

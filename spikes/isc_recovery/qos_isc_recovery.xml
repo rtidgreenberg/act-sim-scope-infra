@@ -1,0 +1,105 @@
+<?xml version="1.0"?>
+<!--
+  QoS for the instance-state recovery spike — PHASE 1 (relay / native ISC only).
+
+  NO durable writer history in this phase. DWH (Scenario B / process-restart recovery)
+  is deferred to a separate Phase-2 profile + runner, added only after Phase 1 passes,
+  because DWH writes SQLite files whose mmap/locking semantics are unsafe on the
+  VirtualBox shared folder — Phase 2 must run entirely on a local filesystem.
+
+  Two profiles:
+    Recovery::Recover    RELIABLE + RECOVER_INSTANCE_STATE_CONSISTENCY on both ends,
+                         TRANSIENT_LOCAL + KEEP_LAST(1) for last-value durability,
+                         MANUAL_BY_TOPIC liveliness (short lease) so the writer can
+                         drop/regain liveliness WITHOUT dying (Scenario A trigger).
+    Recovery::NoRecover  identical but instance_state_consistency = NONE (control).
+
+  Reader recovery knobs + writer serialize_key_with_dispose match relay/cpp/qos_isc.xml
+  so key_value() recovery of dispose-only samples works. UDPv4-only transport so no
+  process can leak /dev/shm shared-memory segments.
+-->
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:noNamespaceSchemaLocation="https://community.rti.com/schema/7.7.0/rti_dds_qos_profiles.xsd">
+    <qos_library name="Recovery">
+
+        <qos_profile name="Recover" is_default_qos="true">
+            <datawriter_qos>
+                <reliability>
+                    <kind>RELIABLE_RELIABILITY_QOS</kind>
+                    <instance_state_consistency_kind>RECOVER_INSTANCE_STATE_CONSISTENCY</instance_state_consistency_kind>
+                </reliability>
+                <durability>
+                    <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+                </durability>
+                <history>
+                    <kind>KEEP_LAST_HISTORY_QOS</kind>
+                    <depth>1</depth>
+                </history>
+                <liveliness>
+                    <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+                    <lease_duration>
+                        <sec>2</sec>
+                        <nanosec>0</nanosec>
+                    </lease_duration>
+                </liveliness>
+                <writer_data_lifecycle>
+                    <autodispose_unregistered_instances>false</autodispose_unregistered_instances>
+                </writer_data_lifecycle>
+                <protocol>
+                    <serialize_key_with_dispose>true</serialize_key_with_dispose>
+                </protocol>
+            </datawriter_qos>
+
+            <datareader_qos>
+                <reliability>
+                    <kind>RELIABLE_RELIABILITY_QOS</kind>
+                    <instance_state_consistency_kind>RECOVER_INSTANCE_STATE_CONSISTENCY</instance_state_consistency_kind>
+                </reliability>
+                <durability>
+                    <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+                </durability>
+                <history>
+                    <kind>KEEP_LAST_HISTORY_QOS</kind>
+                    <depth>1</depth>
+                </history>
+                <liveliness>
+                    <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+                    <lease_duration>
+                        <sec>2</sec>
+                        <nanosec>0</nanosec>
+                    </lease_duration>
+                </liveliness>
+                <reader_resource_limits>
+                    <keep_minimum_state_for_instances>true</keep_minimum_state_for_instances>
+                </reader_resource_limits>
+                <protocol>
+                    <propagate_dispose_of_unregistered_instances>true</propagate_dispose_of_unregistered_instances>
+                </protocol>
+            </datareader_qos>
+
+            <!-- UDPv4 only (no SHMEM): nothing can leak /dev/shm on abrupt exit.
+                 Loopback UDP is used for this single-host rig. -->
+            <participant_qos>
+                <transport_builtin>
+                    <mask>UDPv4</mask>
+                </transport_builtin>
+            </participant_qos>
+        </qos_profile>
+
+        <qos_profile name="NoRecover" base_name="Recovery::Recover">
+            <datawriter_qos>
+                <reliability>
+                    <kind>RELIABLE_RELIABILITY_QOS</kind>
+                    <instance_state_consistency_kind>NO_RECOVER_INSTANCE_STATE_CONSISTENCY</instance_state_consistency_kind>
+                </reliability>
+            </datawriter_qos>
+            <datareader_qos>
+                <reliability>
+                    <kind>RELIABLE_RELIABILITY_QOS</kind>
+                    <instance_state_consistency_kind>NO_RECOVER_INSTANCE_STATE_CONSISTENCY</instance_state_consistency_kind>
+                </reliability>
+            </datareader_qos>
+        </qos_profile>
+
+    </qos_library>
+</dds>

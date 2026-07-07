@@ -1,10 +1,25 @@
 # Configuration
 
+> See [Thesis & Tenets](thesis-and-tenets.md) for the decisions this config model encodes.
+> Key rules baked in below: **LAN endpoints adapt** to discovered app QoS (`auto`), **WAN
+> endpoints impose** explicit aliases (Tenet 6); **WAN data topics carry no liveliness**
+> (Tenet 4); **`dynamic_data` is the default forwarding mode**, `serialized_cdr` is opt-in and
+> eligibility-gated (Tenet 7).
+
 ## QoS Model
 
 QoS should be assigned primarily on the route **input** and **output** endpoints, not on the
 route as a whole. Each endpoint either names a predefined QoS profile alias or uses `auto`
 to match local applications.
+
+The LAN/WAN split is deliberate (Tenet 6): on the **LAN** the router is a peer to the ACT apps,
+so its endpoint QoS is **constrained by / derived from the discovered app writers** (RxO
+compatibility) — the router adapts. On the **WAN** both endpoints are routers we control, so we
+**impose** explicit QoS. App-dictated LAN policies (including liveliness) **terminate at the
+relay** and are re-shaped, not propagated, across the link. WAN data-topic QoS sets liveliness
+to `AUTOMATIC` with an effectively infinite lease (no per-topic liveliness across the link);
+router/link presence is carried by the separate `RouterHealth` topic
+(see [Presence & Health](presence-and-health.md)).
 
 That mirrors the ACT design: commands/events are reliable and prioritized differently from
 periodic status and detail status. Team traffic reuses the status-style QoS profile and
@@ -63,8 +78,8 @@ Type resolution rule for topic-only routes:
 - Discovery provides the topic name and the remote endpoint's registered type name. The
   router uses that type name internally when creating the output `Topic`.
 - In Connext 7.7, TypeObject v2 plus on-demand TypeLookup is the target mechanism:
-  discovery advertises type identifiers and Connext can fetch the full type definition when
-  the router needs it.
+  discovery advertises small type-identifier hashes and Connext fetches the full type
+  definition (once, then caches it) only when the router needs it.
 - Once the router has a `DynamicType`, it can register/create the corresponding DynamicData
   topic on the WAN participant and write with that type.
 - For `serialized_cdr` forwarding, the discovered/registered type is still needed for DDS
@@ -72,6 +87,26 @@ Type resolution rule for topic-only routes:
   output routes use compatible logical types and data representations.
 - Static `act_types.xml` is still useful as a deterministic fallback for the ACT POC, but
   the architecture is pinned to Connext 7.7 wire-learned type resolution.
+
+**Type discovery is enabled on the WAN (why it is now cheap).** The router creates the same
+topics/types on both ends of the link, so in steady state discovery carries only the small
+per-endpoint TypeIdentifier hashes — a full TypeObject crosses the WAN only when a peer that
+has never seen the type joins, served once by the relay and then cached (full behavior and
+validation in [Connext Investigation Review](connext-investigation-review.md#wan-type-exchange-behavior-typeobject-v2)).
+Config implications:
+
+- The WAN participant QoS must set `resource_limits.type_object_max_serialized_length` to
+  `LENGTH_AUTO` (not `0` — `0` disables TypeObject v2 entirely) and keep
+  `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. This is a
+  required edit to ACT `wan_qos_lib.xml`, which currently sets the value to `0`.
+- Leave `type_code_max_serialized_length = 0` (legacy TypeCode, not used by v2).
+- Do **not** set `request_types_filter` to `*` on the WAN participant — the router is a type
+  *source*, not a learner, so proactive fetching is unnecessary and only adds WAN traffic.
+- The builtin TypeLookup replier endpoints must be reachable inbound across the WAN
+  transport/NAT/firewall so remote peers that lack a type can resolve it from the relay.
+- Keep both ends' type definitions synchronized (shared IDL, same extensibility and
+  `rtiddsgen` version). If the structural equivalence hashes drift, Connext silently falls
+  back to fetching full TypeObjects per affected topic — the WAN cost this design avoids.
 
 Use two config sets:
 
@@ -107,7 +142,7 @@ router:
   id: 30
   name: platform-30-control-platform
   config_set: control-platform
-  default_forwarding_mode: serialized_cdr
+  default_forwarding_mode: dynamic_data
 
 control:
   domain: 100
@@ -143,7 +178,7 @@ participants:
 routes:
   - name: control_command
     enabled: true
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     source: control
     destination: platform
     topics:
@@ -168,7 +203,7 @@ routes:
 
   - name: platform_primary_status
     enabled: true
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
@@ -191,7 +226,7 @@ routes:
 
   - name: platform_detail_status
     enabled: false
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
@@ -213,7 +248,7 @@ routes:
 
   - name: platform_events
     enabled: true
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
@@ -257,7 +292,7 @@ router:
   id: 30
   name: platform-30-team
   config_set: platform-team
-  default_forwarding_mode: serialized_cdr
+  default_forwarding_mode: dynamic_data
 
 participants:
   platform_lan:
@@ -272,7 +307,7 @@ participants:
 routes:
   - name: platform_team_to_wan
     enabled: true
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     input:
       participant: platform_lan
     output:
@@ -284,7 +319,7 @@ routes:
 
   - name: wan_team_to_platform
     enabled: true
-    forwarding_mode: serialized_cdr
+    forwarding_mode: dynamic_data
     input:
       participant: team_wan
       reader_qos: wan_status
@@ -313,7 +348,14 @@ Fail the process at startup for structural config errors:
 - explicit WAN endpoint without partition where the route type requires `CONTROL`,
   `PLATFORM`, or a team participant partition;
 - lifecycle mirroring enabled without `dynamic_data` or `generated_type` mode and no key
-  recovery strategy.
+  recovery strategy;
+- `serialized_cdr` forwarding mode combined with a **content filter** on the route (the filter
+  needs field access; only safe if writer-side filtering is guaranteed — reject otherwise);
+- `serialized_cdr` forwarding mode combined with lifecycle/meta-mirroring (needs key + field
+  access).
+
+Forwarding-mode default: when `forwarding_mode` is omitted, the route uses `dynamic_data`.
+`serialized_cdr` must be requested explicitly and passes the eligibility checks above (Tenet 7).
 
 Treat runtime discovery/type/QoS misses as route errors or waiting states, not process-fatal
 errors. The router should stay alive and publish status for the failed route.

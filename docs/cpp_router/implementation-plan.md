@@ -1,5 +1,20 @@
 # Implementation Plan
 
+> **Reframe banner (authoritative — see [Thesis & Tenets](thesis-and-tenets.md)).** This plan
+> predates several decisions; where it conflicts, the tenets win. Specifically:
+> - **ISC is out of scope.** Old Phase 10 ("keyed lifecycle mirroring") is **not** ISC recovery
+>   — it is application-driven **meta-sample mirroring** (`dispose`/`unregister`) plus
+>   **presence-driven reset**, and it is now **high confidence** (proven by `spikes/isc_recovery/`),
+>   not medium. No read-retain / re-assert-on-`ALIVE`.
+> - **Add a Presence/Health phase** (`RouterHealth` topic, roster, presence-driven reset) — see
+>   [Presence & Health](presence-and-health.md). It slots after the core route mechanics.
+> - **`dynamic_data` is the default**; `serialized_cdr` (old Phase 9) stays a **late, opt-in,
+>   eligibility-gated** optimization (no filter / no lifecycle).
+> - **Admin command/status is LAN-local** (resolved open question, [command-status.md](command-status.md)).
+> - **Impairment is the network's job** (EMANE/netem), not a router phase.
+> - Recommended near-term build order is P0→P4 in [Thesis & Tenets](thesis-and-tenets.md)
+>   "Consequences for the build"; the slices below remain a valid finer-grained breakdown.
+
 ## Phased High-Confidence Slices
 
 The safest implementation path is a sequence of vertical slices. Each slice should produce
@@ -202,12 +217,6 @@ These investigations should be short spikes, not new architecture phases. Each o
 produce a small executable, test, or written API note that either raises the slice confidence
 or narrows the fallback path.
 
-The current Connext-informed decisions and risks are recorded in
-[Connext Investigation Review](connext-investigation-review.md). In short, the plan is high
-confidence if the first milestone uses local XML/generated type definitions and normal
-DynamicData forwarding, while serialized CDR forwarding and generic lifecycle mirroring stay
-as isolated spikes.
-
 | Slice | Current confidence | Investigation | Confidence increases if | Fallback if not |
 |---|---|---|---|---|
 | Phase 2: discovery index | High, but foundational | Compare built-in publication/subscription readers vs Connext discovery listeners for the endpoint fields the router needs | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
@@ -241,15 +250,10 @@ lifecycle mirroring, and container harness replacement.
 
 - Highest confidence: controller state, YAML selection, generated admin IDL, explicit-QoS
   forwarding, command/status snapshots.
-- Medium-high confidence: discovery indexing, AsyncWaitSet dynamic attach/detach,
-  partition-driven team routes, generated/DynamicData keyed lifecycle mirroring, and ACT
-  harness replacement.
-- Medium confidence: using serialized-CDR buffer forwarding for ACT routes with lifecycle
-  requirements. Connext 7.7 supports the CDR-buffer APIs, but this remains an optimization
-  path that must prove representation compatibility and key/lifecycle handling.
-- Mandatory POC guardrail: ACT WAN-like QoS disables type code/object propagation, so local
-  XML/generated type definitions are required unless integration profiles explicitly enable
-  type propagation.
+- Medium-high confidence: discovery indexing, LAN auto-match, partition-driven team routes,
+  ACT harness replacement.
+- Medium confidence: serialized-CDR buffer forwarding and generic keyed lifecycle mirroring,
+  because they depend on exact Connext 7.7 Modern C++ API ergonomics and type/key access.
 
 Do not block earlier slices on the medium-confidence items. Use `dynamic_data` or
 generated-type forwarding for the first working route, then optimize the pass-through path
@@ -268,7 +272,8 @@ once the discovery/controller/AsyncWaitSet lifecycle is boring.
 | Detail status toggle | Send `ENABLE_ROUTE platform_detail_status` | control starts receiving detail status from target only; router publishes updated status |
 | Router command/status | Send `SET_PARTICIPANT_PARTITION` or `ENABLE_ROUTE` | command ack is returned and status topic reports new state revision with the full route table |
 | Serialized forwarding smoke | Route `PlatformStatus` with `forwarding_mode: serialized_cdr` | sample arrives downstream without app-level field materialization in the router |
-| Lifecycle route | Dispose/unregister keyed sample during outage | downstream sees matching `instance_state` after reconnect |
+| Meta-sample lifecycle | App disposes/unregisters a keyed instance | downstream sees matching `NOT_ALIVE_DISPOSED` / `NOT_ALIVE_NO_WRITERS` (meta-mirror, not ISC — no reconnect recovery) |
+| Presence reset | A peer router declared `DEAD` on `RouterHealth` | relay unregisters that peer's instances downstream; a returning peer re-writes and they recover as data |
 
 ## Acceptance Criteria
 
@@ -293,8 +298,10 @@ Routing Service.
   `DynamicType` creation plus serialized-CDR forwarding?
 - For lifecycle routes, is key recovery practical in `serialized_cdr` mode, or should those
   routes explicitly use `dynamic_data` / `generated_type` mode?
-- Should route command topics live on the existing ACT admin domain or a router-private
-  control domain?
+- ~~Should route command topics live on the existing ACT admin domain or a router-private
+  control domain?~~ **Resolved:** neither — admin command/status reuse the router's **local LAN
+  participant** (local per-node control, independent of WAN health), partition-ready for future
+  WAN remote admin. See [command-status.md](command-status.md).
 - Do we need route-level flow control in the POC, or is QoS-only prioritization enough for
   the first degraded-link exercise?
 - Can participant-level or publisher/subscriber partition changes be applied in place safely

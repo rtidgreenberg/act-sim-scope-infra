@@ -42,9 +42,10 @@ On data:
   DynamicData writer without materializing fields.
 4. For `dynamic_data` or `generated_type` routes, materialize the sample and write through
   the selected route implementation.
-5. Invalid samples are interpreted as lifecycle transitions.
-6. If the route is marked `mirror_instance_state: true`, recover the key and call
-   `dispose_instance` or `unregister_instance` on the output writer.
+5. Invalid ("meta") samples are interpreted as lifecycle transitions and **mirrored
+   regardless** (Tenet 2): recover the key via `key_value()` and call `dispose_instance` or
+   `unregister_instance` on the output writer. This is application-driven lifecycle only — it
+   is **not** ISC and there is no re-assert-on-`ALIVE` (see Instance State Handling below).
 
 On router command:
 
@@ -106,30 +107,40 @@ place. This keeps failure handling legible.
 
 ## Instance State Handling
 
-For normal bulk routes, forwarding valid samples is enough. For state-critical keyed
-routes, the router needs the same mirroring rule proven in [relay/](../../relay/):
+> **Reframed** — see [Thesis & Tenets](thesis-and-tenets.md) Tenet 2 and
+> [isc-findings.md](isc-findings.md). ISC (Instance State Consistency) is **out of scope**.
+> The relay does **not** attempt to preserve DDS instance-state recovery across the link, and
+> there is **no** re-assert-on-`ALIVE` / read-retain machinery. WAN topics carry no liveliness
+> (Tenet 4), so no data-less `ALIVE` recovery ever reaches the relay in the first place.
 
-```text
-reader sample valid        -> writer.write(sample)
-reader NOT_ALIVE_DISPOSED  -> writer.dispose_instance(handle)
-reader NOT_ALIVE_NO_WRITERS -> writer.unregister_instance(handle)
-```
+The relay's instance-state job has exactly three parts:
 
-The route definition should opt in:
+1. **Forward data** — `reader valid sample -> writer.write(sample)` (the common path).
+2. **Mirror meta samples regardless** — application-driven lifecycle, proven in
+   [relay/](../../relay/), **minus** the re-assert step:
 
-```yaml
-mirror_instance_state: true
-key_fields: ["msg.source"]
-```
+   ```text
+   reader valid sample          -> writer.write(sample)
+   reader NOT_ALIVE_DISPOSED    -> writer.dispose_instance(handle)   # app disposed
+   reader NOT_ALIVE_NO_WRITERS  -> writer.unregister_instance(handle) # source gone / purge
+   ```
 
-For the first C++ version, keep this conservative:
+   Key recovery for the meta samples uses `key_value()`, which the shared QoS makes reliable
+   (`serialize_key_with_dispose` on writers, `keep_minimum_state_for_instances` on readers).
+   Skip and log only the genuinely unrecoverable case (a `NO_WRITERS` for an instance never
+   seen alive).
 
-- keep lifecycle routes on `dynamic_data` or `generated_type` mode if key recovery requires
-  field access;
-- cache key fields from valid samples by reader instance handle when fields are available;
-- use `reader.key_value()` when available and compatible with the chosen API path;
-- skip lifecycle mirroring when the key is unrecoverable in a serialized pass-through path;
-- log every skip with route name and instance handle.
+3. **Presence-driven reset** — on a peer declared `DEAD` by `RouterHealth`, the relay
+   `unregister_instance()`s that peer's forwarded instances on the output writer (→
+   `NOT_ALIVE_NO_WRITERS`), using a lightweight `peer → {instance keys}` set. This is
+   **reversible** (peer returns → re-writes → `ALIVE`) and semantically correct (source gone ≠
+   deleted, so unregister, not dispose). See [Presence & Health](presence-and-health.md).
 
-The POC does not need every ACT topic to be keyed. It only needs to prove the mechanism on
-one keyed state route and leave the rest as ordinary sample forwarding.
+Parts 2 and 3 overlap idempotently: presence is the *fast* path for a dead router; the
+meta-mirror is the *eventual/correct* path when the participant actually purges or an app
+explicitly unregisters. Both reduce to `unregister` downstream.
+
+Forwarding-mode constraint: meta-mirroring needs field/key access, so lifecycle-mirroring
+routes use `dynamic_data` (or `generated_type`), never `serialized_cdr`. ACT payload types are
+currently unkeyed *for demo only*; real state topics will be keyed (project memory
+`act-state-topics-will-be-keyed`), at which point per-instance lifecycle becomes meaningful.

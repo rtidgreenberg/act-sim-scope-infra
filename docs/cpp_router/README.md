@@ -8,12 +8,15 @@
 
 ## Document Set
 
+- [Thesis & Tenets](thesis-and-tenets.md): **read first** — the reframed foundation (why a custom relay, what it is/isn't, and the tenets every other doc traces to). Where docs conflict, this one wins.
 - [Configuration](configuration.md): route YAML, QoS aliases, participant roles, and config validation.
 - [Command And Status](command-status.md): DDS admin topics, command schema, status schema, and route states.
 - [Code Architecture](code-architecture.md): C++ ownership model, controller/state design, AsyncWaitSet architecture, modules, and concurrency rules.
 - [Runtime Behavior](runtime-behavior.md): startup, discovery-driven route activation, dynamic readers/writers, forwarding, and instance-state mirroring.
 - [Implementation Plan](implementation-plan.md): phased implementation slices, tests, acceptance criteria, open questions, and roadmap relationship.
 - [Connext Investigation Review](connext-investigation-review.md): Connext 7.7 API findings, design decisions, concerns, required spikes, and confidence updates.
+- [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
+- [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.
 
 ## Goal
 
@@ -26,11 +29,17 @@ DynamicData, TypeObject v2, and on-demand TypeLookup behavior.
 - load role-aware route definitions from YAML;
 - create DDS DomainParticipants plus DynamicData or generated-type readers/writers from
   discovered endpoint matches;
-- forward samples between local LAN domains and the WAN domain;
+- forward samples between local LAN domains and the WAN domain, and mirror application
+  lifecycle (dispose/unregister) "meta" samples through the relay;
 - accept runtime commands on a DDS control topic to enable, disable, add, remove, and
   update routes;
-- preserve keyed instance lifecycle for routes that require true DDS instance-state
-  convergence.
+- provide **router/link presence awareness** (a `RouterHealth` topic) and, in future,
+  per-endpoint DDS link-health statistics.
+
+> **Note (reframe):** an earlier draft cited preserving DDS Instance State Consistency (ISC)
+> as a goal. That is **no longer the driver** — see [Thesis & Tenets](thesis-and-tenets.md)
+> and [ISC Findings](isc-findings.md). The value is observability and control; ISC is out of
+> scope.
 
 The POC should prove the replacement shape, not reproduce every Routing Service feature.
 The winning test is simple: run the ACT control and platform simulators without Routing
@@ -39,20 +48,24 @@ gateway.
 
 ## Why Try This
 
-Routing Service already solves most routing mechanics, but the ACT work has two pressures
-that make a tiny custom router worth exploring:
+A terminating relay is unavoidable to bridge ACT's segmented LAN/WAN domains while altering
+traffic — Routing Service is already such a relay. So the question is **custom relay vs. RS**,
+and the justification is **observability and control**, not semantic preservation (full
+rationale in [Thesis & Tenets](thesis-and-tenets.md)):
 
-- Instance State Consistency is not carried through Routing Service. A standalone router
-  with real DDS endpoints on both legs can preserve true `instance_state` for keyed state
-  topics.
-- The ACT demo values inspectability. A C++ router with a YAML route file is easier to
-  explain, instrument, and mutate live than a large XML Routing Service configuration.
-- Runtime control can be made ACT-specific: team changes, detail-status enablement, and
-  route toggles can share one control topic rather than relying on Routing Service remote
-  admin resources.
+- **No black box** — we own and can reason about every forwarding decision, vs. RS's opaque
+  XML engine.
+- **Inspectable, live-mutable YAML** config instead of a large XML Routing Service config.
+- **Network capture** — the Modern C++ API exposes `rti::util::network_capture` (pcap of DDS
+  traffic, incl. shared memory) that the Python binding lacks.
+- **Router/link presence awareness** via liveliness callbacks on a `RouterHealth` topic.
+- **(Future) per-writer/reader protocol statistics** to assess DDS link health — the relay is
+  the natural measurement point; RS and the network layer don't provide this.
+- ACT-specific runtime control (team changes, detail-status, route toggles) on one control
+  topic.
 
-This is not a claim that a custom router is production-equivalent to Routing Service. It is
-a deliberately small experiment to find the minimum useful substitute.
+This is not a claim of production-equivalence to Routing Service. It is a deliberately small
+experiment to find the minimum useful, observable, controllable substitute.
 
 ## POC Boundary
 
@@ -64,8 +77,9 @@ In scope:
   command changes.
 - Modern C++ implementation targeting Connext 7.7, with DynamicData routes using
   TypeObject v2 / TypeLookup or the ACT XML type file as a deterministic fallback.
-- Serialized-CDR forwarding fast path for pass-through routes, using DynamicData
-  skip-serialization/deserialization mode where supported.
+- **`dynamic_data` is the default forwarding mode.** `serialized_cdr` (skip-deserialization)
+  is an opt-in, eligibility-gated optimization (no reader-side filter, no lifecycle) deferred
+  to a late phase — see [Thesis & Tenets](thesis-and-tenets.md) Tenet 7.
 - Routes define one input participant, one output participant, a topic list, and a QoS
   pattern.
 - Exact topic names in route topic lists; no regex expansion in the first POC.
@@ -78,13 +92,22 @@ In scope:
 - Optional LAN QoS auto-match, so local readers/writers can inherit compatible QoS from
   discovered endpoints or local defaults instead of being specified on every route.
 - Route enable and disable without process restart.
-- Instance lifecycle mirroring: valid sample forwards as write; dispose mirrors as dispose;
-  no-writers mirrors as unregister when the key can be recovered.
-- Basic metrics and logs: route created, sample forwarded, lifecycle transition mirrored,
-  command accepted or rejected, router status published.
+- Meta-sample lifecycle mirroring: valid sample forwards as write; application `dispose`
+  mirrors as dispose; `no-writers` mirrors as unregister (key recovered via `key_value()`).
+  This is application-driven lifecycle only — **not** ISC (out of scope, Tenet 2).
+- **System-level presence**: a `RouterHealth` topic with liveliness gives router/link presence;
+  WAN data topics carry **no** liveliness. On a peer declared DEAD, the relay unregisters that
+  peer's instances (presence-driven reset). See [Presence & Health](presence-and-health.md).
+- Basic metrics and logs (one structured stream with the Connext logger bridged in): route
+  created, sample forwarded, lifecycle mirrored, command accepted/rejected, status published.
 
 Out of scope for the first POC:
 
+- **Instance State Consistency (ISC) / cross-relay instance-state recovery** — investigated and
+  deliberately dropped (Tenet 2, [ISC Findings](isc-findings.md)).
+- **Link impairment (latency/loss/jitter)** — that is the emulated network's job (EMANE/netem),
+  not the relay's (Tenet 3).
+- **Per-topic liveliness across the WAN** — replaced by system-level presence (Tenet 4).
 - Routing Service auto-topic-route parity.
 - Regex route expansion.
 - Multi-output fanout from one reader.

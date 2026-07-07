@@ -28,10 +28,13 @@ Route forwarding modes:
 | `dynamic_data` | Need runtime type support plus field access, filtering, key extraction, or transform | More flexible; likely deserializes/re-serializes payload |
 | `generated_type` | Hot fixed-schema route or lifecycle route needs typed key/state handling | Fast and type-safe; not generic across arbitrary ACT XML types |
 
-The POC should default pass-through routes to `serialized_cdr` and fall back to
-`dynamic_data` or `generated_type` only when the route needs field access, transformation,
-or lifecycle/key handling. Connext 7.7 is the pinned target for the CDR-buffer forwarding
-and TypeObject v2 / TypeLookup assumptions in this document.
+**`dynamic_data` is the default forwarding mode** (revised — see
+[Thesis & Tenets](thesis-and-tenets.md) Tenet 7). It is correct for every route and is what
+the `spikes/isc_recovery/` relay proved. `serialized_cdr` is an **opt-in, late optimization**,
+allowed only on eligible routes: same logical type in/out, **no reader-side content filter**,
+and **no meta-sample lifecycle mirroring** (both need field access). `generated_type` is for
+hot fixed-schema routes. Connext 7.7 is the pinned target for the CDR-buffer forwarding and
+TypeObject v2 / TypeLookup assumptions in this document.
 
 ## AsyncWaitSet Implementation Architecture
 
@@ -48,6 +51,8 @@ RouterInstance
   AsyncWaitSetDispatcher
   CommandHandler
   StatusPublisher
+  PresenceMonitor        # RouterHealth pub/sub + roster; presence-driven reset (Tenet 4/5)
+  Log                    # one structured stream; Connext logger bridged in (below)
 ```
 
 - `ConfigLoader` reads YAML and selects the local side of role-aware routes. It does not
@@ -67,7 +72,18 @@ RouterInstance
 - `CommandHandler` parses command samples, performs cheap target/idempotency checks, and
   posts accepted mutations to `RouterController`.
 - `StatusPublisher` emits one aggregate `RouterStatus` sample after startup, accepted
-  commands, discovery-driven activation/deactivation, and errors.
+  commands, discovery-driven activation/deactivation, and errors; it includes the presence
+  roster.
+- `PresenceMonitor` publishes this router's `RouterHealth` heartbeat and subscribes to peers',
+  maintaining the `router_id → {state, last-seen, participant GUID}` roster. On a peer declared
+  `DEAD` it posts a presence-reset event to `RouterController` (unregister that peer's forwarded
+  instances). Never carries liveliness across the WAN. See
+  [Presence & Health](presence-and-health.md).
+- `Log` is the single structured log stream. The Connext logger is bridged into it at startup
+  via `rti::config::Logger::instance().output_handler(...)` so middleware messages arrive tagged
+  `source=connext` alongside `source=router`. The handler is `noexcept`, never calls back into
+  Connext, and is fast/thread-safe (may fire from multiple middleware threads). Connext verbosity
+  is config-driven (`WARNING` baseline, per-category overrides).
 
 The key implementation rule is **discovery before DDS entity construction**. A desired route
 does not create its route DataReader until the input writer is discovered. It does not create

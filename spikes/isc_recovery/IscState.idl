@@ -1,0 +1,16 @@
+// Minimal keyed test type for the instance-state recovery spike.
+//
+// Mirrors the relay/cpp/ActState.idl shape so this rig reuses the proven Modern C++
+// entity-creation and key_value() recovery paths.
+//
+//   key_id  — the instance key; its instance_state is the lifecycle signal under test.
+//   seq     — monotonic per-key sequence, so a *replayed data sample* is visibly
+//             distinguishable from a *native ISC state recovery* (which carries no data).
+//   payload — opaque; not interpreted.
+
+struct IscState {
+    @key
+    string key_id;
+    int64 seq;
+    string payload;
+};
