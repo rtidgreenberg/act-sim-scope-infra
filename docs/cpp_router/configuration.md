@@ -56,6 +56,13 @@ For the POC, keep the rule simple:
 - `team_wan` owns a participant-level partition for discovery and group-level scoping.
   Team route endpoints use `inherit_participant` so `SET_PARTICIPANT_PARTITION` updates the
   group in one place.
+- **WAN participants are never multi-homed (D18).** When a node has multiple physical
+  networks (e.g. mesh radio + SATCOM), the config defines **one WAN participant per unique
+  network**, each pinned to its interface via the UDPv4 builtin transport
+  `allow_interfaces_list` (a multi-homed participant would receive redundant DATA on every
+  announced locator and defeat per-path link metrics). The network-definition YAML shape
+  (name → interface allowlist) lands when a second network reaches the rig; today's
+  single-network config is the `N = 1` case.
 - DDS partition names are uppercase in config, commands, and status samples: `CONTROL`,
   `PLATFORM`, `PLATFORM_30`, `TEAM_A`.
 - If auto-match cannot find a compatible discovered endpoint within a short startup window,

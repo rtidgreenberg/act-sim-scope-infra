@@ -52,21 +52,45 @@ RouterInstance
   CommandHandler
   StatusPublisher
   PresenceMonitor        # RouterHealth pub/sub + roster; presence-driven reset (Tenet 4/5)
+  LinkStatsCollector     # WAN link metric capture: protocol-status polling + RTT probe (D14)
   Log                    # one structured stream; Connext logger bridged in (below)
 ```
 
 - `ConfigLoader` reads YAML and selects the local side of role-aware routes. It does not
   create route readers or writers.
 - `ParticipantRegistry` creates the DomainParticipants needed by the selected route sides
-  and admin topics.
+  and admin topics. Participants are created **disabled**, builtin discovery readers and
+  conditions installed, then enabled — builtin readers are lazily created in 7.7, so this is
+  the no-loss discovery startup order (D12). Every router participant sets
+  `user_data = act.router=<node>/<router>` so router-originated endpoints are identifiable
+  in discovery (D15). WAN participants are **never multi-homed** — with multiple physical
+  networks it creates one WAN participant per network, interface-pinned via
+  `allow_interfaces_list` (D18; today's single network is the `N = 1` case).
 - `DiscoveryIndex` watches discovered publications and subscriptions on those participants
-  and records topic name, type identifiers, registered type name, partitions, and QoS.
+  and records topic name, type identifiers, registered type name, partitions, and QoS
+  (captured policy subset pinned in D19 — history/resource_limits are never discoverable).
+  It is backed by the builtin participant/publication/subscription readers with
+  `ReadCondition`s on the `AsyncWaitSet` (no listeners); records are endpoint-GUID-keyed
+  **upserts**, removals derive from builtin instance-state transitions, and the discovered
+  `DynamicType` is optional until TypeLookup resolves it — LAN participants set
+  `request_types_filter` so types are requested without a local endpoint match (D12/D13).
+  A discovered publication whose participant carries a **same-node** `act.router` tag is
+  recorded with its `origin_router`, then locally ignored (`dds::pub::ignore`) so no route
+  reader can ever match it; remote routers' WAN writers stay eligible — they are the
+  expected route inputs (D15). A participant purge — graceful dispose or liveliness-lease
+  expiry — is fanned out into `EndpointLost` for every endpoint that participant owned
+  (D16); lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth`
+  presence window.
 - `RouteRegistry` stores every configured route for the instance, including disabled routes
   and routes waiting on discovery. Desired-enabled plus discovery readiness determines
   whether DDS entities exist.
 - `EntityFactory` creates topics, readers, writers, content-filtered topics, read
   conditions, and serialized-CDR forwarding helpers after discovery supplies type and QoS
-  input.
+  input. Every route output DataWriter is locally ignored at creation
+  (`dds::pub::ignore(participant, writer.instance_handle())`, before the first write), so
+  the router's own forwarded output can never re-enter a route input reader on the same
+  participant — this kills the same-participant echo loop (e.g. `PlatformData` in and out
+  of the team router's LAN participant) by construction (D15).
 - `AsyncWaitSetDispatcher` owns the `AsyncWaitSet`; it attaches route read conditions as
   routes become active and detaches them when routes are disabled, rediscovered, or rebuilt.
 - `CommandHandler` parses command samples, performs cheap target/idempotency checks, and
@@ -80,6 +104,15 @@ RouterInstance
   On a peer declared `DEAD` it posts a presence-reset event to `RouterController` (unregister that
   peer's forwarded instances). Only the compact summary crosses the WAN — never liveliness, never
   the full route table. See [Presence & Health](presence-and-health.md).
+- `LinkStatsCollector` captures per-peer WAN link metrics (D14,
+  [link-health.md](link-health.md)): on a config-fixed tick (~1 s) it is the **sole reader**
+  of the WAN endpoints' matched-endpoint protocol statuses (reads reset `_change`
+  fields/changed-flags; it polls cumulative totals and computes its own interval deltas),
+  rolls them up per peer `router_id` (GUID join via the presence roster / D15 tag), and
+  publishes per-peer `ActRouterLinkStats` on the **LAN** plus one structured log line per
+  interval. It also owns the `RouterLinkProbe` writer/reader (app-ack RTT, probe-only QoS).
+  Capture only — no health classification (presence remains the health authority); metric
+  deltas never bump `state_revision`.
 - `Log` is the single structured log stream. The Connext logger is bridged into it at startup
   via `rti::config::Logger::instance().output_handler(...)` so middleware messages arrive tagged
   `source=connext` alongside `source=router`. The handler is `noexcept`, never calls back into
@@ -141,13 +174,22 @@ RouteView
 
 RouteState
   desired: RouterRouteSpec
-  operational_state          # lifecycle; carries "was forwarding" memory (DEGRADED)
-  discovery_facts            # input_writer_seen, output_reader_seen, type_resolved, qos_resolved
-  discovery_state            # pure rollup of discovery_facts, no memory — design-decisions.md D1
+  operational_state          # lifecycle; DERIVED over topic states (D11); "was forwarding"
+                             # memory (DEGRADED) lives here
+  topics: map<topic_name, TopicRouteState>
+  active_entity_generation
+  aggregate counters         # sums of per-topic counters
+  last_error                 # route-wide errors only; per-topic errors live on the topic
+
+TopicRouteState              # one per configured topic on the route — D11
+  discovery_facts            # derived from matched-endpoint SETS (D20): input_writer_seen ⇔
+                             # matched-writer set non-empty; ditto output_reader_seen;
+                             # plus type_resolved, qos_resolved
+  discovery_state            # pure rollup of this topic's facts, no memory — D1/D11
+  topic_state                # IDLE / CREATING / FORWARDING / TEARING_DOWN / ERROR (sticky)
   resolved_type_name
   resolved_reader_qos_summary
   resolved_writer_qos_summary
-  active_entity_generation
   counters
   last_error
 ```
@@ -155,7 +197,8 @@ RouteState
 The rule of thumb is: **routes read state, the controller writes state**. A route runtime may
 own fast-path DDS entities and route-local counters, but it does not decide global route
 state. When it observes something meaningful, it posts an event such as
-`SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, or `RouteEntityError`.
+`SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, `InputOriginObserved`
+(first sample from a new `publication_handle` — D15), or `RouteEntityError`.
 The controller folds that event into `MutableRouterState`, increments `state_revision` when
 the externally visible state changes, creates a new `RouterStateSnapshot`, and asks
 `StatusPublisher` to publish it.
@@ -206,6 +249,7 @@ The controller should process these event categories on one serialized strand or
 | `SubscriptionDiscovered` | discovery index | update output readiness for `auto` writer QoS routes |
 | `EndpointLost` | discovery index or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
+| `InputOriginObserved` | route runtime (first sample from a new `publication_handle`) | resolve handle → `origin_router` via discovery index; log origination; warn on unexpected origin for the leg (router-origin on LAN input, app-origin on WAN input — D15) |
 | `RouteEntityError` | entity factory or route runtime | mark route `ROUTE_ERROR`, store `last_error`, publish status |
 | `StatusRequested` | command reader or timer | publish current snapshot without changing revision unless state changed |
 | `ShutdownRequested` | signal/main thread | quiesce intake, detach waitset conditions, close entities and participants |
@@ -275,6 +319,8 @@ makes route-state tests possible without running DDS.
 ## Concurrency Rules
 
 - `RouterController` is the single writer for `MutableRouterState`.
+- The `ControllerEvent` queue is **MPSC**: `AsyncWaitSet` dispatch and middleware threads
+  post events; only the controller strand drains (D12).
 - DDS listener callbacks and `AsyncWaitSet` handlers must be short. They post events and
   return.
 - Create, attach, detach, and close route DDS entities from the controller strand or through

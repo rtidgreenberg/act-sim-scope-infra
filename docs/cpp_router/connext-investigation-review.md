@@ -54,6 +54,10 @@ Decision:
   topic objects throughout the router.
 - Discovery can activate route resolution, but it must not create a route until type and
   QoS resolution have both succeeded.
+- **Resolved ([design-decisions.md](design-decisions.md) D12):** the fallback below is
+  promoted to the decision — builtin participant/publication/subscription readers with
+  `ReadCondition`s on the router's `AsyncWaitSet` (created before participant enable) are
+  the primary mechanism; discovery listeners are not used.
 
 Concern:
 
@@ -178,7 +182,10 @@ type (same equivalence hash). During WAN discovery:
    proactively *learning* unknown remote types before a local endpoint exists. The router is
    serving types outward, not learning them from the WAN. (It would only matter for a generic
    "learn arbitrary WAN types first" mode, which the POC does not do.) Do **not** set it to
-   `*` on the WAN — that would proactively pull every remote type.
+   `*` on the WAN — that would proactively pull every remote type. The **LAN** side is the
+   opposite case: there the router *is* the learner with no local endpoint yet, so LAN
+   participants **do** set `request_types_filter` — pinned in
+   [design-decisions.md](design-decisions.md) D13.
 
 Two operational consequences to carry into config/deploy:
 

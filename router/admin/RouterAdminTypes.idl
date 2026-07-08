@@ -29,6 +29,23 @@ enum RouterRouteOperationalState {
     ROUTE_ERROR
 };
 
+enum RouterRouteDiscoveryState {
+    DISCOVERY_NONE,      // required input writer not yet discovered
+    DISCOVERY_PARTIAL,   // input writer seen; type, QoS, or auto-QoS output reader missing
+    DISCOVERY_READY      // all prerequisites for entity creation available
+};
+
+// Per-topic entity state (design-decisions.md D11). Discovery facts and entity lifecycle
+// are tracked per topic; a route is active when at least one topic is forwarding, and
+// the route-level operational_state is derived from these.
+enum RouterRouteTopicState {
+    TOPIC_IDLE,          // no entities (not discovered, or route not active)
+    TOPIC_CREATING,      // prerequisites ready; entity creation in flight
+    TOPIC_FORWARDING,    // reader + writer + read condition live
+    TOPIC_TEARING_DOWN,  // was forwarding; detach/close in progress
+    TOPIC_ERROR          // entity creation/runtime failed; sticky until command re-arm
+};
+
 struct RouterRouteTopicSpec {
     string name;
     string reader_qos;
@@ -75,14 +92,25 @@ struct RouterCommandAck {
     string message;
 };
 
+struct RouterRouteTopicStatus {
+    string name;
+    RouterRouteDiscoveryState discovery_state;   // per-topic rollup of discovery facts
+    RouterRouteTopicState topic_state;
+    uint64 samples_forwarded;
+    uint64 lifecycle_events_forwarded;
+    string last_error;
+};
+
 struct RouterRouteStatus {
     string route_name;
     RouterRouteSpec desired;
-    RouterRouteOperationalState state;
-    string state_revision;
+    RouterRouteOperationalState state;           // derived over topic states (D11)
+    RouterRouteDiscoveryState discovery_state;   // best (max) topic rollup (D11)
+    sequence<RouterRouteTopicStatus> topic_status;
+    uint64 state_revision;
     string caused_by_command_id;
-    uint64 samples_forwarded;
-    uint64 lifecycle_events_forwarded;
+    uint64 samples_forwarded;                    // aggregate across topics
+    uint64 lifecycle_events_forwarded;           // aggregate across topics
     string last_error;
 };
 
@@ -101,7 +129,7 @@ struct RouterStatus {
     uint32 router_id;
     string status_id;
     string caused_by_command_id;
-    string state_revision;
+    uint64 state_revision;
     sequence<RouterParticipantStatus> participants;
     sequence<RouterRouteStatus> routes;
 };

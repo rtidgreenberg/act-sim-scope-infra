@@ -18,6 +18,7 @@
 - [Connext Investigation Review](connext-investigation-review.md): Connext 7.7 API findings, design decisions, concerns, required spikes, and confidence updates.
 - [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
 - [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.
+- [Link Metrics](link-health.md): capture-first per-peer WAN link metrics from reliable protocol statistics (NACKs, repair traffic, send-window backpressure, RTT probe via app-ack on a dedicated `RouterLinkProbe` topic); health *inference* deferred until a link-degradation correlation experiment (D14); multi-network posture: one WAN participant per network, never multi-homed (D18).
 
 ## Goal
 
@@ -34,8 +35,9 @@ DynamicData, TypeObject v2, and on-demand TypeLookup behavior.
   lifecycle (dispose/unregister) "meta" samples through the relay;
 - accept runtime commands on a DDS control topic to enable, disable, add, remove, and
   update routes;
-- provide **router/link presence awareness** (a `RouterHealth` topic) and, in future,
-  per-endpoint DDS link-health statistics.
+- provide **router/link presence awareness** (a `RouterHealth` topic) and **per-peer link
+  metric capture** (reliable-protocol statistics + RTT probe, published on the LAN as
+  `ActRouterLinkStats` — capture only, see [Link Metrics](link-health.md)).
 
 > **Note (reframe):** an earlier draft cited preserving DDS Instance State Consistency (ISC)
 > as a goal. That is **no longer the driver** — see [Thesis & Tenets](thesis-and-tenets.md)
@@ -60,8 +62,10 @@ rationale in [Thesis & Tenets](thesis-and-tenets.md)):
 - **Network capture** — the Modern C++ API exposes `rti::util::network_capture` (pcap of DDS
   traffic, incl. shared memory) that the Python binding lacks.
 - **Router/link presence awareness** via liveliness callbacks on a `RouterHealth` topic.
-- **(Future) per-writer/reader protocol statistics** to assess DDS link health — the relay is
-  the natural measurement point; RS and the network layer don't provide this.
+- **Per-writer/reader protocol statistics** to assess DDS link health — the relay is
+  the natural measurement point; RS and the network layer don't provide this. Scoped
+  capture-first in [Link Metrics](link-health.md) (D14/D18): metrics ship with the router;
+  their health *meaning* is assigned after a link-degradation correlation experiment.
 - ACT-specific runtime control (team changes, detail-status, route toggles) on one control
   topic.
 

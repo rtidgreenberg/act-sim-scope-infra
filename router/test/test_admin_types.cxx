@@ -28,12 +28,22 @@ int main() {
     status.target_router = "platform-30-control-platform";
     status.router_id = 30;
     status.status_id = "status-1";
-    status.state_revision = "1";
+    status.state_revision = 1; // uint64 monotonic counter (design-decisions.md D5)
 
     RouterRouteStatus route;
     route.route_name = "control_command";
     route.state = RouterRouteOperationalState::ROUTE_DISABLED;
+    route.discovery_state = RouterRouteDiscoveryState::DISCOVERY_NONE; // D1 second field
+    route.state_revision = 1;
     route.samples_forwarded = 0;
+
+    // Per-topic status sequence (D11): route active when >= 1 topic forwards.
+    RouterRouteTopicStatus topic;
+    topic.name = "ControlCommand";
+    topic.discovery_state = RouterRouteDiscoveryState::DISCOVERY_READY;
+    topic.topic_state = RouterRouteTopicState::TOPIC_FORWARDING;
+    topic.samples_forwarded = 3;
+    route.topic_status.push_back(topic);
     status.routes.push_back(route);
 
     RouterParticipantStatus part;
@@ -47,6 +57,12 @@ int main() {
     CHECK(status.routes.size() == 1);
     CHECK(status.routes.at(0).route_name == "control_command");
     CHECK(status.routes.at(0).state == RouterRouteOperationalState::ROUTE_DISABLED);
+    CHECK(status.routes.at(0).discovery_state == RouterRouteDiscoveryState::DISCOVERY_NONE);
+    CHECK(status.routes.at(0).topic_status.size() == 1);
+    CHECK(status.routes.at(0).topic_status.at(0).topic_state
+          == RouterRouteTopicState::TOPIC_FORWARDING);
+    CHECK(status.routes.at(0).topic_status.at(0).samples_forwarded == 3u);
+    CHECK(status.state_revision == 1u);
     CHECK(status.participants.size() == 1);
 
     // RouterCommand / RouterCommandAck round-trip of scalar fields.

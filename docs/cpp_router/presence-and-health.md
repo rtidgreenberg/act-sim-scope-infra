@@ -36,6 +36,15 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
 - **QoS:** `RELIABLE`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (late joiners get last state),
   `DEADLINE ≈ 1.5–2×` heartbeat period, `LIVELINESS = AUTOMATIC` with a finite lease
   (≈ 2–3× period). Periodic heartbeat write (e.g. 1 s).
+- **QoS is deliberately untouched by link-metrics capture (D14).** `RouterHealth` doubles as
+  the *passive* stats bellwether — the `LinkStatsCollector` polls this pair's protocol
+  statistics like any WAN pair (known offered rate; signal even when data routes are idle) —
+  but the RTT probe's special QoS (app-ack, per-sample piggyback HB, zero ACK delay) lives on
+  the dedicated `RouterLinkProbe` topic, never here. See [Link Metrics](link-health.md).
+- **Multi-network (D18):** WAN participants are never multi-homed — one WAN participant per
+  unique network (`allow_interfaces_list`). Each network participant carries its own
+  `RouterHealth` pair, so presence becomes per-path (`router_id, network`) when a second
+  network exists; today's single-network rig is the `N = 1` case.
 
 Two signals, deliberately kept separate:
 
@@ -57,6 +66,14 @@ Two signals, deliberately kept separate:
 Crash-detection latency for the whole mesh is set here, not per topic. Starting point is RTI's
 `BuiltinQosSnippetLib::Optimization.Discovery.Common` (participant lease 10 s, assert 3 s,
 ~6 s detection); tighten for the demo if faster router-loss detection is wanted.
+
+**Ordering constraint (pinned — [design-decisions.md](design-decisions.md) D16):** the WAN
+participant lease must stay **longer** than the `RouterHealth` liveliness window
+(≈ 2–3× heartbeat period), so the presence topic is always the first and authoritative DEAD
+signal and the DDS participant purge trails it as backstop/bulk cleanup — it can never race
+ahead of the roster. This constraint must survive any retune of either knob. (LAN
+participants are tuned separately and shorter — local crash detection for route
+degradation, see D16.)
 
 ## Membership roster (each router)
 
@@ -90,6 +107,8 @@ distinct from the per-router `ActRouterStatus` (this router's own detailed route
 | `RouterHealth` | WAN | one compact summary per router (this router publishes its own) | single cross-link presence + summary signal; small on the constrained WAN |
 | `ActRouterStatus` | LAN | this router's own full route/participant detail | LAN-local control plane, WAN-independent |
 | `ActRouterMeshStatus` | LAN | aggregated list of **all** connected routers' summaries + presence | local mesh observability; LAN is unconstrained so the full peer list is cheap here |
+| `RouterLinkProbe` | WAN | tiny per-router probe samples (app-ack RTT) | isolates the probe's special QoS (`VOLATILE`, no liveliness, zero ACK delay) from the presence authority — D14/D18, [link-health.md](link-health.md) |
+| `ActRouterLinkStats` | LAN | per-peer raw link metrics each poll interval | capture-only telemetry (D14); nothing new crosses the WAN |
 
 - The mesh-status sample carries, per connected router: identity, `presence` (`ALIVE`/`STALE`/
   `DEAD`), `last_seen_delta`, and the compact rollup (`state_revision`, `n_routes`, `n_degraded`,

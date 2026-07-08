@@ -49,6 +49,12 @@ tell contradictory stories about the same fact.
 **Docs changed.** `command-status.md` (IDL: new enum + field), `code-architecture.md`
 (`RouteState` facts + rollup comment).
 
+**Amended by D11** — discovery facts are tracked **per topic**; the route-level
+`discovery_state` becomes the best (max) topic rollup.
+
+**Amended by D20** — the raw facts are derived from per-topic **matched-endpoint sets**
+(seen ⇔ set non-empty), not stored booleans.
+
 ---
 
 ## D2 — Operational-state transition table; `ROUTE_ERROR` is sticky until command re-arm (2026-07-07, accepted)
@@ -92,6 +98,12 @@ Notes:
 
 **Docs changed.** `command-status.md` (Route State Machine section points here; `ROUTE_ERROR`
 description gains stickiness).
+
+**Amended by D8** — adds the `RESOLVING` discovery-regression row and the
+redundant-command (new `command_id`) row.
+
+**Amended by D11** — `operational_state` becomes a derivation over per-topic states;
+the table's discovery guards read over the topic set (`D = READY` ⇒ "≥ 1 topic READY").
 
 ---
 
@@ -145,6 +157,9 @@ recorded, the bound, the dedup key, and eviction behavior.
 **Docs changed.** none beyond this log (command-status.md already implies duplicate-ack
 behavior; the bound and reject-caching live here).
 
+**Amended by D9** — `DESCRIBE` is exempt from the history; only state-changing kinds enter
+the FIFO.
+
 ---
 
 ## D5 — `state_revision` is a monotonic `uint64`; explicit increment predicate (2026-07-07, accepted)
@@ -170,6 +185,9 @@ router scope, per-route, and on `RouteView`, without a stated relationship.
   duplicate commands, status republish.
 
 **Docs changed.** `command-status.md` (IDL types).
+
+**Amended by D11** — the increment predicate also fires on any topic's `topic_state` or
+per-topic discovery rollup change.
 
 ---
 
@@ -212,3 +230,545 @@ command/status loop → Phase 6, partitions → Phase 8). The exact seams were u
   the command/status loop).
 
 **Docs changed.** `implementation-plan.md` (Phase 1 section).
+
+**Amended by D10** — the "Phase 0 config parser" route source was a dead option (that parser
+is identity-only); Phase 1 routes come from test fixtures, and `RouteConfigParser` is a
+Phase 4 deliverable.
+
+---
+
+## D8 — Transition-table completions: redundant commands idempotent-accept; `RESOLVING` aborts to `WAITING` on discovery regression; `caused_by_command_id` empty unless command-caused (2026-07-07, accepted)
+
+**Context.** Phase-1 plan review found three edges the D2 table left undefined, each one a
+test that could not be written until decided: a redundant `ENABLE_ROUTE`/`DISABLE_ROUTE`
+arriving with a **new** `command_id` (the duplicate row only covers same-id replay, the
+re-arm row only covers `ERROR`); discovery regressing below `READY` while a route is
+`RESOLVING` (the table exited `RESOLVING` only via success or failure); and the
+`caused_by_command_id` status field, which had no defined value for transitions not caused
+by a command.
+
+**Decision.**
+
+- **Redundant state-changing commands are idempotent accepts.** An `ENABLE_ROUTE` targeting
+  a route that is already desired-enabled (any state except `ERROR`, whose re-arm path D2
+  already defines), or a `DISABLE_ROUTE` targeting a `DISABLED` route, is **accepted** with
+  an ack message like "already enabled"; the ack is cached per D4; there is **no** state
+  change and **no** revision bump (D5: the desired spec did not change). Commands declare
+  desired state, so re-declaring it is success — and an evicted-then-retried command (D4's
+  documented risk) now degrades to a harmless accept instead of a contradictory reject.
+- **`RESOLVING` aborts to `WAITING_FOR_DISCOVERY` when discovery regresses.** Sticky
+  `ERROR` stays reserved for genuine resolve/entity-creation failures; a transient endpoint
+  flap mid-resolve never requires operator re-arm. New authoritative rows for the D2 table:
+
+  | From | Event (guard) | To | Side effects |
+  |---|---|---|---|
+  | `RESOLVING` | discovery facts change (D < `READY`) | `WAITING_FOR_DISCOVERY` | abort resolve; discard partial entities; revision++ |
+  | any except `ERROR` | redundant `ENABLE_ROUTE`/`DISABLE_ROUTE`, new `command_id` (route already in desired state) | (no change) | ack `accepted=true` ("already …"); cache ack; **no** revision bump |
+
+- **Fake-seam consequence (Phase 1).** The abort row is only testable if the fake
+  `EntityFactory` models resolve as a **pending** operation completed by an explicit
+  test-posted event (as D2 already implies for teardown-complete). Phase 1's fakes must
+  support deferred resolve completion — which is also the seam Phase 3's real asynchronous
+  entity creation needs.
+- **`caused_by_command_id` is empty unless the change was directly caused by an accepted
+  command.** Discovery- and runtime-driven transitions (e.g. `WAITING_FOR_DISCOVERY ->
+  RESOLVING`, endpoint-loss degradation) carry an empty id. No "last command that touched
+  the route" persistence — that would show a stale command id on failures it did not cause.
+
+**Docs changed.** `implementation-plan.md` (Phase 1 evidence), `command-status.md`
+(`caused_by_command_id` note).
+
+---
+
+## D9 — `DESCRIBE` is exempt from the command history (2026-07-07, accepted; amends D4)
+
+**Context.** D4 caches the ack for every processed command, and `DESCRIBE` is a command. A
+harness polling `DESCRIBE` at 1 Hz cycles the 256-entry FIFO in ~4 minutes, evicting
+`ENABLE_ROUTE`/`DISABLE_ROUTE` acks and turning delayed retries into "new commands".
+
+**Decision.** Only **state-changing** command kinds enter the history. `DESCRIBE` is
+processed fresh every time and its ack is not cached; a duplicate `DESCRIBE` is simply
+re-processed (read-only, so replay is harmless and byte-stable for unchanged state). With
+reads exempt, 256 entries covers any plausible mutation-retry window, and combined with
+D8's idempotent accept the eviction risk is effectively retired.
+
+**Docs changed.** none beyond this log.
+
+---
+
+## D10 — Phase 1 routes come from test fixtures; `RouteConfigParser` lands in Phase 4 (2026-07-07, accepted; amends D7)
+
+**Context.** D7 said the Phase 1 controller is constructed with specs "from the Phase 0
+config parser or test fixtures" — but the Phase 0 parser (`RouterIdentity`) is deliberately
+identity-only and does not read the `routes:` sections. The parser branch was a dead
+option, and no phase in the implementation plan owned `RouteConfigParser`.
+
+**Decision.**
+
+- Phase 1 constructs the controller with **fixture `RouterRouteSpec` lists only**;
+  `router_main` is untouched and Phase 1's running-code evidence is the unit-test target
+  (already the shape of its evidence list). No demo scaffolding.
+- **`RouteConfigParser`** (full `routes:`/`participants:`/QoS-section parsing plus
+  role-aware `source_side`/`destination_side` selection) is an explicit **Phase 4
+  deliverable** — Phase 4 is where role-aware YAML selection first appears, so the parser
+  lands with its first consumer. Phases 2–3 keep using fixtures/hardcoded specs.
+
+**Docs changed.** `implementation-plan.md` (Phase 1 contract banner, Phase 4 deliverables).
+
+---
+
+## D11 — Per-topic activation and per-topic status; route `operational_state` is derived over topic states (2026-07-08, accepted; amends D1, D2, D5)
+
+**Context.** Routes carry a topic *list* (`platform_events` has two), but D1's discovery
+facts and D2's states were per-route, singular. Undefined: does a route wait for **all**
+topics to be discoverable, or activate per topic? And status had no per-topic detail, so a
+forwarding topic could hide a cold one.
+
+**Decision.**
+
+- **Per-topic activation.** Discovery facts (`input_writer_seen`, `type_resolved`,
+  `qos_resolved`, auto-QoS `output_reader_seen`) are tracked **per topic**, each with its
+  own `RouterRouteDiscoveryState` rollup. A route is **active as soon as at least one topic
+  is ready**; each topic's entities (reader, writer, `ReadCondition`) are created and torn
+  down independently as that topic's facts change. A topic joining or leaving an already-
+  active route causes **no route-level operational transition** — it is visible in the
+  per-topic status and bumps `state_revision`.
+- **Per-topic entity state.** New enum `RouterRouteTopicState`:
+  `TOPIC_IDLE` (no entities), `TOPIC_CREATING`, `TOPIC_FORWARDING`, `TOPIC_TEARING_DOWN`,
+  `TOPIC_ERROR` (sticky until command re-arm, mirroring D2's route-level rule). Creation
+  and teardown are event-bounded per topic, same as the route-level model (the Phase 1
+  fakes' pending-completion seam from D8 applies per topic).
+- **Route `operational_state` becomes a pure derivation** over the topic states of an
+  enabled route:
+
+  | Condition over topic states | `operational_state` |
+  |---|---|
+  | commanded disabled (teardown of all topics complete) | `DISABLED` |
+  | all `IDLE` (or `IDLE`/`ERROR` mix with no activity) | `WAITING_FOR_DISCOVERY` |
+  | ≥ 1 `CREATING`, none `FORWARDING` | `RESOLVING` |
+  | ≥ 1 `FORWARDING` | `ENABLED` |
+  | none `FORWARDING`/`CREATING`, ≥ 1 `TEARING_DOWN` | `DEGRADED` |
+  | route-wide failure (e.g. participant missing), or **all** topics `TOPIC_ERROR` | `ERROR` |
+
+  The D2 table remains the authoritative command/lifecycle contract with its guards read
+  over the topic set: `D = READY` means "≥ 1 topic READY"; the `ENABLED → DEGRADED` trigger
+  is the **last** forwarding topic losing its requirements; `DEGRADED` teardown-complete
+  goes to `RESOLVING` if any topic is READY, else `WAITING_FOR_DISCOVERY`.
+- **Error containment.** One topic's entity-creation or runtime failure marks **that topic**
+  `TOPIC_ERROR` (with its own `last_error`) and does not stop sibling topics. Route-level
+  sticky `ERROR` is reserved for route-wide failures or all topics errored. Command re-arm
+  (D2's `ERROR` exit) retries errored topics — at route scope it also clears per-topic
+  errors.
+- **Status shape.** `RouterRouteStatus` gains `sequence<RouterRouteTopicStatus> topic_status`
+  (per-topic name, discovery rollup, `topic_state`, counters, `last_error`). Route-level
+  `discovery_state` becomes the **best (max)** topic rollup — consistent with "active if any
+  topic is ready" — and route-level counters are aggregates across topics. `state_revision`
+  bumps on any topic's `topic_state` or discovery-rollup change (extends D5's predicate).
+
+**Rationale.** One cold or broken topic must not block the others (`platform_events`
+should deliver `PlatformCommandAck` even if `ContactReport` has no writer yet); the
+per-topic sequence keeps that visible instead of hidden behind a green route. Deriving the
+route state keeps exactly one source of truth — topic states — so route and topic status
+can never contradict.
+
+**Phase impact.** Phase 1 implements the per-topic model directly (fixtures include a
+two-topic route); Phase 3 stays single-topic; Phase 7 (`platform_events`) exercises it
+against real DDS.
+
+**Docs changed.** `command-status.md` (IDL: `RouterRouteTopicState`,
+`RouterRouteTopicStatus`, `topic_status` field + semantics note), `code-architecture.md`
+(`RouteState` per-topic block), `implementation-plan.md` (Phase 1 banner + evidence).
+
+---
+
+## D12 — `DiscoveryIndex` uses builtin readers with `ReadCondition`s on the `AsyncWaitSet`; disabled-participant startup; GUID-keyed upsert cache (2026-07-08, accepted)
+
+**Context.** Phase 2 left "built-in publication/subscription readers or Connext discovery
+listeners" open (also the Phase-2 confidence-investigation row;
+[connext-investigation-review.md](connext-investigation-review.md) leaned listener-first
+with readers as the fallback). Mechanics validated against 7.7 via `ask_connext_question`
+(2026-07-08).
+
+**Decision.**
+
+- **Builtin readers, no listeners.** The index is fed by the builtin `DCPSPublication`,
+  `DCPSSubscription`, and `DCPSParticipant` DataReaders with **`ReadCondition`s attached to
+  the router's own `AsyncWaitSet`**. The dispatch handler `take()`s and posts
+  `PublicationDiscovered` / `SubscriptionDiscovered` / `EndpointLost` controller events —
+  uniform with route dispatch and automatically compliant with the shallow-callback rule.
+  (The participant reader is included so endpoint records can be joined to their owning
+  participant and participant loss can be observed.)
+- **No-loss startup.** Builtin readers are created **lazily** in 7.7, so a late lookup is
+  not guaranteed to replay earlier discovery. `ParticipantRegistry` therefore creates each
+  participant **disabled** (factory `autoenable_created_entities = false`), looks up the
+  builtin readers and attaches conditions, **then** enables the participant.
+- **Cache semantics.** Builtin readers are KEEP_LAST(1) per instance — a **current-state
+  cache, not an event log**. The index keys records by endpoint GUID (`BuiltinTopicKey`),
+  treats samples as **upserts** (a later sample for the same instance can add data — e.g.
+  the discovered type, D13), and derives removals from builtin **instance-state
+  transitions** (graceful dispose now; participant-loss purge semantics are a separate
+  pending decision).
+- **Queue consequence.** With real discovery posting from waitset dispatch threads, the
+  `ControllerEvent` queue is explicitly **MPSC** (multiple producer threads, one consumer
+  strand) from Phase 2 on; Phase 1's implementation must not bake in single-threaded
+  producers.
+
+This resolves the Phase 2 confidence-investigation row.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 banner, deliverable, investigation row),
+`code-architecture.md` (`ParticipantRegistry`/`DiscoveryIndex` bullets, concurrency rule),
+`connext-investigation-review.md` (Phase 2 fallback promoted to decision).
+
+**Amended by D16** — participant-purge fan-out into per-endpoint `EndpointLost` is defined
+there (the pending purge-semantics item above is resolved).
+
+---
+
+## D13 — LAN participants set `request_types_filter`; discovered type is optional-until-resolved (2026-07-08, accepted)
+
+**Context.** In 7.7 (TypeLookup + TypeObject v2 on by default), Connext requests an unknown
+remote type only when a **matching local endpoint** exists or the topic matches
+`DiscoveryConfigQosPolicy::request_types_filter`. The router deliberately creates no local
+endpoints before type/QoS resolution ("discovery before DDS entity construction"), so on the
+learning side the D1 fact `type_resolved` would **never latch** — every route would sit in
+`DISCOVERY_PARTIAL` forever with no error.
+[connext-investigation-review.md](connext-investigation-review.md) already pins the WAN
+side: the filter must **not** be set there (the router is the type *authority* on the WAN,
+not a learner; `"*"` would proactively pull every remote type across the constrained link).
+
+**Decision.**
+
+- **LAN participants** (where the router learns types from discovered application writers)
+  set `request_types_filter` — `"*"` for the POC, narrowable to the configured route topic
+  list later. **WAN/team participants keep it unset**, per the WAN type-exchange finding.
+- **Asynchronous type arrival is the normal case.** The first builtin sample for an endpoint
+  may carry no type; endpoint records hold an **optional** `DynamicType`
+  (`PublicationBuiltinTopicData::type()` / `get_type_no_copy()`), typically populated by a
+  later builtin update of the same instance (D12 upsert). While pending, the topic simply
+  stays `DISCOVERY_PARTIAL` (D1) — no timeout; status explains the wait. Resolution order is
+  unchanged: generated support → loaded XML catalog → discovered TypeObject/TypeLookup.
+- Legacy **TypeObject v1 acceptance** (`endpoint_type_object_lb_serialization_threshold = -1`)
+  is consciously **omitted** — every process on this rig is 7.7/TypeObject v2; revisit only
+  if an older remote appears.
+- **Reference implementation:**
+  [`connext_starter_kit/tools/rti_view/rti_view/discovery.py`](https://github.com/rtidgreenberg/connext_starter_kit/blob/main/tools/rti_view/rti_view/discovery.py)
+  (`configure_type_lookup_qos()`, optional-type endpoint records, type-availability scoring)
+  — the same pattern proven in a working dynamic-subscription tool.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 evidence),
+`code-architecture.md` (`DiscoveryIndex` bullet),
+`connext-investigation-review.md` (LAN-side pointer in the WAN type-exchange section).
+
+---
+
+## D14 — Link metrics: capture and per-peer rollup only; health inference deferred to a correlation experiment (2026-07-08, accepted)
+
+**Context.** Tenet 5 lists "(Future) per-writer/reader protocol statistics" as a
+justification for the custom relay, but nothing defined what is captured or how. An
+investigation validated against Connext 7.7 (Modern C++, `ask_connext_question`, 2026-07-08)
+established what reliable-protocol statistics a router-to-router writer/reader pair exposes
+and how a middleware-level RTT can be measured. Full findings and capture design:
+[link-health.md](link-health.md).
+
+**Decision.**
+
+- **Capture first, infer later.** The router captures and publishes raw per-link metrics; it
+  does **not** classify link health from them. Presence (`RouterHealth` DEAD/STALE) remains
+  the only health authority until a controlled link-degradation experiment (netem/EMANE
+  ground truth) correlates each metric with known impairment. Thresholds/classification are
+  a separate future decision gated on that experiment.
+- **Sources.** Per-matched-endpoint protocol statuses on WAN endpoints
+  (`matched_subscription_datawriter_protocol_status` by handle/locator,
+  `matched_publication_datareader_protocol_status`), `ReliableWriterCacheChangedStatus`
+  (backpressure: unacked count/peak, window-full and watermark events),
+  `ReliableReaderActivityChangedStatus` (inactive peers), reader `SampleLostStatus`
+  distinguishing `lost_by_writer` (end-to-end loss) from local-limit reasons.
+- **Rollup key: peer `router_id`** — matched endpoint handle/locator → participant GUID
+  (`DiscoveryIndex`) → `router_id`, summed across this router's WAN endpoints per peer. Two
+  sources for the GUID→router join, either sufficient: the `PresenceMonitor` roster and the
+  D15 participant `user_data` tag (`act.router=<node>/<router>`), which identifies router
+  participants even before/without a presence heartbeat.
+- **One owner, self-computed deltas.** A new `LinkStatsCollector` module is the sole reader
+  of these statuses (reads reset `_change` fields and changed-flags); it polls cumulative
+  totals on a ~1 s tick and computes interval deltas itself, never trusting `_change`.
+- **RTT probe via application acknowledgment on a dedicated `RouterLinkProbe` topic.**
+  `APPLICATION_AUTO` + `on_application_acknowledgment` gives per-peer roundtrips from one
+  writer, at the cost of an AppAck + AppAckConf message per sample per peer — negligible at
+  ~1 Hz probe cadence. Probe QoS: `RELIABLE`, `VOLATILE`, `KEEP_LAST(1)`, no liveliness,
+  piggyback heartbeat per sample (`heartbeats_per_max_samples == send window`, fixed
+  window), zero reader `heartbeat_response_delay`. App-ack and the zero-delay QoS are
+  **never** applied to data routes (per-sample handshake scales with traffic; retention
+  extends to fully-ACKed; ACK-delay jitter exists to prevent ACK implosion).
+  **Carrier discussed and decided (2026-07-08): dedicated topic, not `RouterHealth` reuse.**
+  Reuse would put app-ack retention semantics on the presence authority (unvalidated against
+  `TRANSIENT_LOCAL`/`KEEP_LAST(1)` replacement), generate bogus RTTs from durable-replay
+  app-acks at peer rejoin, and entangle probe tuning with presence DEADLINE/lease
+  calibration. The cost of the dedicated topic — one more WAN writer/reader pair per router
+  of discovery, restart-churned GUIDs in peers' discovery DBs, `remote_*_allocation`
+  headroom — is **explicitly accepted** for that isolation. `RouterHealth` QoS is untouched;
+  it stays the passive stats bellwether.
+- **Publication: LAN only** — per-peer `ActRouterLinkStats` samples plus one structured log
+  line per interval; nothing new crosses the WAN. Metric deltas do not bump
+  `state_revision` (consistent with D5).
+
+**Resolved choices (2026-07-08 discussion).**
+
+- **Poll period: config-fixed** (YAML, default 1 s, constant per run). No runtime command,
+  no adaptive cadence — a constant cadence keeps experiment sweeps comparable, and
+  `interval_ms` in the sample means command-adjustability can be added later with no wire
+  change. Adaptive cadence rejected on principle: measurement cadence must not depend on
+  the measured signal.
+- **Granularity: per-peer rollup only.** One `ActRouterLinkStats` sample per peer per tick.
+  Matched-endpoint statuses are per (topic-endpoint × peer), so per-topic detail remains
+  observable and can be added later (sequence field mirroring D11's per-topic shape) if the
+  experiment shows per-topic divergence matters; impairment is link-level, so per-peer is
+  the correlating unit.
+- **Publication: LAN topic + structured log line from the start.** The topic makes the
+  correlation experiment recordable with stock DDS tooling and enables live mesh tooling;
+  the log line keeps the experiment runnable offline.
+- **Phasing: own thin phase immediately after the Presence/Health phase** (reuses the
+  roster/tag GUID→router join and the WAN entities; keeps the presence spike small). The
+  correlation experiment is its own `spikes/` entry (PLAN.md + Python netem driver, per repo
+  convention) anchored to this phase; netem is the experiment's ground-truth generator, not
+  a relay feature (Tenet 3).
+
+**Docs changed.** `link-health.md` (new), README (doc-set index, goal + Why-Try-This
+bullets de-futured), `thesis-and-tenets.md` (Tenet-5 pointer), `code-architecture.md`
+(`LinkStatsCollector` module tree + bullet), `implementation-plan.md` (reframe-banner
+bullet: capture phase after Presence/Health; correlation-experiment investigation row),
+`command-status.md` (`ActRouterLinkStats` LAN topic entry), `presence-and-health.md`
+(`RouterHealth` QoS-untouched/bellwether note; `RouterLinkProbe` + `ActRouterLinkStats`
+topic-table rows).
+
+---
+
+## D15 — Loop safety via `ignore_publication`: self-ignore route output writers at creation; ignore same-node router publications at discovery (2026-07-08, accepted)
+
+**Context.** Builtin readers hide a participant's own endpoints from *discovery*, but they
+do not prevent *matching*: a route output DataWriter and a route input DataReader on the
+same participant/topic/partition **do** match. The `platform-team` instance will hold both
+for `PlatformData` on its one LAN participant (`platform_team_to_wan` input reader,
+`wan_team_to_platform` output writer) — a forwarded sample would re-enter the outbound
+route and echo across the team WAN, invisibly to the discovery index. The same-node sibling
+instance's writers are likewise visible, matchable candidate inputs. Partitions **cannot**
+enforce non-matching here (validated 7.7): matching is evaluated per reader-writer pair on
+the shared partition strings, and router and apps both legitimately need the same partition.
+Ignore semantics validated via `ask_connext_question` (2026-07-08).
+
+**Decision.**
+
+- **Self rule — ignore at creation.** Immediately after `EntityFactory` creates a route
+  output DataWriter — after creation, **before the first write** / before handing it to the
+  runtime — the owning participant ignores it:
+  `dds::pub::ignore(participant, writer.instance_handle())`. Ignored publications are never
+  matched by future readers either, so no route input reader on that participant can ever
+  receive the router's own forwarded output, regardless of route config. Scope: route
+  output writers only (admin/status/presence writers are not candidate route inputs).
+- **Same-node rule — tag-driven ignore at discovery.** Every router participant sets
+  `user_data = act.router=<node>/<router>` (participant name as human-readable secondary).
+  In the D12 dispatch handler, a discovered publication whose owning participant carries a
+  **same-node** router tag is first recorded in the index (flagged ignored — post-ignore
+  builtin visibility is not normatively specified, so record before ignoring), then ignored
+  via `dds::pub::ignore(participant, sample_info.instance_handle())`. This is RTI's
+  documented safest call site (during builtin-sample processing). Remote routers'
+  publications are untouched — on the WAN they are the *expected* route inputs.
+- Endpoint records gain **`origin_router`** (empty for application endpoints), joined from
+  the `DCPSParticipant` reader already in the index (D12); used for status/debug and as the
+  same-node trigger. Enforcement itself is DDS-level, not route-matching logic.
+- **Rejected:** `ignore_participant` — domain-wide suppression of the sibling would
+  silently kill any future node-local router coordination topic and erase the sibling from
+  the index. Partitions as enforcement — cannot prevent the match (see context).
+  Irreversibility of ignore in 7.7 is accepted: a restarted sibling presents new handles
+  and is simply re-ignored on rediscovery.
+- **Origination visibility (added same session).** The tag join doubles as a
+  router-name → participant-GUID mapping usable by the presence roster and the link-stats
+  rollup (D14). On top of it, route runtimes perform a cheap per-sample origination check:
+  each reader keeps a seen-set of `SampleInfo::publication_handle`s (one hash lookup on the
+  hot path); the **first** sample from a new handle posts an `InputOriginObserved` event and
+  the controller resolves the handle against the index and logs the origination (app writer
+  vs `origin_router`). Each leg has an expected origin — **LAN inputs: app-originated only**
+  (self/sibling are ignored; remote routers never write into this node's LAN),
+  **WAN inputs: router-originated** — so deviations are warned loudly: router-origin on a
+  LAN input means the ignore protection was bypassed or a cross-node route loop exists;
+  app-origin on a WAN input means something is publishing directly onto the WAN domain.
+
+**Phase 8 side-finding (recorded here, decision deferred to Phase 8).** Publisher/Subscriber
+PARTITION **and** participant-level partition are **runtime-mutable** in 7.7: `set_qos`
+triggers rediscovery/rematching without entity recreation (participant-level propagates via
+participant discovery, so slower). `SET_PARTICIPANT_PARTITION` may therefore be a plain QoS
+change; Phase 8's "recreate affected entities" is the fallback, not the premise.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 banner, deliverable, evidence; Phase 3
+evidence; Phase 8 open question + investigation row), `code-architecture.md`
+(`ParticipantRegistry`, `DiscoveryIndex`, `EntityFactory` bullets; `InputOriginObserved`
+event row).
+
+---
+
+## D16 — Endpoint loss is participant-lease-driven: short LAN lease, ordered WAN lease; index fans participant purge into per-endpoint loss (2026-07-08, accepted)
+
+**Context.** Graceful shutdown disposes builtin endpoint instances promptly, but a
+SIGKILLed process's endpoints stay visible until its **remote participant liveliness lease**
+expires (validated 7.7; the stock default is long — the exact figure was not confirmed
+numerically and is measured in the Phase 2 smoke). Meanwhile
+[presence-and-health.md](presence-and-health.md) already assigns the WAN participant lease a
+role: it is the mesh crash-detection knob (starting point
+`BuiltinQosSnippetLib::Optimization.Discovery.Common`, 10 s lease / 3 s assert), and
+participant purge is one of the DEAD triggers driving bulk instance cleanup.
+
+**Decision.**
+
+- **LAN participants: short lease.** Starting shape ≈ **5 s lease / 1 s assert** (final
+  values pinned after the Phase 2 smoke measures the default and the actual purge timing).
+  A dead local app degrades its routes in seconds, and kill-based tests are observable
+  without minute-long waits.
+- **WAN/team participants: presence-ordered lease.** Adopt the presence doc's starting
+  point (≈ 10 s lease / 3 s assert), with the recorded **ordering constraint**:
+  `WAN participant lease > RouterHealth liveliness window (≈ 2–3× heartbeat period)`.
+  The presence topic is therefore always the **first and authoritative** DEAD signal; the
+  DDS participant purge trails it as backstop and bulk cleanup
+  (`NOT_ALIVE_NO_WRITERS` fan-out), and can never race ahead of the roster. Presence
+  calibration owns the concrete values; this constraint must survive any retune.
+- **DDS handles the purge; the index reacts.** A participant purge — graceful dispose *or*
+  lease expiry — is fanned out by `DiscoveryIndex` into `EndpointLost` for **every endpoint
+  owned by that participant** (the `DCPSParticipant` reader's third job, after the D15 tag
+  join and D12 startup). Route topics whose discovery facts regress then transition per the
+  D2/D11 tables. This resolves the purge item D12 left pending.
+- **Phase 2 smoke measures reality:** the actual 7.7 default participant lease, and
+  observed endpoint-removal latency for graceful exit vs SIGKILL under the chosen LAN
+  values.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 evidence), `code-architecture.md`
+(`DiscoveryIndex` purge fan-out), `presence-and-health.md` (participant-tuning ordering
+constraint), D12 (amend note).
+
+---
+
+## D17 — `RouterStatus` carries no endpoint inventory; discovery visibility = per-topic `discovery_state` + structured log; real LAN `StatusPublisher` lands in Phase 2 (2026-07-08, accepted)
+
+**Context.** Phase 2's evidence said "router status shows discovered endpoints and matching
+route candidates," but `RouterStatus` has no discovered-endpoint fields, and D7 deferred the
+DDS status writer to "admin plumbing." Also: codegen bounds unbounded IDL sequences at 100
+entries, and a busy ACT domain churns endpoints — an inventory field would be both
+truncation-prone and revision-bump noise on the one-coherent-sample status topic.
+
+**Decision.**
+
+- **No endpoint dump in `RouterStatus`.** The per-route/per-topic `discovery_state`
+  (D1/D11) *is* the "matching route candidates" signal — a topic at `PARTIAL`/`READY` shows
+  discovery found and matched it. The raw endpoint inventory (topic/type/QoS summaries,
+  `origin_router`, ignored endpoints — D15) goes to the **structured log**. A verbose
+  `DESCRIBE` inventory response is a possible future addition, explicitly out of POC scope.
+- **Phase 2 stands up the real DDS `StatusPublisher`** on the LAN participant (types
+  already generated in Phase 0; admin rides the LAN participant, which Phase 2 creates
+  anyway). Write-only: the command **reader** stays in Phase 6 per D7. Publication cadence
+  needs no new rule — discovery rollup changes already bump `state_revision` (D5), and
+  status publishes on revision change, so discovery progress is externally observable
+  (e.g. via `rti_view` or any LAN subscriber) as it happens.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 banner + evidence),
+`command-status.md` (`RouterStatus` scope note).
+
+---
+
+## D18 — Multi-network peers: one WAN participant per unique network (`allow_interfaces_list`), never a multi-homed WAN participant (2026-07-08, accepted — activates when multi-network reaches the rig)
+
+**Context.** Real deployments may reach peers over multiple physical networks (e.g. mesh
+radio + SATCOM), typically separate NICs. A single WAN participant on a multi-homed node
+announces unicast locators for **all** interfaces, and — validated 7.7
+(`ask_connext_question`, 2026-07-08) — remote writers then send **user DATA redundantly to
+every announced locator** (duplicates discarded at the receiver; locator-reachability prunes
+dark paths; the OS routing table picks the egress NIC). Consequences of staying multi-homed:
+near-duplicated traffic on constrained links, and broken per-path observability — writer-side
+per-locator stats exist (`matched_subscription_datawriter_protocol_status(Locator)`), but
+reader-side status is per-publication only and the D14 app-ack RTT probe cannot attribute
+which network an ack rode. Full findings: [link-health.md](link-health.md), "Multi-network
+peers".
+
+**Decision.**
+
+- **One WAN DomainParticipant per unique network**, pinned to its NIC/subnet via the UDPv4
+  builtin transport `allow_interfaces_list` (plus `max_interface_count` as a guard). A WAN
+  participant is never multi-homed. Today's single-network rig is the degenerate `N = 1`
+  case — nothing changes until a second network exists.
+- **Everything per-path falls out by construction**: each network participant carries its
+  own `RouterHealth` writer/reader (per-path presence in the roster, keyed
+  `(router_id, network)`), its own `RouterLinkProbe` pair (per-path RTT), and its endpoints'
+  protocol statuses are inherently single-path — the D14 rollup key generalizes to
+  `(peer router_id, network)` with **no per-locator API machinery needed**.
+- **Route-level path policy becomes expressible**: a route's WAN side names the network
+  participant (e.g. `wan.mesh` vs `wan.satcom`), so "this topic over mesh, that one over
+  SATCOM" is config, not transport guesswork. Policy details (default network, failover
+  between networks) are **not** designed here — separate decision when multi-network lands.
+- **Rejected:** single multi-homed WAN participant + locator-aware stats (D14 discussion
+  option b) — redundant-DATA cost stands, attribution stays writer-only, per-path RTT
+  impossible; the per-locator machinery would be wasted once participant-per-network arrives.
+- **Config/registry consequence (deferred to activation):** network definitions
+  (name → interface allowlist) join the participant config; `ParticipantRegistry` creates
+  one WAN participant per configured network; discovery/entity cost scales with network
+  count — accepted, mirroring the D14 probe-topic reasoning (observability and traffic
+  segregation are worth endpoints).
+
+**Docs changed.** `link-health.md` (multi-network section: candidate positions → this
+decision), `configuration.md` (never-multi-homed rule under the POC QoS rules; YAML network
+definitions deferred to activation), `code-architecture.md` (`ParticipantRegistry` bullet),
+`presence-and-health.md` (`RouterHealth` multi-network note: per-path presence keyed
+`(router_id, network)`). Concrete network-definition YAML shape and route→network path
+policy remain deferred to activation (no second network in the current rig).
+
+---
+
+## D19 — Endpoint-record QoS summary: pinned captured subset; history/resource_limits are NOT discoverable and must come from aliases/defaults (2026-07-08, accepted)
+
+**Context.** Phase 2 delivers "useful QoS summaries" without saying which policies, and
+Phase 5's `auto` QoS derives router endpoint QoS from discovered endpoints. Validated 7.7
+(`ask_connext_question`, 2026-07-08): the builtin publication/subscription data carries many
+but not all policies.
+
+**Decision.**
+
+- **Captured subset** (the endpoint record's QoS summary, from
+  `PublicationBuiltinTopicData` / `SubscriptionBuiltinTopicData`): reliability, durability
+  (+ `durability_service`), deadline, latency_budget, liveliness, ownership (+ strength),
+  lifespan, destination_order (**kind only** — its other fields are not propagated),
+  presentation, partition, and data representation.
+- **Negative finding (load-bearing for Phase 5):** **HISTORY and RESOURCE_LIMITS are not
+  propagated in discovery at all.** `auto` QoS can therefore never derive history or
+  resource limits from discovered endpoints — those always come from the router's QoS
+  aliases/defaults. This pre-answers part of Phase 5's investigation row: the "minimum
+  compatible policy set" is bounded by what discovery can actually see (the subset above);
+  anything else is alias-supplied by definition.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 deliverable; Phase 5 deliverable note +
+investigation row), `code-architecture.md` (`DiscoveryIndex` bullet pointer).
+
+---
+
+## D20 — Phase 2 contract completions: participants from config (no admin participant); discovery facts derive from matched-endpoint sets; same-topic type-name conflicts are first-resolved-wins (2026-07-08, accepted)
+
+**Context.** Three leftover gaps from the Phase 2 review: the deliverable still listed an
+"admin" participant (stale — admin rides the LAN participant per
+[command-status.md](command-status.md)); D1/D11's per-topic discovery facts are booleans,
+but a topic can have several matched writers; and two discovered writers on one topic with
+different type names had no defined policy.
+
+**Decision.**
+
+- **Participants come purely from config, per instance** — `control-platform`: LAN + WAN;
+  `platform-team`: LAN + team-WAN. There is **no admin participant**: admin endpoints hang
+  off the LAN participant. (Multi-network expansion per D18 when it activates.)
+- **Discovery facts derive from per-topic matched-endpoint sets.** The index keeps the set
+  of matched input writers (and, for auto-QoS routes, output readers) per route topic;
+  `input_writer_seen` ⇔ set non-empty. Losing one of several writers updates the set with
+  **no** rollup change and no revision bump (consistent with the D2 note on non-boundary
+  fact changes); only the last writer's loss regresses the rollup.
+- **Same-topic type-name conflict: first-resolved-wins.** The first type resolved for a
+  route topic is the route's type; a subsequently discovered writer with a different type
+  name on the same topic is recorded in the index, logged as a **warning**, and does not
+  change the resolved type. Status shows the resolved type (`resolved_type_name`); the POC
+  does not attempt multi-type topics.
+
+**Docs changed.** `implementation-plan.md` (Phase 2 deliverable wording),
+`code-architecture.md` (`TopicRouteState.discovery_facts` comment).
+
+**Amends D1/D11** — the raw facts are now set-derived, not stored booleans.

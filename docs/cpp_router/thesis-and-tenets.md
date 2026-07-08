@@ -27,7 +27,10 @@ and the justification is **observability and control**, *not* semantic preservat
    up (see [presence-and-health.md](presence-and-health.md)).
 5. **(Future) per-writer/reader protocol statistics** to assess DDS **link health** —
    retransmits, NACKs, sample loss, latency per endpoint pair. The relay is the natural
-   measurement point; neither RS nor the network layer gives you this.
+   measurement point; neither RS nor the network layer gives you this. Investigated and
+   scoped capture-first in [link-health.md](link-health.md) (D14): metrics are captured and
+   rolled up per peer now; health *inference* waits for a link-degradation correlation
+   experiment.
 
 **Instance State Consistency (ISC) is explicitly NOT a justification and is out of scope** —
 see Tenet 2 and [isc-findings.md](isc-findings.md).

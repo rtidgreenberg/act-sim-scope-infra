@@ -20,6 +20,12 @@ Mesh-status topic (LAN): `ActRouterMeshStatus` — this router's aggregated view
 connected router (the "connected router list"), built from the WAN `RouterHealth` topic. See
 [Presence & Health](presence-and-health.md#aggregate-mesh-view-published-over-the-lan).
 
+Link-stats topic (LAN): `ActRouterLinkStats` — one sample per connected peer per poll
+interval carrying raw reliable-protocol link metrics (NACKs, repair traffic, send-window
+backpressure, probe RTT). **Capture only** — telemetry, not health classification, and not
+part of the command/ack/revision machinery (metric deltas never bump `state_revision`). See
+[Link Metrics](link-health.md) (D14).
+
 Transport (decided): the command/status topics ride the router's **local LAN participant**,
 not a dedicated admin domain/participant. `DomainParticipant`s are the expensive resource;
 topics/partitions are cheap — reusing the LAN participant keeps participant count minimal *and*
@@ -77,6 +83,14 @@ enum RouterRouteDiscoveryState {
     DISCOVERY_READY      // all prerequisites for entity creation available
 };
 
+enum RouterRouteTopicState {
+    TOPIC_IDLE,          // no entities (not discovered, or route not active)
+    TOPIC_CREATING,      // prerequisites ready; entity creation in flight
+    TOPIC_FORWARDING,    // reader + writer + read condition live
+    TOPIC_TEARING_DOWN,  // was forwarding; detach/close in progress
+    TOPIC_ERROR          // entity creation/runtime failed; sticky until command re-arm
+};
+
 struct RouterRouteTopicSpec {
     string name;
     string reader_qos;
@@ -123,15 +137,25 @@ struct RouterCommandAck {
     string message;
 };
 
+struct RouterRouteTopicStatus {
+    string name;
+    RouterRouteDiscoveryState discovery_state;   // per-topic rollup of discovery facts
+    RouterRouteTopicState topic_state;
+    uint64 samples_forwarded;
+    uint64 lifecycle_events_forwarded;
+    string last_error;
+};
+
 struct RouterRouteStatus {
     string route_name;
     RouterRouteSpec desired;
-    RouterRouteOperationalState state;
-    RouterRouteDiscoveryState discovery_state;
+    RouterRouteOperationalState state;           // derived over topic states (D11)
+    RouterRouteDiscoveryState discovery_state;   // best (max) topic rollup (D11)
+    sequence<RouterRouteTopicStatus> topic_status;
     uint64 state_revision;
     string caused_by_command_id;
-    uint64 samples_forwarded;
-    uint64 lifecycle_events_forwarded;
+    uint64 samples_forwarded;                    // aggregate across topics
+    uint64 lifecycle_events_forwarded;           // aggregate across topics
     string last_error;
 };
 
@@ -159,11 +183,19 @@ execution. The role-aware YAML form with `source_side` / `destination_side` is a
 startup config and by `ADD_ROUTE`; each router instance selects the side matching its local
 `node.role` and materializes DDS entities only after discovery finds the needed endpoints.
 
-`RouterRouteStatus.state` is the route lifecycle; `discovery_state` is a pure rollup of the
-current discovery facts with no memory of its own — "was forwarding" memory lives only in
-`ROUTE_DEGRADED` (see [design-decisions.md](design-decisions.md) D1). `state_revision` is a
-monotonic `uint64`: one global counter, with the per-route field stamped at that route's last
-externally visible change (D5).
+`RouterRouteStatus.state` is the route lifecycle, **derived over the per-topic states**: a
+route is active as soon as at least one topic is forwarding, and each topic's entities are
+created/torn down independently as its own discovery facts change (see
+[design-decisions.md](design-decisions.md) D11). `topic_status` carries the per-topic
+detail — discovery rollup, `topic_state`, counters, `last_error` — so a forwarding topic
+never hides a cold or errored sibling; one topic's failure is contained to `TOPIC_ERROR`
+and does not stop the others. Discovery facts roll up per topic with no memory of their
+own — "was forwarding" memory lives only in `ROUTE_DEGRADED` (D1); the route-level
+`discovery_state` is the best (max) topic rollup. `state_revision` is a monotonic
+`uint64`: one global counter, with the per-route field stamped at that route's last
+externally visible change, including per-topic state changes (D5, D11).
+`caused_by_command_id` is empty unless the change was directly caused by an accepted
+command — discovery- and runtime-driven transitions carry no id (D8).
 
 `RouterCommandAck` is the immediate result of accepting or rejecting a command.
 `RouterStatus` is the primary current-state publication and is keyed by `target_node` and
@@ -174,6 +206,13 @@ routes waiting on discovery, and routes that could not start. `router_id` is a n
 identifier for compact correlation with harness logs or generated node IDs. `participants`
 reports the router's current participant names, domains, participant-level partitions, and
 QoS aliases. `RouterRouteStatus` is the per-route entry inside the `routes` sequence.
+
+`RouterStatus` deliberately carries **no discovered-endpoint inventory**
+([design-decisions.md](design-decisions.md) D17): generated sequences are bounded (default
+cap 100) and endpoint churn would be truncation-prone revision noise on the
+one-coherent-sample topic. Discovery visibility comes from the per-topic `discovery_state`;
+the raw endpoint inventory lives in the structured log. A verbose `DESCRIBE` inventory
+response is a possible future addition, out of POC scope.
 
 ## Required POC Commands
 

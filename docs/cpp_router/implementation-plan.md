@@ -8,6 +8,12 @@
 >   not medium. No read-retain / re-assert-on-`ALIVE`.
 > - **Add a Presence/Health phase** (`RouterHealth` topic, roster, presence-driven reset) — see
 >   [Presence & Health](presence-and-health.md). It slots after the core route mechanics.
+> - **Add a Link-Metrics Capture phase** (`LinkStatsCollector`, per-peer LAN
+>   `ActRouterLinkStats`, `RouterLinkProbe` RTT) immediately **after** the Presence/Health
+>   phase — it reuses the roster/D15-tag GUID→router join and the WAN entities. **Capture
+>   only**; health inference is gated on a netem link-degradation correlation experiment
+>   (its own `spikes/` entry) — see [link-health.md](link-health.md) and D14. netem here is
+>   the experiment's ground-truth generator, not a relay feature (Tenet 3 stands).
 > - **`dynamic_data` is the default**; `serialized_cdr` (old Phase 9) stays a **late, opt-in,
 >   eligibility-gated** optimization (no filter / no lifecycle).
 > - **Admin command/status is LAN-local** (resolved open question, [command-status.md](command-status.md)).
@@ -57,7 +63,10 @@ Evidence:
 
 > **Contract pinned** — transition table, `discovery_state` rollup, `state_revision`
 > semantics, idempotency bounds, and the Phase-1 fake seams are decided in
-> [design-decisions.md](design-decisions.md) D1–D7.
+> [design-decisions.md](design-decisions.md) D1–D7; the review completions (redundant-command
+> idempotent accept, `RESOLVING` abort edge, `DESCRIBE` history exemption, fixture-only
+> route source) in D8–D10; per-topic activation and per-topic status (route active when at
+> least one topic is ready; `operational_state` derived over topic states) in D11.
 
 Deliver:
 
@@ -79,25 +88,62 @@ Evidence:
   for discovery, duplicate command returns prior ack (no revision bump), rejected-command
   ack replay, and route error stores `last_error` and stays sticky until re-arm.
 - transition-table conformance tests drive every D2 edge via synthetic controller events,
-  including `ENABLED -> DEGRADED -> RESOLVING|WAITING` through the teardown-complete event.
+  including `ENABLED -> DEGRADED -> RESOLVING|WAITING` through the teardown-complete event
+  and `RESOLVING -> WAITING_FOR_DISCOVERY` on discovery regression via the fake factory's
+  pending-resolve completion (D8).
+- redundant `ENABLE_ROUTE` with a **new** `command_id` on an already-enabled route returns
+  an idempotent accept with no revision bump (D8); `DESCRIBE` acks are never cached and
+  never evict mutation acks from the history (D9).
+- a two-topic fixture route proves per-topic activation (D11): the route reaches `ENABLED`
+  when only its first topic is ready; the second topic later joins in place with no
+  route-level transition (revision bumps, `topic_status` updates); one topic's creation
+  failure lands in `TOPIC_ERROR` without stopping the forwarding sibling; the route derives
+  `ERROR` only when all topics are errored.
 - honesty note: DDS-dependent behavior (real resolve timing, real endpoint loss) is
   simulated by the fakes; Phases 2–3 implement the same D2 contract against Connext.
 
 ### Phase 2: Static Generated-Type Discovery Smoke
 
+> **Contract pinned** — discovery mechanics (builtin readers + `ReadCondition`s on the
+> `AsyncWaitSet`, disabled-participant no-loss startup, GUID-keyed upsert cache, MPSC event
+> queue) and LAN-side type learning (`request_types_filter`, async TypeObject v2 arrival,
+> optional-until-resolved type) are decided in [design-decisions.md](design-decisions.md)
+> D12–D13; loop safety (participant tagging + `ignore_publication` self/same-node rules) in
+> D15; lease tuning + purge fan-out in D16; status surfacing (no endpoint inventory in
+> `RouterStatus`, real LAN `StatusPublisher` this phase) in D17; the QoS-summary captured
+> subset in D19; config-driven participants, set-derived discovery facts, and the
+> type-conflict policy in D20. This resolves this phase's confidence-investigation row.
+
 Deliver:
 
-- `ParticipantRegistry` for admin, LAN, WAN, and team participants.
-- `DiscoveryIndex` backed by built-in publication/subscription readers or Connext
-  discovery listeners.
-- discovered endpoint records with topic name, type name/type identifier, partition, and
-  useful QoS summaries.
+- `ParticipantRegistry` with participants purely from config, per instance
+  (`control-platform`: LAN + WAN; `platform-team`: LAN + team-WAN); admin endpoints ride
+  the LAN participant — there is no admin participant (D20).
+- `DiscoveryIndex` backed by the builtin participant/publication/subscription readers via
+  `ReadCondition`s on the `AsyncWaitSet` (D12).
+- discovered endpoint records with topic name, type name/type identifier, partition,
+  QoS summaries (captured subset pinned in D19), and `origin_router` (participant
+  `user_data` tag join); same-node router publications are ignored at discovery (D15);
+  per-topic matched-endpoint **sets**, not booleans (D20).
 
 Evidence:
 
 - start a tiny generated-type writer and reader in separate processes/domains.
-- router status shows discovered endpoints and matching route candidates without creating
-  route readers/writers yet.
+- the real LAN `StatusPublisher` publishes `RouterStatus` samples (write-only; command
+  reader stays Phase 6): matching route candidates are visible as per-topic
+  `discovery_state` progressions, observable with any LAN subscriber (e.g. `rti_view`),
+  and the full discovered-endpoint inventory — including `origin_router` and ignored
+  endpoints — appears in the structured log, not in `RouterStatus` (D17). No route
+  readers/writers are created yet.
+- the smoke writer's endpoint appears **before** its type (asynchronous TypeLookup); the
+  type resolves on a later builtin update of the same instance and the topic's discovery
+  rollup walks `NONE → PARTIAL → READY` (D13).
+- a writer from a second participant tagged `act.router` on the same node is recorded with
+  its `origin_router` and ignored — it never appears as a route input candidate (D15).
+- killing the smoke writer ungracefully (SIGKILL) removes its endpoints only after the
+  participant lease expires; the smoke measures the stock default lease and the chosen
+  short-LAN-lease timing, and a participant purge fans out `EndpointLost` for all of that
+  participant's endpoints (D16). Graceful exit disposes promptly.
 
 ### Phase 3: One Discovered Route With Explicit QoS
 
@@ -111,6 +157,8 @@ Deliver:
 Evidence:
 
 - publish one sample on the input side and receive it on the output side.
+- the first sample from the input writer logs its origination (app writer vs router tag)
+  via `InputOriginObserved`; an unexpected origin for the leg logs a warning (D15).
 - route transitions `WAITING_FOR_DISCOVERY -> RESOLVING -> ENABLED` in status.
 - stopping the writer detaches the condition and moves the route to degraded/waiting.
 
@@ -118,6 +166,8 @@ Evidence:
 
 Deliver:
 
+- `RouteConfigParser`: full `routes:`/`participants:`/QoS-section YAML parsing (Phase 0's
+  identity reader stays identity-only; Phases 1–3 use fixtures — D10).
 - YAML selection for `source_side` / `destination_side` based on local `node.role`.
 - `control_command` route with platform-side content filter on `msg.destination`.
 - matching config loaded by both control and platform router instances.
@@ -136,6 +186,8 @@ Deliver:
 - LAN `auto` reader QoS derived from discovered local writers.
 - LAN `auto` writer QoS delayed until compatible local readers are discovered.
 - status fields that explain resolved reader/writer QoS summaries.
+- history and resource limits always come from QoS aliases/defaults — they are **not
+  propagated in discovery** and can never be derived from discovered endpoints (D19).
 
 Evidence:
 
@@ -234,13 +286,14 @@ or narrows the fallback path.
 
 | Slice | Current confidence | Investigation | Confidence increases if | Fallback if not |
 |---|---|---|---|---|
-| Phase 2: discovery index | High, but foundational | Compare built-in publication/subscription readers vs Connext discovery listeners for the endpoint fields the router needs | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
+| Phase 2: discovery index | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
 | Phase 3: dynamic entity lifecycle | High, but concurrency-sensitive | Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
-| Phase 5: LAN `auto` QoS | Medium-high | Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set for router readers/writers | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
-| Phase 8: team partition changes | Medium-high | Test participant-level partition change by recreating only affected team route entities while writers/readers are active | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back | restart the `platform-team` router instance on team change for the first demo |
+| Phase 5: LAN `auto` QoS | Medium-high | Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set for router readers/writers — bounded by the discoverable subset (D19): history/resource_limits are never in discovery and are alias-supplied by definition | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
+| Phase 8: team partition changes | Medium-high | Test participant-level partition change **in place via `set_qos`** (validated runtime-mutable in 7.7 — D15 side-finding) while writers/readers are active; recreate-affected-entities is the fallback | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back | restart the `platform-team` router instance on team change for the first demo |
 | Phase 9: serialized-CDR fast path | Medium | Build a standalone Connext 7.7 C++ pass-through for one generated type using DynamicData serialized-buffer APIs | the reader can access the CDR buffer and the writer can publish it without field materialization | ship first route runtime in `dynamic_data` mode and treat serialized CDR as optimization |
 | Phase 10: keyed lifecycle mirroring | Medium | Test dispose/no-writers propagation with one generated keyed type and one DynamicData route using `reader.key_value()` or cached key fields | downstream reader observes matching instance states and keys can be recovered reliably | require generated-type route runtimes for lifecycle-sensitive topics |
 | Phase 11: harness replacement | Medium-high | Replace Routing Service for one non-critical ACT route in container startup while leaving the rest unchanged | startup ordering, peer discovery, logs, and cleanup are understandable in compose/scripts | run the router sidecar in observe-only/status-only mode before removing Routing Service |
+| Link-Metrics Capture phase (banner) | Capture design pinned (D14/D18); metric *meaning* unproven | netem correlation-experiment spike (own `spikes/` entry, Python driver): sweep delay/jitter/loss/rate/blackout one axis at a time against recorded `ActRouterLinkStats` + the ground-truth schedule; also empirically verify per-locator counter attribution and app-ack RTT probe behavior ([link-health.md](link-health.md)) | specific metrics demonstrably track specific impairments with usable lag and noise floor → a follow-up decision pins thresholds/classification feeding the `RouterHealth` rollup | metrics stay raw telemetry; no health inference ships; presence remains the only health authority |
 
 Investigation order should be: Phase 3 attach/detach, Phase 9 serialized CDR API, Phase 10
 key recovery, Phase 5 auto QoS, Phase 8 partition changes, then Phase 11 harness sequencing.
@@ -319,8 +372,12 @@ Routing Service.
   WAN remote admin. See [command-status.md](command-status.md).
 - Do we need route-level flow control in the POC, or is QoS-only prioritization enough for
   the first degraded-link exercise?
-- Can participant-level or publisher/subscriber partition changes be applied in place safely
-  in Modern C++, or is recreate-on-change the right first implementation?
+- ~~Can participant-level or publisher/subscriber partition changes be applied in place safely
+  in Modern C++, or is recreate-on-change the right first implementation?~~ **Resolved
+  (validated 7.7 — see [design-decisions.md](design-decisions.md) D15 side-finding):** both
+  pub/sub and participant-level partitions are runtime-mutable via `set_qos` with automatic
+  rematching, no entity recreation required (participant-level propagates more slowly via
+  participant discovery). In-place change is the premise for Phase 8; recreate is the fallback.
 - Should route definitions eventually support multi-output fanout, or should ACT keep one
   route per input/output pair for clarity?
 
