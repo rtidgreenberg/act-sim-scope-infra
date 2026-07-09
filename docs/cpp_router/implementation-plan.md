@@ -125,14 +125,20 @@ Evidence:
 ### Phase 2: Static Generated-Type Discovery Smoke
 
 > **Contract pinned** — discovery mechanics (builtin readers + `ReadCondition`s on the
-> `AsyncWaitSet`, disabled-participant no-loss startup, GUID-keyed upsert cache, MPSC event
+> `AsyncWaitSet`, disabled-participant no-loss startup, GUID-keyed upserts (the index-side
+> cache since deleted by D30), MPSC event
 > queue) and LAN-side type learning (`request_types_filter`, async TypeObject v2 arrival,
 > optional-until-resolved type) are decided in [design-decisions.md](design-decisions.md)
 > D12–D13; loop safety (participant tagging + `ignore_publication` self/same-node rules) in
-> D15; lease tuning + purge fan-out in D16; status surfacing (no endpoint inventory in
+> D15; lease tuning + purge handling in D16 (its fan-out since demoted to fallback by
+> D28); status surfacing (no endpoint inventory in
 > `RouterStatus`, real LAN `StatusPublisher` this phase) in D17; the QoS-summary captured
 > subset in D19; config-driven participants, set-derived discovery facts, and the
 > type-conflict policy in D20. This resolves this phase's confidence-investigation row.
+> The simplicity pass (Tenet 9) is pinned in D27–D30: the endpoint record is the builtin
+> topic data itself, endpoint removal is native per-endpoint, the expected-origin warning
+> is a discovery-time matching rule, and the index collapses to a translator plus a
+> participant table.
 
 Deliver:
 
@@ -140,11 +146,15 @@ Deliver:
   (`control-platform`: LAN + WAN; `platform-team`: LAN + team-WAN); admin endpoints ride
   the LAN participant — there is no admin participant (D20).
 - `DiscoveryIndex` backed by the builtin participant/publication/subscription readers via
-  `ReadCondition`s on the `AsyncWaitSet` (D12).
-- discovered endpoint records with topic name, type name/type identifier, partition,
-  QoS summaries (captured subset pinned in D19), and `origin_router` (participant
-  `user_data` tag join); same-node router publications are ignored at discovery (D15);
-  per-topic matched-endpoint **sets**, not booleans (D20).
+  `ReadCondition`s on the `AsyncWaitSet` (D12) — a translator plus a small participant
+  table (GUID → `act.router` tag/name), with **no endpoint-record cache**; removals ride
+  the builtin readers' native per-endpoint instance transitions (D28/D30).
+- endpoint records **are the builtin topic data values** (`PublicationBuiltinTopicData` /
+  `SubscriptionBuiltinTopicData`) plus an `origin_router`/`ignored` sidecar — no
+  hand-rolled record struct (D27); the D19 captured subset is the rule for what
+  matching/auto-QoS may read; `origin_router` comes from the participant `user_data` tag
+  join; same-node router publications are ignored at discovery (D15); per-topic
+  matched-endpoint **sets**, not booleans (D20).
 
 Evidence:
 
@@ -164,8 +174,10 @@ Evidence:
   its `origin_router` and ignored — it never appears as a route input candidate (D15).
 - killing the smoke writer ungracefully (SIGKILL) removes its endpoints only after the
   participant lease expires; the smoke measures the stock default lease and the chosen
-  short-LAN-lease timing, and a participant purge fans out `EndpointLost` for all of that
-  participant's endpoints (D16). Graceful exit disposes promptly.
+  short-LAN-lease timing (D16). Removal arrives as **native per-endpoint** `NOT_ALIVE`
+  transitions on the builtin endpoint readers — the smoke counts them and confirms one per
+  owned endpoint for both SIGKILL and graceful exit (D28; the D16 index fan-out returns as
+  fallback only if this cardinality check fails). Graceful exit disposes promptly.
 
 ### Phase 3: One Discovered Route With Explicit QoS
 
@@ -179,8 +191,9 @@ Deliver:
 Evidence:
 
 - publish one sample on the input side and receive it on the output side.
-- the first sample from the input writer logs its origination (app writer vs router tag)
-  via `InputOriginObserved`; an unexpected origin for the leg logs a warning (D15).
+- an unexpected-origin endpoint (a router-tagged writer matching the LAN input leg) is
+  warned loudly at discovery time by the expected-origin rule in controller matching —
+  there is no per-sample origin check (D15/D29).
 - route transitions `WAITING_FOR_DISCOVERY -> RESOLVING -> ENABLED` in status.
 - stopping the writer detaches the condition and moves the route to degraded/waiting.
 

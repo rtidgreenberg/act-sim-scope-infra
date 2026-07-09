@@ -66,22 +66,35 @@ RouterInstance
   in discovery (D15). WAN participants are **never multi-homed** — with multiple physical
   networks it creates one WAN participant per network, interface-pinned via
   `allow_interfaces_list` (D18; today's single network is the `N = 1` case).
-- `DiscoveryIndex` watches discovered publications and subscriptions on those participants
-  and records topic name, type identifiers, registered type name, partitions, and QoS
-  (captured policy subset pinned in D19 — history/resource_limits are never discoverable).
-  It is backed by the builtin participant/publication/subscription readers with
-  `ReadCondition`s on the `AsyncWaitSet` (no listeners); records are endpoint-GUID-keyed
-  **upserts**, removals derive from builtin instance-state transitions, and the discovered
-  `DynamicType` is optional until TypeLookup resolves it — LAN participants set
-  `request_types_filter` so types are requested without a local endpoint match (D12/D13).
-  A discovered publication whose participant carries a **same-node** `act.router` tag is
-  recorded with its `origin_router`, then locally ignored (`dds::pub::ignore`) so no route
-  reader can ever match it; remote routers' WAN writers stay eligible — they are the
-  expected route inputs (D15). A participant purge — graceful dispose or liveliness-lease
-  expiry — is fanned out into `EndpointLost` for every endpoint that participant owned
-  (D16); lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth`
-  presence window. Ownership boundary (D22): the index keeps the GUID-keyed endpoint
-  records and posts **raw record events**; endpoint→route-topic matching and the per-topic
+- `DiscoveryIndex` watches discovered publications and subscriptions on those
+  participants. It is backed by the builtin participant/publication/subscription readers
+  with `ReadCondition`s on the `AsyncWaitSet` (no listeners) and is a **translator, not a
+  cache** (D30): it `take()`s builtin samples, applies the ignore/tag rules, and posts
+  events whose payload is a **copy of the builtin topic data itself**
+  (`PublicationBuiltinTopicData` / `SubscriptionBuiltinTopicData` — validated copyable
+  value types) plus an `origin_router`/`ignored` sidecar; there is no hand-rolled
+  endpoint-record struct and no index-side endpoint store (D27/D30 — the builtin readers'
+  own KEEP_LAST(1)-per-instance caches are the only current-state store; switch to
+  `read()` if an ad-hoc query need ever appears). The D19 captured subset survives as the
+  rule for what matching/auto-QoS may read from a record — history/resource_limits are
+  never discoverable. The discovered `DynamicType` is optional until TypeLookup resolves
+  it — natively, via the builtin data's `type()` field; a later builtin update for the
+  same GUID is simply another upsert event — LAN participants set `request_types_filter`
+  so types are requested without a local endpoint match (D12/D13). The only index-side
+  state is the small **participant table** (GUID → `act.router` tag/name, from the
+  `DCPSParticipant` reader), serving the same-node ignore decision (D15) and the
+  presence/link-stats GUID→router join (D14); participant loss is index-internal — the
+  controller reacts only to per-endpoint losses (D30). A discovered publication whose
+  participant carries a **same-node** `act.router` tag is recorded/logged with its
+  `origin_router`, then locally ignored (`dds::pub::ignore`) so no route reader can ever
+  match it; remote routers' WAN writers stay eligible — they are the expected route inputs
+  (D15). Endpoint removal is **DDS-native and uniform** (D28): a remote participant's
+  removal — graceful or lease-expiry purge — disposes its endpoints' builtin instances
+  too, so `EndpointLost` is posted per observed builtin instance-state transition, one
+  code path for graceful exit, SIGKILL purge, and single-endpoint deletion (the D16
+  app-level fan-out is the fallback if the Phase 2 smoke disproves per-endpoint delivery);
+  lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth` presence
+  window (D16). Ownership boundary (D22): endpoint→route-topic matching and the per-topic
   matched-endpoint sets live in the controller (`TopicRouteState`) — the index never sees
   route specs.
 - `RouteRegistry` stores every configured route for the instance, including disabled routes
@@ -193,8 +206,9 @@ RouteState
 
 TopicRouteState              # one per configured topic on the route — D11
   matched_endpoint_sets      # matched input writers (and auto-QoS output readers) for this
-                             # topic; maintained by the CONTROLLER from raw endpoint-record
-                             # events — the index keeps GUID-keyed records only (D22)
+                             # topic; maintained by the CONTROLLER from discovery events
+                             # carrying builtin-data copies — the index stores no endpoint
+                             # records (D22/D27/D30)
   discovery_facts            # derived from the sets (D20): input_writer_seen ⇔
                              # matched-writer set non-empty; ditto output_reader_seen;
                              # plus type_resolved, qos_resolved
@@ -212,8 +226,8 @@ TopicRouteState              # one per configured topic on the route — D11
 The rule of thumb is: **routes read state, the controller writes state**. A route runtime may
 own fast-path DDS entities and route-local counters, but it does not decide global route
 state. When it observes something meaningful, it posts an event such as
-`SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, `InputOriginObserved`
-(first sample from a new `publication_handle` — D15), or `RouteEntityError`.
+`SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, or
+`RouteEntityError`.
 The controller folds that event into `MutableRouterState`, increments `state_revision` when
 the externally visible state changes, builds a new `RouterStatus` snapshot (D25), and asks
 `StatusPublisher` to publish it.
@@ -242,13 +256,12 @@ The controller should process these event categories on one serialized strand or
 | Event | Source | Controller action |
 |---|---|---|
 | `CommandReceived` | command reader | validate command id and route target (events are post-admission — node/router targeting is the command reader's job, D24), update desired state, publish ack, reconcile route |
-| `PublicationDiscovered` | discovery index | update discovery cache, try to activate matching desired-enabled routes |
+| `PublicationDiscovered` | discovery index | upsert per-topic matched sets (D22), warn on unexpected origin for the leg (D29), try to activate matching desired-enabled routes |
 | `SubscriptionDiscovered` | discovery index | update output readiness for `auto` writer QoS routes |
 | `EndpointLost` | discovery index or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
 | `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
 | `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, drive `DEGRADED → RESOLVING\|WAITING` per D2; stale stamp → discard (D21/D23) |
-| `InputOriginObserved` | route runtime (first sample from a new `publication_handle`) | resolve handle → `origin_router` via discovery index; log origination; warn on unexpected origin for the leg (router-origin on LAN input, app-origin on WAN input — D15) |
 | `RouteEntityError` | entity factory or route runtime | topic-scoped (`topic_name` set): that topic → `TOPIC_ERROR`, siblings unaffected (D11/D21); route-wide (`topic_name` empty): route → `ROUTE_ERROR`; store `last_error`, publish status |
 | `ShutdownRequested` | signal/main thread | quiesce intake, detach waitset conditions, close entities and participants |
 
@@ -306,7 +319,7 @@ makes route-state tests possible without running DDS.
 | `RouterController` | mutable state, event queue, lifecycle ordering, status revision | hot sample forwarding loop internals |
 | `RouteRegistry` | desired route specs and selected active-side route views | DDS readers/writers |
 | `ParticipantRegistry` | DomainParticipants and participant-level partition generation | per-route read/write conditions |
-| `DiscoveryIndex` | discovered endpoint cache and match notifications | route state transitions |
+| `DiscoveryIndex` | builtin-reader translation, participant tag table, ignore rules (D30) | route state transitions, endpoint-record storage |
 | `TypeResolver` | type lookup order and DynamicType registration | command/status state |
 | `QosResolver` | alias expansion and auto-match compatibility summaries | participant creation |
 | `EntityFactory` | Topic/DataReader/DataWriter/ReadCondition creation and teardown helpers | global state mutation |

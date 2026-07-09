@@ -437,6 +437,11 @@ This resolves the Phase 2 confidence-investigation row.
 **Amended by D16** — participant-purge fan-out into per-endpoint `EndpointLost` is defined
 there (the pending purge-semantics item above is resolved).
 
+**Amended by D28/D30** — removal handling is uniform native per-endpoint instance
+transitions (the "graceful dispose now / purge pending" split is gone), and the index keeps
+no endpoint cache: the upsert semantics live in the controller's matched sets, and the
+builtin readers' own KEEP_LAST(1)-per-instance caches are the only current-state store.
+
 ---
 
 ## D13 — LAN participants set `request_types_filter`; discovered type is optional-until-resolved (2026-07-08, accepted)
@@ -618,6 +623,11 @@ evidence; Phase 8 open question + investigation row), `code-architecture.md`
 (`ParticipantRegistry`, `DiscoveryIndex`, `EntityFactory` bullets; `InputOriginObserved`
 event row).
 
+**Amended by D29** — the origination-visibility bullet's mechanism (per-reader seen-set,
+`InputOriginObserved`, handle→index join) is replaced by a discovery-time expected-origin
+rule inside controller matching; the per-leg policy itself is unchanged. The ignore rules
+(self and same-node) are untouched.
+
 ---
 
 ## D16 — Endpoint loss is participant-lease-driven: short LAN lease, ordered WAN lease; index fans participant purge into per-endpoint loss (2026-07-08, accepted)
@@ -656,6 +666,11 @@ participant purge is one of the DEAD triggers driving bulk instance cleanup.
 **Docs changed.** `implementation-plan.md` (Phase 2 evidence), `code-architecture.md`
 (`DiscoveryIndex` purge fan-out), `presence-and-health.md` (participant-tuning ordering
 constraint), D12 (amend note).
+
+**Amended by D28** — the index fan-out is demoted to fallback: endpoint removal on
+participant purge is observed natively per endpoint on the builtin readers (validated 7.7);
+the Phase 2 smoke confirms the per-endpoint cardinality. Lease values and the
+presence-ordering constraint are unchanged.
 
 ---
 
@@ -757,6 +772,10 @@ but not all policies.
 **Docs changed.** `implementation-plan.md` (Phase 2 deliverable; Phase 5 deliverable note +
 investigation row), `code-architecture.md` (`DiscoveryIndex` bullet pointer).
 
+**Amended by D27** — the captured subset is a read rule over the stored builtin topic data,
+not a struct definition; the negative finding (history/resource_limits never discoverable)
+stands unchanged.
+
 ---
 
 ## D20 — Phase 2 contract completions: participants from config (no admin participant); discovery facts derive from matched-endpoint sets; same-topic type-name conflicts are first-resolved-wins (2026-07-08, accepted)
@@ -856,6 +875,11 @@ is tested in Phase 1 or first written untested in Phase 2.
 
 **Docs changed.** D20 (amend note), `code-architecture.md` (`DiscoveryIndex` bullet,
 `TopicRouteState` comment), `implementation-plan.md` (Phase 1 banner + evidence).
+
+**Amended by D27/D30** — event payloads are copies of the builtin topic data plus the
+`origin_router`/`ignored` sidecar; the index-side GUID-keyed record cache is deleted (the
+index keeps only the participant table). Controller-side matching, the matched sets, and
+the Phase 1 fake-index consequence are unchanged.
 
 ---
 
@@ -975,3 +999,127 @@ history and no SQLite anywhere (vboxsf rule unaffected).
 `implementation-plan.md` (Phase 1 banner/deliverables/evidence, Phase 2 evidence, Phase 6
 slice + deliverables), `code-architecture.md` (`StatusPublisher` bullet, event table),
 `thesis-and-tenets.md` (Tenet 9 records the simplicity/DDS-native lens).
+
+---
+
+## D27 — The endpoint record IS the builtin topic data; D19's subset becomes a read rule (2026-07-09, accepted; amends D19, D22)
+
+**Context.** Phase 2 simplicity pass (Tenet 9, same lens as D25/D26). The design carried a
+hand-rolled endpoint-record struct copying fields out of the builtin discovery data.
+Validated 7.7 (`ask_connext_question`, 2026-07-09):
+`dds::topic::PublicationBuiltinTopicData` / `SubscriptionBuiltinTopicData` are **copyable
+value types** safe to store long-term, exposing `key()`, `participant_key()`,
+`topic_name()`, `type_name()`, `partition()`, and every policy in the D19 subset as
+accessors (subscription data has no `durability_service()` — writer/topic-side policy, as
+expected). The RTI `type()` extension carries the discovered `DynamicType`, empty until
+TypeLookup resolves it — D13's "optional-until-resolved type" is native to the builtin
+data too.
+
+**Decision.**
+
+- There is **no `EndpointRecord` struct**. An endpoint record is a stored copy of the
+  builtin topic data plus a two-field sidecar: `origin_router` (D15 tag join) and
+  `ignored`. Discovery events (D22) carry exactly that.
+- **D19 is reframed, not weakened:** its policy list stops being a struct definition and
+  becomes the **discoverable-subset rule** — what matching/auto-QoS may legitimately read
+  from a record. The Phase 5 constraint stands verbatim: history/resource_limits are never
+  in discovery and always come from aliases/defaults.
+- Same move as D25: one shape from DDS to controller to tests to log.
+
+**Docs changed.** D19/D22 (amend notes), `code-architecture.md` (`DiscoveryIndex` bullet,
+`TopicRouteState` comment), `implementation-plan.md` (Phase 2 deliverables).
+
+---
+
+## D28 — Endpoint removal is DDS-native per endpoint for both exit paths; the D16 fan-out demotes to fallback (2026-07-09, accepted; amends D12, D16)
+
+**Context.** D16 made `DiscoveryIndex` fan a participant purge into per-endpoint
+`EndpointLost` — app-level enumeration machinery. Validated 7.7 (`ask_connext_question`,
+2026-07-09): on remote-participant removal — **graceful delete and lease-expiry purge
+alike** — Connext removes "the remote participant, together with all its entities" from
+the discovery database, and the removal is observable on the builtin
+publication/subscription readers themselves, not only on `DCPSParticipant`. Caveat: the
+docs do not *normatively* guarantee the exact cardinality "one `NOT_ALIVE` transition per
+endpoint," so the smoke verifies it.
+
+**Decision.**
+
+- **One uniform removal path:** `EndpointLost` is posted per builtin endpoint-instance
+  `NOT_ALIVE` transition — the same code path for graceful exit, SIGKILL purge, and
+  single-endpoint deletion. D12's "graceful dispose now / purge pending" split and D16's
+  app-level fan-out are deleted from the design.
+- The **D16 fan-out is the named fallback**, reinstated only if the smoke disproves
+  per-endpoint delivery.
+- The Phase 2 smoke gains the deciding evidence line: after SIGKILL (and after graceful
+  exit), count `NOT_ALIVE` transitions on the builtin endpoint readers and confirm one per
+  owned endpoint.
+- D16's lease values and the presence-ordering constraint are untouched.
+
+**Docs changed.** D12/D16 (amend notes), `implementation-plan.md` (Phase 2 evidence),
+`code-architecture.md` (`DiscoveryIndex` bullet).
+
+---
+
+## D29 — The expected-origin warning is a discovery-time rule inside controller matching; the per-sample seen-set and `InputOriginObserved` are deleted (2026-07-09, accepted; amends D15)
+
+**Context.** D15's origination-visibility bullet built real machinery: a per-reader
+seen-set of `publication_handle`s (hash lookup per sample on the hot path), an
+`InputOriginObserved` event, and a controller-side handle→index join. But the controller
+already runs endpoint→route-topic matching over every raw record (D22) and already knows
+`origin_router` from the tag join (D15) — the warning is one `if` in code that exists.
+Validated 7.7 alternative for actual-RxO-match fidelity (StatusCondition
+`subscription_matched()` on the `AsyncWaitSet`, then diff `matched_publications()` against
+a known set — `last_publication_handle` does not batch — and
+`rti::sub::matched_publication_participant_data()` for the participant `USER_DATA`;
+`matched_publication_data()` works only for currently-associated writers): viable, but new
+machinery the POC does not need.
+
+**Decision.**
+
+- The **expected-origin-per-leg policy is unchanged** from D15 (LAN inputs: app-origin
+  only; WAN inputs: router-origin only). Its **evaluation point moves to discovery time**:
+  when the controller matches an endpoint record to a route topic, a router-origin record
+  on a LAN leg or an app-origin record on a WAN leg logs a loud warning. Strictly earlier
+  than first-sample detection — the loop is flagged before anything echoes — at zero
+  hot-path cost.
+- The per-reader seen-set, the per-sample check, and the `InputOriginObserved` event are
+  **deleted**.
+- The `subscription_matched` variant is recorded as the upgrade path if "candidate
+  matched" vs "actually RxO-matched" ever matters; not built for the POC.
+
+**Docs changed.** D15 (amend note), `code-architecture.md` (event-table row deleted,
+event-list prose, `PublicationDiscovered` action), `implementation-plan.md` (Phase 3
+evidence line).
+
+---
+
+## D30 — `DiscoveryIndex` is a translator plus a participant table; the GUID-keyed endpoint-record cache is deleted (2026-07-09, accepted; amends D12, D22)
+
+**Context.** With D27–D29, D22's index-side endpoint cache has no consumer left: matching
+and the matched sets live in the controller, which upserts from events — D13's
+late-arriving type is just a second `PublicationDiscovered` for the same GUID; removal is
+native per-endpoint (D28); origin resolution needs no handle→record join (D29); the
+structured-log inventory (D17) logs at event time; routes are config-fixed until Phase 4+
+(D10) and `ADD_ROUTE` does not exist, so there is no late-registered-route replay; D14's
+future GUID→router join needs the participant table, not endpoint records. The builtin
+readers are themselves KEEP_LAST(1)-per-instance current-state caches (D12) — an app-level
+mirror is a second copy of a store DDS already maintains.
+
+**Decision.**
+
+- `DiscoveryIndex` collapses to a **translator**: `take()` from the three builtin readers
+  on waitset dispatch, apply the D15 ignore/tag rules, post events carrying the
+  builtin-data copy (D27). **No endpoint store anywhere**; if an ad-hoc query need ever
+  appears, the index switches to `read()` and the builtin readers' own bounded caches
+  serve it.
+- The only index state is the **participant table** (participant GUID → `act.router`
+  tag / name), maintained from the `DCPSParticipant` reader; consumers: the D15 same-node
+  ignore decision and the D14/presence GUID→router join.
+- **Participant loss is index-internal** in Phase 2: the table entry is dropped and the
+  loss logged; the controller reacts only to per-endpoint `EndpointLost` (D28). No
+  `ParticipantLost` controller event until a phase needs one (presence has its own
+  roster).
+- The Phase 1 fake index (D3/D22) is unchanged — it was already a dumb event source.
+
+**Docs changed.** D12/D22 (amend notes), `code-architecture.md` (`DiscoveryIndex` bullet,
+class-responsibility row), `implementation-plan.md` (Phase 2 banner + deliverables).
