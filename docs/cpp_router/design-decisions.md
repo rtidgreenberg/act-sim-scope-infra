@@ -105,6 +105,9 @@ redundant-command (new `command_id`) row.
 **Amended by D11** — `operational_state` becomes a derivation over per-topic states;
 the table's discovery guards read over the topic set (`D = READY` ⇒ "≥ 1 topic READY").
 
+**Amended by D21** — the completion events are named (`TopicEntitiesReady`,
+`TopicTeardownComplete`) and `RouteEntityError` gains per-topic scope.
+
 ---
 
 ## D3 — Phase 1 includes the `ControllerEvent` queue; DDS is faked behind interfaces (2026-07-07, accepted)
@@ -207,6 +210,9 @@ rebuilds the runtime; `AsyncWaitSetDispatcher` rejects stale operations by gener
 
 **Docs changed.** `code-architecture.md` (`RouteView` block).
 
+**Amended by D23** — `entity_generation` becomes a stamp from one global counter;
+staleness is checked per topic, not per route.
+
 ---
 
 ## D7 — Phase 1 seams: concrete routes, three commands, read-only participants, no DDS status writer (2026-07-07, accepted)
@@ -234,6 +240,9 @@ command/status loop → Phase 6, partitions → Phase 8). The exact seams were u
 **Amended by D10** — the "Phase 0 config parser" route source was a dead option (that parser
 is identity-only); Phase 1 routes come from test fixtures, and `RouteConfigParser` is a
 Phase 4 deliverable.
+
+**Amended by D25/D26** — the `RouterStatusView` capture shape is deleted (the snapshot *is*
+the generated `RouterStatus`); `DESCRIBE` is dropped from the POC command set.
 
 ---
 
@@ -278,6 +287,9 @@ by a command.
 **Docs changed.** `implementation-plan.md` (Phase 1 evidence), `command-status.md`
 (`caused_by_command_id` note).
 
+**Amended by D21** — the pending resolve/teardown completions are the named per-topic
+events `TopicEntitiesReady` / `TopicTeardownComplete`.
+
 ---
 
 ## D9 — `DESCRIBE` is exempt from the command history (2026-07-07, accepted; amends D4)
@@ -293,6 +305,9 @@ reads exempt, 256 entries covers any plausible mutation-retry window, and combin
 D8's idempotent accept the eviction risk is effectively retired.
 
 **Docs changed.** none beyond this log.
+
+**Retired by D26** — `DESCRIBE` is dropped from the POC command set, so no read command
+remains and only state-changing kinds can enter the history by construction.
 
 ---
 
@@ -772,3 +787,191 @@ different type names had no defined policy.
 `code-architecture.md` (`TopicRouteState.discovery_facts` comment).
 
 **Amends D1/D11** — the raw facts are now set-derived, not stored booleans.
+
+**Amended by D22** — the matched-endpoint sets live in controller state
+(`TopicRouteState`); the index keeps the GUID-keyed endpoint records.
+
+---
+
+## D21 — Per-topic entity-operation completion events: `TopicEntitiesReady` / `TopicTeardownComplete`; `RouteEntityError` gains topic scope (2026-07-09, accepted; amends D2, D8, D11)
+
+**Context.** D2 makes teardown completion a controller event, D8 requires resolve
+completion to be a *deferred* event the Phase 1 fakes can hold pending, and D11 makes both
+per-topic — but the [code-architecture.md](code-architecture.md) event table named no
+success-completion events; only `RouteEntityError` existed, and without per-topic scope.
+Phase 1's transition-table conformance tests cannot be written against unnamed events.
+
+**Decision.**
+
+- Two new controller events, posted by `EntityFactory`/dispatcher in Phase 3+ and by the
+  fake factory in Phase 1:
+  - **`TopicEntitiesReady { route_name, topic_name, entity_generation }`** — entity
+    creation for one topic completed; drives `TOPIC_CREATING → TOPIC_FORWARDING` and, via
+    the D11 derivation, `RESOLVING → ENABLED`.
+  - **`TopicTeardownComplete { route_name, topic_name, entity_generation }`** — teardown
+    for one topic completed; drives `TOPIC_TEARING_DOWN → TOPIC_IDLE` and the D2
+    `DEGRADED → RESOLVING | WAITING_FOR_DISCOVERY` edge.
+- Failures stay on **`RouteEntityError`**, which gains
+  `{ route_name, topic_name, entity_generation, error }`. **Empty `topic_name` ⇒
+  route-wide failure** (route goes sticky `ERROR`); non-empty ⇒ that topic goes
+  `TOPIC_ERROR` with D11 containment (siblings keep forwarding).
+- Every completion/error carries the **generation stamp** it was issued for (D23); the
+  controller discards events whose stamp no longer matches the target topic's current
+  stamp.
+- A single generic `op/outcome` completion event was **rejected**: Phase 1's conformance
+  tests should map 1:1 onto D2/D11 table rows, and one event kind per row keeps the table
+  and the tests eyeball-comparable.
+
+**Docs changed.** `code-architecture.md` (event-table rows), `implementation-plan.md`
+(Phase 1 deliverable + evidence).
+
+---
+
+## D22 — Controller owns endpoint→route-topic matching and the matched sets; `DiscoveryIndex` is a GUID-keyed record cache + raw event source (2026-07-09, accepted; amends D20)
+
+**Context.** D20 said "the index keeps the set of matched input writers per route topic,"
+while [code-architecture.md](code-architecture.md) keeps the set-derived `discovery_facts`
+in `TopicRouteState` (controller state) and forbids the index from owning route state.
+With the index faked in Phase 1 (D3), the ownership choice decides whether matching logic
+is tested in Phase 1 or first written untested in Phase 2.
+
+**Decision.**
+
+- Discovery events carry **raw endpoint records**: `PublicationDiscovered` /
+  `SubscriptionDiscovered` upserts and `EndpointLost`, each with endpoint GUID, topic
+  name, type name + resolved flag, partition, QoS summary (D19 subset), and
+  `origin_router` (D15).
+- The **controller** matches records against route topic specs and maintains the
+  **per-topic matched-endpoint sets** inside `TopicRouteState`; facts derive from those
+  sets exactly as D20 defined (seen ⇔ set non-empty; only the last endpoint's loss
+  regresses the rollup). Route knowledge lives in one place, and the single-writer rule
+  holds.
+- **`DiscoveryIndex`** keeps the **GUID-keyed endpoint-record cache** (upsert semantics per
+  D12/D13, purge fan-out per D16, ignore/tag handling per D15) and serves lookups (e.g.
+  `InputOriginObserved` handle → origin resolution). It never sees route specs.
+- **Phase 1 consequence.** The fake index is a dumb stub; tests post raw endpoint-record
+  events, so matching, set maintenance, and the D20 set-boundary rules ("lose one of two
+  matched writers → facts change, no rollup change, no revision bump") are genuinely
+  proven in Phase 1 rather than deferred to Phase 2.
+
+**Docs changed.** D20 (amend note), `code-architecture.md` (`DiscoveryIndex` bullet,
+`TopicRouteState` comment), `implementation-plan.md` (Phase 1 banner + evidence).
+
+---
+
+## D23 — One global entity-generation counter; `RouteView` mints and topic entity builds take stamps; staleness is checked per topic (2026-07-09, accepted; amends D6)
+
+**Context.** D6 (route-level `RouteView` generation, dispatcher stale-rejection) predates
+D11's per-topic entity lifecycle. A route-scoped generation that bumps when one topic
+rebuilds would falsely stale-mark a healthy sibling's in-flight operations — violating
+D11's containment. Phase 1 builds the state structs, so the shape gets baked now.
+
+**Decision.**
+
+- `MutableRouterState` holds one **monotonic entity-generation counter**, mirroring D5's
+  one-counter/many-stamps pattern for `state_revision`.
+- Every `RouteView` mint and every per-topic entity build takes the **next counter value
+  as its stamp** (`RouteView.entity_generation`; `TopicRouteState.entity_generation`).
+- An entity operation or completion event is valid iff its stamp equals the target topic's
+  current stamp; the controller and `AsyncWaitSetDispatcher` discard stale-stamped
+  operations. This per-topic check replaces D6's route-level check. Global uniqueness
+  means "spec change vs sibling rebuild" never needs disambiguation and there are no
+  counter-reset rules.
+- **Rejected:** route-level-only generation (falsely stales siblings, see context);
+  per-topic independent counters (a second idiom, plus spec-vs-entity generation
+  interaction rules the stamp pattern doesn't need).
+
+**Docs changed.** D6 (amend note), `code-architecture.md` (state-model fields, dispatcher
+concurrency rule).
+
+---
+
+## D24 — Command admission seams: `CommandReceived` is post-admission (targeting is Phase 6's); unknown `route_name` is a cached reject (2026-07-09, accepted)
+
+**Context.** `CommandHandler` (target/wildcard checks) is not a Phase 1 deliverable,
+leaving open whether the Phase 1 controller must match `target_node`/`target_router`; and
+no table row defined the outcome of a state-changing command naming a route that does not
+exist.
+
+**Decision.**
+
+- **`CommandReceived` events are post-admission.** The controller assumes the command is
+  addressed to this router and ignores the target fields. Target/wildcard matching is the
+  command **reader's** admission job, decided and tested in Phase 6 (it may be reader-side
+  filtering or a content-filtered topic — not pre-empted here). D4's per-router ack
+  caching is unaffected.
+- **A state-changing command naming an unknown `route_name` is rejected**
+  (`accepted=false`, "unknown route"), the reject **cached per D4**, with no state change
+  and no revision bump (D5). Implicit route creation is explicitly rejected — `ADD_ROUTE`
+  stays POC-plus, and a typo'd route name must fail loudly (acceptance criterion: bad
+  route commands are rejected and acknowledged, not silent). `DESCRIBE` is unaffected (it
+  takes no route target).
+
+**Docs changed.** `implementation-plan.md` (Phase 1 evidence), `command-status.md`
+(unknown-route reject note).
+
+---
+
+## D25 — The status snapshot IS the generated `RouterStatus`; the snapshot/view adapter layers are deleted (2026-07-09, accepted; amends D7 wording)
+
+**Context.** The architecture carried four representations of the same information:
+`MutableRouterState` → `RouterStateSnapshot` → `RouterStatusView`/`RouteStatusView` →
+generated `RouterStatus`, i.e. three conversions between the controller's state and the
+wire. Connext 7.7 generated types are plain structs with public data members and value
+semantics — a fully built `RouterStatus` is already an immutable snapshot once nothing
+mutates it. Simplicity lens: app-level machinery must do something the existing types
+cannot (Tenet 9).
+
+**Decision.**
+
+- The controller keeps `MutableRouterState` for internal facts (matched-endpoint sets,
+  generation stamps, command history) — those stay off the wire. On each `state_revision`
+  bump it builds a generated **`RouterStatus`** directly; a `shared_ptr<const RouterStatus>`
+  **is** the snapshot handed to `StatusPublisher` and cached as "current".
+- `RouterStateSnapshot`, `RouterStatusView`, and `RouteStatusView` are **deleted** from the
+  architecture. `RouteView` (the runtime-facing immutable spec, D6/D23) is unaffected — it
+  serves forwarding, not status.
+- Phase 1 tests assert on the wire type directly, so the test suite and the published
+  contract cannot drift.
+
+**Docs changed.** `code-architecture.md` (state-ownership section, status-view block
+replaced, concurrency rule), `implementation-plan.md` (Phase 1 deliverables).
+
+---
+
+## D26 — LAN `RouterStatus` is `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`; publication stays change-driven only; `DESCRIBE` is dropped from the POC command set (2026-07-09, accepted; amends D7, retires D9)
+
+**Context.** `DESCRIBE`'s entire POC effect was "publish ack plus current `RouterStatus`" —
+the same sample the status topic already publishes on every revision change. Late-joiner
+catch-up is a durability job and aliveness is a liveliness job; both are DDS-native
+(Tenet 9). Scope check: `RouterStatus` rides the **LAN participant only**
+([command-status.md](command-status.md) transport decision) and never crosses the WAN, so
+durability replay traffic is loopback/LAN, one small sample per router — the constrained
+link never sees it. In-memory writer history only (`KEEP_LAST(1)`), so no durable writer
+history and no SQLite anywhere (vboxsf rule unaffected).
+
+**Decision.**
+
+- **Status writer QoS (LAN):** `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`, keyed per
+  `(target_node, target_router)`. Any late-joining LAN observer receives the current full
+  snapshot on match, automatically.
+- **Publication remains change-driven** (D17): startup plus every revision bump, nothing
+  else. **No periodic republish** — every sample = one real state change, which keeps
+  revision semantics clean and Phase 1's snapshot-sequence assertions exact. The
+  never-delivered timer source for `StatusRequested` is removed; observer-side aliveness
+  rides the status writer's liveliness (`AUTOMATIC`), and mesh presence stays
+  `RouterHealth`'s job. WAN QoS is untouched by this decision.
+- **`DESCRIBE` is removed from the POC command set.** The enum value stays reserved in the
+  IDL (no wire churn); a received `DESCRIBE` is rejected as unsupported, and the reject is
+  **not cached** — caching it would resurrect the D9 eviction problem (a polling client
+  cycling mutation acks out of the FIFO). D9 is retired as a *special case* but its rule
+  survives structurally: only state-changing kinds enter the history. The reject is
+  deterministic, so an uncached replay returns an identical answer anyway.
+- A future `DESCRIBE` revival would be the **verbose endpoint-inventory response** already
+  noted in D17 (different, request/reply-shaped semantics) — nothing built for the POC
+  command would have been reusable there, so dropping it burns nothing.
+
+**Docs changed.** `command-status.md` (transport/QoS note, command table, IDL comment),
+`implementation-plan.md` (Phase 1 banner/deliverables/evidence, Phase 2 evidence, Phase 6
+slice + deliverables), `code-architecture.md` (`StatusPublisher` bullet, event table),
+`thesis-and-tenets.md` (Tenet 9 records the simplicity/DDS-native lens).

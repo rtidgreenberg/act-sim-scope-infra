@@ -38,6 +38,12 @@ under a dedicated `ADMIN` partition — without a schema change. (This resolves 
 "admin domain vs router-private domain" question in favor of *neither*: reuse the LAN
 participant.)
 
+Status writer QoS (LAN, D26): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late-joining LAN
+observers receive the current snapshot on match from durability, so there is no
+"request current status" command and no periodic republish; publication is change-driven
+only (startup + every `state_revision` bump, D17). Observer-side aliveness rides the status
+writer's liveliness, not sample cadence; nothing durable crosses the WAN.
+
 This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
 router/link presence + a **compact status summary** across the mesh — see
 [Presence & Health](presence-and-health.md). Each router aggregates the `RouterHealth` summaries
@@ -65,7 +71,8 @@ enum RouterCommandKind {
     DISABLE_ROUTE,
     UPDATE_ROUTE,
     SET_PARTICIPANT_PARTITION,
-    DESCRIBE
+    DESCRIBE   // reserved — dropped from the POC command set (D26); a received DESCRIBE
+               // gets an unsupported-kind reject (not cached — D26)
 };
 
 enum RouterRouteOperationalState {
@@ -197,7 +204,10 @@ externally visible change, including per-topic state changes (D5, D11).
 `caused_by_command_id` is empty unless the change was directly caused by an accepted
 command — discovery- and runtime-driven transitions carry no id (D8).
 
-`RouterCommandAck` is the immediate result of accepting or rejecting a command.
+`RouterCommandAck` is the immediate result of accepting or rejecting a command. A
+state-changing command naming an unknown `route_name` is rejected (`accepted=false`,
+"unknown route") and the reject is cached like any other ack — never an implicit
+`ADD_ROUTE` (see [design-decisions.md](design-decisions.md) D24, D4).
 `RouterStatus` is the primary current-state publication and is keyed by `target_node` and
 `target_router`. Publish one full `RouterStatus` sample after accepted route changes so every
 subscriber sees a coherent route table in one message. The `routes` sequence includes every
@@ -212,7 +222,8 @@ QoS aliases. `RouterRouteStatus` is the per-route entry inside the `routes` sequ
 cap 100) and endpoint churn would be truncation-prone revision noise on the
 one-coherent-sample topic. Discovery visibility comes from the per-topic `discovery_state`;
 the raw endpoint inventory lives in the structured log. A verbose `DESCRIBE` inventory
-response is a possible future addition, out of POC scope.
+response is a possible future addition, out of POC scope (the POC `DESCRIBE` command itself
+is dropped — D26).
 
 ## Required POC Commands
 
@@ -222,7 +233,7 @@ response is a possible future addition, out of POC scope.
 | `DISABLE_ROUTE` | Stop forwarding an existing route | detach conditions, close per-topic readers/writers, mark disabled |
 | `UPDATE_ROUTE` | Replace or patch one active-side route definition | reconcile runtime to the supplied `RouterRouteSpec`; covers topic list, endpoint QoS aliases, forwarding mode, filters, and lifecycle flags |
 | `SET_PARTICIPANT_PARTITION` | Change the participant-level partition on a named participant role, currently `team_wan` | update participant status and recreate affected readers/writers that inherit the participant partition; this is the generic form of team assignment |
-| `DESCRIBE` | Report current routes and state | publish ack plus current `RouterStatus` containing the route list |
+| `DESCRIBE` | ~~Report current routes and state~~ **dropped (D26)** | late-joiner catch-up comes from `TRANSIENT_LOCAL` status durability instead; a received `DESCRIBE` is rejected as unsupported (reject not cached — only state-changing kinds enter the history); enum value stays reserved for a possible future verbose inventory response (D17 note) |
 
 Optional POC-plus commands:
 

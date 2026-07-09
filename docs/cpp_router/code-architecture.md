@@ -80,7 +80,10 @@ RouterInstance
   expected route inputs (D15). A participant purge — graceful dispose or liveliness-lease
   expiry — is fanned out into `EndpointLost` for every endpoint that participant owned
   (D16); lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth`
-  presence window.
+  presence window. Ownership boundary (D22): the index keeps the GUID-keyed endpoint
+  records and posts **raw record events**; endpoint→route-topic matching and the per-topic
+  matched-endpoint sets live in the controller (`TopicRouteState`) — the index never sees
+  route specs.
 - `RouteRegistry` stores every configured route for the instance, including disabled routes
   and routes waiting on discovery. Desired-enabled plus discovery readiness determines
   whether DDS entities exist.
@@ -97,7 +100,9 @@ RouterInstance
   posts accepted mutations to `RouterController`.
 - `StatusPublisher` emits one aggregate `RouterStatus` sample after startup, accepted
   commands, discovery-driven activation/deactivation, and errors; it includes the presence
-  roster.
+  roster. Writer QoS (LAN): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late joiners get
+  the current snapshot from durability; publication is change-driven only, never periodic,
+  and observer-side aliveness rides the writer's liveliness (D26).
 - `PresenceMonitor` publishes this router's compact `RouterHealth` summary over the WAN and
   subscribes to peers', maintaining the `router_id → {state, last-seen, participant GUID, summary}`
   roster. It republishes the aggregated connected-router list over the LAN on `ActRouterMeshStatus`.
@@ -148,7 +153,7 @@ RouteRuntime
   reports RouteEvent observations to RouterController
 
 StatusPublisher
-  reads shared_ptr<const RouterStateSnapshot>
+  reads shared_ptr<const RouterStatus>   # the generated type IS the snapshot (D25)
   writes aggregate RouterStatus samples
 ```
 
@@ -160,31 +165,41 @@ MutableRouterState
   router_name
   router_id
   state_revision
+  entity_generation_counter  # one global counter; RouteView mints and topic entity
+                             # builds take stamps from it (D23)
   participants: map<string, ParticipantState>
   routes: map<string, RouteState>
   command_history: bounded map<command_id, RouterCommandAck>
 
-RouterStateSnapshot
-  immutable copy of MutableRouterState at one state_revision
+RouterStatus (generated)
+  the status snapshot: built by the controller at each state_revision bump from
+  MutableRouterState, immutable once built — no separate snapshot/view classes (D25);
+  internal-only facts (matched sets, generation stamps, command history) stay off it
 
 RouteView
   immutable desired route spec plus resolved local active side
   immutable topic list and endpoint policy references
-  entity_generation          # staleness check; no state_revision — see design-decisions.md D6
+  entity_generation          # stamp from the global counter at mint (D23); no
+                             # state_revision — see design-decisions.md D6
 
 RouteState
   desired: RouterRouteSpec
   operational_state          # lifecycle; DERIVED over topic states (D11); "was forwarding"
                              # memory (DEGRADED) lives here
   topics: map<topic_name, TopicRouteState>
-  active_entity_generation
+  route_view_generation      # stamp of the current RouteView (D23)
   aggregate counters         # sums of per-topic counters
   last_error                 # route-wide errors only; per-topic errors live on the topic
 
 TopicRouteState              # one per configured topic on the route — D11
-  discovery_facts            # derived from matched-endpoint SETS (D20): input_writer_seen ⇔
+  matched_endpoint_sets      # matched input writers (and auto-QoS output readers) for this
+                             # topic; maintained by the CONTROLLER from raw endpoint-record
+                             # events — the index keeps GUID-keyed records only (D22)
+  discovery_facts            # derived from the sets (D20): input_writer_seen ⇔
                              # matched-writer set non-empty; ditto output_reader_seen;
                              # plus type_resolved, qos_resolved
+  entity_generation          # stamp taken at this topic's last entity build (D23);
+                             # stale-stamped operations/completions are discarded
   discovery_state            # pure rollup of this topic's facts, no memory — D1/D11
   topic_state                # IDLE / CREATING / FORWARDING / TEARING_DOWN / ERROR (sticky)
   resolved_type_name
@@ -200,7 +215,7 @@ state. When it observes something meaningful, it posts an event such as
 `SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, `InputOriginObserved`
 (first sample from a new `publication_handle` — D15), or `RouteEntityError`.
 The controller folds that event into `MutableRouterState`, increments `state_revision` when
-the externally visible state changes, creates a new `RouterStateSnapshot`, and asks
+the externally visible state changes, builds a new `RouterStatus` snapshot (D25), and asks
 `StatusPublisher` to publish it.
 
 For sample counters, use one of two POC-safe options:
@@ -214,29 +229,11 @@ Do not let the status topic read arbitrary mutable route objects. Status is alwa
 from the controller's snapshot, which prevents half-applied command/discovery transitions
 from leaking into `RouterStatus`.
 
-The status-facing object can be a small immutable adapter rather than the full controller
-state:
-
-```text
-RouteStatusView
-  route_name
-  desired spec
-  operational state
-  discovery summary
-  resolved type/QoS summaries
-  counters
-  last_error
-
-RouterStatusView
-  node/router identity
-  participant summaries
-  vector<RouteStatusView>
-```
-
-`StatusPublisher` converts `RouterStatusView` into the generated DDS `RouterStatus` type.
-Route runtimes may hold `shared_ptr<const RouteView>` for forwarding decisions, but should
-not hold `RouteStatusView`; status is the controller's outward report, not the route's
-working state.
+There is no status-view adapter layer (D25): the controller builds the generated
+`RouterStatus` directly from `MutableRouterState` at each revision bump, and that struct is
+the immutable snapshot — one shape from controller to tests to wire. Route runtimes may hold
+`shared_ptr<const RouteView>` for forwarding decisions, but never read status; status is the
+controller's outward report, not the route's working state.
 
 ## Controller Event Model
 
@@ -244,14 +241,15 @@ The controller should process these event categories on one serialized strand or
 
 | Event | Source | Controller action |
 |---|---|---|
-| `CommandReceived` | command reader | validate target and command id, update desired state, publish ack, reconcile route |
+| `CommandReceived` | command reader | validate command id and route target (events are post-admission — node/router targeting is the command reader's job, D24), update desired state, publish ack, reconcile route |
 | `PublicationDiscovered` | discovery index | update discovery cache, try to activate matching desired-enabled routes |
 | `SubscriptionDiscovered` | discovery index | update output readiness for `auto` writer QoS routes |
 | `EndpointLost` | discovery index or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
+| `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
+| `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, drive `DEGRADED → RESOLVING\|WAITING` per D2; stale stamp → discard (D21/D23) |
 | `InputOriginObserved` | route runtime (first sample from a new `publication_handle`) | resolve handle → `origin_router` via discovery index; log origination; warn on unexpected origin for the leg (router-origin on LAN input, app-origin on WAN input — D15) |
-| `RouteEntityError` | entity factory or route runtime | mark route `ROUTE_ERROR`, store `last_error`, publish status |
-| `StatusRequested` | command reader or timer | publish current snapshot without changing revision unless state changed |
+| `RouteEntityError` | entity factory or route runtime | topic-scoped (`topic_name` set): that topic → `TOPIC_ERROR`, siblings unaffected (D11/D21); route-wide (`topic_name` empty): route → `ROUTE_ERROR`; store `last_error`, publish status |
 | `ShutdownRequested` | signal/main thread | quiesce intake, detach waitset conditions, close entities and participants |
 
 This keeps DDS callback threads shallow. They translate DDS notifications into controller
@@ -326,10 +324,10 @@ makes route-state tests possible without running DDS.
 - Create, attach, detach, and close route DDS entities from the controller strand or through
   an executor owned by the controller.
 - `AsyncWaitSetDispatcher` serializes condition attach/detach operations and rejects stale
-  operations by checking `active_entity_generation`.
+  operations by checking the per-topic generation stamp (D23).
 - `RouteRuntime` can use atomics for hot counters, but all externally visible operational
   state changes go through controller events.
-- `RouterStateSnapshot`, `RouteView`, and `RouterStatusView` are immutable once published.
+- Published `RouterStatus` snapshots and `RouteView`s are immutable once built (D25).
 - Shutdown is ordered: stop command intake, stop new discovery events, detach read
   conditions, stop `AsyncWaitSet`, close route entities, close admin entities, close
   participants.

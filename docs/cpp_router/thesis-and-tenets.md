@@ -105,6 +105,16 @@ ordering, explicit lifecycle (dispose), keying — and reconstruct exactly those
 spec for "faithful enough." (ACT payload types are currently unkeyed *for demo only*; real
 state topics will be keyed — see [[act-state-topics-will-be-keyed]] in project memory.)
 
+### 9. Simplicity first — prefer DDS-native mechanisms over app-level machinery
+This is a clean-sheet design; the review criterion applied at every phase is: before adding
+router logic or a new representation, check whether DDS (or the generated types) already
+provides the behavior — durability for late-joiner state, liveliness for aliveness, CFTs
+for filtering, partitions for scoping, `ignore` for loop safety, RxO for compatibility.
+App-level machinery must earn its place by doing something DDS cannot (e.g. command
+idempotency, the route state machine). Applied in D25/D26: the status snapshot is the
+generated `RouterStatus` itself; `TRANSIENT_LOCAL` status durability replaces the
+`DESCRIBE` command; no periodic status republish.
+
 ## Consequences for the build
 
 - Instance-state handling reduces to: **forward data + mirror meta samples (dispose/unregister)

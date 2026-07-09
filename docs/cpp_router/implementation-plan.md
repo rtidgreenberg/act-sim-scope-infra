@@ -36,7 +36,7 @@ route engine one behavior at a time.
 | 3 | One discovered route with explicit QoS | High | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
 | 4 | Role-aware control/platform route | High | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
 | 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
-| 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, `DESCRIBE`, full status snapshots, duplicate command handling | status or commands introduce racey state changes |
+| 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling (`DESCRIBE` dropped — D26) | status or commands introduce racey state changes |
 | 7 | Platform status/events replacement | High | control receives `PlatformStatus`, `PlatformCommandAck`, and `ContactReport` without Routing Service | ACT topic/type mapping diverges from the planned route model |
 | 8 | Team partition route | Medium-high | `SET_PARTICIPANT_PARTITION` recreates affected entities and `PlatformData` crosses team scope | participant/partition changes cannot be made predictable enough |
 | 9 | Serialized-CDR fast path | Medium | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` first and revisit |
@@ -64,22 +64,32 @@ Evidence:
 > **Contract pinned** — transition table, `discovery_state` rollup, `state_revision`
 > semantics, idempotency bounds, and the Phase-1 fake seams are decided in
 > [design-decisions.md](design-decisions.md) D1–D7; the review completions (redundant-command
-> idempotent accept, `RESOLVING` abort edge, `DESCRIBE` history exemption, fixture-only
+> idempotent accept, `RESOLVING` abort edge, `DESCRIBE` history exemption (since retired
+> by D26), fixture-only
 > route source) in D8–D10; per-topic activation and per-topic status (route active when at
-> least one topic is ready; `operational_state` derived over topic states) in D11.
+> least one topic is ready; `operational_state` derived over topic states) in D11; the
+> implementation-readiness completions (named per-topic completion events, controller-owned
+> matching and matched sets, global generation stamps, command admission seams) in D21–D24;
+> the simplicity pass (the status snapshot is the generated `RouterStatus`; `TRANSIENT_LOCAL`
+> status durability; `DESCRIBE` dropped, retiring D9) in D25–D26.
 
 Deliver:
 
-- `RouterController`, `MutableRouterState`, `RouteState`, `RouterStateSnapshot`, `RouteView`,
-  and `RouterStatusView`.
-- the typed `ControllerEvent` queue drained on one strand, with `DiscoveryIndex`,
-  `EntityFactory`, and `StatusPublisher` behind interfaces and faked in tests (D3).
+- `RouterController`, `MutableRouterState`, `RouteState`, and `RouteView`. The status
+  snapshot is the generated `RouterStatus` built at each revision bump — there are no
+  separate snapshot/view classes (D25).
+- the typed `ControllerEvent` queue drained on one strand — producer-side thread-safe from
+  the start (MPSC, D12) — with `DiscoveryIndex`, `EntityFactory`, and `StatusPublisher`
+  behind interfaces and faked in tests (D3); per-topic completion events
+  `TopicEntitiesReady` / `TopicTeardownComplete` and topic-scoped `RouteEntityError` (D21).
+  Discovery events carry raw endpoint records; matching and the per-topic matched-endpoint
+  sets are controller logic (D22), stamped by the global entity-generation counter (D23).
 - route state machine implementing the D2 transition table: `operational_state` lifecycle
   guarded by the `discovery_state` rollup of per-route discovery facts (D1); `ROUTE_ERROR`
   sticky until command re-arm (D2).
 - bounded command history: acks cached for accepted **and** rejected commands, FIFO 256,
-  dedup on `command_id` per router (D4). `ENABLE_ROUTE`/`DISABLE_ROUTE`/`DESCRIBE` handled;
-  `UPDATE_ROUTE`/`SET_PARTICIPANT_PARTITION` parsed-and-rejected (D7).
+  dedup on `command_id` per router (D4). `ENABLE_ROUTE`/`DISABLE_ROUTE` handled;
+  `UPDATE_ROUTE`/`SET_PARTICIPANT_PARTITION`/`DESCRIBE` parsed-and-rejected (D7, D26).
 - global `uint64 state_revision` with the D5 increment predicate; per-route revision stamps.
 
 Evidence:
@@ -92,13 +102,23 @@ Evidence:
   and `RESOLVING -> WAITING_FOR_DISCOVERY` on discovery regression via the fake factory's
   pending-resolve completion (D8).
 - redundant `ENABLE_ROUTE` with a **new** `command_id` on an already-enabled route returns
-  an idempotent accept with no revision bump (D8); `DESCRIBE` acks are never cached and
-  never evict mutation acks from the history (D9).
+  an idempotent accept with no revision bump (D8); a received `DESCRIBE` is rejected as
+  unsupported and the reject is never cached — only state-changing kinds enter the history
+  (D26 — D9 retired as a special case, preserved as the structural rule).
 - a two-topic fixture route proves per-topic activation (D11): the route reaches `ENABLED`
   when only its first topic is ready; the second topic later joins in place with no
   route-level transition (revision bumps, `topic_status` updates); one topic's creation
   failure lands in `TOPIC_ERROR` without stopping the forwarding sibling; the route derives
   `ERROR` only when all topics are errored.
+- losing one of two matched input writers for a topic updates the matched set with **no**
+  rollup change and no revision bump; the last writer's loss regresses the rollup — proven
+  with raw endpoint-record events against the stub index, since matching and set
+  maintenance are controller logic (D20/D22).
+- a `TopicEntitiesReady` / `TopicTeardownComplete` / `RouteEntityError` event carrying a
+  stale generation stamp is discarded with no state change (D21/D23).
+- `ENABLE_ROUTE`/`DISABLE_ROUTE` naming an unknown route returns a cached reject with no
+  revision bump (D24). `CommandReceived` events are post-admission — target/wildcard
+  matching is tested where it lives, in Phase 6 (D24).
 - honesty note: DDS-dependent behavior (real resolve timing, real endpoint loss) is
   simulated by the fakes; Phases 2–3 implement the same D2 contract against Connext.
 
@@ -130,7 +150,9 @@ Evidence:
 
 - start a tiny generated-type writer and reader in separate processes/domains.
 - the real LAN `StatusPublisher` publishes `RouterStatus` samples (write-only; command
-  reader stays Phase 6): matching route candidates are visible as per-topic
+  reader stays Phase 6; `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` so a late-joining
+  observer receives the current snapshot on match — D26): matching route candidates are
+  visible as per-topic
   `discovery_state` progressions, observable with any LAN subscriber (e.g. `rti_view`),
   and the full discovered-endpoint inventory — including `origin_router` and ignored
   endpoints — appears in the structured log, not in `RouterStatus` (D17). No route
@@ -201,7 +223,8 @@ Evidence:
 Deliver:
 
 - command reader and ack writer on the admin domain.
-- `ENABLE_ROUTE`, `DISABLE_ROUTE`, `DESCRIBE`, and duplicate command handling.
+- `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate command handling (`DESCRIBE` dropped —
+  D26; late-joiner catch-up comes from status durability).
 - aggregate `RouterStatus` publication after accepted changes.
 
 Evidence:
