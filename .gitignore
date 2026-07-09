@@ -12,6 +12,7 @@ dist/
 # Docker / build
 *.log
 build/
+tmp/
 
 # EMANE / captures
 *.pcap

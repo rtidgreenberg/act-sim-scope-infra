@@ -9,6 +9,7 @@
 #   router_main          Phase-0 entry point (no DDS): validate config, print identity.
 #   test_config_identity no-DDS unit test for the config identity reader.
 #   test_admin_types     compiles + exercises the generated admin types (links Connext).
+#   test_discovery_smoke Phase-2 builtin discovery smoke for generated admin endpoints.
 #
 # Modeled on the proven relay/cpp/CMakeLists.txt. rtiddsgen generates RouterAdminTypes
 # from admin/RouterAdminTypes.idl at configure/build time (no committed generated code).
@@ -51,6 +52,9 @@ target_include_directories(router_main PRIVATE src)
 # --- Tests ---
 enable_testing()
 
+set(ROUTER_TEST_TMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tmp/router_tests")
+file(MAKE_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
 # no-DDS config identity unit test
 add_executable(test_config_identity
     test/test_config_identity.cxx
@@ -84,3 +88,16 @@ target_include_directories(test_admin_types PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(test_admin_types RTIConnextDDS::cpp2_api)
 add_test(NAME admin_types COMMAND test_admin_types)
+
+# Phase 2: real builtin discovery smoke. Uses UDPv4-only participant QoS, a
+# per-process default DDS domain, and real generated admin endpoint topic names.
+add_executable(test_discovery_smoke
+    test/test_discovery_smoke.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_discovery_smoke PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_discovery_smoke RTIConnextDDS::cpp2_api)
+add_test(NAME discovery_smoke COMMAND test_discovery_smoke)
+set_tests_properties(discovery_smoke PROPERTIES
+    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
