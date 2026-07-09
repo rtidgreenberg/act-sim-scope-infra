@@ -61,6 +61,20 @@ target_compile_definitions(test_config_identity PRIVATE
     ROUTER_SAMPLE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
 add_test(NAME config_identity COMMAND test_config_identity)
 
+# Phase 1: controller-owned state machine conformance (fakes for all DDS seams — D3;
+# links Connext for the generated admin types only, creates no DDS entities)
+add_executable(test_controller_phase1
+    test/test_controller_phase1.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_controller_phase1 PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_controller_phase1 RTIConnextDDS::cpp2_api)
+add_test(NAME controller_phase1 COMMAND test_controller_phase1)
+
 # generated admin types compile/usability test (links the Modern C++ API)
 add_executable(test_admin_types
     test/test_admin_types.cxx
