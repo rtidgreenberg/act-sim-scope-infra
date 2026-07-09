@@ -27,7 +27,7 @@ the first working milestone.
 
 | Area | Decision | Confidence | Remaining proof |
 |---|---|---|---|
-| Discovery metadata | Build `DiscoveryIndex` from built-in publication/subscription metadata; track topic, type, partition, endpoint key, participant key, and QoS summary | High | Smoke test duplicate discovery callbacks and endpoint removal |
+| Discovery metadata | Build `DiscoveryDispatcher` from built-in publication/subscription metadata; translate endpoint facts into controller events and keep only the participant tag table | High | Smoke test duplicate discovery callbacks and endpoint removal |
 | Type resolution | Use local XML/generated type definitions as the deterministic POC path; use discovered DynamicType/TypeLookup only when type propagation is enabled | High | Verify ACT XML type load and mapping from topic/type names |
 | AsyncWaitSet lifecycle | Attach/detach read conditions dynamically, but serialize entity lifecycle through controller/dispatcher ownership | High | Repeated attach/detach/close executable |
 | QoS policy | Treat discovered QoS as diagnostic input, not something to clone blindly; use explicit topic-class QoS aliases for POC routes | High | Capture ACT endpoint QoS and confirm aliases match intended flows |
@@ -36,7 +36,7 @@ the first working milestone.
 | Keyed lifecycle | Mirror lifecycle by recovering keys with `reader.key_value()` and resolving outbound writer handles from keys | Medium-high for generated/dynamic data, medium for CDR-only | Dispose/unregister test for generated and DynamicData keyed topics |
 | Harness replacement | Run Routing Service baseline and C++ router candidate through equivalent ACT edge tests | Medium-high | Baseline/candidate matrix in compose/scripts |
 
-## Phase 2: Discovery Index
+## Phase 2: Discovery Dispatcher
 
 Evidence:
 
@@ -49,9 +49,9 @@ Evidence:
 
 Decision:
 
-- `DiscoveryIndex` should store stable endpoint records keyed by participant and endpoint
-  keys. It should expose route-relevant summaries rather than leaking Connext built-in
-  topic objects throughout the router.
+- `DiscoveryDispatcher` should translate built-in participant/publication/subscription
+  samples into route-relevant controller events. It keeps only the participant tag table;
+  endpoint current state remains in the DDS built-in readers.
 - Discovery can activate route resolution, but it must not create a route until type and
   QoS resolution have both succeeded.
 - **Resolved ([design-decisions.md](design-decisions.md) D12):** the fallback below is

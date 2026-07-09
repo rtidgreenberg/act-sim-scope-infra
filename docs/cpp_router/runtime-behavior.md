@@ -60,7 +60,6 @@ On router command:
 6. If the command changes participant state, such as a `SET_PARTICIPANT_PARTITION` update,
   include the updated participant names and participant-level partitions in the same
   `RouterStatus` sample.
-7. If the command was `DESCRIBE`, publish `RouterStatus` without changing `state_revision`.
 
 ## Dynamic Readers And Writers
 

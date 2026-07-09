@@ -36,7 +36,7 @@ route engine one behavior at a time.
 | 3 | One discovered route with explicit QoS | High | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
 | 4 | Role-aware control/platform route | High | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
 | 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
-| 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling (`DESCRIBE` dropped — D26) | status or commands introduce racey state changes |
+| 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | High | control receives `PlatformStatus`, `PlatformCommandAck`, and `ContactReport` without Routing Service | ACT topic/type mapping diverges from the planned route model |
 | 8 | Team partition route | Medium-high | `SET_PARTICIPANT_PARTITION` recreates affected entities and `PlatformData` crosses team scope | participant/partition changes cannot be made predictable enough |
 | 9 | Serialized-CDR fast path | Medium | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` first and revisit |
@@ -64,14 +64,13 @@ Evidence:
 > **Contract pinned** — transition table, `discovery_state` rollup, `state_revision`
 > semantics, idempotency bounds, and the Phase-1 fake seams are decided in
 > [design-decisions.md](design-decisions.md) D1–D7; the review completions (redundant-command
-> idempotent accept, `RESOLVING` abort edge, `DESCRIBE` history exemption (since retired
-> by D26), fixture-only
-> route source) in D8–D10; per-topic activation and per-topic status (route active when at
+> idempotent accept, `RESOLVING` abort edge, fixture-only route source) in D8 and D10;
+> per-topic activation and per-topic status (route active when at
 > least one topic is ready; `operational_state` derived over topic states) in D11; the
 > implementation-readiness completions (named per-topic completion events, controller-owned
 > matching and matched sets, global generation stamps, command admission seams) in D21–D24;
 > the simplicity pass (the status snapshot is the generated `RouterStatus`; `TRANSIENT_LOCAL`
-> status durability; `DESCRIBE` dropped, retiring D9) in D25–D26.
+> status durability) in D25–D26.
 
 Deliver:
 
@@ -79,8 +78,8 @@ Deliver:
   snapshot is the generated `RouterStatus` built at each revision bump — there are no
   separate snapshot/view classes (D25).
 - the typed `ControllerEvent` queue drained on one strand — producer-side thread-safe from
-  the start (MPSC, D12) — with `DiscoveryIndex`, `EntityFactory`, and `StatusPublisher`
-  behind interfaces and faked in tests (D3); per-topic completion events
+  the start (MPSC, D12) — with `EntityFactory` and `StatusPublisher` behind interfaces and
+  faked in tests (D3); per-topic completion events
   `TopicEntitiesReady` / `TopicTeardownComplete` and topic-scoped `RouteEntityError` (D21).
   Discovery events carry raw endpoint records; matching and the per-topic matched-endpoint
   sets are controller logic (D22), stamped by the global entity-generation counter (D23).
@@ -89,7 +88,7 @@ Deliver:
   sticky until command re-arm (D2).
 - bounded command history: acks cached for accepted **and** rejected commands, FIFO 256,
   dedup on `command_id` per router (D4). `ENABLE_ROUTE`/`DISABLE_ROUTE` handled;
-  `UPDATE_ROUTE`/`SET_PARTICIPANT_PARTITION`/`DESCRIBE` parsed-and-rejected (D7, D26).
+  `UPDATE_ROUTE`/`SET_PARTICIPANT_PARTITION` parsed-and-rejected (D7).
 - global `uint64 state_revision` with the D5 increment predicate; per-route revision stamps.
 
 Evidence:
@@ -102,9 +101,7 @@ Evidence:
   and `RESOLVING -> WAITING_FOR_DISCOVERY` on discovery regression via the fake factory's
   pending-resolve completion (D8).
 - redundant `ENABLE_ROUTE` with a **new** `command_id` on an already-enabled route returns
-  an idempotent accept with no revision bump (D8); a received `DESCRIBE` takes the same
-  generic unsupported-kind cached-reject path as `UPDATE_ROUTE` — no special handling, no
-  dedicated tests (D26/D31).
+  an idempotent accept with no revision bump (D8).
 - a two-topic fixture route proves per-topic activation (D11): the route reaches `ENABLED`
   when only its first topic is ready; the second topic later joins in place with no
   route-level transition (revision bumps, `topic_status` updates); one topic's creation
@@ -112,8 +109,8 @@ Evidence:
   `ERROR` only when all topics are errored.
 - losing one of two matched input writers for a topic updates the matched set with **no**
   rollup change and no revision bump; the last writer's loss regresses the rollup — proven
-  with raw endpoint-record events against the stub index, since matching and set
-  maintenance are controller logic (D20/D22).
+  with raw endpoint-record events, since matching and set maintenance are controller logic
+  (D20/D22).
 - a `TopicEntitiesReady` / `TopicTeardownComplete` / `RouteEntityError` event carrying a
   stale generation stamp is discarded with no state change (D21/D23).
 - `ENABLE_ROUTE`/`DISABLE_ROUTE` naming an unknown route returns a cached reject with no
@@ -125,7 +122,7 @@ Evidence:
 ### Phase 2: Static Generated-Type Discovery Smoke
 
 > **Contract pinned** — discovery mechanics (builtin readers + `ReadCondition`s on the
-> `AsyncWaitSet`, disabled-participant no-loss startup, GUID-keyed upserts (the index-side
+> `AsyncWaitSet`, disabled-participant no-loss startup, GUID-keyed upserts (the dispatcher-side
 > cache since deleted by D30), MPSC event
 > queue) and LAN-side type learning (`request_types_filter`, async TypeObject v2 arrival,
 > optional-until-resolved type) are decided in [design-decisions.md](design-decisions.md)
@@ -137,7 +134,7 @@ Evidence:
 > type-conflict policy in D20. This resolves this phase's confidence-investigation row.
 > The simplicity pass (Tenet 9) is pinned in D27–D30: the endpoint record is the builtin
 > topic data itself, endpoint removal is native per-endpoint, the expected-origin warning
-> is a discovery-time matching rule, and the index collapses to a translator plus a
+> is a discovery-time matching rule, and the dispatcher collapses to a translator plus a
 > participant table.
 
 Deliver:
@@ -145,7 +142,7 @@ Deliver:
 - `ParticipantRegistry` with participants purely from config, per instance
   (`control-platform`: LAN + WAN; `platform-team`: LAN + team-WAN); admin endpoints ride
   the LAN participant — there is no admin participant (D20).
-- `DiscoveryIndex` backed by the builtin participant/publication/subscription readers via
+- `DiscoveryDispatcher` backed by the builtin participant/publication/subscription readers via
   `ReadCondition`s on the `AsyncWaitSet` (D12) — a translator plus a small participant
   table (GUID → `act.router` tag/name), with **no endpoint-record cache**; removals ride
   the builtin readers' native per-endpoint instance transitions (D28/D30).
@@ -176,7 +173,7 @@ Evidence:
   participant lease expires; the smoke measures the stock default lease and the chosen
   short-LAN-lease timing (D16). Removal arrives as **native per-endpoint** `NOT_ALIVE`
   transitions on the builtin endpoint readers — the smoke counts them and confirms one per
-  owned endpoint for both SIGKILL and graceful exit (D28; the D16 index fan-out returns as
+  owned endpoint for both SIGKILL and graceful exit (D28; the D16 dispatcher fan-out returns as
   fallback only if this cardinality check fails). Graceful exit disposes promptly.
 
 ### Phase 3: One Discovered Route With Explicit QoS
@@ -235,10 +232,14 @@ Evidence:
 
 Deliver:
 
-- command reader and ack writer on the admin domain.
-- `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate command handling (`DESCRIBE` dropped —
-  D26; late-joiner catch-up comes from status durability).
+- command reader and ack writer on the LAN admin participant.
+- `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate command handling; late-joiner catch-up
+  comes from status durability.
 - aggregate `RouterStatus` publication after accepted changes.
+- controller event/decision journal writer on the LAN admin participant. The writer is
+  always created with the command/status plumbing, but the recorder/subscriber is launched
+  only in debug mode; without a matched debug reader, the journal produces no data-sample
+  traffic beyond normal DDS endpoint discovery.
 
 Evidence:
 
@@ -246,6 +247,10 @@ Evidence:
 - `ENABLE_ROUTE` moves it to waiting or enabled depending on discovery readiness.
 - `DISABLE_ROUTE` detaches read conditions and closes route entities.
 - duplicate `command_id` returns the original ack and does not increment state revision.
+- with debug recorder enabled, every processed controller event records the input event,
+  controller decision/outcome, pre/post `state_revision`, affected route/topic delta, and
+  requested factory/status actions; with no recorder reader matched, route behavior and
+  status publication are unchanged.
 
 ### Phase 7: Platform Status And Events Replacement
 
@@ -322,7 +327,7 @@ or narrows the fallback path.
 
 | Slice | Current confidence | Investigation | Confidence increases if | Fallback if not |
 |---|---|---|---|---|
-| Phase 2: discovery index | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
+| Phase 2: discovery dispatcher | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
 | Phase 3: dynamic entity lifecycle | High, but concurrency-sensitive | Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
 | Phase 5: LAN `auto` QoS | Medium-high | Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set for router readers/writers — bounded by the discoverable subset (D19): history/resource_limits are never in discovery and are alias-supplied by definition | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
 | Phase 8: team partition changes | Medium-high | Test participant-level partition change **in place via `set_qos`** (validated runtime-mutable in 7.7 — D15 side-finding) while writers/readers are active; recreate-affected-entities is the fallback | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back | restart the `platform-team` router instance on team change for the first demo |
@@ -354,7 +359,7 @@ lifecycle mirroring, and container harness replacement.
 
 - Highest confidence: controller state, YAML selection, generated admin IDL, explicit-QoS
   forwarding, command/status snapshots.
-- Medium-high confidence: discovery indexing, LAN auto-match, partition-driven team routes,
+- Medium-high confidence: discovery dispatching, LAN auto-match, partition-driven team routes,
   ACT harness replacement.
 - Medium confidence: serialized-CDR buffer forwarding and generic keyed lifecycle mirroring,
   because they depend on exact Connext 7.7 Modern C++ API ergonomics and type/key access.

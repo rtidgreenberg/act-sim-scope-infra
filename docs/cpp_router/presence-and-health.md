@@ -234,7 +234,7 @@ may be logged for diagnostics — never crossing the WAN, never driving cross-li
   match**. So liveliness-lost logging is available **only if the app writers offer a finite
   lease**.
 - **QoS-independent alternative:** log local endpoint appearance/disappearance from **discovery
-  events** (the `DiscoveryIndex` already watches the built-in publication topic). This catches
+  events** (the `DiscoveryDispatcher` already watches the built-in publication topic). This catches
   crash/disconnect regardless of app QoS, but not the hung-but-connected case (only liveliness
   or deadline catches that).
 

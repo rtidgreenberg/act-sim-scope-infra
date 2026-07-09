@@ -26,6 +26,13 @@ backpressure, probe RTT). **Capture only** — telemetry, not health classificat
 part of the command/ack/revision machinery (metric deltas never bump `state_revision`). See
 [Link Metrics](link-health.md) (D14).
 
+Controller journal topic (LAN/debug recorder): `ActRouterControllerJournal` — one sample per
+processed controller event containing the input event, controller decision/outcome,
+pre/post `state_revision`, affected route/topic delta, and requested side effects. The
+journal writer is created with the admin/status plumbing so instrumentation is always
+available; the recorder/subscriber exists only in debug mode. With no matched debug reader,
+the topic produces no event-log data traffic beyond normal DDS endpoint discovery.
+
 Transport (decided): the command/status topics ride the router's **local LAN participant**,
 not a dedicated admin domain/participant. `DomainParticipant`s are the expensive resource;
 topics/partitions are cheap — reusing the LAN participant keeps participant count minimal *and*
@@ -43,6 +50,12 @@ observers receive the current snapshot on match from durability, so there is no
 "request current status" command and no periodic republish; publication is change-driven
 only (startup + every `state_revision` bump, D17). Observer-side aliveness rides the status
 writer's liveliness, not sample cadence; nothing durable crosses the WAN.
+
+Controller journal writer QoS (LAN, debug analysis): `RELIABLE + VOLATILE` with bounded
+history/resource limits. It is an analysis stream, not state; late joiners use
+`RouterStatus` for current state and a live recorder for event history. The controller must
+not block indefinitely on journal backpressure; if debug recording cannot keep up, the
+drop/backpressure policy must be explicit and visible in structured logs.
 
 This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
 router/link presence + a **compact status summary** across the mesh — see
@@ -70,9 +83,19 @@ enum RouterCommandKind {
     ENABLE_ROUTE,
     DISABLE_ROUTE,
     UPDATE_ROUTE,
-    SET_PARTICIPANT_PARTITION,
-    DESCRIBE   // reserved — dropped from the POC command set (D26); a received DESCRIBE
-               // gets the generic unsupported-kind cached reject (D31)
+    SET_PARTICIPANT_PARTITION
+};
+
+enum ControllerJournalEventKind {
+    JOURNAL_COMMAND_RECEIVED,
+    JOURNAL_PUBLICATION_DISCOVERED,
+    JOURNAL_SUBSCRIPTION_DISCOVERED,
+    JOURNAL_ENDPOINT_LOST,
+    JOURNAL_TOPIC_ENTITIES_READY,
+    JOURNAL_TOPIC_TEARDOWN_COMPLETE,
+    JOURNAL_ROUTE_ENTITY_ERROR,
+    JOURNAL_ROUTE_DATA_READY,
+    JOURNAL_SHUTDOWN_REQUESTED
 };
 
 enum RouterRouteOperationalState {
@@ -183,6 +206,28 @@ struct RouterStatus {
     sequence<RouterParticipantStatus> participants;
     sequence<RouterRouteStatus> routes;
 };
+
+struct ControllerJournalRecord {
+    string target_node;
+    string target_router;
+    uint32 router_id;
+    string status_id;
+    uint64 event_sequence;
+    int64 timestamp_unix_nanos;
+    ControllerJournalEventKind event_kind;
+    uint64 pre_state_revision;
+    uint64 post_state_revision;
+    boolean state_changed;
+    string route_name;
+    string topic_name;
+    string command_id;
+    string endpoint_guid;
+    uint64 entity_generation;
+    string decision;
+    string reason;
+    string action;
+    string payload_json; // compact affected state delta + detailed event fields
+};
 ```
 
 `RouterRouteSpec` is the concrete active-side route shape used by runtime status and route
@@ -221,9 +266,7 @@ QoS aliases. `RouterRouteStatus` is the per-route entry inside the `routes` sequ
 ([design-decisions.md](design-decisions.md) D17): generated sequences are bounded (default
 cap 100) and endpoint churn would be truncation-prone revision noise on the
 one-coherent-sample topic. Discovery visibility comes from the per-topic `discovery_state`;
-the raw endpoint inventory lives in the structured log. A verbose `DESCRIBE` inventory
-response is a possible future addition, out of POC scope (the POC `DESCRIBE` command itself
-is dropped — D26).
+the raw endpoint inventory lives in the structured log.
 
 ## Required POC Commands
 
@@ -233,7 +276,6 @@ is dropped — D26).
 | `DISABLE_ROUTE` | Stop forwarding an existing route | detach conditions, close per-topic readers/writers, mark disabled |
 | `UPDATE_ROUTE` | Replace or patch one active-side route definition | reconcile runtime to the supplied `RouterRouteSpec`; covers topic list, endpoint QoS aliases, forwarding mode, filters, and lifecycle flags |
 | `SET_PARTICIPANT_PARTITION` | Change the participant-level partition on a named participant role, currently `team_wan` | update participant status and recreate affected readers/writers that inherit the participant partition; this is the generic form of team assignment |
-| `DESCRIBE` | ~~Report current routes and state~~ **dropped (D26)** | late-joiner catch-up comes from `TRANSIENT_LOCAL` status durability instead; a received `DESCRIBE` takes the generic unsupported-kind cached-reject path, no special handling (D31); enum value stays reserved for a possible future verbose inventory response (D17 note) |
 
 Optional POC-plus commands:
 

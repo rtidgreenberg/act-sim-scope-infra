@@ -118,7 +118,7 @@ reaches the controller as typed events on one strand. Unclear whether Phase 1 bu
 drives the state machine with direct method calls.
 
 **Decision.** The event queue **is the Phase 1 deliverable's spine**: Phase 1 builds the
-`ControllerEvent` types and the single-strand drain loop, with `DiscoveryIndex`,
+`ControllerEvent` types and the single-strand drain loop, with `DiscoveryDispatcher`,
 `EntityFactory`, and `StatusPublisher` injected behind interfaces and **faked** in tests.
 Tests post synthetic events (`CommandReceived`, `PublicationDiscovered`, `EndpointLost`,
 `RouteEntityError`, …) and assert on the snapshot sequence. This proves the actual
@@ -160,11 +160,6 @@ recorded, the bound, the dedup key, and eviction behavior.
 **Docs changed.** none beyond this log (command-status.md already implies duplicate-ack
 behavior; the bound and reject-caching live here).
 
-**Amended by D9** — `DESCRIBE` is exempt from the history; only state-changing kinds enter
-the FIFO.
-
----
-
 ## D5 — `state_revision` is a monotonic `uint64`; explicit increment predicate (2026-07-07, accepted)
 
 **Context.** The IDL declared `state_revision` a `string` while
@@ -184,8 +179,8 @@ router scope, per-route, and on `RouteView`, without a stated relationship.
   - a route's desired spec changes (accepted `ENABLE_ROUTE`/`DISABLE_ROUTE`/`UPDATE_ROUTE`);
   - participant state changes (accepted `SET_PARTICIPANT_PARTITION`);
   - `last_error` changes.
-- **No** bump for: counter/metric deltas (counters advance inside a revision), `DESCRIBE`,
-  duplicate commands, status republish.
+- **No** bump for: counter/metric deltas (counters advance inside a revision), duplicate
+  commands, status republish.
 
 **Docs changed.** `command-status.md` (IDL types).
 
@@ -225,7 +220,7 @@ command/status loop → Phase 6, partitions → Phase 8). The exact seams were u
 - **Routes**: the controller is constructed with a list of concrete active-side
   `RouterRouteSpec`s (from the Phase 0 config parser or test fixtures). Role-aware
   `source_side`/`destination_side` selection stays in Phase 4; Phase 1 never sees it.
-- **Commands**: `ENABLE_ROUTE`, `DISABLE_ROUTE`, `DESCRIBE` + duplicate handling, injected as
+- **Commands**: `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate handling, injected as
   `CommandReceived` events (no DDS reader). `UPDATE_ROUTE` and `SET_PARTICIPANT_PARTITION`
   are parsed-and-rejected per D4.
 - **Participants**: `MutableRouterState.participants` is populated read-only from config for
@@ -242,7 +237,7 @@ is identity-only); Phase 1 routes come from test fixtures, and `RouteConfigParse
 Phase 4 deliverable.
 
 **Amended by D25/D26** — the `RouterStatusView` capture shape is deleted (the snapshot *is*
-the generated `RouterStatus`); `DESCRIBE` is dropped from the POC command set.
+the generated `RouterStatus`); late-joiner catch-up comes from status durability.
 
 ---
 
@@ -289,25 +284,6 @@ by a command.
 
 **Amended by D21** — the pending resolve/teardown completions are the named per-topic
 events `TopicEntitiesReady` / `TopicTeardownComplete`.
-
----
-
-## D9 — `DESCRIBE` is exempt from the command history (2026-07-07, accepted; amends D4)
-
-**Context.** D4 caches the ack for every processed command, and `DESCRIBE` is a command. A
-harness polling `DESCRIBE` at 1 Hz cycles the 256-entry FIFO in ~4 minutes, evicting
-`ENABLE_ROUTE`/`DISABLE_ROUTE` acks and turning delayed retries into "new commands".
-
-**Decision.** Only **state-changing** command kinds enter the history. `DESCRIBE` is
-processed fresh every time and its ack is not cached; a duplicate `DESCRIBE` is simply
-re-processed (read-only, so replay is harmless and byte-stable for unchanged state). With
-reads exempt, 256 entries covers any plausible mutation-retry window, and combined with
-D8's idempotent accept the eviction risk is effectively retired.
-
-**Docs changed.** none beyond this log.
-
-**Retired by D26** — `DESCRIBE` is dropped from the POC command set, so no read command
-remains and only state-changing kinds can enter the history by construction.
 
 ---
 
@@ -396,7 +372,7 @@ against real DDS.
 
 ---
 
-## D12 — `DiscoveryIndex` uses builtin readers with `ReadCondition`s on the `AsyncWaitSet`; disabled-participant startup; GUID-keyed upsert cache (2026-07-08, accepted)
+## D12 — `DiscoveryDispatcher` uses builtin readers with `ReadCondition`s on the `AsyncWaitSet`; disabled-participant startup; GUID-keyed upsert cache (2026-07-08, accepted)
 
 **Context.** Phase 2 left "built-in publication/subscription readers or Connext discovery
 listeners" open (also the Phase-2 confidence-investigation row;
@@ -406,7 +382,7 @@ with readers as the fallback). Mechanics validated against 7.7 via `ask_connext_
 
 **Decision.**
 
-- **Builtin readers, no listeners.** The index is fed by the builtin `DCPSPublication`,
+- **Builtin readers, no listeners.** The dispatcher is fed by the builtin `DCPSPublication`,
   `DCPSSubscription`, and `DCPSParticipant` DataReaders with **`ReadCondition`s attached to
   the router's own `AsyncWaitSet`**. The dispatch handler `take()`s and posts
   `PublicationDiscovered` / `SubscriptionDiscovered` / `EndpointLost` controller events —
@@ -418,7 +394,7 @@ with readers as the fallback). Mechanics validated against 7.7 via `ask_connext_
   participant **disabled** (factory `autoenable_created_entities = false`), looks up the
   builtin readers and attaches conditions, **then** enables the participant.
 - **Cache semantics.** Builtin readers are KEEP_LAST(1) per instance — a **current-state
-  cache, not an event log**. The index keys records by endpoint GUID (`BuiltinTopicKey`),
+  cache, not an event log**. The dispatcher keys records by endpoint GUID (`BuiltinTopicKey`),
   treats samples as **upserts** (a later sample for the same instance can add data — e.g.
   the discovered type, D13), and derives removals from builtin **instance-state
   transitions** (graceful dispose now; participant-loss purge semantics are a separate
@@ -431,14 +407,14 @@ with readers as the fallback). Mechanics validated against 7.7 via `ask_connext_
 This resolves the Phase 2 confidence-investigation row.
 
 **Docs changed.** `implementation-plan.md` (Phase 2 banner, deliverable, investigation row),
-`code-architecture.md` (`ParticipantRegistry`/`DiscoveryIndex` bullets, concurrency rule),
+`code-architecture.md` (`ParticipantRegistry`/`DiscoveryDispatcher` bullets, concurrency rule),
 `connext-investigation-review.md` (Phase 2 fallback promoted to decision).
 
 **Amended by D16** — participant-purge fan-out into per-endpoint `EndpointLost` is defined
 there (the pending purge-semantics item above is resolved).
 
 **Amended by D28/D30** — removal handling is uniform native per-endpoint instance
-transitions (the "graceful dispose now / purge pending" split is gone), and the index keeps
+transitions (the "graceful dispose now / purge pending" split is gone), and the dispatcher keeps
 no endpoint cache: the upsert semantics live in the controller's matched sets, and the
 builtin readers' own KEEP_LAST(1)-per-instance caches are the only current-state store.
 
@@ -476,7 +452,7 @@ not a learner; `"*"` would proactively pull every remote type across the constra
   — the same pattern proven in a working dynamic-subscription tool.
 
 **Docs changed.** `implementation-plan.md` (Phase 2 evidence),
-`code-architecture.md` (`DiscoveryIndex` bullet),
+`code-architecture.md` (`DiscoveryDispatcher` bullet),
 `connext-investigation-review.md` (LAN-side pointer in the WAN type-exchange section).
 
 ---
@@ -504,7 +480,7 @@ and how a middleware-level RTT can be measured. Full findings and capture design
   `ReliableReaderActivityChangedStatus` (inactive peers), reader `SampleLostStatus`
   distinguishing `lost_by_writer` (end-to-end loss) from local-limit reasons.
 - **Rollup key: peer `router_id`** — matched endpoint handle/locator → participant GUID
-  (`DiscoveryIndex`) → `router_id`, summed across this router's WAN endpoints per peer. Two
+  (`DiscoveryDispatcher`) → `router_id`, summed across this router's WAN endpoints per peer. Two
   sources for the GUID→router join, either sufficient: the `PresenceMonitor` roster and the
   D15 participant `user_data` tag (`act.router=<node>/<router>`), which identifies router
   participants even before/without a presence heartbeat.
@@ -569,7 +545,7 @@ do not prevent *matching*: a route output DataWriter and a route input DataReade
 same participant/topic/partition **do** match. The `platform-team` instance will hold both
 for `PlatformData` on its one LAN participant (`platform_team_to_wan` input reader,
 `wan_team_to_platform` output writer) — a forwarded sample would re-enter the outbound
-route and echo across the team WAN, invisibly to the discovery index. The same-node sibling
+route and echo across the team WAN, invisibly to the discovery dispatcher. The same-node sibling
 instance's writers are likewise visible, matchable candidate inputs. Partitions **cannot**
 enforce non-matching here (validated 7.7): matching is evaluated per reader-writer pair on
 the shared partition strings, and router and apps both legitimately need the same partition.
@@ -587,17 +563,17 @@ Ignore semantics validated via `ask_connext_question` (2026-07-08).
 - **Same-node rule — tag-driven ignore at discovery.** Every router participant sets
   `user_data = act.router=<node>/<router>` (participant name as human-readable secondary).
   In the D12 dispatch handler, a discovered publication whose owning participant carries a
-  **same-node** router tag is first recorded in the index (flagged ignored — post-ignore
+  **same-node** router tag is first recorded in the dispatcher (flagged ignored — post-ignore
   builtin visibility is not normatively specified, so record before ignoring), then ignored
   via `dds::pub::ignore(participant, sample_info.instance_handle())`. This is RTI's
   documented safest call site (during builtin-sample processing). Remote routers'
   publications are untouched — on the WAN they are the *expected* route inputs.
 - Endpoint records gain **`origin_router`** (empty for application endpoints), joined from
-  the `DCPSParticipant` reader already in the index (D12); used for status/debug and as the
+  the `DCPSParticipant` reader already in the dispatcher (D12); used for status/debug and as the
   same-node trigger. Enforcement itself is DDS-level, not route-matching logic.
 - **Rejected:** `ignore_participant` — domain-wide suppression of the sibling would
   silently kill any future node-local router coordination topic and erase the sibling from
-  the index. Partitions as enforcement — cannot prevent the match (see context).
+  the dispatcher. Partitions as enforcement — cannot prevent the match (see context).
   Irreversibility of ignore in 7.7 is accepted: a restarted sibling presents new handles
   and is simply re-ignored on rediscovery.
 - **Origination visibility (added same session).** The tag join doubles as a
@@ -605,7 +581,7 @@ Ignore semantics validated via `ask_connext_question` (2026-07-08).
   rollup (D14). On top of it, route runtimes perform a cheap per-sample origination check:
   each reader keeps a seen-set of `SampleInfo::publication_handle`s (one hash lookup on the
   hot path); the **first** sample from a new handle posts an `InputOriginObserved` event and
-  the controller resolves the handle against the index and logs the origination (app writer
+  the controller resolves the handle against the dispatcher and logs the origination (app writer
   vs `origin_router`). Each leg has an expected origin — **LAN inputs: app-originated only**
   (self/sibling are ignored; remote routers never write into this node's LAN),
   **WAN inputs: router-originated** — so deviations are warned loudly: router-origin on a
@@ -620,7 +596,7 @@ change; Phase 8's "recreate affected entities" is the fallback, not the premise.
 
 **Docs changed.** `implementation-plan.md` (Phase 2 banner, deliverable, evidence; Phase 3
 evidence; Phase 8 open question + investigation row), `code-architecture.md`
-(`ParticipantRegistry`, `DiscoveryIndex`, `EntityFactory` bullets; `InputOriginObserved`
+(`ParticipantRegistry`, `DiscoveryDispatcher`, `EntityFactory` bullets; `InputOriginObserved`
 event row).
 
 **Amended by D29** — the origination-visibility bullet's mechanism (per-reader seen-set,
@@ -654,8 +630,8 @@ participant purge is one of the DEAD triggers driving bulk instance cleanup.
   DDS participant purge trails it as backstop and bulk cleanup
   (`NOT_ALIVE_NO_WRITERS` fan-out), and can never race ahead of the roster. Presence
   calibration owns the concrete values; this constraint must survive any retune.
-- **DDS handles the purge; the index reacts.** A participant purge — graceful dispose *or*
-  lease expiry — is fanned out by `DiscoveryIndex` into `EndpointLost` for **every endpoint
+- **DDS handles the purge; the dispatcher reacts.** A participant purge — graceful dispose *or*
+  lease expiry — is fanned out by `DiscoveryDispatcher` into `EndpointLost` for **every endpoint
   owned by that participant** (the `DCPSParticipant` reader's third job, after the D15 tag
   join and D12 startup). Route topics whose discovery facts regress then transition per the
   D2/D11 tables. This resolves the purge item D12 left pending.
@@ -664,10 +640,10 @@ participant purge is one of the DEAD triggers driving bulk instance cleanup.
   values.
 
 **Docs changed.** `implementation-plan.md` (Phase 2 evidence), `code-architecture.md`
-(`DiscoveryIndex` purge fan-out), `presence-and-health.md` (participant-tuning ordering
+(`DiscoveryDispatcher` purge fan-out), `presence-and-health.md` (participant-tuning ordering
 constraint), D12 (amend note).
 
-**Amended by D28** — the index fan-out is demoted to fallback: endpoint removal on
+**Amended by D28** — the dispatcher fan-out is demoted to fallback: endpoint removal on
 participant purge is observed natively per endpoint on the builtin readers (validated 7.7);
 the Phase 2 smoke confirms the per-endpoint cardinality. Lease values and the
 presence-ordering constraint are unchanged.
@@ -687,8 +663,7 @@ truncation-prone and revision-bump noise on the one-coherent-sample status topic
 - **No endpoint dump in `RouterStatus`.** The per-route/per-topic `discovery_state`
   (D1/D11) *is* the "matching route candidates" signal — a topic at `PARTIAL`/`READY` shows
   discovery found and matched it. The raw endpoint inventory (topic/type/QoS summaries,
-  `origin_router`, ignored endpoints — D15) goes to the **structured log**. A verbose
-  `DESCRIBE` inventory response is a possible future addition, explicitly out of POC scope.
+  `origin_router`, ignored endpoints — D15) goes to the **structured log**.
 - **Phase 2 stands up the real DDS `StatusPublisher`** on the LAN participant (types
   already generated in Phase 0; admin rides the LAN participant, which Phase 2 creates
   anyway). Write-only: the command **reader** stays in Phase 6 per D7. Publication cadence
@@ -770,7 +745,7 @@ but not all policies.
   anything else is alias-supplied by definition.
 
 **Docs changed.** `implementation-plan.md` (Phase 2 deliverable; Phase 5 deliverable note +
-investigation row), `code-architecture.md` (`DiscoveryIndex` bullet pointer).
+investigation row), `code-architecture.md` (`DiscoveryDispatcher` bullet pointer).
 
 **Amended by D27** — the captured subset is a read rule over the stored builtin topic data,
 not a struct definition; the negative finding (history/resource_limits never discoverable)
@@ -791,14 +766,14 @@ different type names had no defined policy.
 - **Participants come purely from config, per instance** — `control-platform`: LAN + WAN;
   `platform-team`: LAN + team-WAN. There is **no admin participant**: admin endpoints hang
   off the LAN participant. (Multi-network expansion per D18 when it activates.)
-- **Discovery facts derive from per-topic matched-endpoint sets.** The index keeps the set
+- **Discovery facts derive from per-topic matched-endpoint sets.** The dispatcher keeps the set
   of matched input writers (and, for auto-QoS routes, output readers) per route topic;
   `input_writer_seen` ⇔ set non-empty. Losing one of several writers updates the set with
   **no** rollup change and no revision bump (consistent with the D2 note on non-boundary
   fact changes); only the last writer's loss regresses the rollup.
 - **Same-topic type-name conflict: first-resolved-wins.** The first type resolved for a
   route topic is the route's type; a subsequently discovered writer with a different type
-  name on the same topic is recorded in the index, logged as a **warning**, and does not
+  name on the same topic is recorded in the dispatcher, logged as a **warning**, and does not
   change the resolved type. Status shows the resolved type (`resolved_type_name`); the POC
   does not attempt multi-type topics.
 
@@ -808,7 +783,7 @@ different type names had no defined policy.
 **Amends D1/D11** — the raw facts are now set-derived, not stored booleans.
 
 **Amended by D22** — the matched-endpoint sets live in controller state
-(`TopicRouteState`); the index keeps the GUID-keyed endpoint records.
+(`TopicRouteState`); the dispatcher keeps the GUID-keyed endpoint records.
 
 ---
 
@@ -846,13 +821,14 @@ Phase 1's transition-table conformance tests cannot be written against unnamed e
 
 ---
 
-## D22 — Controller owns endpoint→route-topic matching and the matched sets; `DiscoveryIndex` is a GUID-keyed record cache + raw event source (2026-07-09, accepted; amends D20)
+## D22 — Controller owns endpoint→route-topic matching and the matched sets; `DiscoveryDispatcher` is a GUID-keyed record cache + raw event source (2026-07-09, accepted; amends D20)
 
-**Context.** D20 said "the index keeps the set of matched input writers per route topic,"
-while [code-architecture.md](code-architecture.md) keeps the set-derived `discovery_facts`
-in `TopicRouteState` (controller state) and forbids the index from owning route state.
-With the index faked in Phase 1 (D3), the ownership choice decides whether matching logic
-is tested in Phase 1 or first written untested in Phase 2.
+**Context.** D20 said "the discovery component keeps the set of matched input writers per
+route topic," while [code-architecture.md](code-architecture.md) keeps the set-derived
+`discovery_facts` in `TopicRouteState` (controller state) and forbids the discovery
+component from owning route state. With discovery faked as events in Phase 1 (D3), the
+ownership choice decides whether matching logic is tested in Phase 1 or first written
+untested in Phase 2.
 
 **Decision.**
 
@@ -865,21 +841,21 @@ is tested in Phase 1 or first written untested in Phase 2.
   sets exactly as D20 defined (seen ⇔ set non-empty; only the last endpoint's loss
   regresses the rollup). Route knowledge lives in one place, and the single-writer rule
   holds.
-- **`DiscoveryIndex`** keeps the **GUID-keyed endpoint-record cache** (upsert semantics per
+- **`DiscoveryDispatcher`** keeps the **GUID-keyed endpoint-record cache** (upsert semantics per
   D12/D13, purge fan-out per D16, ignore/tag handling per D15) and serves lookups (e.g.
   `InputOriginObserved` handle → origin resolution). It never sees route specs.
-- **Phase 1 consequence.** The fake index is a dumb stub; tests post raw endpoint-record
+- **Phase 1 consequence.** The fake dispatcher is a dumb event source; tests post raw endpoint-record
   events, so matching, set maintenance, and the D20 set-boundary rules ("lose one of two
   matched writers → facts change, no rollup change, no revision bump") are genuinely
   proven in Phase 1 rather than deferred to Phase 2.
 
-**Docs changed.** D20 (amend note), `code-architecture.md` (`DiscoveryIndex` bullet,
+**Docs changed.** D20 (amend note), `code-architecture.md` (`DiscoveryDispatcher` bullet,
 `TopicRouteState` comment), `implementation-plan.md` (Phase 1 banner + evidence).
 
 **Amended by D27/D30** — event payloads are copies of the builtin topic data plus the
-`origin_router`/`ignored` sidecar; the index-side GUID-keyed record cache is deleted (the
-index keeps only the participant table). Controller-side matching, the matched sets, and
-the Phase 1 fake-index consequence are unchanged.
+`origin_router`/`ignored` sidecar; the dispatcher-side GUID-keyed record cache is deleted (the
+dispatcher keeps only the participant table). Controller-side matching, the matched sets,
+and the Phase 1 fake-dispatcher consequence are unchanged.
 
 ---
 
@@ -928,8 +904,7 @@ exist.
   (`accepted=false`, "unknown route"), the reject **cached per D4**, with no state change
   and no revision bump (D5). Implicit route creation is explicitly rejected — `ADD_ROUTE`
   stays POC-plus, and a typo'd route name must fail loudly (acceptance criterion: bad
-  route commands are rejected and acknowledged, not silent). `DESCRIBE` is unaffected (it
-  takes no route target).
+  route commands are rejected and acknowledged, not silent).
 
 **Docs changed.** `implementation-plan.md` (Phase 1 evidence), `command-status.md`
 (unknown-route reject note).
@@ -963,12 +938,10 @@ replaced, concurrency rule), `implementation-plan.md` (Phase 1 deliverables).
 
 ---
 
-## D26 — LAN `RouterStatus` is `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`; publication stays change-driven only; `DESCRIBE` is dropped from the POC command set (2026-07-09, accepted; amends D7, retires D9)
+## D26 — LAN `RouterStatus` is `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`; publication stays change-driven only (2026-07-09, accepted; amends D7)
 
-**Context.** `DESCRIBE`'s entire POC effect was "publish ack plus current `RouterStatus`" —
-the same sample the status topic already publishes on every revision change. Late-joiner
-catch-up is a durability job and aliveness is a liveliness job; both are DDS-native
-(Tenet 9). Scope check: `RouterStatus` rides the **LAN participant only**
+**Context.** Late-joiner catch-up is a durability job and aliveness is a liveliness job;
+both are DDS-native (Tenet 9). Scope check: `RouterStatus` rides the **LAN participant only**
 ([command-status.md](command-status.md) transport decision) and never crosses the WAN, so
 durability replay traffic is loopback/LAN, one small sample per router — the constrained
 link never sees it. In-memory writer history only (`KEEP_LAST(1)`), so no durable writer
@@ -985,23 +958,11 @@ history and no SQLite anywhere (vboxsf rule unaffected).
   never-delivered timer source for `StatusRequested` is removed; observer-side aliveness
   rides the status writer's liveliness (`AUTOMATIC`), and mesh presence stays
   `RouterHealth`'s job. WAN QoS is untouched by this decision.
-- **`DESCRIBE` is removed from the POC command set.** The enum value stays reserved in the
-  IDL (no wire churn); a received `DESCRIBE` is rejected as unsupported, and the reject is
-  **not cached** — caching it would resurrect the D9 eviction problem (a polling client
-  cycling mutation acks out of the FIFO). D9 is retired as a *special case* but its rule
-  survives structurally: only state-changing kinds enter the history. The reject is
-  deterministic, so an uncached replay returns an identical answer anyway.
-- A future `DESCRIBE` revival would be the **verbose endpoint-inventory response** already
-  noted in D17 (different, request/reply-shaped semantics) — nothing built for the POC
-  command would have been reusable there, so dropping it burns nothing.
 
-**Docs changed.** `command-status.md` (transport/QoS note, command table, IDL comment),
+**Docs changed.** `command-status.md` (transport/QoS note),
 `implementation-plan.md` (Phase 1 banner/deliverables/evidence, Phase 2 evidence, Phase 6
 slice + deliverables), `code-architecture.md` (`StatusPublisher` bullet, event table),
 `thesis-and-tenets.md` (Tenet 9 records the simplicity/DDS-native lens).
-
-**Amended by D31** — the uncached-reject special case is deleted; `DESCRIBE` takes the
-generic unsupported-kind cached-reject path like any other unimplemented kind.
 
 ---
 
@@ -1029,14 +990,14 @@ data too.
   in discovery and always come from aliases/defaults.
 - Same move as D25: one shape from DDS to controller to tests to log.
 
-**Docs changed.** D19/D22 (amend notes), `code-architecture.md` (`DiscoveryIndex` bullet,
+**Docs changed.** D19/D22 (amend notes), `code-architecture.md` (`DiscoveryDispatcher` bullet,
 `TopicRouteState` comment), `implementation-plan.md` (Phase 2 deliverables).
 
 ---
 
 ## D28 — Endpoint removal is DDS-native per endpoint for both exit paths; the D16 fan-out demotes to fallback (2026-07-09, accepted; amends D12, D16)
 
-**Context.** D16 made `DiscoveryIndex` fan a participant purge into per-endpoint
+**Context.** D16 made `DiscoveryDispatcher` fan a participant purge into per-endpoint
 `EndpointLost` — app-level enumeration machinery. Validated 7.7 (`ask_connext_question`,
 2026-07-09): on remote-participant removal — **graceful delete and lease-expiry purge
 alike** — Connext removes "the remote participant, together with all its entities" from
@@ -1059,7 +1020,7 @@ endpoint," so the smoke verifies it.
 - D16's lease values and the presence-ordering constraint are untouched.
 
 **Docs changed.** D12/D16 (amend notes), `implementation-plan.md` (Phase 2 evidence),
-`code-architecture.md` (`DiscoveryIndex` bullet).
+`code-architecture.md` (`DiscoveryDispatcher` bullet).
 
 ---
 
@@ -1096,9 +1057,9 @@ evidence line).
 
 ---
 
-## D30 — `DiscoveryIndex` is a translator plus a participant table; the GUID-keyed endpoint-record cache is deleted (2026-07-09, accepted; amends D12, D22)
+## D30 — `DiscoveryDispatcher` is a translator plus a participant table; the GUID-keyed endpoint-record cache is deleted (2026-07-09, accepted; amends D12, D22)
 
-**Context.** With D27–D29, D22's index-side endpoint cache has no consumer left: matching
+**Context.** With D27–D29, D22's dispatcher-side endpoint cache has no consumer left: matching
 and the matched sets live in the controller, which upserts from events — D13's
 late-arriving type is just a second `PublicationDiscovered` for the same GUID; removal is
 native per-endpoint (D28); origin resolution needs no handle→record join (D29); the
@@ -1110,47 +1071,19 @@ mirror is a second copy of a store DDS already maintains.
 
 **Decision.**
 
-- `DiscoveryIndex` collapses to a **translator**: `take()` from the three builtin readers
+- `DiscoveryDispatcher` collapses to a **translator**: `take()` from the three builtin readers
   on waitset dispatch, apply the D15 ignore/tag rules, post events carrying the
   builtin-data copy (D27). **No endpoint store anywhere**; if an ad-hoc query need ever
-  appears, the index switches to `read()` and the builtin readers' own bounded caches
+  appears, the dispatcher switches to `read()` and the builtin readers' own bounded caches
   serve it.
-- The only index state is the **participant table** (participant GUID → `act.router`
+- The only dispatcher state is the **participant table** (participant GUID → `act.router`
   tag / name), maintained from the `DCPSParticipant` reader; consumers: the D15 same-node
   ignore decision and the D14/presence GUID→router join.
-- **Participant loss is index-internal** in Phase 2: the table entry is dropped and the
+- **Participant loss is dispatcher-internal** in Phase 2: the table entry is dropped and the
   loss logged; the controller reacts only to per-endpoint `EndpointLost` (D28). No
   `ParticipantLost` controller event until a phase needs one (presence has its own
   roster).
-- The Phase 1 fake index (D3/D22) is unchanged — it was already a dumb event source.
+- The Phase 1 fake dispatcher (D3/D22) is unchanged — it was already a dumb event source.
 
-**Docs changed.** D12/D22 (amend notes), `code-architecture.md` (`DiscoveryIndex` bullet,
+**Docs changed.** D12/D22 (amend notes), `code-architecture.md` (`DiscoveryDispatcher` bullet,
 class-responsibility row), `implementation-plan.md` (Phase 2 banner + deliverables).
-
----
-
-## D31 — `DESCRIBE` has no special handling: generic unsupported-kind cached reject, no dedicated code or tests (2026-07-09, accepted; amends D26)
-
-**Context.** D26 dropped `DESCRIBE` but gave its reject a special rule — *not cached* — to
-protect the FIFO from a polling client. Tenet-9 review of the implementation: that special
-case defends against a poller of a command that **no longer exists**, and it never uniquely
-protected anything — any client spamming fresh `command_id`s of a *cached* kind (e.g.
-`UPDATE_ROUTE` rejects) cycles the FIFO identically. Eviction-by-spam is D4's generic,
-documented, accepted risk, already defanged by D8's idempotent accepts. A special case that
-prevents nothing is machinery without a job.
-
-**Decision.**
-
-- `DESCRIBE` is handled **identically to every other unsupported kind**
-  (`UPDATE_ROUTE`, `SET_PARTICIPANT_PARTITION` in Phase 1): parsed, rejected
-  "unsupported in this build", **reject cached per D4**. One code path, zero
-  `DESCRIBE`-specific logic.
-- With no special behavior there is **nothing `DESCRIBE`-specific to test**; the
-  unsupported-kind path is already covered by the `UPDATE_ROUTE` reject/replay test. The
-  dedicated uncached-reject test is deleted.
-- D26's "only state-changing kinds enter the history" clause is superseded: **every
-  processed command's ack is cached** — D4's original uniform rule is restored. (D9's
-  polling concern died with the command, not with a caching rule.)
-
-**Docs changed.** D26 (amend note), `command-status.md` (IDL comment, command-table row),
-`implementation-plan.md` (Phase 1 evidence line).

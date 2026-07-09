@@ -113,10 +113,10 @@ for filtering, partitions for scoping, `ignore` for loop safety, RxO for compati
 App-level machinery must earn its place by doing something DDS cannot (e.g. command
 idempotency, the route state machine). Applied in D25/D26: the status snapshot is the
 generated `RouterStatus` itself; `TRANSIENT_LOCAL` status durability replaces the
-`DESCRIBE` command; no periodic status republish. Applied to Phase 2 in D27–D30: the
+request/reply status command; no periodic status republish. Applied to Phase 2 in D27–D30: the
 endpoint record is the builtin topic data itself; endpoint removal rides native builtin
 instance transitions; the origin warning is a discovery-time matching rule, not per-sample
-machinery; the discovery index is a translator, not a second cache.
+machinery; the discovery dispatcher is a translator, not a second cache.
 
 ## Consequences for the build
 

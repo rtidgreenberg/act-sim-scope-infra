@@ -38,7 +38,7 @@ TypeObject v2 / TypeLookup assumptions in this document.
 
 ## AsyncWaitSet Implementation Architecture
 
-Each router instance is a small runtime around a route registry, discovery index, and one
+Each router instance is a small runtime around a route registry, discovery dispatcher, and one
 `AsyncWaitSet`:
 
 ```text
@@ -46,7 +46,7 @@ RouterInstance
   ConfigLoader
   ParticipantRegistry
   RouteRegistry
-  DiscoveryIndex
+  DiscoveryDispatcher
   EntityFactory
   AsyncWaitSetDispatcher
   CommandHandler
@@ -66,24 +66,24 @@ RouterInstance
   in discovery (D15). WAN participants are **never multi-homed** — with multiple physical
   networks it creates one WAN participant per network, interface-pinned via
   `allow_interfaces_list` (D18; today's single network is the `N = 1` case).
-- `DiscoveryIndex` watches discovered publications and subscriptions on those
+- `DiscoveryDispatcher` watches discovered publications and subscriptions on those
   participants. It is backed by the builtin participant/publication/subscription readers
   with `ReadCondition`s on the `AsyncWaitSet` (no listeners) and is a **translator, not a
   cache** (D30): it `take()`s builtin samples, applies the ignore/tag rules, and posts
   events whose payload is a **copy of the builtin topic data itself**
   (`PublicationBuiltinTopicData` / `SubscriptionBuiltinTopicData` — validated copyable
   value types) plus an `origin_router`/`ignored` sidecar; there is no hand-rolled
-  endpoint-record struct and no index-side endpoint store (D27/D30 — the builtin readers'
+  endpoint-record struct and no dispatcher-side endpoint store (D27/D30 — the builtin readers'
   own KEEP_LAST(1)-per-instance caches are the only current-state store; switch to
   `read()` if an ad-hoc query need ever appears). The D19 captured subset survives as the
   rule for what matching/auto-QoS may read from a record — history/resource_limits are
   never discoverable. The discovered `DynamicType` is optional until TypeLookup resolves
   it — natively, via the builtin data's `type()` field; a later builtin update for the
   same GUID is simply another upsert event — LAN participants set `request_types_filter`
-  so types are requested without a local endpoint match (D12/D13). The only index-side
+  so types are requested without a local endpoint match (D12/D13). The only dispatcher-side
   state is the small **participant table** (GUID → `act.router` tag/name, from the
   `DCPSParticipant` reader), serving the same-node ignore decision (D15) and the
-  presence/link-stats GUID→router join (D14); participant loss is index-internal — the
+  presence/link-stats GUID→router join (D14); participant loss is dispatcher-internal — the
   controller reacts only to per-endpoint losses (D30). A discovered publication whose
   participant carries a **same-node** `act.router` tag is recorded/logged with its
   `origin_router`, then locally ignored (`dds::pub::ignore`) so no route reader can ever
@@ -95,7 +95,7 @@ RouterInstance
   app-level fan-out is the fallback if the Phase 2 smoke disproves per-endpoint delivery);
   lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth` presence
   window (D16). Ownership boundary (D22): endpoint→route-topic matching and the per-topic
-  matched-endpoint sets live in the controller (`TopicRouteState`) — the index never sees
+  matched-endpoint sets live in the controller (`TopicRouteState`) — the dispatcher never sees
   route specs.
 - `RouteRegistry` stores every configured route for the instance, including disabled routes
   and routes waiting on discovery. Desired-enabled plus discovery readiness determines
@@ -116,6 +116,12 @@ RouterInstance
   roster. Writer QoS (LAN): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late joiners get
   the current snapshot from durability; publication is change-driven only, never periodic,
   and observer-side aliveness rides the writer's liveliness (D26).
+- `ControllerJournalPublisher` emits one LAN-local analysis sample per processed controller
+  event with the input event, controller decision/outcome, pre/post revision, affected
+  route/topic delta, and requested side effects. Its writer is always created with the
+  admin/status plumbing, but the recorder reader exists only in debug mode; with no matched
+  reader, the journal produces no event-log data traffic beyond normal DDS endpoint
+  discovery.
 - `PresenceMonitor` publishes this router's compact `RouterHealth` summary over the WAN and
   subscribes to peers', maintaining the `router_id → {state, last-seen, participant GUID, summary}`
   roster. It republishes the aggregated connected-router list over the LAN on `ActRouterMeshStatus`.
@@ -207,7 +213,7 @@ RouteState
 TopicRouteState              # one per configured topic on the route — D11
   matched_endpoint_sets      # matched input writers (and auto-QoS output readers) for this
                              # topic; maintained by the CONTROLLER from discovery events
-                             # carrying builtin-data copies — the index stores no endpoint
+                             # carrying builtin-data copies — the dispatcher stores no endpoint
                              # records (D22/D27/D30)
   discovery_facts            # derived from the sets (D20): input_writer_seen ⇔
                              # matched-writer set non-empty; ditto output_reader_seen;
@@ -256,9 +262,9 @@ The controller should process these event categories on one serialized strand or
 | Event | Source | Controller action |
 |---|---|---|
 | `CommandReceived` | command reader | validate command id and route target (events are post-admission — node/router targeting is the command reader's job, D24), update desired state, publish ack, reconcile route |
-| `PublicationDiscovered` | discovery index | upsert per-topic matched sets (D22), warn on unexpected origin for the leg (D29), try to activate matching desired-enabled routes |
-| `SubscriptionDiscovered` | discovery index | update output readiness for `auto` writer QoS routes |
-| `EndpointLost` | discovery index or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
+| `PublicationDiscovered` | discovery dispatcher | upsert per-topic matched sets (D22), warn on unexpected origin for the leg (D29), try to activate matching desired-enabled routes |
+| `SubscriptionDiscovered` | discovery dispatcher | update output readiness for `auto` writer QoS routes |
+| `EndpointLost` | discovery dispatcher or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
 | `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
 | `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, drive `DEGRADED → RESOLVING\|WAITING` per D2; stale stamp → discard (D21/D23) |
@@ -268,6 +274,12 @@ The controller should process these event categories on one serialized strand or
 This keeps DDS callback threads shallow. They translate DDS notifications into controller
 events and return quickly. The controller can then perform entity creation/destruction in a
 known order and publish a coherent status snapshot.
+
+For debug analysis, the controller also writes a controller journal record after each
+processed event. The record is observability only: it captures the input event, the
+decisions/actions taken, and the pre/post externally visible state, but it never feeds back
+into route control. The journal writer exists in normal builds; the recorder reader is
+debug-mode only, so event-log data traffic appears only when recording is requested.
 
 ## Proposed C++ Module Layout
 
@@ -290,7 +302,7 @@ core/
   ParticipantRegistry.hpp/.cxx
 
 dds/
-  DiscoveryIndex.hpp/.cxx
+  DiscoveryDispatcher.hpp/.cxx
   TypeResolver.hpp/.cxx
   QosResolver.hpp/.cxx
   EntityFactory.hpp/.cxx
@@ -305,12 +317,13 @@ routes/
 admin/
   CommandReader.hpp/.cxx
   StatusPublisher.hpp/.cxx
+  ControllerJournalPublisher.hpp/.cxx
   RouterAdminTypes.idl
 ```
 
-Keep `RouterController` independent of YAML and DDS API details where practical. It should
-depend on interfaces such as `DiscoveryIndex`, `EntityFactory`, and `StatusPublisher`, which
-makes route-state tests possible without running DDS.
+Keep `RouterController` independent of YAML and DDS API details where practical. Discovery
+arrives as raw controller events; entity creation and status publication stay behind
+interfaces, which makes route-state tests possible without running DDS.
 
 ## Core Class Responsibilities
 
@@ -319,13 +332,14 @@ makes route-state tests possible without running DDS.
 | `RouterController` | mutable state, event queue, lifecycle ordering, status revision | hot sample forwarding loop internals |
 | `RouteRegistry` | desired route specs and selected active-side route views | DDS readers/writers |
 | `ParticipantRegistry` | DomainParticipants and participant-level partition generation | per-route read/write conditions |
-| `DiscoveryIndex` | builtin-reader translation, participant tag table, ignore rules (D30) | route state transitions, endpoint-record storage |
+| `DiscoveryDispatcher` | builtin-reader translation, participant tag table, ignore rules (D30) | route state transitions, endpoint-record storage |
 | `TypeResolver` | type lookup order and DynamicType registration | command/status state |
 | `QosResolver` | alias expansion and auto-match compatibility summaries | participant creation |
 | `EntityFactory` | Topic/DataReader/DataWriter/ReadCondition creation and teardown helpers | global state mutation |
 | `AsyncWaitSetDispatcher` | `AsyncWaitSet` and attached conditions | route status mutation |
 | `RouteRuntime` | one active route/topic forwarding path and route-local fast counters | desired-state changes |
 | `StatusPublisher` | generated status writer and snapshot serialization | direct reads from mutable route objects |
+| `ControllerJournalPublisher` | generated controller event/decision journal writer | route control decisions, blocking controller progress indefinitely |
 
 ## Concurrency Rules
 

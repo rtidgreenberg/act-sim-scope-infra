@@ -133,7 +133,7 @@ coding starts:
 | Gap | Why it matters | POC decision |
 |---|---|---|
 | Central state ownership | Discovery callbacks, command samples, route read conditions, and status publishing all want to observe or change route state | Use one `RouterController` as the only writer to mutable router state; route runtimes receive read-only views and report events back |
-| Discovery event source | The router needs writer/reader discovery before it can build endpoints | Start with built-in publication/subscription readers or Connext discovery listeners per participant; hide the exact API behind `DiscoveryIndex` |
+| Discovery event source | The router needs writer/reader discovery before it can build endpoints | Start with built-in publication/subscription readers or Connext discovery listeners per participant; hide the exact API behind `DiscoveryDispatcher` |
 | Type resolution order | Dynamic route creation still requires a registered type or `DynamicType` | Resolve in order: generated type support, loaded XML, discovered TypeObject/TypeLookup; fail route if no type is available before deadline |
 | QoS auto-match algorithm | `auto` LAN endpoints need deterministic compatibility rules | Copy the minimum compatible policies from the discovered peer, then apply route/topic overrides; log the resolved profile/policy set in status |
 | Output-side readiness | A discovered input writer is not enough if the route's output side uses `auto` QoS | For `auto` output writer QoS, wait for a compatible local reader; explicit output QoS can create the writer immediately |

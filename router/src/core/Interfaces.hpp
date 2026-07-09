@@ -1,7 +1,7 @@
 // Interfaces.hpp — the seams RouterController depends on (D3).
 //
 // Phase 1 fakes both in tests; Phase 2 delivers the real StatusPublisher, Phase 3 the
-// real EntityFactory. DiscoveryIndex is not a controller dependency: it is a pure event
+// real EntityFactory. DiscoveryDispatcher is not a controller dependency: it is a pure event
 // source (translator + participant table, D30) the controller never queries — tests post
 // its events directly. The fake EntityFactory must model
 // create/teardown as PENDING operations completed by explicit TopicEntitiesReady /

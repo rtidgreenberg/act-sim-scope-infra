@@ -7,7 +7,7 @@
 // discardable.
 //
 // Discovery events carry raw endpoint records (D22): endpoint→route-topic matching and
-// the per-topic matched-endpoint sets are controller logic, not DiscoveryIndex logic.
+// the per-topic matched-endpoint sets are controller logic, not DiscoveryDispatcher logic.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 
 namespace router {
 
-// A discovered endpoint, as posted by DiscoveryIndex (real in Phase 2, synthetic in
+// A discovered endpoint, as posted by DiscoveryDispatcher (real in Phase 2, synthetic in
 // Phase 1 tests). Upsert semantics per GUID (D12): a later record for the same GUID can
 // add data — e.g. the discovered type arriving after the endpoint (D13). This struct is
 // Phase 1's no-DDS stand-in for the real payload, which is a copy of the builtin topic

@@ -16,7 +16,6 @@ std::string kind_name(RouterCommandKind kind) {
     case RouterCommandKind::DISABLE_ROUTE:             return "DISABLE_ROUTE";
     case RouterCommandKind::UPDATE_ROUTE:              return "UPDATE_ROUTE";
     case RouterCommandKind::SET_PARTICIPANT_PARTITION: return "SET_PARTICIPANT_PARTITION";
-    case RouterCommandKind::DESCRIBE:                  return "DESCRIBE";
     }
     return "?";
 }
@@ -118,9 +117,8 @@ void RouterController::handle_command(const RouterCommand &cmd) {
     switch (cmd.kind) {
     case RouterCommandKind::UPDATE_ROUTE:
     case RouterCommandKind::SET_PARTICIPANT_PARTITION:
-    case RouterCommandKind::DESCRIBE: // dropped from the POC command set (D26/D31)
         // Unsupported kinds are parsed-and-rejected (D4/D7), reject cached like any
-        // other ack — no kind has special handling (D31).
+        // other ack.
         ack.message = kind_name(cmd.kind) + std::string(" unsupported in this build");
         cache_ack(ack);
         status_->publish_ack(ack);

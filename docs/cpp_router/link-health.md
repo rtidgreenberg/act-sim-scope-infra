@@ -90,7 +90,7 @@ aggregate NACK spike can't say which link is sick. 7.7 provides matched-endpoint
 - `reader.extensions().matched_publication_datareader_protocol_status(handle)`
 
 The locator form groups naturally by peer address. The collector correlates
-`InstanceHandle`/locator → participant GUID (builtin topic data via `DiscoveryIndex`) →
+`InstanceHandle`/locator → participant GUID (builtin topic data via `DiscoveryDispatcher`) →
 `router_id` — two join sources, either sufficient: the `PresenceMonitor` roster
 (`router_id → participant GUID`) and the D15 participant `user_data` tag
 (`act.router=<node>/<router>`), which identifies router participants even before a presence
@@ -225,7 +225,7 @@ LinkStatsCollector     # polls WAN endpoint protocol statuses; per-peer rollup;
   `send_window_size`, `uncommitted_sample_count`, inactive-reader count).
 - **Discovery gating.** A `pulled_*` burst right after a peer (re)match is `TRANSIENT_LOCAL`
   replay, not link loss. The collector stamps each interval with match/rediscovery events
-  from `DiscoveryIndex` (a `rediscovery_in_interval` flag) so analysis can exclude or
+  from `DiscoveryDispatcher` (a `rediscovery_in_interval` flag) so analysis can exclude or
   down-weight those intervals — raw counters still published unmodified.
 - **RTT probe.** `on_application_acknowledgment` timestamps per peer feed min/mean/max/count
   into the same per-peer record each interval.

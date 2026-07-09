@@ -16,8 +16,19 @@ enum RouterCommandKind {
     ENABLE_ROUTE,
     DISABLE_ROUTE,
     UPDATE_ROUTE,
-    SET_PARTICIPANT_PARTITION,
-    DESCRIBE
+    SET_PARTICIPANT_PARTITION
+};
+
+enum ControllerJournalEventKind {
+    JOURNAL_COMMAND_RECEIVED,
+    JOURNAL_PUBLICATION_DISCOVERED,
+    JOURNAL_SUBSCRIPTION_DISCOVERED,
+    JOURNAL_ENDPOINT_LOST,
+    JOURNAL_TOPIC_ENTITIES_READY,
+    JOURNAL_TOPIC_TEARDOWN_COMPLETE,
+    JOURNAL_ROUTE_ENTITY_ERROR,
+    JOURNAL_ROUTE_DATA_READY,
+    JOURNAL_SHUTDOWN_REQUESTED
 };
 
 enum RouterRouteOperationalState {
@@ -132,4 +143,26 @@ struct RouterStatus {
     uint64 state_revision;
     sequence<RouterParticipantStatus> participants;
     sequence<RouterRouteStatus> routes;
+};
+
+struct ControllerJournalRecord {
+    string target_node;
+    string target_router;
+    uint32 router_id;
+    string status_id;
+    uint64 event_sequence;
+    int64 timestamp_unix_nanos;
+    ControllerJournalEventKind event_kind;
+    uint64 pre_state_revision;
+    uint64 post_state_revision;
+    boolean state_changed;
+    string route_name;
+    string topic_name;
+    string command_id;
+    string endpoint_guid;
+    uint64 entity_generation;
+    string decision;
+    string reason;
+    string action;
+    string payload_json; // compact affected state delta + detailed event fields
 };
