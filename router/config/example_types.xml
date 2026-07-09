@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Router-authored example data model (D35). The forwarded data model is
+  reference-only: the router is a generic DynamicData relay coupled to no
+  application type. This file exists so the router controls the runtime
+  type-load shape (rooted <dds><types>, rti_dds_profiles.xsd) rather than
+  inheriting a Routing-Service-schema file. ExampleCommand mirrors the shape
+  the content filter exercises: a nested struct member `msg.destination`.
+-->
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.7.0/rti_dds_profiles.xsd">
+  <types>
+    <struct name="MsgBase">
+      <member name="destination" type="string" stringMaxLength="100"/>
+      <member name="seq" type="int32"/>
+    </struct>
+    <struct name="ExampleCommand">
+      <member name="msg" type="nonBasic" nonBasicTypeName="MsgBase"/>
+    </struct>
+  </types>
+</dds>

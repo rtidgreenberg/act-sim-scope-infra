@@ -33,6 +33,17 @@ find_package(RTIConnextDDS "7.7.0" REQUIRED COMPONENTS core)
 
 include(ConnextDdsCodegen)
 
+# yaml-cpp for route/participant config parsing (D36). Fetched + built locally into the
+# build tree (never the vboxsf share). Requires network at first configure.
+include(FetchContent)
+FetchContent_Declare(yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG 0.8.0)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(yaml-cpp)
+
 # Generate the admin command/status type support (C++11 == "Modern C++").
 # Sets RouterAdminTypes_CXX11_GENERATED_SOURCES and the generated/ include dir.
 connextdds_rtiddsgen_run(
@@ -142,3 +153,40 @@ target_link_libraries(test_route_forward RTIConnextDDS::cpp2_api)
 add_test(NAME route_forward COMMAND test_route_forward)
 set_tests_properties(route_forward PROPERTIES
     WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
+# Phase 4 (steps 1-2): DynamicData forwarding + ContentFilteredTopic. Router loads an
+# example type from XML and forwards it as DynamicData with a destination content filter.
+add_executable(test_dynamic_forward
+    test/test_dynamic_forward.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/DiscoveryDispatcher.cxx
+    src/core/DdsStatusPublisher.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    src/core/DynamicRouteFactory.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_dynamic_forward PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(test_dynamic_forward PRIVATE
+    ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+target_link_libraries(test_dynamic_forward RTIConnextDDS::cpp2_api)
+add_test(NAME dynamic_forward COMMAND test_dynamic_forward)
+set_tests_properties(dynamic_forward PROPERTIES
+    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
+# Phase 4 (step 3): role-aware route config parsing (yaml-cpp, no DDS).
+add_executable(test_route_config
+    test/test_route_config.cxx
+    src/config/RouteConfigParser.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_route_config PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(test_route_config PRIVATE
+    ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+target_link_libraries(test_route_config RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
+add_test(NAME route_config COMMAND test_route_config)

@@ -34,7 +34,7 @@ route engine one behavior at a time.
 | 1 | Controller-owned state without DDS data routes | High | immutable snapshots, route state machine, command idempotency, disabled route status | state transitions become hard to reason about before DDS is involved |
 | 2 | Static generated-type discovery smoke | High | participants, discovery cache, type/QoS summaries, status publication | discovery metadata is insufficient or unstable for route matching |
 | 3 | One discovered route with explicit QoS | **Done (D34)** | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
-| 4 | Role-aware control/platform route | High — **pinned (D35–D37)** | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
+| 4 | Role-aware control/platform route | **Done (D38)** | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
 | 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
 | 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | High | control receives `PlatformStatus`, `PlatformCommandAck`, and `ContactReport` without Routing Service | ACT topic/type mapping diverges from the planned route model |
@@ -236,6 +236,10 @@ Evidence:
 > `ContentFilteredTopic<DynamicData>` supported. Confidence **high** with the internal build
 > order below (D37): prove the Connext-hard pieces (DynamicData forwarding, then CFT) before the
 > config plumbing.
+>
+> **Status: shipped and test-verified (D38).** `test_dynamic_forward` (DynamicData forward +
+> content filter + D32 teardown) and `test_route_config` (both role selections + filter-param
+> substitution from `control-platform.yaml`) pass; 8/8 targets green.
 
 Deliver (in D37 order):
 

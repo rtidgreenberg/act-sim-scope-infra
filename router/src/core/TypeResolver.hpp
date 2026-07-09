@@ -1,16 +1,20 @@
-// TypeResolver.hpp — generated-type fast path (D31 step 2).
+// TypeResolver.hpp — type construction readiness for both route lanes (D31/D35).
 //
-// Phase 3 forwards a *generated* type the router links against. Construction readiness
-// is: the discovered topic's registered type_name matches a type this build has generated
-// support for. This class is the registry of locally supported type names; the
-// EntityFactory consults it before creating route entities. A discovered type_name with
-// no local support is a RouteEntityError, not a silent skip.
+// Two lanes coexist (D35):
+//   - Generated-type lane (Phase 3): a registry of locally supported compiled type names
+//     (the router's own admin types, and any generated fast-path route type).
+//   - DynamicData lane (Phase 4, the default for forwarded app payloads): types loaded
+//     from a DDS-type XML at runtime via a QosProvider; the resolver hands out the
+//     DynamicType by registered name so the DynamicData factory can build entities.
 //
-// This is deliberately NOT DynamicType/TypeLookup schema-equivalence proof (the later,
-// stronger path). It is the name-match fast path D31 pins for explicit-QoS routes.
+// The router is data-model-agnostic (D35): the forwarded data model is reference-only, so
+// the XML this loads is a router-authored example, not any application's committed schema.
 
 #pragma once
 
+#include <dds/dds.hpp>
+
+#include <memory>
 #include <set>
 #include <string>
 
@@ -18,16 +22,39 @@ namespace router {
 
 class TypeResolver {
 public:
-    // Declare a generated type this build can construct DataReaders/DataWriters for.
+    // --- Generated-type lane (Phase 3) ---
     void register_type(const std::string &type_name) { known_.insert(type_name); }
-
-    // Construction readiness: is this discovered type_name locally supported?
     bool is_constructible(const std::string &type_name) const {
         return known_.find(type_name) != known_.end();
     }
 
+    // --- DynamicData lane (Phase 4) ---
+    // Load a DDS-type XML (rooted <dds><types>). Throws on parse/open failure.
+    void load_types(const std::string &xml_path) {
+        provider_ = std::make_shared<dds::core::QosProvider>(xml_path);
+    }
+
+    bool has_dynamic_type(const std::string &type_name) const {
+        if (!provider_) {
+            return false;
+        }
+        try {
+            provider_->extensions().type(type_name);
+            return true;
+        } catch (const std::exception &) {
+            return false;
+        }
+    }
+
+    // Resolve a DynamicType by registered name. Throws if not loaded/unknown.
+    const dds::core::xtypes::DynamicType &get_dynamic_type(
+            const std::string &type_name) const {
+        return provider_->extensions().type(type_name);
+    }
+
 private:
     std::set<std::string> known_;
+    std::shared_ptr<dds::core::QosProvider> provider_;
 };
 
 } // namespace router

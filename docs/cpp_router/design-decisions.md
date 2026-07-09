@@ -1313,3 +1313,37 @@ piece is proven before the config plumbing:
 Steps 1–2 are the Connext risk and get focused tests; step 3 is mechanical once yaml-cpp is in.
 
 **Docs changed.** `implementation-plan.md` (Phase 4 confidence + build-order note).
+
+---
+
+## D38 — Phase 4 shipped and test-verified (2026-07-09, accepted; closes Phase 4)
+
+**Decision.** The Phase 4 runtime is implemented and green, following the D37 order:
+
+- `TypeResolver` gained the DynamicData lane: `load_types(xml)` (QosProvider) +
+  `get_dynamic_type(name)`; the generated-type registry (Phase 3) is untouched (D35).
+- `DynamicRouteFactory` (`IEntityFactory`) forwards `DynamicData` for one XML-loaded type,
+  reusing `RouteTopicRuntime<DynamicData>` — same D31.4 create-order (`ignore` the output
+  writer first) and D32 teardown barrier as the Phase 3 typed factory, only the payload
+  type differs. When the input endpoint carries a filter it builds a
+  `ContentFilteredTopic<DynamicData>`.
+- `RouteConfigParser` (yaml-cpp, D36) parses `routes:`/`participants:`, selects
+  `source_side`/`destination_side` by local `node.role`, and substitutes+quotes
+  `${node.name}` into the SQL filter param.
+- `config/example_types.xml` is the router-authored reference data model (D35).
+
+Evidence (all passing, stable over repeated runs, no `/dev/shm` leaks): `dynamic_forward`
+proves DynamicData forwarding across two participants/domains from real discovery, the
+`msg.destination = %0` content filter (Platform_30's sample forwarded, Platform_31's
+dropped), and D32 teardown on source loss. `route_config` proves both role selections from
+the real `control-platform.yaml` (`control_lan→control_wan` on the control node,
+`platform_wan→platform_lan` on the platform node) plus filter-param substitution to
+`'Platform_30'`. 8/8 targets green.
+
+**Deferred (not gaps):** end-to-end wiring of parsed config → live controller/factory in one
+process is the command-loop/harness phases (6/11); Phase 4 proves the parser and the DDS
+forwarding halves with focused tests per the D37 order. Multi-type dispatch (factory picks
+the DynamicType by discovered type_name) and LAN `auto` QoS (Phase 5) remain deferred as
+planned.
+
+**Docs changed.** `implementation-plan.md` (Phase 4 marked done in the phase table + slice).
