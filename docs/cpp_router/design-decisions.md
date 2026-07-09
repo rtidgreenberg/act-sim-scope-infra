@@ -1087,3 +1087,47 @@ mirror is a second copy of a store DDS already maintains.
 
 **Docs changed.** D12/D22 (amend notes), `code-architecture.md` (`DiscoveryDispatcher` bullet,
 class-responsibility row), `implementation-plan.md` (Phase 2 banner + deliverables).
+
+---
+
+## D31 — Phase 3 builds the thin real runtime spine before forwarding; generated-type readiness is a construction fast path; waitset teardown is single-owner (2026-07-09, accepted)
+
+**Context.** A review of the next phase found that Phase 3's forwarding evidence can become
+misleading if it jumps directly from synthetic controller events to `EntityFactory` work.
+The committed Phase 2 smoke proves builtin discovery mechanics, but the runtime pieces that
+feed the controller and publish status still need a minimal real path. Validated against
+Connext 7.7 Modern C++ with `ask_connext_question` (2026-07-09): disabled-participant
+builtin-reader lookup before enable, LAN `request_types_filter`, generated-type name fast
+path, `dds::pub::ignore(participant, writer.instance_handle())`, and single-owner
+`AsyncWaitSet` detach/close discipline are consistent with 7.7 behavior, with the caveats
+below.
+
+**Decision.** Phase 3's implementation order is:
+
+1. Build the **thin real runtime spine** needed for one route: config-created participants,
+   builtin participant/publication/subscription readers attached before participant enable,
+   discovery translation into controller events, and a real LAN `StatusPublisher`.
+2. Add a generated-type `TypeResolver` fast path for explicit-QoS routes: a discovered
+   `topic_name` plus registered `type_name` matching local generated support is sufficient
+   **construction readiness**, not proof of full remote schema equivalence. DynamicType /
+   TypeLookup equivalence remains a later stronger path.
+3. Keep TypeLookup semantics asynchronous: LAN `request_types_filter` initiates early type
+   requests for matching topic patterns, but route creation still waits on
+   controller-observed readiness.
+4. `EntityFactory` creates the output `DataWriter`, immediately calls
+   `dds::pub::ignore(participant, writer.instance_handle())` (`<dds/pub/discovery.hpp>`) on
+   route output writers, and only then exposes the writer to forwarding or attaches input
+   `ReadCondition`s. Failure to ignore is a `RouteEntityError`, not a warning.
+5. `AsyncWaitSetDispatcher` is the only owner of route-condition attach/detach. Teardown
+   detaches or quiesces the condition before closing DDS entities; callbacks already in
+   flight are tolerated by generation-stamped completion events, which the controller
+   discards when stale.
+
+**Caveats from Connext validation.** Builtin readers do not report local entities from the
+same participant, so same-participant self-discovery is already suppressed; the ignore step
+is retained for multi-participant/internal-loop safety and as a deterministic guard before
+forwarding. Builtin reader caches are current-state `KEEP_LAST(1)` stores, not event logs,
+so the controller must reconcile current facts and must not require every intermediate
+discovery edge to arrive.
+
+**Docs changed.** `implementation-plan.md` (Phase 3 deliverables/evidence).

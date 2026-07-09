@@ -178,21 +178,44 @@ Evidence:
 
 ### Phase 3: One Discovered Route With Explicit QoS
 
+> **Connext-confirmed execution shape** — validated against Connext 7.7 Modern C++ via
+> `ask_connext_question` (2026-07-09) and pinned in D31: Phase 3 is not another synthetic
+> controller test. It first builds the thin real runtime spine needed for one route, then
+> adds dynamic entities and forwarding on top of that spine.
+
 Deliver:
 
-- `TypeResolver`, `QosResolver`, `EntityFactory`, and `AsyncWaitSetDispatcher` minimum path.
-- one explicit-QoS route for one topic using generated type or loaded ACT XML.
-- dynamic DataReader/DataWriter creation after input writer discovery.
-- dynamic `ReadCondition` attachment and ordered detach/close.
+- thin real runtime spine from Phase 2's contracts: config-created participants,
+  builtin participant/publication/subscription readers attached before participant enable,
+  discovery records posted to the controller, and a real LAN `StatusPublisher`.
+- generated-type `TypeResolver` fast path for explicit-QoS routes: discovered
+  `topic_name` + registered `type_name` matching local generated support is sufficient
+  **construction readiness**, not full remote schema-equivalence proof. DynamicType /
+  TypeLookup validation remains the later stronger path.
+- explicit-QoS `QosResolver` minimum path: aliases/defaults supply history and resource
+  limits; no auto-QoS propagation yet.
+- `EntityFactory` minimum path for one topic: create route input `DataReader` and output
+  `DataWriter` after controller discovery readiness, call
+  `dds::pub::ignore(participant, writer.instance_handle())` on the route output writer
+  before any write and before attaching input conditions, then report
+  `TopicEntitiesReady` with the controller-issued generation stamp.
+- `AsyncWaitSetDispatcher` as the sole owner of route `ReadCondition` attach/detach;
+  teardown detaches or otherwise quiesces the condition before closing DDS entities and
+  posts `TopicTeardownComplete` only after the entity bundle is closed.
 
 Evidence:
 
-- publish one sample on the input side and receive it on the output side.
+- publish one sample on the input side and receive it on the output side using real
+  discovery, real controller events, real status publication, and real generated DDS
+  entities.
 - an unexpected-origin endpoint (a router-tagged writer matching the LAN input leg) is
   warned loudly at discovery time by the expected-origin rule in controller matching —
   there is no per-sample origin check (D15/D29).
 - route transitions `WAITING_FOR_DISCOVERY -> RESOLVING -> ENABLED` in status.
-- stopping the writer detaches the condition and moves the route to degraded/waiting.
+- stopping the writer detaches the condition, closes route entities in order, and moves the
+  route through degraded to waiting or resolving according to current discovery.
+- repeated create/attach/forward/detach/close cycles do not crash, do not dispatch after
+  close into closed handles, and stale completion events are ignored by generation.
 
 ### Phase 4: Role-Aware Control/Platform Route
 
