@@ -12,6 +12,7 @@
 #include "Interfaces.hpp"
 #include "RouterState.hpp"
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,6 +41,9 @@ public:
 
     // Drain and process all pending events on the caller's thread (the strand).
     void drain();
+
+    // Block briefly for events, then process the batch on the caller's thread.
+    void wait_and_drain(std::chrono::milliseconds timeout);
 
     // Test/observability access (const — routes read state, controller writes it).
     const MutableRouterState &state() const { return state_; }

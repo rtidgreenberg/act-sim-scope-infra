@@ -8,6 +8,7 @@
 
 #include "RouterEvents.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -28,6 +29,15 @@ public:
     // Move all pending events out (consumer strand only).
     std::vector<ControllerEvent> drain() {
         std::lock_guard<std::mutex> lk(mutex_);
+        std::vector<ControllerEvent> out(queue_.begin(), queue_.end());
+        queue_.clear();
+        return out;
+    }
+
+    // Wait up to timeout for producer work, then move all pending events out.
+    std::vector<ControllerEvent> wait_and_drain(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lk(mutex_);
+        cv_.wait_for(lk, timeout, [this]() { return !queue_.empty(); });
         std::vector<ControllerEvent> out(queue_.begin(), queue_.end());
         queue_.clear();
         return out;

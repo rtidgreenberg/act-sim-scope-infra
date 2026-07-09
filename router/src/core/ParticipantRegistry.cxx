@@ -26,7 +26,7 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
 } // namespace
 
 ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs) {
-    // Phase 2.5: participants created ENABLED (KEEP_LAST builtin caches ensure no
+    // Phase 2.5: participants are created enabled. KEEP_LAST builtin caches ensure no
     // discovery events are missed even if conditions attach after the participant
     // is live). Phase 3 should add the disabled-startup optimisation (D12).
     for (const Config &cfg : configs) {
@@ -44,12 +44,6 @@ ParticipantRegistry::~ParticipantRegistry() {}
 
 dds::domain::DomainParticipant ParticipantRegistry::get(const std::string &name) const {
     return participants_.at(name);
-}
-
-void ParticipantRegistry::enable_all() {
-    // Phase 3: call participant.enable() here once disabled-startup is wired in (D12).
-    // In Phase 2.5 participants are already enabled; this is intentionally a no-op.
-    (void)this;
 }
 
 } // namespace router

@@ -9,9 +9,8 @@ namespace router {
 
 namespace {
 
-dds::pub::qos::DataWriterQos make_writer_qos(dds::domain::DomainParticipant participant) {
-    dds::pub::qos::DataWriterQos qos =
-        dds::pub::Publisher(participant).default_datawriter_qos();
+dds::pub::qos::DataWriterQos make_writer_qos(const dds::pub::Publisher &publisher) {
+    dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
     qos << dds::core::policy::Reliability::Reliable();
     qos << dds::core::policy::Durability::TransientLocal();
     qos << dds::core::policy::History::KeepLast(1);
@@ -22,8 +21,9 @@ dds::pub::qos::DataWriterQos make_writer_qos(dds::domain::DomainParticipant part
 
 DdsStatusPublisher::DdsStatusPublisher(dds::domain::DomainParticipant participant,
                                        const std::string &topic_name)
-    : topic_(participant, topic_name),
-      writer_(dds::pub::Publisher(participant), topic_, make_writer_qos(participant)) {
+        : publisher_(participant),
+            topic_(participant, topic_name),
+            writer_(publisher_, topic_, make_writer_qos(publisher_)) {
     Log::info("status_publisher_ready", {{"topic", topic_name}});
 }
 

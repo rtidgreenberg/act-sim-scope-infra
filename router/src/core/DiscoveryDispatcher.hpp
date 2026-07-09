@@ -24,6 +24,7 @@
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <dds/dds.hpp>
 
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
@@ -49,6 +50,8 @@ public:
 private:
     void attach_participant(dds::domain::DomainParticipant participant);
 
+    struct PendingPublication;
+
     void on_participant(
         dds::sub::DataReader<dds::topic::ParticipantBuiltinTopicData> reader);
     void on_publication(
@@ -56,6 +59,12 @@ private:
         dds::domain::DomainParticipant participant);
     void on_subscription(
         dds::sub::DataReader<dds::topic::SubscriptionBuiltinTopicData> reader);
+
+    void handle_publication_sample(
+        const dds::topic::PublicationBuiltinTopicData &data,
+        const dds::core::InstanceHandle &handle,
+        dds::domain::DomainParticipant participant,
+        const std::string &origin_router);
 
     static std::string format_key(const dds::topic::BuiltinTopicKey &key);
     static std::string extract_router_tag(const dds::core::policy::UserData &ud);
@@ -68,10 +77,11 @@ private:
     // Participant GUID → act.router tag (D30; empty string = not a router participant).
     std::mutex table_mutex_;
     std::map<std::string, std::string> participant_table_;
+    std::map<std::string, std::vector<PendingPublication>> pending_publications_;
 
     // Held ReadConditions (type-erased) — keep alive while attached to the AWS.
     std::vector<dds::core::cond::Condition> conditions_;
-    bool shut_down_ = false;
+    std::atomic<bool> shut_down_;
 };
 
 } // namespace router

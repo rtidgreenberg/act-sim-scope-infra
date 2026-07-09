@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace router {
 
@@ -29,11 +30,23 @@ dds::sub::DataReader<T> find_builtin_reader(dds::sub::Subscriber builtin_sub,
 
 } // namespace
 
+struct DiscoveryDispatcher::PendingPublication {
+    PendingPublication(const dds::topic::PublicationBuiltinTopicData &d,
+                       const dds::core::InstanceHandle &h,
+                       dds::domain::DomainParticipant p)
+        : data(d), handle(h), participant(p) {}
+
+    dds::topic::PublicationBuiltinTopicData data;
+    dds::core::InstanceHandle handle;
+    dds::domain::DomainParticipant participant;
+};
+
 DiscoveryDispatcher::DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
                                          RouterController &controller,
                                          ParticipantRegistry &registry,
                                          const std::string &own_router_tag)
-    : aws_(aws), controller_(controller), own_router_tag_(own_router_tag) {
+    : aws_(aws), controller_(controller), own_router_tag_(own_router_tag),
+      shut_down_(false) {
     for (const std::string &name : registry.names()) {
         attach_participant(registry.get(name));
     }
@@ -42,14 +55,11 @@ DiscoveryDispatcher::DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
 }
 
 DiscoveryDispatcher::~DiscoveryDispatcher() {
-    if (!shut_down_) {
-        shutdown();
-    }
+    shutdown();
 }
 
 void DiscoveryDispatcher::shutdown() {
-    if (shut_down_) return;
-    shut_down_ = true;
+    if (shut_down_.exchange(true)) return;
     for (const auto &cond : conditions_) {
         try {
             aws_.detach_condition(cond);
@@ -114,16 +124,30 @@ void DiscoveryDispatcher::on_participant(
     dds::sub::DataReader<dds::topic::ParticipantBuiltinTopicData> reader) {
     auto samples = reader.take();
     for (auto it = samples.begin(); it != samples.end(); ++it) {
-        // Only process ALIVE samples with data; skip key-only NOT_ALIVE samples.
-        // Phase 2.5: stale table entries for NOT_ALIVE participants are harmless;
-        // cleanup is a Phase 3 refinement.
-        if (!it->info().valid()) continue;
         std::string guid = format_key(it->data().key());
+        if (!it->info().valid()) {
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            participant_table_.erase(guid);
+            pending_publications_.erase(guid);
+            continue;
+        }
+
         std::string tag = extract_router_tag(it->data().user_data());
-        std::lock_guard<std::mutex> lk(table_mutex_);
-        participant_table_[guid] = tag;
+        std::vector<PendingPublication> pending;
+        {
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            participant_table_[guid] = tag;
+            auto pit = pending_publications_.find(guid);
+            if (pit != pending_publications_.end()) {
+                pending.swap(pit->second);
+                pending_publications_.erase(pit);
+            }
+        }
         if (!tag.empty()) {
             Log::debug("participant_router_tagged", {{"guid", guid}, {"tag", tag}});
+        }
+        for (const PendingPublication &pub : pending) {
+            handle_publication_sample(pub.data, pub.handle, pub.participant, tag);
         }
     }
 }
@@ -144,48 +168,71 @@ void DiscoveryDispatcher::on_publication(
         }
 
         const auto &data = it->data();
-        std::string endpoint_guid = format_key(data.key());
         std::string participant_guid = format_key(data.participant_key());
 
         std::string origin_router;
+        bool participant_known = false;
         {
             std::lock_guard<std::mutex> lk(table_mutex_);
             auto pit = participant_table_.find(participant_guid);
             if (pit != participant_table_.end()) {
                 origin_router = pit->second;
+                participant_known = true;
             }
         }
 
-        // Same-node router publication: ignore via DDS API and skip (D15).
-        if (is_same_node(origin_router)) {
-            Log::info("endpoint_ignored_same_node",
-                      {{"guid", endpoint_guid},
-                       {"topic", data.topic_name()},
-                       {"origin", origin_router}});
-            try {
-                dds::pub::ignore(participant, it->info().instance_handle());
-            } catch (const std::exception &e) {
-                Log::warn("ignore_failed", {{"error", e.what()}});
-            }
+        if (!participant_known) {
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            pending_publications_[participant_guid].push_back(
+                PendingPublication(data, it->info().instance_handle(), participant));
+            Log::debug("publication_pending_participant",
+                       {{"guid", format_key(data.key())},
+                        {"participant", participant_guid},
+                        {"topic", std::string(data.topic_name())}});
             continue;
         }
 
-        EndpointRecord rec;
-        rec.guid          = endpoint_guid;
-        rec.is_publication = true;
-        rec.topic_name    = data.topic_name();
-        rec.type_name     = data.type_name();
-        rec.has_type      = !rec.type_name.empty(); // generated-type fast path (D31)
-        rec.origin_router = origin_router;
-
-        Log::debug("publication_discovered",
-                   {{"guid", endpoint_guid},
-                    {"topic", rec.topic_name},
-                    {"type", rec.type_name},
-                    {"has_type", rec.has_type ? "true" : "false"},
-                    {"origin", origin_router}});
-        controller_.post(ControllerEvent::publication_discovered(rec));
+        handle_publication_sample(data, it->info().instance_handle(), participant,
+                                  origin_router);
     }
+}
+
+void DiscoveryDispatcher::handle_publication_sample(
+    const dds::topic::PublicationBuiltinTopicData &data,
+    const dds::core::InstanceHandle &handle,
+    dds::domain::DomainParticipant participant,
+    const std::string &origin_router) {
+    std::string endpoint_guid = format_key(data.key());
+
+    // Same-node router publication: ignore via DDS API and skip (D15).
+    if (is_same_node(origin_router)) {
+        Log::info("endpoint_ignored_same_node",
+                  {{"guid", endpoint_guid},
+                   {"topic", data.topic_name()},
+                   {"origin", origin_router}});
+        try {
+            dds::pub::ignore(participant, handle);
+        } catch (const std::exception &e) {
+            Log::warn("ignore_failed", {{"error", e.what()}});
+        }
+        return;
+    }
+
+    EndpointRecord rec;
+    rec.guid          = endpoint_guid;
+    rec.is_publication = true;
+    rec.topic_name    = data.topic_name();
+    rec.type_name     = data.type_name();
+    rec.has_type      = !rec.type_name.empty(); // generated-type fast path (D31)
+    rec.origin_router = origin_router;
+
+    Log::debug("publication_discovered",
+               {{"guid", endpoint_guid},
+                {"topic", rec.topic_name},
+                {"type", rec.type_name},
+                {"has_type", rec.has_type ? "true" : "false"},
+                {"origin", origin_router}});
+    controller_.post(ControllerEvent::publication_discovered(rec));
 }
 
 void DiscoveryDispatcher::on_subscription(

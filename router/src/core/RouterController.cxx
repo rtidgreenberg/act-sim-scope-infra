@@ -69,6 +69,16 @@ void RouterController::drain() {
     }
 }
 
+void RouterController::wait_and_drain(std::chrono::milliseconds timeout) {
+    std::vector<ControllerEvent> events = queue_.wait_and_drain(timeout);
+    for (size_t i = 0; i < events.size(); ++i) {
+        std::vector<std::string> pre = fingerprints();
+        current_cause_.clear();
+        process(events[i]);
+        publish_if_changed(pre);
+    }
+}
+
 void RouterController::process(const ControllerEvent &event) {
     switch (event.kind) {
     case ControllerEventKind::CommandReceived:

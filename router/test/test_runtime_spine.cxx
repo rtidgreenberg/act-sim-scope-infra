@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
 
 using namespace router;
 
@@ -51,10 +52,12 @@ static int g_failures = 0;
 // ---------------------------------------------------------------------------
 struct SelfCompletingFakeFactory : IEntityFactory {
     RouterController *ctrl = nullptr;
+    std::atomic<int> creates{0};
 
     void create_topic_entities(const RouteView &view,
                                const std::string &topic,
                                std::uint64_t gen) override {
+        creates.fetch_add(1, std::memory_order_relaxed);
         if (ctrl) {
             ctrl->post(ControllerEvent::topic_entities_ready(
                 view.spec.route_name, topic, gen));
@@ -72,16 +75,15 @@ struct SelfCompletingFakeFactory : IEntityFactory {
 };
 
 // ---------------------------------------------------------------------------
-// DrainThread — calls RouterController::drain() in a tight loop on a background
-// thread so the async controller strand is processed without a hand-written loop.
+// DrainThread — waits for controller events and processes them on one background
+// strand so AsyncWaitSet callbacks never mutate controller state directly.
 // ---------------------------------------------------------------------------
 class DrainThread {
 public:
     explicit DrainThread(RouterController &ctrl) : ctrl_(ctrl), running_(true) {
         thread_ = std::thread([this]() {
             while (running_.load(std::memory_order_relaxed)) {
-                ctrl_.drain();
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                ctrl_.wait_and_drain(std::chrono::milliseconds(100));
             }
         });
     }
@@ -172,6 +174,23 @@ int main() {
         probe_qos << rti::core::policy::TransportBuiltin::UDPv4();
         dds::domain::DomainParticipant probe_dp(domain, probe_qos);
 
+        // Same-node router publication: must be ignored, not treated as an
+        // application input writer for smoke_r1 (D15).
+        dds::domain::qos::DomainParticipantQos same_node_qos =
+            dds::domain::DomainParticipant::default_participant_qos();
+        same_node_qos << rti::core::policy::TransportBuiltin::UDPv4();
+        const std::string same_node_tag = "act.router=TestNode/peer-router";
+        same_node_qos << dds::core::policy::UserData(
+            dds::core::ByteSeq(same_node_tag.begin(), same_node_tag.end()));
+        dds::domain::DomainParticipant same_node_dp(domain, same_node_qos);
+        dds::topic::Topic<RouterStatus> same_node_topic(
+            same_node_dp, "ActRouterPhase25Smoke");
+        dds::pub::DataWriter<RouterStatus> same_node_writer(
+            dds::pub::Publisher(same_node_dp), same_node_topic);
+
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        CHECK(fake_factory.creates.load(std::memory_order_relaxed) == 0);
+
         // RouterStatus reader — TRANSIENT_LOCAL so it sees samples written before join.
         dds::topic::Topic<RouterStatus> status_topic(probe_dp, "ActRouterStatus");
         {
@@ -184,6 +203,8 @@ int main() {
 
             // Application-data writer: its discovery triggers PublicationDiscovered in
             // the router, which the controller matches to smoke_r1.ActRouterPhase25Smoke.
+            // RouterStatus is used only as a convenient generated payload type here;
+            // the smoke validates discovery/runtime plumbing, not payload schema.
             dds::topic::Topic<RouterStatus> app_topic(probe_dp, "ActRouterPhase25Smoke");
             dds::pub::DataWriter<RouterStatus> app_writer(
                 dds::pub::Publisher(probe_dp), app_topic);
@@ -218,10 +239,10 @@ int main() {
             }
 
             // ---------------------------------------------------------------
-            // Shutdown — safe order: drain → dispatcher → aws → entities
+            // Shutdown — safe order: dispatcher → drain → aws → entities
             // ---------------------------------------------------------------
-            drain.stop();
             dispatcher.shutdown();
+            drain.stop();
             aws.stop();
 
             CHECK(route_enabled);

@@ -32,6 +32,7 @@ public:
     void publish_ack(const RouterCommandAck &ack) override; // Phase 6 no-op
 
 private:
+    dds::pub::Publisher publisher_;
     dds::topic::Topic<RouterStatus> topic_;
     dds::pub::DataWriter<RouterStatus> writer_;
 };
