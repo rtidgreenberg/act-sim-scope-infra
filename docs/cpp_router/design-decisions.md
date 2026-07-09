@@ -1257,11 +1257,14 @@ generic route engine the reframe banner already names as the default (`dynamic_d
   payloads use DynamicData. This is the eligibility-gated fast path Phase 9 frames — it is not
   removed, just no longer the default.
 
-**Caveat to verify in Phase 4.** The runtime type-load XML the docs expect is rooted at
-`<dds><types>` (`rti_dds_profiles.xsd` / `rti_dds_topic_types.xsd`). `act_types.xml` is rooted at
-`<dds>` under the Routing-Service schema. First Phase 4 step is to confirm `QosProvider` loads it
-as-is; if the schema-location rejects it, ship a router-local DDS-type XML (or point rtiddsgen/
-QosProvider at an extracted `<types>`), rather than assuming it loads.
+**Data model is reference-only (clarified 2026-07-09).** `act_types.xml` is an *example*
+datamodel; the router is a generic relay and the deliverable/tests may use **any** data model.
+This reinforces DynamicData: the router is coupled to no compiled application type. It also
+removes the earlier "verify `QosProvider` loads `act_types.xml`" caveat — Phase 4 authors its own
+clean DDS-type XML (rooted `<dds><types>`, `rti_dds_profiles.xsd`/`rti_dds_topic_types.xsd`) for
+the example type it forwards, so the load shape is controlled by us, not inherited from the
+Routing-Service-schema `act_types.xml`. The only compiled types in the router remain its own admin
+types (`RouterStatus` etc.).
 
 **Docs changed.** `implementation-plan.md` (Phase 4 deliverables/evidence; forwarding-mode note);
 `thesis-and-tenets.md` dynamic-data-default line is now the active path (no edit needed — this
@@ -1295,10 +1298,11 @@ yaml-cpp later — not required by this decision.
 Phase 4 is **high confidence**. To keep it high, build it in this order so the hardest Connext
 piece is proven before the config plumbing:
 
-1. **DynamicData forwarding smoke** — reuse the Phase 3 harness shape but forward `control_command`
-   as DynamicData loaded from XML, across two participants/domains. Proves type-load + DynamicData
-   runtime + D32 teardown for the new payload path. (Verifies the D35 caveat immediately.)
-2. **ContentFilteredTopic on the input reader** — add the `msg.destination = %0` filter with a
+1. **DynamicData forwarding smoke** — reuse the Phase 3 harness shape but forward a router-authored
+   example type (a struct with a nested `destination` string) as DynamicData loaded from a clean
+   DDS-type XML, across two participants/domains. Proves type-load + DynamicData runtime + D32
+   teardown for the new payload path. (Data model is reference-only — D35 — so we control the XML.)
+2. **ContentFilteredTopic on the input reader** — add the `<field>.destination = %0` filter with a
    runtime-substituted node-name parameter; prove Platform_30 receives only its own commands and
    Platform_31's are filtered.
 3. **`RouteConfigParser` (yaml-cpp)** — parse `routes:`/`participants:`/QoS sections into

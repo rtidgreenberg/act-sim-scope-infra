@@ -226,11 +226,13 @@ Evidence:
 
 ### Phase 4: Role-Aware Control/Platform Route
 
-> **Contract pinned (D35–D37).** Forwarded ACT payloads use **DynamicData** loaded from
-> `types.xml` at runtime (`QosProvider` → `DynamicType` by name), beside the Phase 3
-> generated-type lane which stays for admin/fast-path routes (D35). Config is parsed with
+> **Contract pinned (D35–D37).** Forwarded payloads use **DynamicData** loaded from a DDS-type
+> XML at runtime (`QosProvider` → `DynamicType` by name), beside the Phase 3 generated-type lane
+> which stays for admin/fast-path routes (D35). The data model is **reference-only** — the router
+> is a generic relay coupled to no application type, so Phase 4 authors its own clean example
+> DDS-type XML (`act_types.xml` is illustrative, not a dependency). Config is parsed with
 > **yaml-cpp** (FetchContent), not a hand-rolled nested parser (D36). Content-filter shape is
-> validated: nested `msg.destination = %0`, string param quoted as `"'Platform_30'"`,
+> validated: nested `<field>.destination = %0`, string param quoted as `"'Platform_30'"`,
 > `ContentFilteredTopic<DynamicData>` supported. Confidence **high** with the internal build
 > order below (D37): prove the Connext-hard pieces (DynamicData forwarding, then CFT) before the
 > config plumbing.
@@ -238,11 +240,11 @@ Evidence:
 Deliver (in D37 order):
 
 - **DynamicData route runtime/factory** beside the Phase 3 typed one: `TypeResolver` gains
-  `get_dynamic_type(name)` (loads `types.xml` via `QosProvider`); `Topic<DynamicData>` from the
+  `get_dynamic_type(name)` (loads a DDS-type XML via `QosProvider`); `Topic<DynamicData>` from the
   resolved `DynamicType`; reader/writer `<DynamicData>`; same D31.4 create-order and D32 teardown.
-  First step verifies the D35 caveat: confirm `QosProvider` loads `act_types.xml` as-is or ship a
-  router-local DDS-type XML.
-- **ContentFilteredTopic** on the input reader: `msg.destination = %0`, node-name parameter
+  Ship a small router-authored example DDS-type XML (the data model is reference-only — D35), so
+  the load shape is controlled by us.
+- **ContentFilteredTopic** on the input reader: `<field>.destination = %0`, node-name parameter
   substituted at creation, re-targetable via `filter_parameters()`.
 - `RouteConfigParser` (yaml-cpp): full `routes:`/`participants:`/QoS-section parsing (Phase 0's
   identity reader stays identity-only; Phases 1–3 use fixtures — D10), with
