@@ -67,6 +67,9 @@ private:
         const std::string &origin_router);
 
     static std::string format_key(const dds::topic::BuiltinTopicKey &key);
+    static std::string handle_str(const dds::core::InstanceHandle &handle);
+    std::string take_lost_guid(std::map<std::string, std::string> &map,
+                               const dds::core::InstanceHandle &handle);
     static std::string extract_router_tag(const dds::core::policy::UserData &ud);
     bool is_same_node(const std::string &origin_router) const;
 
@@ -78,6 +81,14 @@ private:
     std::mutex table_mutex_;
     std::map<std::string, std::string> participant_table_;
     std::map<std::string, std::vector<PendingPublication>> pending_publications_;
+
+    // Instance-handle → endpoint GUID, captured from valid discovery samples so a native
+    // NOT_ALIVE (which carries only the instance handle) can be translated back to the
+    // GUID the controller keys on. This is identity translation, not the endpoint-record
+    // cache D30 deleted — no type/QoS/topic is stored. key_value() is unreliable once an
+    // instance is no longer alive (validated against 7.7), so this map is required.
+    std::map<std::string, std::string> pub_handle_guid_;
+    std::map<std::string, std::string> sub_handle_guid_;
 
     // Held ReadConditions (type-erased) — keep alive while attached to the AWS.
     std::vector<dds::core::cond::Condition> conditions_;

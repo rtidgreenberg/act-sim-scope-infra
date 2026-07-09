@@ -121,3 +121,24 @@ target_link_libraries(test_runtime_spine RTIConnextDDS::cpp2_api)
 add_test(NAME runtime_spine COMMAND test_runtime_spine)
 set_tests_properties(runtime_spine PROPERTIES
     WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
+# Phase 3: one discovered route forwards one topic end-to-end (real EntityFactory,
+# TypeResolver, QosResolver, AsyncWaitSetDispatcher). Proves discovery → dynamic entity
+# creation → forwarding → status ENABLED, and D32 teardown on source loss.
+add_executable(test_route_forward
+    test/test_route_forward.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/DiscoveryDispatcher.cxx
+    src/core/DdsStatusPublisher.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_route_forward PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_route_forward RTIConnextDDS::cpp2_api)
+add_test(NAME route_forward COMMAND test_route_forward)
+set_tests_properties(route_forward PROPERTIES
+    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")

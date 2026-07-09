@@ -1131,3 +1131,99 @@ so the controller must reconcile current facts and must not require every interm
 discovery edge to arrive.
 
 **Docs changed.** `implementation-plan.md` (Phase 3 deliverables/evidence).
+
+---
+
+## D32 — Route teardown barrier is the blocking `detach_condition`, not generation staleness; pinned close order; `unlock_condition` is never called (2026-07-09, accepted; sharpens D31.5)
+
+**Context.** D31.5 said the `AsyncWaitSetDispatcher` detaches/quiesces a route condition before
+closing entities and that "callbacks already in flight are tolerated by generation-stamped
+completion events." That framing left the *primary* safety mechanism ambiguous — it read as if
+generation staleness were what protects against a forwarding handler touching a closed reader or
+writer. It is not: generation stamps protect the **controller state machine** from stale
+*completion events*, but they do nothing to stop an in-flight `take()`/`write()` on the AWS
+worker thread from racing a `close()`. Before building the real forwarding path this needed a
+hard, documented barrier. Validated against Connext 7.7 Modern C++ via `ask_connext_question`
+(2026-07-09).
+
+**Decision.** The teardown barrier is the **blocking `AsyncWaitSet::detach_condition()`** call:
+
+- `detach_condition(cond)` **blocks until the detach completes**; on successful return it is
+  guaranteed the AWS will no longer dispatch that condition, so any handler that was mid-flight
+  has returned. This is the synchronization point — not generation staleness.
+- Per-condition dispatch is **serialized by default**: the AWS locks a condition while a worker
+  dispatches it, so the same route's forwarding handler can never run on two threads at once. We
+  therefore **never call `unlock_condition()`** on route conditions (it exists only to opt into
+  concurrent same-condition dispatch, which we do not want).
+- Pinned close order, all issued from the controller strand:
+  `detach_condition(cond)` → `cond.close()` → `input_reader.close()` → `output_writer.close()`.
+  `ReadCondition::close()` requires the condition already be detached from every waitset
+  (else `PreconditionNotMetError`), which the order above guarantees.
+- Generation-stamped completion events (D21/D23) remain, but their job is narrowed to what they
+  actually do: discard stale `TopicTeardownComplete` / `TopicEntitiesReady` / `RouteEntityError`
+  events at the controller. They are belt-and-suspenders for the state machine, not the
+  use-after-close defense.
+
+**Confidence.** This resolves the sole "concurrency-sensitive" caveat on Phase 3 (the
+attach/detach investigation row) to **high** — the fallback in that row ("serialize all
+attach/detach/close on the controller strand") is now confirmed to be the design, backed by a
+documented blocking guarantee. Self-loop is separately a non-issue: every configured route
+places input and output legs on **different participants** (`control_lan`→`control_wan`,
+`platform_lan`→`platform_wan`, distinct domains), so intra-participant self-match cannot occur;
+cross-participant router-to-router loops are caught by the D15/D29 same-node origin rule (built
+and tested in the Phase 2.5 spine); D31.5's `dds::pub::ignore(output writer handle)` stays a
+cheap deterministic guard, not the primary defense.
+
+**Docs changed.** `implementation-plan.md` (Phase 3 attach/detach investigation row → resolved;
+teardown-order deliverable made explicit).
+
+---
+
+## D33 — Endpoint-loss GUID recovery uses a captured instance-handle→GUID map, not `key_value()` (2026-07-09, accepted; implements D28/D30)
+
+**Context.** Building the Phase 3 forwarding path (`test_route_forward`) exercised, for the first
+time against real DDS, the endpoint-loss path in `DiscoveryDispatcher`. The existing code read
+the lost endpoint's GUID from `sample.data().key()` on the NOT_ALIVE builtin sample. On an
+invalid builtin sample `data()` is unreadable — Connext throws `Precondition not met: Invalid
+data` — so the GUID recovery silently failed (the throw was swallowed), no `EndpointLost` event
+was posted, and a route never tore down when its source went away. The Phase 2.5 spine never lost
+an endpoint, so the bug was latent until now.
+
+**Decision.** `DiscoveryDispatcher` captures a minimal `instance_handle → endpoint-GUID` map from
+**valid** publication/subscription samples (application endpoints only — ignored same-node router
+publications are never tracked). On a NOT_ALIVE sample it looks the GUID up by the sample's
+`instance_handle()`, posts `EndpointLost(guid)`, and erases the entry. `DataReader::key_value()`
+is **not** used for this: validated against 7.7, it requires an existing known instance and is
+not guaranteed once the instance is no longer alive.
+
+This map is **identity translation, not the endpoint-record cache D30 deleted** — it stores no
+topic/type/QoS, only what is needed to turn a native per-endpoint NOT_ALIVE (which carries only
+an instance handle) into the GUID the controller keys its matched sets on. It is the concrete
+mechanism behind D28's "removal arrives as native per-endpoint NOT_ALIVE transitions."
+
+**Docs changed.** None beyond this log; `code-architecture.md` DiscoveryDispatcher note can pick
+this up on its next pass.
+
+---
+
+## D34 — Phase 3 forwarding path shipped and test-verified (2026-07-09, accepted; closes Phase 3)
+
+**Decision.** The Phase 3 runtime is implemented and green: `TypeResolver` (generated-type
+construction-readiness registry), `QosResolver` (explicit-QoS minimum path — RELIABLE +
+TRANSIENT_LOCAL + KEEP_LAST; real XML-alias resolution deferred to Phase 4/5), `EntityFactory<T>`
+(D31.4 ordering: create output writer → `dds::pub::ignore` its handle → create input reader +
+forwarding condition → attach → post `TopicEntitiesReady`; failures post `RouteEntityError`),
+`RouteTopicRuntime<T>` (forwards valid samples reader→writer on an AWS worker thread; meta-sample
+mirroring deferred to Phase 10), and `AsyncWaitSetDispatcher` (sole owner of route condition
+attach/detach; D32 blocking-detach teardown barrier). `test_route_forward` proves end-to-end
+forwarding across two participants/domains from real discovery, `ROUTE_ENABLED` on the status
+stream, and D32 teardown when the source is closed — stable over repeated runs, no leaked
+`/dev/shm` segments.
+
+**Deferred (as planned, not gaps):** per-sample `samples_forwarded` is not surfaced into
+`RouterStatus` yet (counters never bump revision, D26; the runtime tracks its own count);
+multi-type routing (a type-dispatching factory selecting a typed sub-factory by discovered
+type_name) — Phase 3 binds one generated type; `dynamic_data` default mode (reframe banner) —
+the generated-type fast path ships first by design.
+
+**Docs changed.** `implementation-plan.md` (Phase 3 marked done in the phase table + slice).

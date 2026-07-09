@@ -158,12 +158,14 @@ void DiscoveryDispatcher::on_publication(
     auto samples = reader.take();
     for (auto it = samples.begin(); it != samples.end(); ++it) {
         if (!it->info().valid()) {
-            // NOT_ALIVE: key fields are still accessible in the key-only sample.
-            try {
-                std::string guid = format_key(it->data().key());
+            // NOT_ALIVE: data() is unreadable on an invalid builtin sample. Recover the
+            // GUID from the handle→GUID map captured on the endpoint's valid samples.
+            std::string guid = take_lost_guid(pub_handle_guid_,
+                                              it->info().instance_handle());
+            if (!guid.empty()) {
                 Log::debug("endpoint_lost_pub", {{"guid", guid}});
                 controller_.post(ControllerEvent::endpoint_lost(guid));
-            } catch (...) {}
+            }
             continue;
         }
 
@@ -218,6 +220,13 @@ void DiscoveryDispatcher::handle_publication_sample(
         return;
     }
 
+    // Record identity for native-loss translation (application endpoints only; ignored
+    // same-node router publications returned above and are never reported or tracked).
+    {
+        std::lock_guard<std::mutex> lk(table_mutex_);
+        pub_handle_guid_[handle_str(handle)] = endpoint_guid;
+    }
+
     EndpointRecord rec;
     rec.guid          = endpoint_guid;
     rec.is_publication = true;
@@ -240,11 +249,12 @@ void DiscoveryDispatcher::on_subscription(
     auto samples = reader.take();
     for (auto it = samples.begin(); it != samples.end(); ++it) {
         if (!it->info().valid()) {
-            try {
-                std::string guid = format_key(it->data().key());
+            std::string guid = take_lost_guid(sub_handle_guid_,
+                                              it->info().instance_handle());
+            if (!guid.empty()) {
                 Log::debug("endpoint_lost_sub", {{"guid", guid}});
                 controller_.post(ControllerEvent::endpoint_lost(guid));
-            } catch (...) {}
+            }
             continue;
         }
 
@@ -257,10 +267,35 @@ void DiscoveryDispatcher::on_subscription(
         rec.has_type      = !rec.type_name.empty();
         rec.origin_router = ""; // subscriptions not used for same-node ignore
 
+        {
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            sub_handle_guid_[handle_str(it->info().instance_handle())] = rec.guid;
+        }
+
         Log::debug("subscription_discovered",
                    {{"guid", rec.guid}, {"topic", rec.topic_name}});
         controller_.post(ControllerEvent::subscription_discovered(rec));
     }
+}
+
+std::string DiscoveryDispatcher::handle_str(const dds::core::InstanceHandle &handle) {
+    std::ostringstream os;
+    os << handle;
+    return os.str();
+}
+
+// Pop and return the GUID mapped to this instance handle, or "" if untracked.
+// table_mutex_ guards the maps against concurrent pub/sub dispatch.
+std::string DiscoveryDispatcher::take_lost_guid(std::map<std::string, std::string> &map,
+                                                const dds::core::InstanceHandle &handle) {
+    std::lock_guard<std::mutex> lk(table_mutex_);
+    auto it = map.find(handle_str(handle));
+    if (it == map.end()) {
+        return std::string();
+    }
+    std::string guid = it->second;
+    map.erase(it);
+    return guid;
 }
 
 std::string DiscoveryDispatcher::format_key(const dds::topic::BuiltinTopicKey &key) {

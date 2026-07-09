@@ -33,7 +33,7 @@ route engine one behavior at a time.
 | 0 | Build skeleton and admin IDL | High | executable, generated admin types, config file loading, logging, test harness shape | cannot reliably build/run Connext 7.7 C++ executable in the harness |
 | 1 | Controller-owned state without DDS data routes | High | immutable snapshots, route state machine, command idempotency, disabled route status | state transitions become hard to reason about before DDS is involved |
 | 2 | Static generated-type discovery smoke | High | participants, discovery cache, type/QoS summaries, status publication | discovery metadata is insufficient or unstable for route matching |
-| 3 | One discovered route with explicit QoS | High | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
+| 3 | One discovered route with explicit QoS | **Done (D34)** | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
 | 4 | Role-aware control/platform route | High | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
 | 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
 | 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
@@ -182,6 +182,11 @@ Evidence:
 > `ask_connext_question` (2026-07-09) and pinned in D31: Phase 3 is not another synthetic
 > controller test. It first builds the thin real runtime spine needed for one route, then
 > adds dynamic entities and forwarding on top of that spine.
+>
+> **Status: shipped and test-verified (D34).** `router/test/test_route_forward.cxx` proves
+> end-to-end forwarding across two participants/domains from real discovery, `ROUTE_ENABLED`
+> on the status stream, and D32 teardown on source loss (stable over repeated runs). Building
+> this surfaced and fixed a latent endpoint-loss bug in the Phase 2.5 dispatcher (D33).
 
 Deliver:
 
@@ -199,9 +204,11 @@ Deliver:
   `dds::pub::ignore(participant, writer.instance_handle())` on the route output writer
   before any write and before attaching input conditions, then report
   `TopicEntitiesReady` with the controller-issued generation stamp.
-- `AsyncWaitSetDispatcher` as the sole owner of route `ReadCondition` attach/detach;
-  teardown detaches or otherwise quiesces the condition before closing DDS entities and
-  posts `TopicTeardownComplete` only after the entity bundle is closed.
+- `AsyncWaitSetDispatcher` as the sole owner of route `ReadCondition` attach/detach.
+  Teardown uses the blocking `detach_condition()` as the barrier (D32): on the controller
+  strand, `detach_condition` → `cond.close()` → close input reader → close output writer,
+  then post `TopicTeardownComplete` only after the entity bundle is closed. `unlock_condition`
+  is never called, so a route's forwarding handler is never dispatched concurrently.
 
 Evidence:
 
@@ -351,7 +358,7 @@ or narrows the fallback path.
 | Slice | Current confidence | Investigation | Confidence increases if | Fallback if not |
 |---|---|---|---|---|
 | Phase 2: discovery dispatcher | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
-| Phase 3: dynamic entity lifecycle | High, but concurrency-sensitive | Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
+| Phase 3: dynamic entity lifecycle | High — **resolved (D31/D32)** | ~~Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly~~ Decided: `detach_condition()` is a documented **blocking barrier** (in-flight handler has returned on success); per-condition dispatch is serialized (never call `unlock_condition`); pinned close order detach→close-cond→close-reader→close-writer on the controller strand | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
 | Phase 5: LAN `auto` QoS | Medium-high | Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set for router readers/writers — bounded by the discoverable subset (D19): history/resource_limits are never in discovery and are alias-supplied by definition | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
 | Phase 8: team partition changes | Medium-high | Test participant-level partition change **in place via `set_qos`** (validated runtime-mutable in 7.7 — D15 side-finding) while writers/readers are active; recreate-affected-entities is the fallback | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back | restart the `platform-team` router instance on team change for the first demo |
 | Phase 9: serialized-CDR fast path | Medium | Build a standalone Connext 7.7 C++ pass-through for one generated type using DynamicData serialized-buffer APIs | the reader can access the CDR buffer and the writer can publish it without field materialization | ship first route runtime in `dynamic_data` mode and treat serialized CDR as optimization |
