@@ -1000,6 +1000,9 @@ history and no SQLite anywhere (vboxsf rule unaffected).
 slice + deliverables), `code-architecture.md` (`StatusPublisher` bullet, event table),
 `thesis-and-tenets.md` (Tenet 9 records the simplicity/DDS-native lens).
 
+**Amended by D31** — the uncached-reject special case is deleted; `DESCRIBE` takes the
+generic unsupported-kind cached-reject path like any other unimplemented kind.
+
 ---
 
 ## D27 — The endpoint record IS the builtin topic data; D19's subset becomes a read rule (2026-07-09, accepted; amends D19, D22)
@@ -1123,3 +1126,31 @@ mirror is a second copy of a store DDS already maintains.
 
 **Docs changed.** D12/D22 (amend notes), `code-architecture.md` (`DiscoveryIndex` bullet,
 class-responsibility row), `implementation-plan.md` (Phase 2 banner + deliverables).
+
+---
+
+## D31 — `DESCRIBE` has no special handling: generic unsupported-kind cached reject, no dedicated code or tests (2026-07-09, accepted; amends D26)
+
+**Context.** D26 dropped `DESCRIBE` but gave its reject a special rule — *not cached* — to
+protect the FIFO from a polling client. Tenet-9 review of the implementation: that special
+case defends against a poller of a command that **no longer exists**, and it never uniquely
+protected anything — any client spamming fresh `command_id`s of a *cached* kind (e.g.
+`UPDATE_ROUTE` rejects) cycles the FIFO identically. Eviction-by-spam is D4's generic,
+documented, accepted risk, already defanged by D8's idempotent accepts. A special case that
+prevents nothing is machinery without a job.
+
+**Decision.**
+
+- `DESCRIBE` is handled **identically to every other unsupported kind**
+  (`UPDATE_ROUTE`, `SET_PARTICIPANT_PARTITION` in Phase 1): parsed, rejected
+  "unsupported in this build", **reject cached per D4**. One code path, zero
+  `DESCRIBE`-specific logic.
+- With no special behavior there is **nothing `DESCRIBE`-specific to test**; the
+  unsupported-kind path is already covered by the `UPDATE_ROUTE` reject/replay test. The
+  dedicated uncached-reject test is deleted.
+- D26's "only state-changing kinds enter the history" clause is superseded: **every
+  processed command's ack is cached** — D4's original uniform rule is restored. (D9's
+  polling concern died with the command, not with a caching rule.)
+
+**Docs changed.** D26 (amend note), `command-status.md` (IDL comment, command-table row),
+`implementation-plan.md` (Phase 1 evidence line).

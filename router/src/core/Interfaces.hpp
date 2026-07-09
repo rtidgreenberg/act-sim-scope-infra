@@ -1,7 +1,9 @@
 // Interfaces.hpp — the seams RouterController depends on (D3).
 //
-// Phase 1 fakes all three in tests; Phase 2 delivers the real DiscoveryIndex and
-// StatusPublisher, Phase 3 the real EntityFactory. The fake EntityFactory must model
+// Phase 1 fakes both in tests; Phase 2 delivers the real StatusPublisher, Phase 3 the
+// real EntityFactory. DiscoveryIndex is not a controller dependency: it is a pure event
+// source (translator + participant table, D30) the controller never queries — tests post
+// its events directly. The fake EntityFactory must model
 // create/teardown as PENDING operations completed by explicit TopicEntitiesReady /
 // TopicTeardownComplete events (D8/D21) — the same seam real async creation needs.
 
@@ -40,14 +42,6 @@ struct IStatusPublisher {
     virtual ~IStatusPublisher() {}
     virtual void publish(std::shared_ptr<const RouterStatus> snapshot) = 0;
     virtual void publish_ack(const RouterCommandAck &ack) = 0;
-};
-
-// GUID-keyed endpoint-record cache (D22). Near-vestigial in Phase 1: the controller
-// receives raw records as events and owns all matching; the index only serves lookups
-// (first real consumer: InputOriginObserved origin resolution, Phase 3).
-struct IDiscoveryIndex {
-    virtual ~IDiscoveryIndex() {}
-    virtual bool lookup(const std::string &guid, EndpointRecord &out) const = 0;
 };
 
 } // namespace router

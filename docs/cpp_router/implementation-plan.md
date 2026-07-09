@@ -102,9 +102,9 @@ Evidence:
   and `RESOLVING -> WAITING_FOR_DISCOVERY` on discovery regression via the fake factory's
   pending-resolve completion (D8).
 - redundant `ENABLE_ROUTE` with a **new** `command_id` on an already-enabled route returns
-  an idempotent accept with no revision bump (D8); a received `DESCRIBE` is rejected as
-  unsupported and the reject is never cached — only state-changing kinds enter the history
-  (D26 — D9 retired as a special case, preserved as the structural rule).
+  an idempotent accept with no revision bump (D8); a received `DESCRIBE` takes the same
+  generic unsupported-kind cached-reject path as `UPDATE_ROUTE` — no special handling, no
+  dedicated tests (D26/D31).
 - a two-topic fixture route proves per-topic activation (D11): the route reaches `ENABLED`
   when only its first topic is ready; the second topic later joins in place with no
   route-level transition (revision bumps, `topic_status` updates); one topic's creation

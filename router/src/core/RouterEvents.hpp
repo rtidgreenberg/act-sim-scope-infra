@@ -20,7 +20,9 @@ namespace router {
 
 // A discovered endpoint, as posted by DiscoveryIndex (real in Phase 2, synthetic in
 // Phase 1 tests). Upsert semantics per GUID (D12): a later record for the same GUID can
-// add data — e.g. the discovered type arriving after the endpoint (D13).
+// add data — e.g. the discovered type arriving after the endpoint (D13). This struct is
+// Phase 1's no-DDS stand-in for the real payload, which is a copy of the builtin topic
+// data plus the origin_router/ignored sidecar (D27) — same facts, DDS-owned shape.
 struct EndpointRecord {
     std::string guid;
     bool is_publication = true;  // false: subscription (auto-QoS output reader — D1)

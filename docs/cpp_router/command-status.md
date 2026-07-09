@@ -72,7 +72,7 @@ enum RouterCommandKind {
     UPDATE_ROUTE,
     SET_PARTICIPANT_PARTITION,
     DESCRIBE   // reserved — dropped from the POC command set (D26); a received DESCRIBE
-               // gets an unsupported-kind reject (not cached — D26)
+               // gets the generic unsupported-kind cached reject (D31)
 };
 
 enum RouterRouteOperationalState {
@@ -233,7 +233,7 @@ is dropped — D26).
 | `DISABLE_ROUTE` | Stop forwarding an existing route | detach conditions, close per-topic readers/writers, mark disabled |
 | `UPDATE_ROUTE` | Replace or patch one active-side route definition | reconcile runtime to the supplied `RouterRouteSpec`; covers topic list, endpoint QoS aliases, forwarding mode, filters, and lifecycle flags |
 | `SET_PARTICIPANT_PARTITION` | Change the participant-level partition on a named participant role, currently `team_wan` | update participant status and recreate affected readers/writers that inherit the participant partition; this is the generic form of team assignment |
-| `DESCRIBE` | ~~Report current routes and state~~ **dropped (D26)** | late-joiner catch-up comes from `TRANSIENT_LOCAL` status durability instead; a received `DESCRIBE` is rejected as unsupported (reject not cached — only state-changing kinds enter the history); enum value stays reserved for a possible future verbose inventory response (D17 note) |
+| `DESCRIBE` | ~~Report current routes and state~~ **dropped (D26)** | late-joiner catch-up comes from `TRANSIENT_LOCAL` status durability instead; a received `DESCRIBE` takes the generic unsupported-kind cached-reject path, no special handling (D31); enum value stays reserved for a possible future verbose inventory response (D17 note) |
 
 Optional POC-plus commands:
 

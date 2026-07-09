@@ -10,12 +10,6 @@ namespace {
 
 const size_t kCommandHistoryBound = 256; // D4
 
-bool is_state_changing(RouterCommandKind kind) {
-    // DESCRIBE is the only non-state-changing kind, and it is dropped from the POC set
-    // (D26): rejected as unsupported, never cached.
-    return kind != RouterCommandKind::DESCRIBE;
-}
-
 std::string kind_name(RouterCommandKind kind) {
     switch (kind) {
     case RouterCommandKind::ENABLE_ROUTE:              return "ENABLE_ROUTE";
@@ -32,11 +26,9 @@ std::string kind_name(RouterCommandKind kind) {
 RouterController::RouterController(const RouterIdentityInfo &identity,
                                    const std::vector<RouterRouteSpec> &route_specs,
                                    const std::vector<ParticipantState> &participants,
-                                   IDiscoveryIndex *discovery_index,
                                    IEntityFactory *entity_factory,
                                    IStatusPublisher *status_publisher)
-        : discovery_(discovery_index),
-          factory_(entity_factory),
+        : factory_(entity_factory),
           status_(status_publisher) {
     state_.node_name = identity.node_name;
     state_.router_name = identity.router_name;
@@ -108,7 +100,7 @@ void RouterController::process(const ControllerEvent &event) {
 
 void RouterController::handle_command(const RouterCommand &cmd) {
     // Duplicate command_id: return the cached ack, no state change, no revision bump
-    // (D2/D4). Only state-changing kinds are ever in the history.
+    // (D2/D4).
     std::map<std::string, RouterCommandAck>::const_iterator cached =
             state_.ack_by_command_id.find(cmd.command_id);
     if (cached != state_.ack_by_command_id.end()) {
@@ -124,15 +116,11 @@ void RouterController::handle_command(const RouterCommand &cmd) {
     ack.accepted = false;
 
     switch (cmd.kind) {
-    case RouterCommandKind::DESCRIBE:
-        // Dropped from the POC command set (D26): status is TRANSIENT_LOCAL and
-        // change-driven; reject is deterministic and deliberately NOT cached.
-        ack.message = "DESCRIBE unsupported: RouterStatus is durable and change-driven (D26)";
-        status_->publish_ack(ack);
-        return;
     case RouterCommandKind::UPDATE_ROUTE:
     case RouterCommandKind::SET_PARTICIPANT_PARTITION:
-        // Parsed-and-rejected in this build (D4/D7); reject cached like any other ack.
+    case RouterCommandKind::DESCRIBE: // dropped from the POC command set (D26/D31)
+        // Unsupported kinds are parsed-and-rejected (D4/D7), reject cached like any
+        // other ack — no kind has special handling (D31).
         ack.message = kind_name(cmd.kind) + std::string(" unsupported in this build");
         cache_ack(ack);
         status_->publish_ack(ack);

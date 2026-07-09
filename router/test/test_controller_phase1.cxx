@@ -81,10 +81,6 @@ struct FakeStatusPublisher : IStatusPublisher {
     const RouterCommandAck &last_ack() const { return acks.back(); }
 };
 
-struct StubDiscoveryIndex : IDiscoveryIndex {
-    bool lookup(const std::string &, EndpointRecord &) const override { return false; }
-};
-
 // --- Fixture helpers ---
 
 static RouterRouteTopicSpec topic_spec(const std::string &name, bool auto_qos = false) {
@@ -132,11 +128,10 @@ static RouterCommand command(RouterCommandKind kind, const std::string &id,
 struct Fixture {
     FakeEntityFactory factory;
     FakeStatusPublisher status;
-    StubDiscoveryIndex index;
     RouterController controller;
 
     explicit Fixture(const std::vector<RouterRouteSpec> &specs)
-            : controller(identity(), specs, participants(), &index, &factory, &status) {}
+            : controller(identity(), specs, participants(), &factory, &status) {}
 
     static RouterIdentityInfo identity() {
         RouterIdentityInfo id;
@@ -273,25 +268,6 @@ static void test_rejected_command_ack_replay() {
             command(RouterCommandKind::ENABLE_ROUTE, "x1", "no_such_route")));
     CHECK(f.status.last_ack().message == "unknown route");
     CHECK(f.status.acks.size() == 4);
-}
-
-// DESCRIBE: rejected as unsupported and NEVER cached (D26) — a later state-changing
-// command reusing the id is processed as a fresh command.
-static void test_describe_rejected_not_cached() {
-    std::vector<RouterRouteSpec> specs(
-            1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
-    Fixture f(specs);
-
-    f.post(ControllerEvent::command_received(
-            command(RouterCommandKind::DESCRIBE, "id1")));
-    CHECK(!f.status.last_ack().accepted);
-    CHECK(f.revision() == 0);
-
-    // Same id, state-changing kind: proves the DESCRIBE reject never entered the history.
-    f.post(ControllerEvent::command_received(
-            command(RouterCommandKind::ENABLE_ROUTE, "id1", "r")));
-    CHECK(f.status.last_ack().accepted);
-    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_WAITING_FOR_DISCOVERY);
 }
 
 // Full single-topic walk: WAITING -> RESOLVING -> ENABLED -> DEGRADED -> WAITING, then
@@ -593,7 +569,6 @@ int main() {
     RUN(test_enable_waits_for_discovery);
     RUN(test_duplicate_command_returns_cached_ack);
     RUN(test_rejected_command_ack_replay);
-    RUN(test_describe_rejected_not_cached);
     RUN(test_transition_walk_single_topic);
     RUN(test_resolving_abort_and_stale_completion);
     RUN(test_redundant_enable_idempotent_accept);

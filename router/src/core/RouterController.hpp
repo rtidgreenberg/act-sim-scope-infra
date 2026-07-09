@@ -32,7 +32,6 @@ public:
     RouterController(const RouterIdentityInfo &identity,
                      const std::vector<RouterRouteSpec> &route_specs,
                      const std::vector<ParticipantState> &participants,
-                     IDiscoveryIndex *discovery_index,
                      IEntityFactory *entity_factory,
                      IStatusPublisher *status_publisher);
 
@@ -75,7 +74,6 @@ private:
 
     MutableRouterState state_;
     EventQueue queue_;
-    IDiscoveryIndex *discovery_;
     IEntityFactory *factory_;
     IStatusPublisher *status_;
     std::string current_cause_; // accepted command id during this event, else empty (D8)
