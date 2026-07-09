@@ -1227,3 +1227,85 @@ type_name) — Phase 3 binds one generated type; `dynamic_data` default mode (re
 the generated-type fast path ships first by design.
 
 **Docs changed.** `implementation-plan.md` (Phase 3 marked done in the phase table + slice).
+
+---
+
+## D35 — Forwarded ACT payloads use DynamicData (runtime XML-loaded types); generated types stay the admin/fast-path lane (2026-07-09, accepted; resolves the Phase 4 type fork, aligns reframe banner)
+
+**Context.** Phase 3 forwarded a compile-time *generated* type (`RouterStatus`, already in the
+build). Phase 4's `control_command` route forwards an ACT type defined only in
+`harness/act/node_sim/datamodel/act_types.xml` (`control_command { base_type msg }`, with
+`msg.destination : string`). Nothing generates ACT types into the router build, so Phase 4 forced
+a fork the plan never resolved: codegen the ACT types vs forward DynamicData. Both validated
+supported in 7.7 Modern C++ (`ask_connext_question`, 2026-07-09).
+
+**Decision.** Forwarded application payloads use **DynamicData**, loaded from XML at runtime — the
+generic route engine the reframe banner already names as the default (`dynamic_data` default;
+`serialized_cdr` a later opt-in). Concretely:
+
+- The router loads the config's `types.xml` via a `dds::core::QosProvider` and resolves a topic's
+  `DynamicType` **by registered type name** (`qos_provider.extensions().type("control_command")`).
+  This becomes `TypeResolver`'s real job (Phase 3's name-registry seam generalizes to
+  `get_dynamic_type(name)` + `is_constructible`).
+- A **DynamicData route runtime/factory** sits beside the Phase 3 typed one: `Topic<DynamicData>`
+  takes the resolved `DynamicType`; `DataReader<DynamicData>` → `DataWriter<DynamicData>`;
+  `take()`/`write(sample.data())` forward generically. The D31.4 create-order, D32 teardown
+  barrier, and `RouteView`/completion-event contract are unchanged — only the payload type
+  differs, so Phase 3's proven lifecycle/threading carries over.
+- **Generated types stay a lane, not the lane:** the router's own admin `RouterStatus` (and any
+  future keyed lifecycle route wanting typed `key_value`) uses the generated path; forwarded app
+  payloads use DynamicData. This is the eligibility-gated fast path Phase 9 frames — it is not
+  removed, just no longer the default.
+
+**Caveat to verify in Phase 4.** The runtime type-load XML the docs expect is rooted at
+`<dds><types>` (`rti_dds_profiles.xsd` / `rti_dds_topic_types.xsd`). `act_types.xml` is rooted at
+`<dds>` under the Routing-Service schema. First Phase 4 step is to confirm `QosProvider` loads it
+as-is; if the schema-location rejects it, ship a router-local DDS-type XML (or point rtiddsgen/
+QosProvider at an extracted `<types>`), rather than assuming it loads.
+
+**Docs changed.** `implementation-plan.md` (Phase 4 deliverables/evidence; forwarding-mode note);
+`thesis-and-tenets.md` dynamic-data-default line is now the active path (no edit needed — this
+realizes it).
+
+---
+
+## D36 — Route/participant/QoS config parsed with vendored yaml-cpp (FetchContent), not a hand-rolled nested parser (2026-07-09, accepted)
+
+**Context.** Phase 0's `RouterIdentity` reader is a dependency-free *flat* line parser (it only
+reads `node.*`/`router.*`). Phase 4's `routes:` are deeply nested (route → `source_side`/
+`destination_side` → `input`/`output` → `filter` → `parameters` list). No system `yaml-cpp` is
+installed (only low-level C `libyaml`).
+
+**Decision.** Add **yaml-cpp** via CMake `FetchContent` for the `RouteConfigParser`
+(routes/participants/QoS sections). Rationale: nested-YAML hand-parsing is a well-known
+bug factory (indentation, lists, quoting, anchors); the config is the router's contract with the
+harness and must parse correctly. The build stays local per vboxsf rules (FetchContent builds into
+the local `build/` tree, never the share). The Phase 0 identity reader may stay as-is or migrate to
+yaml-cpp later — not required by this decision.
+
+**Docs changed.** `implementation-plan.md` (Phase 4 `RouteConfigParser` deliverable notes yaml-cpp);
+`configuration.md` can note the dependency on its next pass.
+
+---
+
+## D37 — Phase 4 confidence: high, with a pinned internal build order (2026-07-09, accepted)
+
+**Decision.** With D35/D36 pinned and the content-filter surface validated (nested `msg.destination
+= %0`, string param quoted as `"'Platform_30'"`, `ContentFilteredTopic<DynamicData>` supported),
+Phase 4 is **high confidence**. To keep it high, build it in this order so the hardest Connext
+piece is proven before the config plumbing:
+
+1. **DynamicData forwarding smoke** — reuse the Phase 3 harness shape but forward `control_command`
+   as DynamicData loaded from XML, across two participants/domains. Proves type-load + DynamicData
+   runtime + D32 teardown for the new payload path. (Verifies the D35 caveat immediately.)
+2. **ContentFilteredTopic on the input reader** — add the `msg.destination = %0` filter with a
+   runtime-substituted node-name parameter; prove Platform_30 receives only its own commands and
+   Platform_31's are filtered.
+3. **`RouteConfigParser` (yaml-cpp)** — parse `routes:`/`participants:`/QoS sections into
+   `RouterRouteSpec`, with `source_side`/`destination_side` selected by local `node.role`; load the
+   same config on both control and platform instances and assert each selects the right legs
+   (`control_lan→control_wan` vs `platform_wan→platform_lan`).
+
+Steps 1–2 are the Connext risk and get focused tests; step 3 is mechanical once yaml-cpp is in.
+
+**Docs changed.** `implementation-plan.md` (Phase 4 confidence + build-order note).

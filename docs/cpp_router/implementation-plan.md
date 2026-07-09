@@ -34,7 +34,7 @@ route engine one behavior at a time.
 | 1 | Controller-owned state without DDS data routes | High | immutable snapshots, route state machine, command idempotency, disabled route status | state transitions become hard to reason about before DDS is involved |
 | 2 | Static generated-type discovery smoke | High | participants, discovery cache, type/QoS summaries, status publication | discovery metadata is insufficient or unstable for route matching |
 | 3 | One discovered route with explicit QoS | **Done (D34)** | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
-| 4 | Role-aware control/platform route | High | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
+| 4 | Role-aware control/platform route | High — **pinned (D35–D37)** | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
 | 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
 | 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | High | control receives `PlatformStatus`, `PlatformCommandAck`, and `ContactReport` without Routing Service | ACT topic/type mapping diverges from the planned route model |
@@ -226,16 +226,34 @@ Evidence:
 
 ### Phase 4: Role-Aware Control/Platform Route
 
-Deliver:
+> **Contract pinned (D35–D37).** Forwarded ACT payloads use **DynamicData** loaded from
+> `types.xml` at runtime (`QosProvider` → `DynamicType` by name), beside the Phase 3
+> generated-type lane which stays for admin/fast-path routes (D35). Config is parsed with
+> **yaml-cpp** (FetchContent), not a hand-rolled nested parser (D36). Content-filter shape is
+> validated: nested `msg.destination = %0`, string param quoted as `"'Platform_30'"`,
+> `ContentFilteredTopic<DynamicData>` supported. Confidence **high** with the internal build
+> order below (D37): prove the Connext-hard pieces (DynamicData forwarding, then CFT) before the
+> config plumbing.
 
-- `RouteConfigParser`: full `routes:`/`participants:`/QoS-section YAML parsing (Phase 0's
-  identity reader stays identity-only; Phases 1–3 use fixtures — D10).
-- YAML selection for `source_side` / `destination_side` based on local `node.role`.
-- `control_command` route with platform-side content filter on `msg.destination`.
+Deliver (in D37 order):
+
+- **DynamicData route runtime/factory** beside the Phase 3 typed one: `TypeResolver` gains
+  `get_dynamic_type(name)` (loads `types.xml` via `QosProvider`); `Topic<DynamicData>` from the
+  resolved `DynamicType`; reader/writer `<DynamicData>`; same D31.4 create-order and D32 teardown.
+  First step verifies the D35 caveat: confirm `QosProvider` loads `act_types.xml` as-is or ship a
+  router-local DDS-type XML.
+- **ContentFilteredTopic** on the input reader: `msg.destination = %0`, node-name parameter
+  substituted at creation, re-targetable via `filter_parameters()`.
+- `RouteConfigParser` (yaml-cpp): full `routes:`/`participants:`/QoS-section parsing (Phase 0's
+  identity reader stays identity-only; Phases 1–3 use fixtures — D10), with
+  `source_side`/`destination_side` selected by local `node.role`.
 - matching config loaded by both control and platform router instances.
 
 Evidence:
 
+- DynamicData forwarding smoke: `control_command` (loaded from XML) forwards across two
+  participants/domains and tears down on source loss (D32) — the Phase 3 evidence, re-proven for
+  the DynamicData payload path.
 - control-side router selects `control_lan -> control_wan`.
 - platform-side router selects `platform_wan -> platform_lan`.
 - Platform_30 receives commands addressed to Platform_30 and rejects/filters commands for
