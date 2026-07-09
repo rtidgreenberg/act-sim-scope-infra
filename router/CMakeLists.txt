@@ -101,3 +101,23 @@ target_link_libraries(test_discovery_smoke RTIConnextDDS::cpp2_api)
 add_test(NAME discovery_smoke COMMAND test_discovery_smoke)
 set_tests_properties(discovery_smoke PROPERTIES
     WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
+# Phase 2.5: thin real runtime spine smoke.
+# Proves Connext builtin discovery → DiscoveryDispatcher → RouterController →
+# DdsStatusPublisher → observable DDS status sample (D30/D31).
+add_executable(test_runtime_spine
+    test/test_runtime_spine.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/DiscoveryDispatcher.cxx
+    src/core/DdsStatusPublisher.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_runtime_spine PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_runtime_spine RTIConnextDDS::cpp2_api)
+add_test(NAME runtime_spine COMMAND test_runtime_spine)
+set_tests_properties(runtime_spine PROPERTIES
+    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
