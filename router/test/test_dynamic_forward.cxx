@@ -8,7 +8,9 @@
 //     -> router wan_in discovery -> DynamicRouteFactory creates CFT reader + writer
 //     -> RouteTopicRuntime<DynamicData> forwards only P30 samples
 //     -> sink reader (domain B) receives P30, never P31
-//   then closing the source tears the route down (D32) and it leaves ROUTE_ENABLED.
+//   then closing the source tears the route down (D32) and it leaves ROUTE_ENABLED,
+//   and a NEW source rebuilds the filtered route (CFT recreated by name) and forwards
+//   again (the D32 rebuild goal, D41).
 //
 // Input leg (domain A) and output leg (domain B) are separate participants/domains — the
 // real router topology, so no intra-participant self-loop. UDPv4 only; per-process domains.
@@ -237,14 +239,52 @@ int main() {
         }
         CHECK(left_enabled);
 
+        // --- Rebuild proof (D32 rebuild goal, D41): a NEW source re-enables the
+        //     filtered route — the "<topic>_cft" name was reclaimed on teardown, so
+        //     the second build recreates it instead of dying on a name collision — and
+        //     filtered forwarding works end-to-end again. ---
+        int p30_rebuilt = 0;
+        {
+            dds::domain::DomainParticipant src2_dp = make_app_participant(dom_in);
+            dds::topic::Topic<DynData> src2_topic(src2_dp, topic, cmd_type);
+            dds::pub::DataWriter<DynData> src2_writer(
+                dds::pub::Publisher(src2_dp), src2_topic, reliable_tl_writer());
+
+            bool re_enabled = false;
+            for (int i = 0; i < 80 && !re_enabled; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                re_enabled = route_enabled_now(status_reader);
+            }
+            CHECK(re_enabled);
+
+            for (int i = 0; i < 80 && p30_rebuilt == 0; ++i) {
+                DynData to_us(cmd_type);
+                to_us.value<std::string>("msg.destination", this_node);
+                to_us.value<int32_t>("msg.seq", 2000 + i);
+                src2_writer.write(to_us);
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                auto samples = sink_reader.take();
+                for (auto it = samples.begin(); it != samples.end(); ++it) {
+                    if (!it->info().valid()) continue;
+                    if (it->data().value<std::string>("msg.destination") == this_node) {
+                        ++p30_rebuilt;
+                    }
+                }
+            }
+            CHECK(p30_rebuilt > 0); // rebuilt route forwards again
+            src2_dp.close();
+        }
+
         route_disp.shutdown();
         discovery.shutdown();
         drain.stop();
         aws.stop();
 
         if (g_failures == 0) {
-            std::printf("test_dynamic_forward: OK in=%d out=%d cmd_r1 p30=%d p31=%d\n",
-                        dom_in, dom_out, p30_seen, p31_seen);
+            std::printf("test_dynamic_forward: OK in=%d out=%d cmd_r1 p30=%d p31=%d "
+                        "rebuilt=%d\n",
+                        dom_in, dom_out, p30_seen, p31_seen, p30_rebuilt);
             return 0;
         }
         std::fprintf(stderr, "test_dynamic_forward: %d failure(s)\n", g_failures);

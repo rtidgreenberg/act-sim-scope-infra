@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 namespace router {
@@ -35,20 +36,22 @@ public:
     }
 
     bool has_dynamic_type(const std::string &type_name) const {
-        if (!provider_) {
-            return false;
-        }
         try {
-            provider_->extensions().type(type_name);
+            get_dynamic_type(type_name);
             return true;
         } catch (const std::exception &) {
             return false;
         }
     }
 
-    // Resolve a DynamicType by registered name. Throws if not loaded/unknown.
+    // Resolve a DynamicType by registered name. Throws if no XML is loaded or the name
+    // is unknown.
     const dds::core::xtypes::DynamicType &get_dynamic_type(
             const std::string &type_name) const {
+        if (!provider_) {
+            throw std::runtime_error("no DDS-type XML loaded (wanted type: "
+                                     + type_name + ")");
+        }
         return provider_->extensions().type(type_name);
     }
 

@@ -56,7 +56,8 @@ struct SelfCompletingFakeFactory : IEntityFactory {
 
     void create_topic_entities(const RouteView &view,
                                const std::string &topic,
-                               std::uint64_t gen) override {
+                               std::uint64_t gen,
+                               const DerivedWriterQos &) override {
         creates.fetch_add(1, std::memory_order_relaxed);
         if (ctrl) {
             ctrl->post(ControllerEvent::topic_entities_ready(
@@ -72,6 +73,10 @@ struct SelfCompletingFakeFactory : IEntityFactory {
     }
     void abort_topic_creation(const std::string &, const std::string &,
                               std::uint64_t) override {}
+    std::string update_writer_deadline(const std::string &, const std::string &,
+                                       std::int64_t) override {
+        return std::string();
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -127,16 +132,17 @@ int main() {
         DdsStatusPublisher status_pub(router_dp, "ActRouterStatus");
 
         // ---------------------------------------------------------------
-        // Route spec: one explicit-QoS topic (reader_qos non-empty → qos_resolved=true)
+        // Route spec: one explicit-QoS route (endpoint reader_qos non-empty →
+        // qos_resolved=true; aliases live on the endpoint spec, D41)
         // ---------------------------------------------------------------
         RouterRouteTopicSpec topic_spec;
-        topic_spec.name       = "ActRouterPhase25Smoke";
-        topic_spec.reader_qos = "default";
-        topic_spec.writer_qos = "default";
+        topic_spec.name = "ActRouterPhase25Smoke";
 
         RouterRouteSpec route_spec;
         route_spec.route_name     = "smoke_r1";
         route_spec.desired_enabled = true;
+        route_spec.input.reader_qos  = "default";
+        route_spec.output.writer_qos = "default";
         route_spec.topics.push_back(topic_spec);
 
         RouterIdentityInfo identity;

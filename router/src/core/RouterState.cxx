@@ -4,12 +4,47 @@
 
 namespace router {
 
-bool topic_uses_auto_qos(const RouterRouteTopicSpec &spec) {
-    return spec.reader_qos.empty() && spec.writer_qos.empty();
+bool output_uses_auto_qos(const RouterRouteSpec &spec) {
+    return spec.output.writer_qos.empty();
+}
+
+DerivedWriterQos derive_writer_qos(const TopicRouteState &topic,
+                                   const RouterRouteSpec &route_spec) {
+    DerivedWriterQos d;
+    d.derive = output_uses_auto_qos(route_spec);
+    if (!d.derive) {
+        return d;
+    }
+    for (std::map<std::string, MatchedEndpoint>::const_iterator it =
+                 topic.matched_readers.begin();
+         it != topic.matched_readers.end(); ++it) {
+        const MatchedEndpoint &r = it->second;
+        if (r.deadline_nanos < d.deadline_nanos) {
+            d.deadline_nanos = r.deadline_nanos;
+        }
+        if (static_cast<int>(r.liveliness_kind)
+            > static_cast<int>(d.liveliness_kind)) {
+            d.liveliness_kind = r.liveliness_kind;
+        }
+        if (r.lease_nanos < d.lease_nanos) {
+            d.lease_nanos = r.lease_nanos;
+        }
+    }
+    return d;
+}
+
+const RouterRouteTopicSpec *find_topic_spec(const RouterRouteSpec &spec,
+                                            const std::string &topic_name) {
+    for (size_t i = 0; i < spec.topics.size(); ++i) {
+        if (spec.topics.at(i).name == topic_name) {
+            return &spec.topics.at(i);
+        }
+    }
+    return nullptr;
 }
 
 RouterRouteDiscoveryState derive_topic_discovery(const TopicRouteState &topic,
-                                                 const RouterRouteTopicSpec &spec) {
+                                                 const RouterRouteSpec &route_spec) {
     // input_writer_seen <=> matched-writer set non-empty (D20)
     if (topic.matched_writers.empty()) {
         return RouterRouteDiscoveryState::DISCOVERY_NONE;
@@ -25,10 +60,12 @@ RouterRouteDiscoveryState derive_topic_discovery(const TopicRouteState &topic,
             break;
         }
     }
-    // qos_resolved: explicit alias => resolved by definition (D19: history/resource
-    // limits are alias-supplied anyway); auto => needs a discovered output reader (D1)
+    // qos_resolved: explicit writer alias => resolved by definition (D19: history/
+    // resource limits are alias-supplied anyway); auto output => needs >=1 discovered
+    // local reader to derive deadline/liveliness from (D1/D39/D45). The input side never
+    // gates: the weakest-request reader profile matches every writer by construction.
     bool qos_resolved =
-            topic_uses_auto_qos(spec) ? !topic.matched_readers.empty() : true;
+            output_uses_auto_qos(route_spec) ? !topic.matched_readers.empty() : true;
 
     if (type_resolved && qos_resolved) {
         return RouterRouteDiscoveryState::DISCOVERY_READY;
@@ -45,7 +82,7 @@ RouterRouteDiscoveryState derive_route_discovery(const RouteState &route) {
         if (t == route.topics.end()) {
             continue;
         }
-        RouterRouteDiscoveryState d = derive_topic_discovery(t->second, spec);
+        RouterRouteDiscoveryState d = derive_topic_discovery(t->second, route.desired);
         if (static_cast<int>(d) > static_cast<int>(best)) {
             best = d;
         }
@@ -105,8 +142,11 @@ std::string route_fingerprint(const RouteState &route) {
         }
         os << '|' << spec.name << ':'
            << static_cast<int>(t->second.topic_state) << ':'
-           << static_cast<int>(derive_topic_discovery(t->second, spec)) << ':'
-           << t->second.last_error;
+           << static_cast<int>(derive_topic_discovery(t->second, route.desired)) << ':'
+           << t->second.last_error << ':'
+           << t->second.qos_warning << ':'
+           << t->second.reader_qos_summary << ':'
+           << t->second.writer_qos_summary;
     }
     return os.str();
 }

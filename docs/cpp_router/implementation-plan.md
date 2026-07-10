@@ -35,7 +35,7 @@ route engine one behavior at a time.
 | 2 | Static generated-type discovery smoke | High | participants, discovery cache, type/QoS summaries, status publication | discovery metadata is insufficient or unstable for route matching |
 | 3 | One discovered route with explicit QoS | **Done (D34)** | writer discovery creates reader/writer, attaches `ReadCondition`, forwards one topic | dynamic attach/detach or entity lifetime is unreliable |
 | 4 | Role-aware control/platform route | **Done (D38)** | one YAML route runs opposite sides on control/platform nodes; command path works | role abstraction creates ambiguous endpoint ownership |
-| 5 | LAN `auto` QoS and output readiness | Medium-high | route waits for discovered LAN reader/writer and resolves compatible QoS | auto-match requires too many DDS policies for POC confidence |
+| 5 | LAN `auto` QoS and output readiness | **High (D39/D40)** | route waits for a compatible LAN reader before creating its output writer; static asymmetric QoS matches everything else by RxO construction | residual RxO mismatches (ownership/durability/liveliness) turn out to be common on the target LAN |
 | 6 | Command/status control loop | High | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | High | control receives `PlatformStatus`, `PlatformCommandAck`, and `ContactReport` without Routing Service | ACT topic/type mapping diverges from the planned route model |
 | 8 | Team partition route | Medium-high | `SET_PARTICIPANT_PARTITION` recreates affected entities and `PlatformData` crosses team scope | participant/partition changes cannot be made predictable enough |
@@ -267,20 +267,64 @@ Evidence:
 
 ### Phase 5: LAN Auto QoS And Output Readiness
 
+> **Contract pinned (D39–D40, amended by D42).** Reader-side `auto` derivation is
+> **deleted, not implemented**: route input readers use one fixed weakest-request profile
+> (`BEST_EFFORT` + `VOLATILE` + defaults, `DataRepresentation` union), which matches every
+> discovered writer by RxO construction — reader-side QoS immutability stops mattering.
+> Output writers offer a fixed strong baseline (`RELIABLE` + `TRANSIENT_LOCAL` — the TL
+> offer already *is* the durability auto-match, D42) and derive two policies from the
+> matched local readers: **deadline** (mutable → adapted in place via `set_qos`) and
+> **liveliness** kind + lease at creation (D42; `AUTOMATIC` honored automatically by the
+> middleware, `MANUAL` kinds by forwarded writes plus `LIVELINESS_CHANGED`-driven
+> `assert_liveliness()` propagation from the input leg).
+> Residual immutable mismatches — Ownership (equality RxO), durability above
+> `TRANSIENT_LOCAL`, presentation, late-joiner liveliness stronger than created — are
+> warned via the incompatible-QoS statuses with `last_policy_id`, first-resolved-wins
+> (D20 precedent), never auto-adapted.
+> Confidence **high** (D40); the F10→F6 factory/alias unification and F1/F4/F3
+> rebuild-leak/abort prerequisites are **done** (D41,
+> [phase3-4-code-review.md](phase3-4-code-review.md)).
+>
+> **Status: shipped and test-verified (D45).** The readiness gate is output-side only
+> (`output_uses_auto_qos` — refines the old both-sides predicate), XML QoS-alias lookup
+> is re-pinned to Phase 7 (its first consumers), and the quiet-MANUAL liveliness
+> residual is documented. `test_auto_qos` proves all five evidence items end-to-end;
+> 9/9 targets green.
+
 Deliver:
 
-- LAN `auto` reader QoS derived from discovered local writers.
-- LAN `auto` writer QoS delayed until compatible local readers are discovered.
+- the fixed weakest-request input-reader profile and strong-offer output-writer baseline
+  in `QosResolver` (alias override still honored when a route names one), landing once in
+  the unified `RouteEntityFactory` skeleton (D41).
+- output readiness: writer creation gated on ≥1 compatible discovered local reader (the
+  D20/D22 matched sets already know); at creation the writer derives liveliness
+  (kind = max requested, lease = min requested — D42) and deadline (min requested period)
+  from the matched readers; a stricter deadline from a later reader is tightened in place
+  via `set_qos`.
+- upstream-liveliness propagation for `MANUAL`-kind routes: `LIVELINESS_CHANGED` on the
+  input reader's `StatusCondition` → `assert_liveliness()` on the output writer while
+  upstream is alive (D42).
+- `REQUESTED_INCOMPATIBLE_QOS` / `OFFERED_INCOMPATIBLE_QOS` enabled on route-entity
+  `StatusCondition`s attached to the `AsyncWaitSet` → route warning / status reason naming
+  the failing policy (closes F5's silent no-match structurally).
 - status fields that explain resolved reader/writer QoS summaries.
 - history and resource limits always come from QoS aliases/defaults — they are **not
-  propagated in discovery** and can never be derived from discovered endpoints (D19).
+  propagated in discovery** and can never be derived from discovered endpoints (D19,
+  reconfirmed against 7.7).
 
 Evidence:
 
-- route waits rather than creating a mismatched output writer when no local reader exists.
-- route activates automatically once the compatible LAN reader appears.
-- incompatible discovered endpoints produce `ROUTE_ERROR` or waiting status with a useful
-  reason.
+- route waits rather than creating an output writer when no compatible local reader
+  exists, and activates automatically once one appears.
+- `BEST_EFFORT` and `VOLATILE` application writers match the route input reader and
+  forward (the F5 case that previously showed `ROUTE_ENABLED` with zero samples).
+- a local reader requesting `AUTOMATIC` liveliness with a finite lease matches the route
+  writer created after it (derived lease ≤ requested) and observes liveliness with no
+  router-side asserts (D42).
+- an EXCLUSIVE-ownership writer (or a reader requesting `TRANSIENT` durability) produces
+  a loud incompatible-QoS warning naming the policy; route status carries a useful reason.
+- a later local reader with a tighter deadline is accommodated in place via `set_qos` —
+  no entity recreation, no teardown cycle.
 
 ### Phase 6: Command/Status Control Loop
 
@@ -383,7 +427,7 @@ or narrows the fallback path.
 |---|---|---|---|---|
 | Phase 2: discovery dispatcher | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
 | Phase 3: dynamic entity lifecycle | High — **resolved (D31/D32)** | ~~Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly~~ Decided: `detach_condition()` is a documented **blocking barrier** (in-flight handler has returned on success); per-condition dispatch is serialized (never call `unlock_condition`); pinned close order detach→close-cond→close-reader→close-writer on the controller strand | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
-| Phase 5: LAN `auto` QoS | Medium-high | Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set for router readers/writers — bounded by the discoverable subset (D19): history/resource_limits are never in discovery and are alias-supplied by definition | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
+| Phase 5: LAN `auto` QoS | High — **resolved (D39), shipped (D45)** | ~~Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set~~ Decided: no reader-side derivation at all — weakest-request input readers match every writer by RxO construction; writer derives deadline (mutable in place) and, per D42, liveliness kind+lease at creation (fixed TL offer is already the durability auto-match); immutability table, ownership-equality RxO, liveliness RxO/assert mechanics, and incompatible-QoS status detection validated against 7.7 (the data model is reference-only per D35, so "actual ACT endpoints" was stale — the phase tests against router-authored endpoints with deliberately heterogeneous QoS) | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
 | Phase 8: team partition changes | Medium-high | Test participant-level partition change **in place via `set_qos`** (validated runtime-mutable in 7.7 — D15 side-finding) while writers/readers are active; recreate-affected-entities is the fallback | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back | restart the `platform-team` router instance on team change for the first demo |
 | Phase 9: serialized-CDR fast path | Medium | Build a standalone Connext 7.7 C++ pass-through for one generated type using DynamicData serialized-buffer APIs | the reader can access the CDR buffer and the writer can publish it without field materialization | ship first route runtime in `dynamic_data` mode and treat serialized CDR as optimization |
 | Phase 10: keyed lifecycle mirroring | Medium | Test dispose/no-writers propagation with one generated keyed type and one DynamicData route using `reader.key_value()` or cached key fields | downstream reader observes matching instance states and keys can be recovered reliably | require generated-type route runtimes for lifecycle-sensitive topics |
@@ -413,8 +457,9 @@ lifecycle mirroring, and container harness replacement.
 
 - Highest confidence: controller state, YAML selection, generated admin IDL, explicit-QoS
   forwarding, command/status snapshots.
-- Medium-high confidence: discovery dispatching, LAN auto-match, partition-driven team routes,
-  ACT harness replacement.
+- Medium-high confidence: discovery dispatching, partition-driven team routes,
+  ACT harness replacement. (LAN auto-match raised to high by D39/D40 — the asymmetric
+  static-QoS contract removes the derivation machinery the medium-high rating priced in.)
 - Medium confidence: serialized-CDR buffer forwarding and generic keyed lifecycle mirroring,
   because they depend on exact Connext 7.7 Modern C++ API ergonomics and type/key access.
 

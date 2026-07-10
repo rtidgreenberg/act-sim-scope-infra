@@ -94,6 +94,37 @@ int main() {
         }
     }
 
+    // --- QoS alias validation catches the known Phase-5-interim gap (D44) ---
+    // control-platform.yaml uses named QoS-library aliases (wan_event, wan_status,
+    // lan_status_1hz) that QosResolver cannot yet resolve; validate_qos_aliases must reject
+    // the config with one clear message naming the offending route/alias, rather than
+    // leaving it to surface as N per-topic sticky errors once this config is wired to the
+    // real pipeline.
+    {
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(path, cfg, err));
+        std::string qos_err;
+        CHECK(!validate_qos_aliases(cfg, qos_err));
+        CHECK(!qos_err.empty());
+        CHECK(qos_err.find("unresolvable until Phase 7") != std::string::npos);
+    }
+
+    // --- Numeric-looking node name: quoted YAML scalar must still be quoted (D43) ---
+    // A node named "101" substituted into the quoted "${node.name}" parameter must not be
+    // misread as a numeric SQL literal — the author's explicit quoting in the YAML source
+    // is authoritative, regardless of what the substituted text looks like.
+    {
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(path, cfg, err, "platform", "101"));
+        const RouterRouteSpec *cc = find_route(cfg, "control_command");
+        CHECK(cc != nullptr);
+        if (cc && cc->input.filter_parameters.size() == 1) {
+            CHECK(cc->input.filter_parameters.at(0) == "'101'");
+        }
+    }
+
     if (g_failures == 0) {
         std::printf("test_route_config: OK role selection + filter substitution\n");
         return 0;

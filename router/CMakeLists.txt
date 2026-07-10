@@ -177,6 +177,30 @@ add_test(NAME dynamic_forward COMMAND test_dynamic_forward)
 set_tests_properties(dynamic_forward PROPERTIES
     WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
 
+# Phase 5: asymmetric auto QoS + output readiness (D39/D42/D45). Weakest-request input
+# reader, strong-offer output writer with derived deadline/liveliness, readiness gating,
+# in-place deadline tightening, incompatible-QoS warnings in status.
+add_executable(test_auto_qos
+    test/test_auto_qos.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/DiscoveryDispatcher.cxx
+    src/core/DdsStatusPublisher.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    src/core/DynamicRouteFactory.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_auto_qos PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(test_auto_qos PRIVATE
+    ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+target_link_libraries(test_auto_qos RTIConnextDDS::cpp2_api)
+add_test(NAME auto_qos COMMAND test_auto_qos)
+set_tests_properties(auto_qos PROPERTIES
+    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+
 # Phase 4 (step 3): role-aware route config parsing (yaml-cpp, no DDS).
 add_executable(test_route_config
     test/test_route_config.cxx

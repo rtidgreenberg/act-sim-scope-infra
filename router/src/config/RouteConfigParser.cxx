@@ -1,6 +1,7 @@
 // RouteConfigParser.cxx — yaml-cpp route/participant parsing + role-aware selection (D36).
 
 #include "config/RouteConfigParser.hpp"
+#include "core/QosAliasPolicy.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -15,15 +16,50 @@ std::string get_str(const YAML::Node &n, const std::string &key,
     return (n && n[key]) ? n[key].as<std::string>() : dflt;
 }
 
-// Substitute ${node.name} and single-quote the value for a string SQL filter param.
-std::string resolve_filter_param(const std::string &raw, const std::string &node_name) {
-    std::string v = raw;
+// True for a plain SQL numeric literal: [+-]digits[.digits][(e|E)[+-]digits].
+bool is_numeric_literal(const std::string &v) {
+    std::size_t i = 0;
+    if (i < v.size() && (v[i] == '+' || v[i] == '-')) ++i;
+    std::size_t digits = 0;
+    while (i < v.size() && v[i] >= '0' && v[i] <= '9') { ++i; ++digits; }
+    if (i < v.size() && v[i] == '.') {
+        ++i;
+        while (i < v.size() && v[i] >= '0' && v[i] <= '9') { ++i; ++digits; }
+    }
+    if (digits == 0) return false;
+    if (i < v.size() && (v[i] == 'e' || v[i] == 'E')) {
+        ++i;
+        if (i < v.size() && (v[i] == '+' || v[i] == '-')) ++i;
+        std::size_t exp_digits = 0;
+        while (i < v.size() && v[i] >= '0' && v[i] <= '9') { ++i; ++exp_digits; }
+        if (exp_digits == 0) return false;
+    }
+    return i == v.size();
+}
+
+// Substitute ${node.name}, then make the value a valid SQL filter parameter. The member
+// type is unknown at the YAML layer (it lives with the DDS type; typed resolution is a
+// Phase 5+ concern), so quoting follows how the author wrote the YAML scalar (D43): an
+// explicitly quoted parameter (`Tag() == "!"` for single/double-quoted scalars, vs `"?"`
+// for a plain/bare one — verified against yaml-cpp 0.8.0) is always a string, regardless
+// of shape, so a numeric-looking id like "101" or "PLATFORM232" written in quotes is never
+// misquoted. Only a plain/bare scalar (an actual number in the config) falls back to the
+// numeric-shape check (string comparison requires quotes — validated 7.7).
+std::string resolve_filter_param(const YAML::Node &param, const std::string &node_name) {
+    std::string v = param.as<std::string>();
     const std::string token = "${node.name}";
     std::string::size_type pos;
     while ((pos = v.find(token)) != std::string::npos) {
         v.replace(pos, token.size(), node_name);
     }
-    return "'" + v + "'"; // string comparison => quoted (validated 7.7)
+    if (v.size() >= 2 && v[0] == '\'' && v[v.size() - 1] == '\'') {
+        return v; // author embedded the SQL quotes directly
+    }
+    bool explicitly_quoted = (param.Tag() == "!");
+    if (explicitly_quoted || !is_numeric_literal(v)) {
+        return "'" + v + "'";
+    }
+    return v;
 }
 
 // Fill a RouterRouteEndpointSpec from a side's input/output YAML node.
@@ -43,7 +79,7 @@ void fill_endpoint(const YAML::Node &ep, RouterRouteEndpointSpec &out,
         if (f["parameters"]) {
             for (std::size_t i = 0; i < f["parameters"].size(); ++i) {
                 out.filter_parameters.push_back(
-                    resolve_filter_param(f["parameters"][i].as<std::string>(), node_name));
+                    resolve_filter_param(f["parameters"][i], node_name));
             }
         }
     }
@@ -126,6 +162,27 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         return false;
     }
 
+    return true;
+}
+
+bool validate_qos_aliases(const RouteConfig &cfg, std::string &error) {
+    for (std::size_t r = 0; r < cfg.routes.size(); ++r) {
+        const RouterRouteSpec &spec = cfg.routes[r];
+        if (!is_resolvable_qos_alias(spec.input.reader_qos)) {
+            error = "route '" + spec.route_name + "' input.reader_qos '"
+                    + spec.input.reader_qos
+                    + "' is unresolvable until Phase 7 QoS-library lookup lands (D45) "
+                      "(only \"\"/\"default\" supported)";
+            return false;
+        }
+        if (!is_resolvable_qos_alias(spec.output.writer_qos)) {
+            error = "route '" + spec.route_name + "' output.writer_qos '"
+                    + spec.output.writer_qos
+                    + "' is unresolvable until Phase 7 QoS-library lookup lands (D45) "
+                      "(only \"\"/\"default\" supported)";
+            return false;
+        }
+    }
     return true;
 }
 

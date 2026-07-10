@@ -20,12 +20,15 @@ namespace router {
 
 // Creates/destroys per-topic route DDS entities. Operations are stamped (D23); the
 // implementation reports completion by posting TopicEntitiesReady / TopicTeardownComplete
-// / RouteEntityError events carrying the same stamp (D21).
+// / RouteEntityError events carrying the same stamp (D21). The controller derives the
+// writer-side QoS from the matched local readers at issue time and passes it in (D39/D42):
+// applied only when the output endpoint uses auto QoS (derived.derive).
 struct IEntityFactory {
     virtual ~IEntityFactory() {}
     virtual void create_topic_entities(const RouteView &view,
                                        const std::string &topic_name,
-                                       std::uint64_t generation) = 0;
+                                       std::uint64_t generation,
+                                       const DerivedWriterQos &derived) = 0;
     virtual void teardown_topic_entities(const std::string &route_name,
                                          const std::string &topic_name,
                                          std::uint64_t generation) = 0;
@@ -33,6 +36,13 @@ struct IEntityFactory {
     virtual void abort_topic_creation(const std::string &route_name,
                                       const std::string &topic_name,
                                       std::uint64_t generation) = 0;
+    // Tighten the (mutable) deadline of a live build's output writer in place — no
+    // entity recreation, no teardown cycle (D39). Synchronous on the controller strand;
+    // returns the writer's new QoS summary, or "" if no such runtime exists / the
+    // update failed (the caller then surfaces a warning).
+    virtual std::string update_writer_deadline(const std::string &route_name,
+                                               const std::string &topic_name,
+                                               std::int64_t deadline_nanos) = 0;
 };
 
 // Publishes the controller's outward report. The snapshot IS the generated RouterStatus

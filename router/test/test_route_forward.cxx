@@ -141,17 +141,18 @@ int main() {
         QosResolver qos;
         EntityFactory<RouterStatus> factory(registry, types, qos, route_disp, "RouterStatus");
 
-        // --- Route: fwd_r1, one explicit-QoS topic, wan_in -> lan_out ---
+        // --- Route: fwd_r1, one explicit-QoS route, wan_in -> lan_out (aliases on the
+        //     endpoint spec, D41) ---
         RouterRouteTopicSpec topic_spec;
         topic_spec.name = topic;
-        topic_spec.reader_qos = "default";
-        topic_spec.writer_qos = "default";
 
         RouterRouteSpec route_spec;
         route_spec.route_name = "fwd_r1";
         route_spec.desired_enabled = true;
         route_spec.input.participant  = "wan_in";
+        route_spec.input.reader_qos   = "default";
         route_spec.output.participant = "lan_out";
+        route_spec.output.writer_qos  = "default";
         route_spec.topics.push_back(topic_spec);
 
         RouterIdentityInfo identity;

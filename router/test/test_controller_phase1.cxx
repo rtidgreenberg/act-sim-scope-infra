@@ -39,15 +39,20 @@ struct FakeEntityFactory : IEntityFactory {
     struct Op {
         std::string route, topic;
         std::uint64_t gen;
+        DerivedWriterQos derived; // creates only (D39/D45)
+        std::int64_t deadline_nanos = 0; // deadline updates only
     };
-    std::vector<Op> creates, teardowns, aborts;
+    std::vector<Op> creates, teardowns, aborts, deadline_updates;
+    bool fail_deadline_update = false;
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
-                               std::uint64_t gen) override {
+                               std::uint64_t gen,
+                               const DerivedWriterQos &derived) override {
         Op op;
         op.route = view.spec.route_name;
         op.topic = topic;
         op.gen = gen;
+        op.derived = derived;
         creates.push_back(op);
     }
     void teardown_topic_entities(const std::string &route, const std::string &topic,
@@ -66,6 +71,17 @@ struct FakeEntityFactory : IEntityFactory {
         op.gen = gen;
         aborts.push_back(op);
     }
+    std::string update_writer_deadline(const std::string &route,
+                                       const std::string &topic,
+                                       std::int64_t deadline_nanos) override {
+        Op op;
+        op.route = route;
+        op.topic = topic;
+        op.gen = 0;
+        op.deadline_nanos = deadline_nanos;
+        deadline_updates.push_back(op);
+        return fail_deadline_update ? std::string() : "RELIABLE,TRANSIENT_LOCAL,updated";
+    }
 };
 
 struct FakeStatusPublisher : IStatusPublisher {
@@ -83,22 +99,24 @@ struct FakeStatusPublisher : IStatusPublisher {
 
 // --- Fixture helpers ---
 
-static RouterRouteTopicSpec topic_spec(const std::string &name, bool auto_qos = false) {
+static RouterRouteTopicSpec topic_spec(const std::string &name) {
     RouterRouteTopicSpec t;
     t.name = name;
-    if (!auto_qos) {
-        t.reader_qos = "reliable_alias";
-        t.writer_qos = "reliable_alias";
-    }
     return t;
 }
 
+// QoS aliases live on the endpoint spec (D41): explicit by default, empty for auto-QoS.
 static RouterRouteSpec route_spec(const std::string &name, bool enabled,
-                                  const std::vector<RouterRouteTopicSpec> &topics) {
+                                  const std::vector<RouterRouteTopicSpec> &topics,
+                                  bool auto_qos = false) {
     RouterRouteSpec s;
     s.route_name = name;
     s.desired_enabled = enabled;
     s.forwarding_mode = "dynamic_data";
+    if (!auto_qos) {
+        s.input.reader_qos = "reliable_alias";
+        s.output.writer_qos = "reliable_alias";
+    }
     for (size_t i = 0; i < topics.size(); ++i) {
         s.topics.push_back(topics[i]);
     }
@@ -339,6 +357,35 @@ static void test_resolving_abort_and_stale_completion() {
     CHECK(f.revision() == rev);
 }
 
+// An aborted build's late RouteEntityError is discarded by the same stale-stamp rule as
+// its late TopicEntitiesReady — a topic that legitimately returned to IDLE must not be
+// forced into sticky ERROR (D23/D41); a live build's error still applies.
+static void test_stale_error_after_abort_discarded() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+    Fixture f(specs);
+
+    // Build starts, then discovery regresses mid-create: abort zeroes the generation.
+    f.post(ControllerEvent::publication_discovered(writer_record("w1", "T")));
+    std::uint64_t gen = f.last_create_gen();
+    f.post(ControllerEvent::endpoint_lost("w1"));
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_WAITING_FOR_DISCOVERY);
+    CHECK(f.factory.aborts.size() == 1);
+
+    // The aborted creation fails late: stale stamp, discarded — NOT sticky ERROR.
+    std::uint64_t rev = f.revision();
+    f.post(ControllerEvent::route_entity_error("r", "T", gen, "create failed late"));
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_WAITING_FOR_DISCOVERY);
+    CHECK(f.route("r").topic_status.at(0).topic_state == RouterRouteTopicState::TOPIC_IDLE);
+    CHECK(f.revision() == rev);
+
+    // A fresh build's error with the CURRENT stamp still lands (sticky per-topic ERROR).
+    f.post(ControllerEvent::publication_discovered(writer_record("w2", "T")));
+    std::uint64_t gen2 = f.last_create_gen();
+    f.post(ControllerEvent::route_entity_error("r", "T", gen2, "writer creation failed"));
+    CHECK(f.route("r").topic_status.at(0).topic_state == RouterRouteTopicState::TOPIC_ERROR);
+}
+
 // Redundant ENABLE_ROUTE with a NEW command_id on an already-enabled route: idempotent
 // accept, ack cached, no state change, no revision bump (D8).
 static void test_redundant_enable_idempotent_accept() {
@@ -500,11 +547,11 @@ static void test_type_arrives_late_via_upsert() {
     CHECK(f.factory.creates.size() == 1);
 }
 
-// Auto-QoS topic (D1): READY additionally requires a discovered output reader.
+// Auto-QoS route (D1): READY additionally requires a discovered output reader.
 static void test_auto_qos_requires_output_reader() {
     std::vector<RouterRouteSpec> specs(
-            1, route_spec("r", true,
-                          std::vector<RouterRouteTopicSpec>(1, topic_spec("T", true))));
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
+                          /*auto_qos=*/true));
     Fixture f(specs);
 
     f.post(ControllerEvent::publication_discovered(writer_record("w1", "T")));
@@ -539,6 +586,124 @@ static void test_disable_tears_down() {
     CHECK(f.factory.creates.size() == 1);
 }
 
+// --- Phase 5 (D39/D42/D45): output-side gating, writer derivation, tightening ---
+
+static EndpointRecord reader_record(const std::string &guid, const std::string &topic,
+                                    std::int64_t deadline_nanos = kInfiniteNanos,
+                                    LivelinessKindPod kind = LivelinessKindPod::Automatic,
+                                    std::int64_t lease_nanos = kInfiniteNanos) {
+    EndpointRecord r;
+    r.guid = guid;
+    r.is_publication = false;
+    r.topic_name = topic;
+    r.deadline_nanos = deadline_nanos;
+    r.liveliness_kind = kind;
+    r.lease_nanos = lease_nanos;
+    return r;
+}
+
+// The readiness gate is OUTPUT-side only (D45): a named reader_qos with an auto writer
+// still gates on a local reader; a named writer_qos never gates.
+static void test_gate_is_output_side_only() {
+    RouterRouteSpec in_named = route_spec(
+            "in_named", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
+            /*auto_qos=*/true);
+    in_named.input.reader_qos = "reliable_alias"; // output stays auto
+    RouterRouteSpec out_named = route_spec(
+            "out_named", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("U")),
+            /*auto_qos=*/true);
+    out_named.output.writer_qos = "reliable_alias"; // input stays auto
+    std::vector<RouterRouteSpec> specs;
+    specs.push_back(in_named);
+    specs.push_back(out_named);
+    Fixture f(specs);
+
+    // Auto output: writer discovery alone is PARTIAL, no create.
+    f.post(ControllerEvent::publication_discovered(writer_record("w1", "T")));
+    CHECK(f.route("in_named").discovery_state
+          == RouterRouteDiscoveryState::DISCOVERY_PARTIAL);
+    CHECK(f.factory.creates.empty());
+    f.post(ControllerEvent::subscription_discovered(reader_record("rd1", "T")));
+    CHECK(f.route("in_named").discovery_state
+          == RouterRouteDiscoveryState::DISCOVERY_READY);
+    CHECK(f.factory.creates.size() == 1);
+    CHECK(f.factory.creates.back().derived.derive);
+
+    // Named writer alias: no gate, no derivation.
+    f.post(ControllerEvent::publication_discovered(writer_record("w2", "U")));
+    CHECK(f.route("out_named").discovery_state
+          == RouterRouteDiscoveryState::DISCOVERY_READY);
+    CHECK(f.factory.creates.size() == 2);
+    CHECK(!f.factory.creates.back().derived.derive);
+}
+
+// Writer derivation (D39/D42): deadline = min period, kind = max, lease = min across
+// the matched readers at issue time.
+static void test_writer_qos_derivation() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
+                          /*auto_qos=*/true));
+    Fixture f(specs);
+
+    f.post(ControllerEvent::subscription_discovered(reader_record(
+            "rd1", "T", 2000000000LL, LivelinessKindPod::Automatic, 5000000000LL)));
+    f.post(ControllerEvent::subscription_discovered(reader_record(
+            "rd2", "T", 500000000LL, LivelinessKindPod::ManualByTopic, kInfiniteNanos)));
+    f.post(ControllerEvent::publication_discovered(writer_record("w1", "T")));
+
+    CHECK(f.factory.creates.size() == 1);
+    const DerivedWriterQos &d = f.factory.creates.back().derived;
+    CHECK(d.derive);
+    CHECK(d.deadline_nanos == 500000000LL);
+    CHECK(d.liveliness_kind == LivelinessKindPod::ManualByTopic);
+    CHECK(d.lease_nanos == 5000000000LL);
+}
+
+// A later reader with a tighter deadline tightens in place (D39); looser is a no-op;
+// summaries and warnings ride the snapshot.
+static void test_deadline_tightening_and_warning() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
+                          /*auto_qos=*/true));
+    Fixture f(specs);
+
+    f.post(ControllerEvent::subscription_discovered(
+            reader_record("rd1", "T", 2000000000LL)));
+    f.post(ControllerEvent::publication_discovered(writer_record("w1", "T")));
+    std::uint64_t gen = f.last_create_gen();
+    f.post(ControllerEvent::topic_entities_ready("r", "T", gen, "BEST_EFFORT,VOLATILE",
+                                                 "RELIABLE,TRANSIENT_LOCAL,orig"));
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_ENABLED);
+    CHECK(f.route("r").topic_status.at(0).reader_qos_summary == "BEST_EFFORT,VOLATILE");
+    CHECK(f.route("r").topic_status.at(0).writer_qos_summary
+          == "RELIABLE,TRANSIENT_LOCAL,orig");
+
+    // Looser deadline: no update issued.
+    f.post(ControllerEvent::subscription_discovered(
+            reader_record("rd2", "T", 3000000000LL)));
+    CHECK(f.factory.deadline_updates.empty());
+
+    // Tighter deadline: in-place update, no teardown/recreate, summary refreshed.
+    f.post(ControllerEvent::subscription_discovered(
+            reader_record("rd3", "T", 500000000LL)));
+    CHECK(f.factory.deadline_updates.size() == 1);
+    CHECK(f.factory.deadline_updates.back().deadline_nanos == 500000000LL);
+    CHECK(f.factory.teardowns.empty());
+    CHECK(f.factory.creates.size() == 1);
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_ENABLED);
+    CHECK(f.route("r").topic_status.at(0).writer_qos_summary
+          == "RELIABLE,TRANSIENT_LOCAL,updated");
+
+    // Incompatible-QoS warning with the live stamp lands in status; a stale one is
+    // discarded (D23 discipline).
+    f.post(ControllerEvent::topic_qos_warning("r", "T", gen, "writer:DURABILITY"));
+    CHECK(f.route("r").topic_status.at(0).qos_warning == "writer:DURABILITY");
+    std::uint64_t rev = f.revision();
+    f.post(ControllerEvent::topic_qos_warning("r", "T", gen + 99, "writer:OWNERSHIP"));
+    CHECK(f.route("r").topic_status.at(0).qos_warning == "writer:DURABILITY");
+    CHECK(f.revision() == rev); // stale warning: no visible change, no bump
+}
+
 // Command history bound (D4): FIFO 256, evicted ids are treated as new commands.
 static void test_history_fifo_eviction() {
     std::vector<RouterRouteSpec> specs(
@@ -571,12 +736,16 @@ int main() {
     RUN(test_rejected_command_ack_replay);
     RUN(test_transition_walk_single_topic);
     RUN(test_resolving_abort_and_stale_completion);
+    RUN(test_stale_error_after_abort_discarded);
     RUN(test_redundant_enable_idempotent_accept);
     RUN(test_error_sticky_until_rearm);
     RUN(test_per_topic_activation_two_topics);
     RUN(test_matched_set_boundary);
     RUN(test_type_arrives_late_via_upsert);
     RUN(test_auto_qos_requires_output_reader);
+    RUN(test_gate_is_output_side_only);
+    RUN(test_writer_qos_derivation);
+    RUN(test_deadline_tightening_and_warning);
     RUN(test_disable_tears_down);
     RUN(test_history_fifo_eviction);
 

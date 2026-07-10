@@ -1,55 +1,39 @@
-// DynamicRouteFactory.hpp — IEntityFactory that forwards a DynamicData payload (D35).
+// DynamicRouteFactory.hpp — DynamicData lane of the route-entity factory (D35/D41).
 //
-// The Phase 4 default lane. Creates route entities for one DynamicData type (resolved
-// from the TypeResolver's loaded DDS-type XML), following the same D31.4 create-order and
-// D32 teardown barrier as the Phase 3 generated-type EntityFactory<T> — only the payload
-// type differs (dds::core::xtypes::DynamicData instead of a compiled T), so the reader/
-// writer creation needs the DynamicType and, when the route input carries a filter, a
-// ContentFilteredTopic.
+// The Phase 4 default lane. A thin binding of the shared RouteEntityFactory skeleton to
+// one DynamicData type resolved from the TypeResolver's loaded DDS-type XML; the skeleton
+// supplies the D31.4 create-order, the content-filter branch, and the D32 teardown
+// barrier — this lane contributes only the type gate and the DynamicType-bound topic.
 //
-// Bound to ONE type name at construction (like Phase 3's EntityFactory<T>); multi-type
-// dispatch by discovered type_name stays deferred (D34/D35). Methods run on the controller
-// strand, so the dispatcher's runtime map stays single-threaded (D12/D32).
+// Bound to ONE type name at construction (like the generated lane); multi-type dispatch
+// by discovered type_name stays deferred (D34/D35).
 
 #pragma once
 
-#include "Interfaces.hpp"
+#include "RouteEntityFactory.hpp"
 
-#include <cstdint>
+#include <dds/core/xtypes/DynamicData.hpp>
+
 #include <string>
 
 namespace router {
 
-class ParticipantRegistry;
 class TypeResolver;
-class QosResolver;
-class AsyncWaitSetDispatcher;
-class RouterController;
 
-class DynamicRouteFactory : public IEntityFactory {
+class DynamicRouteFactory : public RouteEntityFactory<dds::core::xtypes::DynamicData> {
 public:
     DynamicRouteFactory(ParticipantRegistry &registry, TypeResolver &types,
                         QosResolver &qos, AsyncWaitSetDispatcher &dispatcher,
                         const std::string &type_name);
 
-    void set_controller(RouterController *controller) { controller_ = controller; }
+protected:
+    void ensure_type_available() const override;
 
-    void create_topic_entities(const RouteView &view, const std::string &topic_name,
-                               std::uint64_t generation) override;
-    void teardown_topic_entities(const std::string &route_name,
-                                 const std::string &topic_name,
-                                 std::uint64_t generation) override;
-    void abort_topic_creation(const std::string &route_name,
-                              const std::string &topic_name,
-                              std::uint64_t generation) override;
+    dds::topic::Topic<dds::core::xtypes::DynamicData> make_topic(
+            dds::domain::DomainParticipant dp, const std::string &name) const override;
 
 private:
-    ParticipantRegistry &registry_;
     TypeResolver &types_;
-    QosResolver &qos_;
-    AsyncWaitSetDispatcher &dispatcher_;
-    std::string type_name_;
-    RouterController *controller_;
 };
 
 } // namespace router

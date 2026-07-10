@@ -102,6 +102,9 @@ void RouterController::process(const ControllerEvent &event) {
     case ControllerEventKind::RouteEntityError:
         apply_entity_error(event);
         break;
+    case ControllerEventKind::TopicQosWarning:
+        apply_qos_warning(event);
+        break;
     }
 }
 
@@ -187,6 +190,7 @@ void RouterController::handle_enable(const RouterCommand &cmd, RouterCommandAck 
             it->second.topic_state = RouterRouteTopicState::TOPIC_IDLE;
             it->second.entity_generation = 0;
             it->second.last_error.clear();
+            it->second.clear_entity_facts();
         }
     }
     ack.accepted = true;
@@ -221,10 +225,12 @@ void RouterController::handle_disable(const RouterCommand &cmd, RouterCommandAck
                                            topic.entity_generation);
             topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
             topic.entity_generation = 0;
+            topic.clear_entity_facts();
             break;
         case RouterRouteTopicState::TOPIC_ERROR:
             topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
             topic.entity_generation = 0;
+            topic.clear_entity_facts();
             break;
         case RouterRouteTopicState::TOPIC_TEARING_DOWN:
         case RouterRouteTopicState::TOPIC_IDLE:
@@ -286,7 +292,44 @@ void RouterController::apply_subscription(const EndpointRecord &rec) {
         MatchedEndpoint &entry = t->second.matched_readers[rec.guid];
         entry.type_name = rec.type_name;
         entry.has_type = rec.has_type;
+        entry.deadline_nanos = rec.deadline_nanos;
+        entry.liveliness_kind = rec.liveliness_kind;
+        entry.lease_nanos = rec.lease_nanos;
+        maybe_tighten_deadline(r->second, t->second, rec.topic_name);
         reconcile_topic(r->second, rec.topic_name);
+    }
+}
+
+// A later local reader with a tighter deadline than the live build's offer is
+// accommodated in place via set_qos — no entity recreation, no D32 teardown (D39).
+// Only meaningful for auto-output routes on a FORWARDING build; a build still CREATING
+// is re-checked when its TopicEntitiesReady lands (apply_entities_ready).
+void RouterController::maybe_tighten_deadline(RouteState &route, TopicRouteState &topic,
+                                              const std::string &topic_name) {
+    if (!output_uses_auto_qos(route.desired)
+        || topic.topic_state != RouterRouteTopicState::TOPIC_FORWARDING) {
+        return;
+    }
+    DerivedWriterQos d = derive_writer_qos(topic, route.desired);
+    if (d.deadline_nanos >= topic.offered_deadline_nanos) {
+        return; // never relax; equal is a no-op
+    }
+    std::string summary = factory_->update_writer_deadline(
+            route.desired.route_name, topic_name, d.deadline_nanos);
+    if (summary.empty()) {
+        Log::warn("deadline_tighten_failed",
+                  {{"route", route.desired.route_name}, {"topic", topic_name}});
+        topic.qos_warning = "writer:DEADLINE(update-failed)";
+        return;
+    }
+    Log::info("deadline_tightened",
+              {{"route", route.desired.route_name}, {"topic", topic_name},
+               {"deadline", summary}});
+    topic.offered_deadline_nanos = d.deadline_nanos;
+    topic.writer_qos_summary = summary;
+    // A transient DEADLINE mismatch warning recorded before the tighten is now stale.
+    if (topic.qos_warning == "writer:DEADLINE") {
+        topic.qos_warning.clear();
     }
 }
 
@@ -328,6 +371,11 @@ void RouterController::apply_entities_ready(const ControllerEvent &e) {
         return; // stale stamp: rebuilt or aborted since issue — discard (D21/D23)
     }
     topic.topic_state = RouterRouteTopicState::TOPIC_FORWARDING;
+    topic.reader_qos_summary = e.reader_qos_summary;
+    topic.writer_qos_summary = e.writer_qos_summary;
+    // A reader that arrived while the build was in flight may request a tighter
+    // deadline than the derivation the build was issued with — re-check now (D39).
+    maybe_tighten_deadline(r->second, topic, e.topic_name);
 }
 
 void RouterController::apply_teardown_complete(const ControllerEvent &e) {
@@ -349,6 +397,7 @@ void RouterController::apply_teardown_complete(const ControllerEvent &e) {
     }
     topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
     topic.entity_generation = 0;
+    topic.clear_entity_facts();
     // Teardown complete: rebuild if discovery is READY again, else quiesce
     // (DEGRADED -> RESOLVING | WAITING_FOR_DISCOVERY, D2).
     reconcile_topic(r->second, e.topic_name);
@@ -371,7 +420,12 @@ void RouterController::apply_entity_error(const ControllerEvent &e) {
         return;
     }
     TopicRouteState &topic = t->second;
-    if (topic.entity_generation != 0 && e.entity_generation != topic.entity_generation) {
+    // Exact-stamp match only. In particular a zeroed generation (abort / teardown
+    // complete / re-arm) discards any error still in flight from the invalidated build —
+    // no `!= 0` escape hatch, or an aborted build's late error would force a topic that
+    // legitimately returned to IDLE into sticky ERROR (D23/D41). Errors on a live build
+    // (CREATING or a runtime fault while FORWARDING) carry the current stamp and apply.
+    if (e.entity_generation != topic.entity_generation) {
         Log::warn("stale_entity_error",
                   {{"route", e.route_name}, {"topic", e.topic_name}});
         return; // stale stamp (D23)
@@ -380,6 +434,36 @@ void RouterController::apply_entity_error(const ControllerEvent &e) {
     topic.topic_state = RouterRouteTopicState::TOPIC_ERROR;
     topic.entity_generation = 0;
     topic.last_error = e.error;
+    topic.clear_entity_facts();
+}
+
+// Incompatible-QoS status on a live build's entity (D39/D45): record the failing policy
+// as a warning — status reason only, the topic keeps forwarding for whatever DOES match.
+// Exact-stamp gated like errors, so a warning from an invalidated build is discarded.
+void RouterController::apply_qos_warning(const ControllerEvent &e) {
+    std::map<std::string, RouteState>::iterator r = state_.routes.find(e.route_name);
+    if (r == state_.routes.end()) {
+        return;
+    }
+    std::map<std::string, TopicRouteState>::iterator t =
+            r->second.topics.find(e.topic_name);
+    if (t == r->second.topics.end()) {
+        return;
+    }
+    TopicRouteState &topic = t->second;
+    if (e.entity_generation != topic.entity_generation) {
+        return; // stale stamp (D23)
+    }
+    // A DEADLINE mismatch the tightening already resolved can still be in flight from
+    // the dispatch thread (status fired before set_qos landed) — drop it rather than
+    // record a warning that no longer describes the offer.
+    if (e.qos_warning == "writer:DEADLINE") {
+        DerivedWriterQos d = derive_writer_qos(topic, r->second.desired);
+        if (d.deadline_nanos >= topic.offered_deadline_nanos) {
+            return;
+        }
+    }
+    topic.qos_warning = e.qos_warning;
 }
 
 // --- Reconciliation (the D2/D8/D11 tables) ---
@@ -394,21 +478,25 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
     if (!route.desired.desired_enabled || route.route_error) {
         return; // disabled routes quiesce via handle_disable; ERROR is sticky (D2)
     }
-    const RouterRouteTopicSpec *spec = find_topic_spec(route, topic_name);
+    const RouterRouteTopicSpec *spec = find_topic_spec(route.desired, topic_name);
     std::map<std::string, TopicRouteState>::iterator t = route.topics.find(topic_name);
     if (spec == NULL || t == route.topics.end()) {
         return;
     }
     TopicRouteState &topic = t->second;
-    RouterRouteDiscoveryState d = derive_topic_discovery(topic, *spec);
+    RouterRouteDiscoveryState d = derive_topic_discovery(topic, route.desired);
 
     switch (topic.topic_state) {
     case RouterRouteTopicState::TOPIC_IDLE:
         if (d == RouterRouteDiscoveryState::DISCOVERY_READY) {
             topic.entity_generation = next_generation(); // D23 stamp at build
             topic.topic_state = RouterRouteTopicState::TOPIC_CREATING;
+            // Writer-side derivation from the matched readers at issue time (D39/D42);
+            // the offer is remembered so later readers can tighten the deadline in place.
+            DerivedWriterQos derived = derive_writer_qos(topic, route.desired);
+            topic.offered_deadline_nanos = derived.deadline_nanos;
             factory_->create_topic_entities(*route.view, topic_name,
-                                            topic.entity_generation);
+                                            topic.entity_generation, derived);
         }
         break;
     case RouterRouteTopicState::TOPIC_CREATING:
@@ -419,6 +507,7 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
                                            topic.entity_generation);
             topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
             topic.entity_generation = 0; // invalidates any in-flight completion (D23)
+            topic.clear_entity_facts();
         }
         break;
     case RouterRouteTopicState::TOPIC_FORWARDING:
@@ -434,16 +523,6 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
     case RouterRouteTopicState::TOPIC_ERROR:
         break; // sticky until command re-arm (D2/D11)
     }
-}
-
-const RouterRouteTopicSpec *RouterController::find_topic_spec(
-        const RouteState &route, const std::string &topic_name) const {
-    for (size_t i = 0; i < route.desired.topics.size(); ++i) {
-        if (route.desired.topics.at(i).name == topic_name) {
-            return &route.desired.topics.at(i);
-        }
-    }
-    return NULL;
 }
 
 // --- Snapshot + revision predicate (D5/D25/D26) ---
@@ -526,11 +605,14 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
             }
             RouterRouteTopicStatus ts;
             ts.name = spec.name;
-            ts.discovery_state = derive_topic_discovery(t->second, spec);
+            ts.discovery_state = derive_topic_discovery(t->second, route.desired);
             ts.topic_state = t->second.topic_state;
             ts.samples_forwarded = t->second.samples_forwarded;
             ts.lifecycle_events_forwarded = t->second.lifecycle_events_forwarded;
             ts.last_error = t->second.last_error;
+            ts.reader_qos_summary = t->second.reader_qos_summary;
+            ts.writer_qos_summary = t->second.writer_qos_summary;
+            ts.qos_warning = t->second.qos_warning;
             rs.topic_status.push_back(ts);
             rs.samples_forwarded += ts.samples_forwarded; // aggregates (D11)
             rs.lifecycle_events_forwarded += ts.lifecycle_events_forwarded;

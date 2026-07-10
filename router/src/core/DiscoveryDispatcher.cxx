@@ -1,6 +1,7 @@
 // DiscoveryDispatcher.cxx — builtin reader → controller event translation (D30).
 
 #include "DiscoveryDispatcher.hpp"
+#include "QosResolver.hpp" // nanos_from_duration (D45)
 #include "RouterEvents.hpp"
 #include "Log.hpp"
 
@@ -124,18 +125,41 @@ void DiscoveryDispatcher::on_participant(
     dds::sub::DataReader<dds::topic::ParticipantBuiltinTopicData> reader) {
     auto samples = reader.take();
     for (auto it = samples.begin(); it != samples.end(); ++it) {
-        std::string guid = format_key(it->data().key());
         if (!it->info().valid()) {
-            std::lock_guard<std::mutex> lk(table_mutex_);
-            participant_table_.erase(guid);
-            pending_publications_.erase(guid);
+            // NOT_ALIVE: data() is unreadable on an invalid builtin sample (D33) —
+            // recover the GUID from the handle→GUID map captured on the valid sample.
+            std::string guid = take_lost_guid(part_handle_guid_,
+                                              it->info().instance_handle());
+            if (guid.empty()) {
+                continue; // never seen valid — nothing tracked for it
+            }
+            std::vector<std::string> lost_endpoints;
+            {
+                std::lock_guard<std::mutex> lk(table_mutex_);
+                participant_table_.erase(guid);
+                pending_publications_.erase(guid);
+                lost_endpoints = purge_participant_endpoints_locked(guid);
+            }
+            // Synthesize the per-endpoint losses a purged participant may never
+            // deliver itself (the one-NOT_ALIVE-per-endpoint cardinality is not
+            // normatively guaranteed, D28/D41).
+            for (const std::string &eg : lost_endpoints) {
+                Log::debug("endpoint_lost_participant",
+                           {{"guid", eg}, {"participant", guid}});
+                controller_.post(ControllerEvent::endpoint_lost(eg));
+            }
             continue;
         }
 
+        std::string guid = format_key(it->data().key());
         std::string tag = extract_router_tag(it->data().user_data());
+        std::string handle_key = handle_str(it->info().instance_handle());
+        EndpointIdentity id;
+        id.guid = guid; // participant_guid left unset: a participant has no "owner" (D44)
         std::vector<PendingPublication> pending;
         {
             std::lock_guard<std::mutex> lk(table_mutex_);
+            part_handle_guid_[handle_key] = id;
             participant_table_[guid] = tag;
             auto pit = pending_publications_.find(guid);
             if (pit != pending_publications_.end()) {
@@ -147,7 +171,7 @@ void DiscoveryDispatcher::on_participant(
             Log::debug("participant_router_tagged", {{"guid", guid}, {"tag", tag}});
         }
         for (const PendingPublication &pub : pending) {
-            handle_publication_sample(pub.data, pub.handle, pub.participant, tag);
+            handle_publication_sample(pub.data, pub.handle, pub.participant, tag, guid);
         }
     }
 }
@@ -165,6 +189,11 @@ void DiscoveryDispatcher::on_publication(
             if (!guid.empty()) {
                 Log::debug("endpoint_lost_pub", {{"guid", guid}});
                 controller_.post(ControllerEvent::endpoint_lost(guid));
+            } else {
+                // Untracked handle: the publisher may have died while still parked
+                // pending its participant — drop the pending record so it is not
+                // replayed later as a phantom discovery (D41).
+                drop_pending_publication(it->info().instance_handle());
             }
             continue;
         }
@@ -195,7 +224,7 @@ void DiscoveryDispatcher::on_publication(
         }
 
         handle_publication_sample(data, it->info().instance_handle(), participant,
-                                  origin_router);
+                                  origin_router, participant_guid);
     }
 }
 
@@ -203,7 +232,8 @@ void DiscoveryDispatcher::handle_publication_sample(
     const dds::topic::PublicationBuiltinTopicData &data,
     const dds::core::InstanceHandle &handle,
     dds::domain::DomainParticipant participant,
-    const std::string &origin_router) {
+    const std::string &origin_router,
+    const std::string &participant_guid) {
     std::string endpoint_guid = format_key(data.key());
 
     // Same-node router publication: ignore via DDS API and skip (D15).
@@ -222,9 +252,14 @@ void DiscoveryDispatcher::handle_publication_sample(
 
     // Record identity for native-loss translation (application endpoints only; ignored
     // same-node router publications returned above and are never reported or tracked).
+    // participant_guid is the caller's — already computed once (D44), not recomputed here.
     {
+        std::string handle_key = handle_str(handle);
+        EndpointIdentity id;
+        id.guid = endpoint_guid;
+        id.participant_guid = participant_guid;
         std::lock_guard<std::mutex> lk(table_mutex_);
-        pub_handle_guid_[handle_str(handle)] = endpoint_guid;
+        pub_handle_guid_[handle_key] = id;
     }
 
     EndpointRecord rec;
@@ -267,9 +302,29 @@ void DiscoveryDispatcher::on_subscription(
         rec.has_type      = !rec.type_name.empty();
         rec.origin_router = ""; // subscriptions not used for same-node ignore
 
+        // Requested-QoS subset the auto output writer derives from (D39/D42/D45).
+        rec.deadline_nanos = nanos_from_duration(data.deadline().period());
+        rec.lease_nanos    = nanos_from_duration(data.liveliness().lease_duration());
+        switch (data.liveliness().kind().underlying()) {
+        case dds::core::policy::LivelinessKind::MANUAL_BY_PARTICIPANT:
+            rec.liveliness_kind = LivelinessKindPod::ManualByParticipant;
+            break;
+        case dds::core::policy::LivelinessKind::MANUAL_BY_TOPIC:
+            rec.liveliness_kind = LivelinessKindPod::ManualByTopic;
+            break;
+        case dds::core::policy::LivelinessKind::AUTOMATIC:
+        default:
+            rec.liveliness_kind = LivelinessKindPod::Automatic;
+            break;
+        }
+
         {
+            std::string handle_key = handle_str(it->info().instance_handle());
+            EndpointIdentity id;
+            id.guid = rec.guid;
+            id.participant_guid = format_key(data.participant_key());
             std::lock_guard<std::mutex> lk(table_mutex_);
-            sub_handle_guid_[handle_str(it->info().instance_handle())] = rec.guid;
+            sub_handle_guid_[handle_key] = id;
         }
 
         Log::debug("subscription_discovered",
@@ -285,17 +340,65 @@ std::string DiscoveryDispatcher::handle_str(const dds::core::InstanceHandle &han
 }
 
 // Pop and return the GUID mapped to this instance handle, or "" if untracked.
-// table_mutex_ guards the maps against concurrent pub/sub dispatch.
-std::string DiscoveryDispatcher::take_lost_guid(std::map<std::string, std::string> &map,
-                                                const dds::core::InstanceHandle &handle) {
+// table_mutex_ guards the maps against concurrent builtin-reader dispatch.
+std::string DiscoveryDispatcher::take_lost_guid(
+        std::map<std::string, EndpointIdentity> &map,
+        const dds::core::InstanceHandle &handle) {
     std::lock_guard<std::mutex> lk(table_mutex_);
     auto it = map.find(handle_str(handle));
     if (it == map.end()) {
         return std::string();
     }
-    std::string guid = it->second;
+    std::string guid = it->second.guid;
     map.erase(it);
     return guid;
+}
+
+// Remove any publication still parked pending its participant that matches this handle
+// (its loss arrived before the participant was ever discovered, D41).
+void DiscoveryDispatcher::drop_pending_publication(
+        const dds::core::InstanceHandle &handle) {
+    const std::string h = handle_str(handle);
+    std::lock_guard<std::mutex> lk(table_mutex_);
+    for (auto pit = pending_publications_.begin();
+         pit != pending_publications_.end();) {
+        std::vector<PendingPublication> &v = pit->second;
+        for (auto it = v.begin(); it != v.end();) {
+            if (handle_str(it->handle) == h) {
+                Log::debug("pending_publication_dropped",
+                           {{"participant", pit->first}});
+                it = v.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (v.empty()) {
+            pit = pending_publications_.erase(pit);
+        } else {
+            ++pit;
+        }
+    }
+}
+
+// Erase every endpoint identity owned by this participant from both handle maps and
+// return the endpoint GUIDs so the caller can synthesize their losses (D41). Caller
+// must hold table_mutex_.
+std::vector<std::string> DiscoveryDispatcher::purge_participant_endpoints_locked(
+        const std::string &participant_guid) {
+    std::vector<std::string> lost;
+    std::map<std::string, EndpointIdentity> *maps[2] = {&pub_handle_guid_,
+                                                        &sub_handle_guid_};
+    for (int m = 0; m < 2; ++m) {
+        for (auto it = maps[m]->begin(); it != maps[m]->end();) {
+            if (it->second.participant_guid == participant_guid) {
+                lost.push_back(it->second.guid);
+                it = maps[m]->erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    return lost;
 }
 
 std::string DiscoveryDispatcher::format_key(const dds::topic::BuiltinTopicKey &key) {

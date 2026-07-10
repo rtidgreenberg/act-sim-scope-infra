@@ -13,6 +13,7 @@
 
 #include "RouteView.hpp"
 #include "RouterAdminTypes.hpp"
+#include "RouterEvents.hpp" // EndpointRecord QoS PODs + DerivedWriterQos (D45)
 
 #include <cstdint>
 #include <deque>
@@ -23,9 +24,14 @@
 namespace router {
 
 // Minimal per-endpooint info kept inside a matched set entry (upserted per GUID, D12/D22).
+// Reader entries additionally carry the requested QoS subset the output writer derives
+// from at creation (D39/D42); defaults are derivation-neutral.
 struct MatchedEndpoint {
     std::string type_name;
     bool has_type = false;
+    std::int64_t deadline_nanos = kInfiniteNanos;
+    LivelinessKindPod liveliness_kind = LivelinessKindPod::Automatic;
+    std::int64_t lease_nanos = kInfiniteNanos;
 };
 
 struct TopicRouteState {
@@ -39,6 +45,22 @@ struct TopicRouteState {
     std::string last_error;
     std::uint64_t samples_forwarded = 0;
     std::uint64_t lifecycle_events_forwarded = 0;
+
+    // Entity facts of the live build (D45): resolved QoS summaries from
+    // TopicEntitiesReady, the writer deadline currently offered (for in-place
+    // tightening decisions), and the last incompatible-QoS warning. Cleared whenever
+    // the build they describe stops existing (teardown/abort/error/re-arm).
+    std::string reader_qos_summary;
+    std::string writer_qos_summary;
+    std::string qos_warning;
+    std::int64_t offered_deadline_nanos = kInfiniteNanos;
+
+    void clear_entity_facts() {
+        reader_qos_summary.clear();
+        writer_qos_summary.clear();
+        qos_warning.clear();
+        offered_deadline_nanos = kInfiniteNanos;
+    }
 };
 
 struct RouteState {
@@ -77,14 +99,29 @@ struct MutableRouterState {
 
 // --- Pure derivations ---
 
-// True if this topic spec names no explicit QoS: QoS must then be resolved from a
-// discovered compatible output reader (D1 "auto-QoS output reader"; real resolution is
-// Phase 5 — Phase 1 models the readiness fact only).
-bool topic_uses_auto_qos(const RouterRouteTopicSpec &spec);
+// True if the route's OUTPUT endpoint names no explicit writer QoS (the canonical alias
+// location, D41). Only the output side depends on discovery under D39's asymmetric
+// contract: an auto writer derives deadline/liveliness from the matched local readers at
+// creation, so readiness gates on >=1 discovered local reader. The input reader's auto
+// profile (weakest-request) matches every writer by RxO construction and needs nothing
+// from discovery (D39/D45 — refines the old both-sides predicate).
+bool output_uses_auto_qos(const RouterRouteSpec &spec);
+
+// The writer-side derivation (D39/D42): deadline = min requested period, liveliness
+// kind = max requested kind, lease = min requested lease across the matched readers.
+// derive=false when the output endpoint names an explicit alias.
+DerivedWriterQos derive_writer_qos(const TopicRouteState &topic,
+                                   const RouterRouteSpec &route_spec);
+
+// Find a topic by name within a route spec, or nullptr if absent. The one shared lookup
+// (D44) — RouteEntityFactory and RouterController both scan the same RouterRouteSpec's
+// topics vector and had drifted into independent copies.
+const RouterRouteTopicSpec *find_topic_spec(const RouterRouteSpec &spec,
+                                            const std::string &topic_name);
 
 // Per-topic discovery rollup — pure function of the current matched sets, no memory (D1).
 RouterRouteDiscoveryState derive_topic_discovery(const TopicRouteState &topic,
-                                                 const RouterRouteTopicSpec &spec);
+                                                 const RouterRouteSpec &route_spec);
 
 // Route-level discovery = best (max) topic rollup (D11).
 RouterRouteDiscoveryState derive_route_discovery(const RouteState &route);

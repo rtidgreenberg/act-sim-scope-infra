@@ -5,12 +5,36 @@
 
 namespace router {
 
+namespace {
+
+// Detach every condition of a runtime from the AsyncWaitSet. Each detach is the D32
+// blocking barrier: it returns only when any in-flight handler for that condition has
+// completed, so the subsequent close() can never race an active handler.
+void detach_all(rti::core::cond::AsyncWaitSet &aws, RouteTopicRuntimeBase &runtime,
+                const std::string &route, const std::string &topic) {
+    std::vector<dds::core::cond::Condition> conds = runtime.conditions();
+    for (size_t i = 0; i < conds.size(); ++i) {
+        try {
+            aws.detach_condition(conds[i]);
+        } catch (const std::exception &e) {
+            Log::warn("route_detach_failed", {{"route", route}, {"topic", topic},
+                                              {"error", e.what()}});
+        }
+    }
+}
+
+} // namespace
+
 void AsyncWaitSetDispatcher::attach(const std::string &route, const std::string &topic,
                                     std::unique_ptr<RouteTopicRuntimeBase> runtime) {
-    dds::core::cond::Condition cond = runtime->condition();
+    std::vector<dds::core::cond::Condition> conds = runtime->conditions();
     runtimes_[key(route, topic)] = std::move(runtime);
-    aws_.attach_condition(cond);
-    Log::debug("route_condition_attached", {{"route", route}, {"topic", topic}});
+    for (size_t i = 0; i < conds.size(); ++i) {
+        aws_.attach_condition(conds[i]);
+    }
+    Log::debug("route_conditions_attached",
+               {{"route", route}, {"topic", topic},
+                {"count", std::to_string(conds.size())}});
 }
 
 bool AsyncWaitSetDispatcher::detach_and_close(const std::string &route,
@@ -20,18 +44,10 @@ bool AsyncWaitSetDispatcher::detach_and_close(const std::string &route,
     if (it == runtimes_.end()) {
         return false;
     }
-    // D32 barrier: detach_condition blocks until any in-flight handler for this condition
-    // has returned, so the subsequent close() can never race an active pump.
-    dds::core::cond::Condition cond = it->second->condition();
-    try {
-        aws_.detach_condition(cond);
-    } catch (const std::exception &e) {
-        Log::warn("route_detach_failed", {{"route", route}, {"topic", topic},
-                                          {"error", e.what()}});
-    }
+    detach_all(aws_, *it->second, route, topic);
     it->second->close(); // close condition, then reader, then writer (D32)
     runtimes_.erase(it);
-    Log::debug("route_condition_detached", {{"route", route}, {"topic", topic}});
+    Log::debug("route_conditions_detached", {{"route", route}, {"topic", topic}});
     return true;
 }
 
@@ -39,12 +55,7 @@ void AsyncWaitSetDispatcher::shutdown() {
     while (!runtimes_.empty()) {
         std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
             runtimes_.begin();
-        dds::core::cond::Condition cond = it->second->condition();
-        try {
-            aws_.detach_condition(cond);
-        } catch (const std::exception &e) {
-            Log::warn("route_detach_failed", {{"error", e.what()}});
-        }
+        detach_all(aws_, *it->second, "", "");
         it->second->close();
         runtimes_.erase(it);
     }
@@ -55,6 +66,17 @@ std::uint64_t AsyncWaitSetDispatcher::forwarded(const std::string &route,
     std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::const_iterator it =
         runtimes_.find(key(route, topic));
     return it == runtimes_.end() ? 0 : it->second->forwarded();
+}
+
+std::string AsyncWaitSetDispatcher::set_writer_deadline(const std::string &route,
+                                                        const std::string &topic,
+                                                        std::int64_t deadline_nanos) {
+    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
+        runtimes_.find(key(route, topic));
+    if (it == runtimes_.end()) {
+        return std::string();
+    }
+    return it->second->set_writer_deadline(deadline_nanos);
 }
 
 AsyncWaitSetDispatcher::~AsyncWaitSetDispatcher() {

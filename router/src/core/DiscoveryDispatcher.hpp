@@ -64,12 +64,28 @@ private:
         const dds::topic::PublicationBuiltinTopicData &data,
         const dds::core::InstanceHandle &handle,
         dds::domain::DomainParticipant participant,
-        const std::string &origin_router);
+        const std::string &origin_router,
+        const std::string &participant_guid);
+
+    // Identity captured from a valid endpoint discovery sample: the endpoint GUID the
+    // controller keys on, plus the owning participant GUID so a participant loss can
+    // purge and synthesize losses for its endpoints (D41).
+    struct EndpointIdentity {
+        std::string guid;
+        std::string participant_guid;
+    };
 
     static std::string format_key(const dds::topic::BuiltinTopicKey &key);
     static std::string handle_str(const dds::core::InstanceHandle &handle);
-    std::string take_lost_guid(std::map<std::string, std::string> &map,
+    // One shared pop-helper (D44): part_handle_guid_ uses EndpointIdentity too (its
+    // participant_guid field is simply unused), so this is the only overload needed —
+    // it previously had a near-identical std::map<string,string> twin purely because
+    // the participant map was typed differently.
+    std::string take_lost_guid(std::map<std::string, EndpointIdentity> &map,
                                const dds::core::InstanceHandle &handle);
+    void drop_pending_publication(const dds::core::InstanceHandle &handle);
+    std::vector<std::string> purge_participant_endpoints_locked(
+            const std::string &participant_guid);
     static std::string extract_router_tag(const dds::core::policy::UserData &ud);
     bool is_same_node(const std::string &origin_router) const;
 
@@ -82,13 +98,16 @@ private:
     std::map<std::string, std::string> participant_table_;
     std::map<std::string, std::vector<PendingPublication>> pending_publications_;
 
-    // Instance-handle → endpoint GUID, captured from valid discovery samples so a native
+    // Instance-handle → identity, captured from valid discovery samples so a native
     // NOT_ALIVE (which carries only the instance handle) can be translated back to the
-    // GUID the controller keys on. This is identity translation, not the endpoint-record
-    // cache D30 deleted — no type/QoS/topic is stored. key_value() is unreliable once an
-    // instance is no longer alive (validated against 7.7), so this map is required.
-    std::map<std::string, std::string> pub_handle_guid_;
-    std::map<std::string, std::string> sub_handle_guid_;
+    // GUID the controller keys on — for participants (D41) exactly as for endpoints
+    // (D33). This is identity translation, not the endpoint-record cache D30 deleted —
+    // no type/QoS/topic is stored. key_value() is unreliable once an instance is no
+    // longer alive (validated against 7.7), so these maps are required. All three share
+    // one map type (D44) — a participant's own entry simply leaves participant_guid unset.
+    std::map<std::string, EndpointIdentity> part_handle_guid_;
+    std::map<std::string, EndpointIdentity> pub_handle_guid_;
+    std::map<std::string, EndpointIdentity> sub_handle_guid_;
 
     // Held ReadConditions (type-erased) — keep alive while attached to the AWS.
     std::vector<dds::core::cond::Condition> conditions_;

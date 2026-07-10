@@ -18,6 +18,13 @@
 
 namespace router {
 
+// Durations in these DDS-free structs are nanoseconds; infinite = kInfiniteNanos.
+const std::int64_t kInfiniteNanos = INT64_MAX;
+
+// Liveliness kind as a POD, ordered by RxO strength (AUTOMATIC < MANUAL_BY_PARTICIPANT
+// < MANUAL_BY_TOPIC — validated 7.7), so "max requested kind" is numeric max (D42).
+enum class LivelinessKindPod { Automatic = 0, ManualByParticipant = 1, ManualByTopic = 2 };
+
 // A discovered endpoint, as posted by DiscoveryDispatcher (real in Phase 2, synthetic in
 // Phase 1 tests). Upsert semantics per GUID (D12): a later record for the same GUID can
 // add data — e.g. the discovered type arriving after the endpoint (D13). This struct is
@@ -30,6 +37,24 @@ struct EndpointRecord {
     std::string type_name;
     bool has_type = false;       // TypeLookup resolved (D13: optional until resolved)
     std::string origin_router;   // empty for application endpoints (D15)
+
+    // Requested QoS captured from subscription builtin data (D19/D27 pinned subset) —
+    // the writer-side derivation inputs (D39/D42). Defaults are the DDS defaults, so a
+    // record without captured QoS is derivation-neutral.
+    std::int64_t deadline_nanos = kInfiniteNanos;
+    LivelinessKindPod liveliness_kind = LivelinessKindPod::Automatic;
+    std::int64_t lease_nanos = kInfiniteNanos;
+};
+
+// Writer-side QoS derived from the matched local readers at entity creation (D39/D42):
+// deadline = min requested period, liveliness kind = max requested kind, lease = min
+// requested lease. `derive` is false when the output endpoint names an explicit alias —
+// the factory then applies the alias untouched.
+struct DerivedWriterQos {
+    bool derive = false;
+    std::int64_t deadline_nanos = kInfiniteNanos;
+    LivelinessKindPod liveliness_kind = LivelinessKindPod::Automatic;
+    std::int64_t lease_nanos = kInfiniteNanos;
 };
 
 enum class ControllerEventKind {
@@ -39,7 +64,8 @@ enum class ControllerEventKind {
     EndpointLost,           // by GUID; controller erases it from all matched sets
     TopicEntitiesReady,     // per-topic entity creation completed (D21)
     TopicTeardownComplete,  // per-topic teardown completed (D21)
-    RouteEntityError        // topic-scoped (topic_name set) or route-wide (empty) (D21)
+    RouteEntityError,       // topic-scoped (topic_name set) or route-wide (empty) (D21)
+    TopicQosWarning         // incompatible-QoS status on a live build's entity (D39/D45)
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -52,11 +78,14 @@ struct ControllerEvent {
     // PublicationDiscovered / SubscriptionDiscovered / EndpointLost
     EndpointRecord endpoint;
 
-    // TopicEntitiesReady / TopicTeardownComplete / RouteEntityError
+    // TopicEntitiesReady / TopicTeardownComplete / RouteEntityError / TopicQosWarning
     std::string route_name;
     std::string topic_name;              // empty on RouteEntityError = route-wide (D21)
     std::uint64_t entity_generation = 0; // stamp the operation was issued for (D23)
     std::string error;                   // RouteEntityError only
+    std::string reader_qos_summary;      // TopicEntitiesReady only (D45)
+    std::string writer_qos_summary;      // TopicEntitiesReady only (D45)
+    std::string qos_warning;             // TopicQosWarning only, "reader:<POLICY>" form
 
     static ControllerEvent command_received(const RouterCommand &cmd) {
         ControllerEvent e;
@@ -86,12 +115,28 @@ struct ControllerEvent {
     }
     static ControllerEvent topic_entities_ready(const std::string &route,
                                                 const std::string &topic,
-                                                std::uint64_t gen) {
+                                                std::uint64_t gen,
+                                                const std::string &reader_summary = "",
+                                                const std::string &writer_summary = "") {
         ControllerEvent e;
         e.kind = ControllerEventKind::TopicEntitiesReady;
         e.route_name = route;
         e.topic_name = topic;
         e.entity_generation = gen;
+        e.reader_qos_summary = reader_summary;
+        e.writer_qos_summary = writer_summary;
+        return e;
+    }
+    static ControllerEvent topic_qos_warning(const std::string &route,
+                                             const std::string &topic,
+                                             std::uint64_t gen,
+                                             const std::string &warning) {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::TopicQosWarning;
+        e.route_name = route;
+        e.topic_name = topic;
+        e.entity_generation = gen;
+        e.qos_warning = warning;
         return e;
     }
     static ControllerEvent topic_teardown_complete(const std::string &route,

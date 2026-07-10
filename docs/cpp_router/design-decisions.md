@@ -1347,3 +1347,365 @@ the DynamicType by discovered type_name) and LAN `auto` QoS (Phase 5) remain def
 planned.
 
 **Docs changed.** `implementation-plan.md` (Phase 4 marked done in the phase table + slice).
+
+---
+
+## D39 — Phase 5 QoS is asymmetric and static: weakest-request input readers, strong-offer output writers with in-place deadline derivation; residual RxO mismatches warn, never adapt (2026-07-10, accepted; bounds refined by D19/D27)
+
+> **Amended by D42:** the output writer additionally derives **liveliness** (kind + lease)
+> from the matched readers at creation, and the fixed-TL offer is recognized as already
+> *being* the durability auto-match. The residual warning set shrinks accordingly.
+
+**Decision.** Reader-side `auto` QoS derivation is **deleted, not implemented**. The RxO
+asymmetry does the matching work (Tenet 9):
+
+- **Route input readers use one fixed weakest-request profile**: `BEST_EFFORT` +
+  `VOLATILE` + default deadline/latency_budget/liveliness/destination_order/presentation,
+  `DataRepresentation` as the union of accepted representations. By RxO construction this
+  matches **every** discovered writer, present or future — so reader-side QoS immutability
+  (the "snapshot at resolve time" risk) stops existing on the input side. LAN reliability
+  is not needed generally (user), and the `VOLATILE` input means only samples published
+  before the route reader existed are lost at the input hop; downstream late-joiners are
+  still served by the route **writer's** `TRANSIENT_LOCAL` cache, so the loss window is
+  app-writer-start → route-creation (discovery-driven, short). Stated as contract, not bug.
+- **Route output writers offer a fixed strong baseline** — `RELIABLE` + `TRANSIENT_LOCAL`
+  (a strong offer matches all weaker readers; best-effort readers cost nothing since they
+  don't ack) — and derive exactly **one** policy from discovered local readers:
+  **deadline** (offer = min requested period across matched readers). Deadline is
+  **mutable after enable**, so a later reader with a tighter deadline is accommodated
+  in place via `set_qos` — no entity recreation, no D32 teardown cycle.
+- **Residual immutable mismatches warn, never auto-adapt**: Ownership (RxO is
+  **equality** — a SHARED-default reader/writer never matches an EXCLUSIVE peer),
+  durability requested above `TRANSIENT_LOCAL`, liveliness kind above the offer,
+  coherent/ordered presentation. First-resolved-wins + loud warning (D20 precedent);
+  recreate-on-stronger-request is a documented non-goal until someone needs it.
+- **Detection is DDS-native**: `REQUESTED_INCOMPATIBLE_QOS` (route reader) and
+  `OFFERED_INCOMPATIBLE_QOS` (route writer) enabled on the entities' `StatusCondition`s,
+  attached to the existing `AsyncWaitSet` beside the ReadConditions; the status carries
+  `last_policy_id`, so the warning/route-status reason names the failing policy. This
+  closes code-review finding **F5** (forced RELIABLE+TL → silent no-match).
+- History/resource_limits stay alias/default-supplied (D19 — reconfirmed absent from
+  builtin discovery data in 7.7).
+
+**Validated against Connext 7.7** (`ask_connext_question`, 2026-07-10):
+- Immutable after enable: Reliability, Durability, Liveliness, Ownership,
+  DestinationOrder, Presentation, DataRepresentation. Mutable: **Deadline**,
+  **LatencyBudget**.
+- RxO reduction directions (recorded for the writer side and any future derivation):
+  min kind for Reliability/Durability, **max** period for Deadline/LatencyBudget,
+  weakest kind for Liveliness/DestinationOrder, **union** for DataRepresentation,
+  **equality** for Ownership (no ordering).
+- `PublicationBuiltinTopicData`/`SubscriptionBuiltinTopicData` do **not** propagate
+  History or ResourceLimits (D19 stands; an initial contrary MCP aside was retracted on
+  targeted follow-up).
+- Incompatible-QoS statuses are enableable on a `StatusCondition` attached to an
+  `AsyncWaitSet` alongside ReadConditions, with `last_policy_id` + per-policy counts.
+
+**Rejected.** Per-policy reader derivation from discovered writers (the plan's original
+shape): every derived immutable policy re-creates the snapshot problem a weakest-request
+reader dissolves for free, and it needs the full reduction table live in the controller.
+Recreate-on-late-weaker-endpoint: a D32 teardown/rebuild cycle per QoS surprise, for cases
+the rig doesn't have.
+
+**Docs changed.** `implementation-plan.md` (Phase 5 slice rewritten to the asymmetric
+contract; phase-table row + confidence notes; Phase 5 investigation row resolved).
+
+---
+
+## D40 — Phase 5 confidence: high, gated on the factory unification and rebuild-leak fixes landing first (2026-07-10, accepted)
+
+**Decision.** With D39 pinned, the Connext-hard parts of Phase 5 are all validated —
+what remains is controller policy plus known entity plumbing, so Phase 5 is **high
+confidence**, with sequencing against the open Phase 3–4 code review
+(`phase3-4-code-review.md`):
+
+1. **F10 → F6 first**: unify the two drifting `IEntityFactory` bodies into one skeleton
+   parameterized by a type-lane strategy, and pick the single canonical QoS-alias location
+   — so Phase 5's QoS logic lands **once**, not twice, and the alias split stops being
+   masked the moment alias lookup exists.
+2. **F1, F4 (and F3) before or with the phase**: readiness gating means the writer is
+   created/destroyed on discovery edges, so create/teardown cycles multiply — the CFT and
+   Publisher/Subscriber rebuild leaks go from latent to hot, and the abort-path stale-error
+   guard (F3) sits on the wait-then-activate seam Phase 5 exercises.
+3. **F5 closes as part of the phase** (D39's StatusCondition detection is the fix).
+
+Output readiness itself reuses existing machinery: the D20/D22 per-topic matched-endpoint
+sets already know whether a compatible local reader exists; the phase adds the gate and the
+deadline derivation, nothing structurally new.
+
+**Docs changed.** `implementation-plan.md` (Phase 5 confidence High in phase table +
+banner; confidence notes).
+
+---
+
+## D41 — Phase 3–4 code review resolved: shared factory skeleton, endpoint-level QoS alias, per-build entity ownership, participant-loss endpoint purge (2026-07-10, accepted; executes D40 items 1–2, resolves phase3-4-code-review.md F1–F10)
+
+**Decision.** All ten findings of `phase3-4-code-review.md` are fixed; the choices pinned:
+
+- **One factory skeleton (F10)**: `RouteEntityFactory<T>` owns the D31.4 create-order,
+  the content-filter branch, teardown/abort (D32), and completion reporting (D21/D23)
+  once; `EntityFactory<T>` (generated lane) and `DynamicRouteFactory` (DynamicData lane)
+  are thin bindings supplying only `ensure_type_available()` + `make_topic()`. The
+  generated lane thereby gains the CFT branch it silently lacked.
+- **Canonical QoS-alias location is the endpoint spec (F6)**: `input.reader_qos` /
+  `output.writer_qos`, matching the YAML schema (D36). `RouterRouteTopicSpec` lost its
+  unused alias slots, and auto-QoS detection is now `route_uses_auto_qos(spec)` at route
+  scope (was per-topic — a granularity nothing could configure).
+- **The runtime owns the whole build (F1/F4)**: `RouteTopicRuntime` holds and closes the
+  per-build Publisher, Subscriber, and ContentFilteredTopic (close order: condition,
+  reader, writer, CFT, subscriber, publisher — validated against 7.7: closing the reader
+  does not delete the CFT; explicit `cft.close()` frees the fixed `"<topic>_cft"` name
+  for the next build). Rebuild proven end-to-end by the extended `dynamic_forward` leg
+  (new source after teardown → route re-enables → filtered forwarding resumes).
+- **Stale-error guard is exact-stamp (F3)**: `apply_entity_error` discards on any
+  generation mismatch — the former `entity_generation != 0 &&` escape hatch let an
+  aborted build's late error force a topic that had legitimately returned to IDLE into
+  sticky ERROR. Deliberately NOT gated on `TOPIC_CREATING`: a runtime error on a
+  FORWARDING build carries the live stamp and must still land (per-topic containment,
+  D11/D21, as `test_per_topic_activation_two_topics` requires).
+- **Participant loss is handle-translated and purges its endpoints (F2/F7/F9)**:
+  `on_participant` no longer reads `data()` on invalid samples — the D33 pattern now
+  covers all three builtin readers via a `part_handle_guid_` map. Endpoint handle-map
+  entries carry the owning participant GUID, so a participant purge erases its endpoints
+  and synthesizes the per-endpoint losses D28 says may never arrive; a publication lost
+  while still parked pending its participant is dropped instead of being replayed later
+  as a phantom discovery.
+- **Unresolvable QoS alias fails loudly (F5, interim)**: `QosResolver` throws (→
+  `RouteEntityError`, visible sticky topic error) on any alias other than `""`/`"default"`
+  until Phase 5 alias lookup plus D39's incompatible-QoS StatusCondition detection close
+  the silent no-match structurally.
+- **Filter-param quoting is a documented heuristic (F8)**: numeric literals and
+  pre-quoted values pass through verbatim; everything else is treated as a string and
+  single-quoted. Typed parameter resolution stays with the layer that knows the member
+  type (Phase 5+).
+
+Cleanups from the same review: `pump()` reuses a cached `Selector` (safe because the D32
+detach barrier stops dispatch before close — validated 7.7); `TypeResolver` no longer
+double-looks-up nor derefs a null provider. Deferred, still open (noted in the review
+doc): shared test scaffolding extraction; QoS-triple duplication in test helpers.
+
+Evidence: 8/8 targets green, including the new `test_stale_error_after_abort_discarded`
+controller case and the `dynamic_forward` rebuild leg (route entities created twice, CFT
+recreated by name, samples forwarded after rebuild).
+
+**Docs changed.** `phase3-4-code-review.md` (all findings marked fixed, with notes).
+
+---
+
+## D42 — Output writer also derives liveliness at creation; durability auto-match is the fixed TRANSIENT_LOCAL offer itself (2026-07-10, accepted; amends D39)
+
+**Context.** User: durability and liveliness are the most common QoS conflicts — can they
+auto-match on the writer side? The two policies turn out to need opposite treatments.
+
+**Decision.**
+
+- **Durability: no derivation — the fixed offer already IS the auto-match.** RxO direction
+  means the `TRANSIENT_LOCAL` offer matches every servable reader (`VOLATILE` and
+  `TRANSIENT_LOCAL` requests alike); the common conflict — TL reader vs weaker writer —
+  cannot occur against a TL offer. Deriving durability *downward* from matched readers is
+  **rejected**: it would re-introduce the snapshot problem D39 dissolved (first matched
+  reader VOLATILE → writer created VOLATILE → later TL reader mismatches an immutable
+  policy). Requests above TL (`TRANSIENT`/`PERSISTENT`) stay in the warning bucket — the
+  router cannot honor them anyway without Persistence Service.
+- **Liveliness: derive kind + lease at writer creation.** The D39 baseline (default
+  `AUTOMATIC` + infinite lease) fails any finite-lease reader — the common real conflict —
+  and cannot be fixed-strong (the "strongest" offer is lease→0, which nothing can honor).
+  Output readiness (D39/D40) means the matched readers are known at creation, so derive
+  there: **kind = max requested kind, lease = min requested lease** across matched local
+  readers. Honoring, by kind:
+  - `AUTOMATIC` + finite lease: middleware asserts automatically, zero router machinery
+    (`assertions_per_lease_duration`, default 3) — covers the common case.
+  - `MANUAL_BY_PARTICIPANT` / `MANUAL_BY_TOPIC`: each forwarded `write()` asserts; for
+    quiet topics the route propagates upstream liveliness — `LIVELINESS_CHANGED` enabled
+    on the input reader's `StatusCondition` (already attached for D39's incompatible-QoS
+    detection) → `writer.assert_liveliness()` while upstream is alive. Downstream thereby
+    tracks *source* liveliness through the relay, not merely router-process liveliness.
+- Liveliness is immutable after enable, so a **later** reader requesting stronger than the
+  created offer falls into the existing D39 first-resolved-wins + warning bucket —
+  derivation-at-creation makes that a rare edge rather than the common case.
+- Residual warning set after this amendment: Ownership (equality RxO), durability above
+  `TRANSIENT_LOCAL`, presentation, and late-joiner liveliness stronger than created.
+
+**Validated against Connext 7.7** (`ask_connext_question`, 2026-07-10): liveliness RxO is
+offered kind ≥ requested kind (`AUTOMATIC < MANUAL_BY_PARTICIPANT < MANUAL_BY_TOPIC`) with
+offered lease ≤ requested lease; `AUTOMATIC` + finite lease is middleware-asserted with no
+app action; `MANUAL_BY_TOPIC` asserts via `write()` and Modern C++
+`DataWriter::assert_liveliness()`; upstream transitions are observable via
+`LIVELINESS_CHANGED` on the reader's `StatusCondition` on a waitset (notified within one
+lease of the change).
+
+**Docs changed.** `implementation-plan.md` (Phase 5 banner/deliverables/evidence: writer
+derives deadline **and liveliness**; durability sentence; residual list). D39 gained the
+amend note.
+
+---
+
+## D43 — Filter-param quoting decided by YAML author intent (quoted-vs-plain scalar), not value shape (2026-07-10, accepted; supersedes D41's F8 heuristic)
+
+**Decision.** `RouteConfigParser::resolve_filter_param` no longer guesses a filter
+parameter's SQL quoting from whether the substituted *value* looks numeric (D41's
+`is_numeric_literal` heuristic, which misquotes a numeric-looking string like a node named
+`"101"` compared against a `string` member). Instead it reads how the author *wrote* the
+YAML scalar: `YAML::Node::Tag()` returns `"!"` for any explicitly quoted scalar
+(single- or double-quoted, regardless of content) and `"?"` for a plain/bare one —
+confirmed against the vendored yaml-cpp 0.8.0 with a standalone probe. An explicitly
+quoted parameter (the shipped configs already write `"${node.name}"` this way) is always
+treated as a string; only a plain/bare scalar falls back to the numeric-shape check, which
+is now only ever exercised by an actual bare YAML number.
+
+**Why not full DDS-type introspection instead.** The original F8 fix direction ("quoting
+belongs where the member type is known") is real but heavier: it needs the parser to defer
+quoting to `RouteEntityFactory` (the only place with a resolved type — `DynamicType` via
+`TypeResolver`, or `rti::topic::dynamic_type<T>::get()` for the generated lane, both
+confirmed reachable via `ask_connext_question`), plus a small filter-expression parser
+mapping each `%N` to the member path it's compared against. That's a real design (new
+factory hook, new expression tokenizer, `filter_parameters` changing from pre-quoted to
+raw) worth its own decision if a config ever needs it. The author-intent signal solves the
+actual reported failure (a numeric-looking identifier) with a ~10-line, YAML-only change
+and no cross-layer plumbing — the router's one real use case (`msg.destination` filtered
+by a node identifier like `PLATFORM232`) never needed type introspection to begin with.
+
+**Residual gap.** A plain/bare `${node.name}` (author omits quotes) substituting to a
+purely numeric node name is still misquoted — two independent author choices working
+against each other, materially narrower than D41's original gap, and avoided entirely by
+the config convention already in use (quote the templated parameter).
+
+**Evidence.** `test_route_config` gained a case: node name `"101"` substituted into the
+quoted `"${node.name}"` parameter is asserted to come out `'101'`, not `101` (would have
+failed under D41's heuristic — `is_numeric_literal("101")` is true).
+
+**Docs changed.** `phase3-4-code-review.md` (F8 marked fixed under the new mechanism).
+
+---
+
+## D44 — Second-pass code-review cleanup: route-qualified CFT names, config-time QoS-alias validation, handle-map/lookup dedup, single dynamic-type lookup (2026-07-10, accepted)
+
+**Decision.** A follow-up review of the D41 diff surfaced six further items (four
+correctness/robustness, two reuse) — all fixed:
+
+- **CFT name is route-qualified.** `RouteEntityFactory` named a filtered input's
+  `ContentFilteredTopic` only `"<topic>_cft"`. Two different, concurrently-enabled routes
+  reading the same topic through the same input participant (a legal config shape — e.g.
+  two destinations fanning out from one WAN participant with different filters) would
+  collide on that name; the second construction throws `PRECONDITION_NOT_MET` (validated
+  7.7), sticking that route in `TOPIC_ERROR` though its own definition is valid. Not hit
+  by either shipped config today, but reachable by the schema. Fixed by naming it
+  `"<route>_<topic>_cft"` — still stable across same-route rebuilds (the property D41's
+  fix depended on), now also unique across routes.
+- **QoS-alias resolvability is one shared predicate, checked at config-load time too.**
+  `QosResolver::ensure_resolvable` (D41) and a new `RouteConfigParser::validate_qos_aliases`
+  both call `is_resolvable_qos_alias` (new `QosAliasPolicy.hpp`, dependency-free) instead of
+  each carrying its own copy of the `""`/`"default"` rule. `validate_qos_aliases` is **not**
+  called by `parse_route_config` itself (parsing stays purely syntactic) — it's there for
+  whatever eventually wires a `RouteConfig` into the real route-building pipeline to call
+  first, so an unresolvable alias (both shipped configs use `wan_event`/`wan_status`/
+  `lan_status_1hz`, which `QosResolver` cannot yet honor) fails once with one clear message
+  naming the route and alias, instead of as N per-topic sticky errors discovered piecemeal
+  at runtime. `test_route_config` gained a case proving it rejects `control-platform.yaml`
+  today, so the gap is an explicit, tested fact rather than a silent one.
+- **`find_topic_spec` unified.** `RouteEntityFactory` and `RouterController` each
+  linear-scanned a `RouterRouteSpec`'s topics by name independently — same underlying
+  vector, reached through different wrapper types (`RouteView`/`RouteState`) that both
+  happen to just be a `RouterRouteSpec`. Replaced with one free function in
+  `RouterState.hpp/.cxx`; both call sites now pass their `RouterRouteSpec` directly
+  (`view.spec`, `route.desired`).
+- **`take_lost_guid` unified.** The two overloads existed only because `part_handle_guid_`
+  was typed `map<string,string>` while `pub_handle_guid_`/`sub_handle_guid_` were
+  `map<string,EndpointIdentity>`. Participants now use `EndpointIdentity` too
+  (`participant_guid` simply left unset — a participant has no "owner"), collapsing to the
+  one overload.
+- **Lock-hygiene in `DiscoveryDispatcher`.** String formatting (`handle_str`/`format_key`)
+  is now computed before acquiring `table_mutex_` rather than inside the critical section
+  (`on_participant`'s valid branch, `on_subscription`), and `handle_publication_sample`
+  takes the caller's already-computed `participant_guid` as a parameter instead of
+  recomputing `format_key(data.participant_key())` under the lock. The two full-map-scan
+  functions (`purge_participant_endpoints_locked`, `drop_pending_publication`) were left
+  as-is — indexing endpoints by owning participant would remove the scan but adds real
+  structural complexity, not justified without an actual endpoint-count scale requirement.
+- **Dynamic lane's double type lookup reduced to one call.** `DynamicRouteFactory::
+  ensure_type_available` now calls `TypeResolver::get_dynamic_type` directly instead of
+  `has_dynamic_type` (which itself wraps the identical lookup in a try/catch just to return
+  a bool), letting its own exception propagate. `make_topic`'s separate lookup is
+  unavoidable (it needs the `DynamicType&` to construct the `Topic`) but only runs on a
+  topic's first build, not every rebuild (`find_or_create_topic` skips it once the topic
+  exists) — confirmed low-cost/low-frequency, so not worth caching at construction (which
+  would require `load_types` to run before the factory is constructed, changing today's
+  graceful "not yet loaded → per-topic `RouteEntityError`" behavior into a constructor
+  throw).
+
+**Evidence.** 8/8 test targets still green; `test_route_config` gained the QoS-alias
+validation case.
+
+**Docs changed.** None beyond this entry — no findings doc existed for this second-pass
+review (informal follow-up, not a separate high-effort review run).
+
+---
+
+## D45 — Phase 5 shipped and test-verified: output-side gate, derived writer QoS, DDS-native warnings; XML alias lookup re-pinned to Phase 7 (2026-07-10, accepted; closes Phase 5, refines D39/D41/D42)
+
+**Decision.** Phase 5 is implemented per D39/D42 with three refinements surfaced by the
+pre-implementation review:
+
+- **The readiness gate is OUTPUT-side only.** `route_uses_auto_qos` (both endpoints
+  alias-less) became `output_uses_auto_qos` (`spec.output.writer_qos.empty()`): under the
+  asymmetric contract only an auto output writer depends on discovery (it derives
+  deadline/liveliness from the matched local readers at creation); the auto input
+  reader's weakest-request profile matches every writer by RxO construction and never
+  gates. The old both-sides predicate would have skipped the gate for the shipped
+  configs' destination sides (named `reader_qos` + auto output).
+- **XML QoS-alias lookup (QosProvider profiles) is deferred to Phase 7, not Phase 5.**
+  Three code comments had promised it for Phase 5, but no Phase 5 deliverable or
+  evidence item exercises a named alias — the first consumers (`wan_event`/`wan_status`
+  routes) ship in Phase 7. Resolvable aliases stay `""`/`"default"`
+  (QosAliasPolicy.hpp); `validate_qos_aliases` still rejects the shipped configs as a
+  tested, explicit fact (D44). Comments updated to say Phase 7.
+- **Quiet-MANUAL liveliness residual (documents a D42 bound).** Propagation is
+  assert-on-forwarded-write (middleware-automatic for MANUAL kinds) plus
+  `assert_liveliness()` on upstream ALIVE transitions via `LIVELINESS_CHANGED`. An alive
+  upstream's periodic manual asserts do NOT re-fire `LIVELINESS_CHANGED` (no transition),
+  so a quiet MANUAL-kind route writer past its derived lease shows not-alive downstream
+  until traffic or a transition resumes — downstream liveliness therefore means
+  "upstream alive AND recently forwarding". True periodic re-assertion would need a
+  router-owned timer; deliberately out of scope until a real topic needs it. The common
+  case (AUTOMATIC + finite lease, D42) has zero router machinery and is test-verified.
+
+**Mechanics shipped** (all validated against 7.7 via MCP before implementation):
+
+- `QosResolver`: auto reader = BEST_EFFORT + VOLATILE + DataRepresentation union
+  {XCDR, XCDR2} + KEEP_LAST(16) (the router-default history depth, alias-supplied per
+  D19); auto writer = RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(16) + derived deadline and
+  liveliness. Plus `summarize()` for the status summaries and a runtime
+  QosPolicyId→name map (`qos_policy_name` — 7.7 only ships compile-time policy traits,
+  so the reverse map is spelled out).
+- Derivation is a pure function (`derive_writer_qos`: min deadline, max liveliness
+  kind, min lease over `matched_readers`) computed at build-issue time; the offer is
+  remembered (`offered_deadline_nanos`) so `apply_subscription` /
+  `apply_entities_ready` can tighten a FORWARDING build's deadline **in place** via
+  `IEntityFactory::update_writer_deadline` → dispatcher → `writer.qos(q)` — never
+  relax, never rebuild. `EndpointRecord`/`MatchedEndpoint` carry the requested
+  deadline/liveliness subset (POD nanos; infinite = INT64_MAX) captured in
+  `on_subscription`.
+- `RouteTopicRuntime` owns the two entity StatusConditions (reader:
+  REQUESTED_INCOMPATIBLE_QOS + LIVELINESS_CHANGED-when-MANUAL; writer:
+  OFFERED_INCOMPATIBLE_QOS), dispatched on the same AsyncWaitSet;
+  `conditions()` replaced the single-condition accessor and the dispatcher
+  attaches/detaches them all (each detach is a D32 barrier). Warnings post
+  `TopicQosWarning` events (stamp-gated like errors; a `writer:DEADLINE` warning
+  already resolved by tightening is dropped — the status can race set_qos).
+- Status: `RouterRouteTopicStatus` gained `reader_qos_summary`, `writer_qos_summary`,
+  `qos_warning`; all three are in the route fingerprint (revision bumps/publishes) and
+  are cleared with the build they describe (teardown/abort/error/re-arm).
+
+**Evidence.** 9/9 targets green. New `test_auto_qos` (real DDS, DynamicData lane) proves
+all five phase evidence items in one flow: waits at DISCOVERY_PARTIAL with a source but
+no local reader → activates on reader appearance; BE+VOLATILE source forwards;
+AUTOMATIC finite-lease reader observes liveliness with no router asserts and the exact
+derived summaries ride the status; TRANSIENT reader → `writer:DURABILITY` and EXCLUSIVE
+source writer → `reader:OWNERSHIP` warnings with the route still ENABLED; a later 500ms
+deadline reader tightens the offer in place (summary flips to `deadline=500ms`, route
+never leaves ENABLED, data flows to the new reader). `test_controller_phase1` gained
+`test_gate_is_output_side_only`, `test_writer_qos_derivation`, and
+`test_deadline_tightening_and_warning`.
+
+**Docs changed.** `implementation-plan.md` (Phase 5 banner → shipped);
+`QosResolver.hpp`/`QosAliasPolicy.hpp` comments (alias lookup → Phase 7).

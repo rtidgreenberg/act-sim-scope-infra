@@ -26,7 +26,8 @@ class AsyncWaitSetDispatcher {
 public:
     explicit AsyncWaitSetDispatcher(rti::core::cond::AsyncWaitSet &aws) : aws_(aws) {}
 
-    // Take ownership of a route runtime and attach its condition to the AsyncWaitSet.
+    // Take ownership of a route runtime and attach its conditions (read condition +
+    // entity status conditions, D45) to the AsyncWaitSet.
     void attach(const std::string &route, const std::string &topic,
                 std::unique_ptr<RouteTopicRuntimeBase> runtime);
 
@@ -40,6 +41,11 @@ public:
 
     // Cumulative samples forwarded by a live route topic (0 if not currently attached).
     std::uint64_t forwarded(const std::string &route, const std::string &topic) const;
+
+    // In-place mutable deadline update on a live build's output writer (D39). Returns
+    // the writer's new QoS summary, or "" if no runtime exists / the update failed.
+    std::string set_writer_deadline(const std::string &route, const std::string &topic,
+                                    std::int64_t deadline_nanos);
 
     ~AsyncWaitSetDispatcher();
 

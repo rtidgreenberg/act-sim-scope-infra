@@ -57,10 +57,10 @@ enum RouterRouteTopicState {
     TOPIC_ERROR          // entity creation/runtime failed; sticky until command re-arm
 };
 
+// QoS aliases live on the endpoint spec (input.reader_qos / output.writer_qos) — the
+// one canonical location, matching the YAML config schema (D41).
 struct RouterRouteTopicSpec {
     string name;
-    string reader_qos;
-    string writer_qos;
 };
 
 struct RouterRouteEndpointSpec {
@@ -110,6 +110,14 @@ struct RouterRouteTopicStatus {
     uint64 samples_forwarded;
     uint64 lifecycle_events_forwarded;
     string last_error;
+    // Resolved entity QoS, set when entities are built (Phase 5, D39/D45). Empty while
+    // no entities exist. The writer summary reflects in-place deadline tightening.
+    string reader_qos_summary;
+    string writer_qos_summary;
+    // Last incompatible-QoS warning ("reader:OWNERSHIP" / "writer:DURABILITY"), from the
+    // DDS-native REQUESTED/OFFERED_INCOMPATIBLE_QOS statuses (D39). Warning only — the
+    // topic keeps forwarding for whatever DOES match; cleared on rebuild/teardown.
+    string qos_warning;
 };
 
 struct RouterRouteStatus {
