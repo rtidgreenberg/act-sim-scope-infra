@@ -45,6 +45,11 @@ public:
     // Block briefly for events, then process the batch on the caller's thread.
     void wait_and_drain(std::chrono::milliseconds timeout);
 
+    // Re-publish the current status snapshot. Used by disabled startup (D52), where the
+    // constructor-time snapshot was written before the status writer was enabled. Call
+    // from the strand thread only (reads the controller state the drain thread mutates).
+    void republish_status();
+
     // Test/observability access (const — routes read state, controller writes it).
     const MutableRouterState &state() const { return state_; }
 

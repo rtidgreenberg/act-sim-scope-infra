@@ -1,0 +1,51 @@
+# e2e_auto_qos.yaml — single router_main fixture for the Phase 5 auto-QoS e2e test
+# (router/test_e2e/test_auto_qos.py). Python port of the retired C++ test/test_auto_qos.cxx.
+#
+# ONE router process (role: platform) owns both legs of route auto_r1, with auto ("") QoS
+# on input AND output — the real D39/D42/D45 asymmetric auto-QoS path, NOT routed around
+# with writer_qos: default. This does NOT hit the D51/D52 two-process auto-QoS deadlock:
+# there is only one router, and the app writer/readers the Python test creates are the
+# matched peers, exactly like the C++ test's wan_in (dom A, app writer) -> lan_out (dom B,
+# app readers) topology.
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py
+# (control_lan -> input domain, platform_lan -> output domain; wan unused here).
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 5
+  name: autoqos
+  type_name: ExampleCommand
+  admin_participant: wan_in
+
+types:
+  xml: router/config/example_types.xml
+
+participants:
+  wan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+  lan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+
+routes:
+  - name: auto_r1
+    enabled: true
+    forwarding_mode: dynamic_data
+    # source == destination == this node's role: the single platform process materializes
+    # source_side (RouteConfigParser picks source_side when node_role == source).
+    source: platform
+    destination: control
+    topics:
+      - name: AutoQosCmd
+    source_side:
+      input:
+        participant: wan_in
+        reader_qos: ""
+      output:
+        participant: lan_out
+        writer_qos: ""

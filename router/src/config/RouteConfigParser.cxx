@@ -9,6 +9,14 @@
 
 namespace router {
 
+bool has_participant(const std::vector<ParticipantState> &participants,
+                    const std::string &name) {
+    for (const auto &ps : participants) {
+        if (ps.name == name) return true;
+    }
+    return false;
+}
+
 namespace {
 
 std::string get_str(const YAML::Node &n, const std::string &key,
@@ -106,11 +114,26 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             error = "missing node.role";
             return false;
         }
+        if (out.node_name.empty()) {
+            error = "missing node.name";
+            return false;
+        }
 
         const YAML::Node &router = root["router"];
         out.router_name = get_str(router, "name");
+        if (out.router_name.empty()) {
+            error = "missing router.name";
+            return false;
+        }
         if (router && router["id"]) {
             out.router_id = router["id"].as<std::int32_t>();
+        }
+        out.type_name = get_str(router, "type_name");
+        out.admin_participant = get_str(router, "admin_participant");
+
+        out.types_xml_path = get_str(root["types"], "xml");
+        for (std::size_t i = 0; i < root["qos_libraries"].size(); ++i) {
+            out.qos_library_paths.push_back(root["qos_libraries"][i].as<std::string>());
         }
 
         for (auto it = root["participants"].begin(); it != root["participants"].end(); ++it) {
@@ -120,6 +143,7 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             if (p["domain"]) {
                 ps.domain = p["domain"].as<std::int32_t>();
             }
+            ps.role = get_str(p, "role");
             ps.qos_profile_alias = get_str(p, "qos");
             out.participants.push_back(ps);
         }
@@ -150,6 +174,18 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             spec.forwarding_mode = get_str(rt, "forwarding_mode");
             fill_endpoint(side["input"], spec.input, out.node_name, /*is_input=*/true);
             fill_endpoint(side["output"], spec.output, out.node_name, /*is_input=*/false);
+            if (!has_participant(out.participants, spec.input.participant)) {
+                error = "route '" + spec.route_name + "' " + side_key
+                        + ".input.participant '" + spec.input.participant
+                        + "' is not a declared participant";
+                return false;
+            }
+            if (!has_participant(out.participants, spec.output.participant)) {
+                error = "route '" + spec.route_name + "' " + side_key
+                        + ".output.participant '" + spec.output.participant
+                        + "' is not a declared participant";
+                return false;
+            }
             for (std::size_t t = 0; t < rt["topics"].size(); ++t) {
                 RouterRouteTopicSpec topic;
                 topic.name = get_str(rt["topics"][t], "name");

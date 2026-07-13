@@ -19,6 +19,9 @@ enum RouterCommandKind {
     SET_PARTICIPANT_PARTITION
 };
 
+// Trimmed to exactly today's ControllerEventKind set (D46): no ROUTE_DATA_READY (no such
+// controller event exists; per-sample journaling would be a firehose) or SHUTDOWN_REQUESTED
+// (shutdown is procedural, not a queued event); TOPIC_QOS_WARNING added (D39/D45).
 enum ControllerJournalEventKind {
     JOURNAL_COMMAND_RECEIVED,
     JOURNAL_PUBLICATION_DISCOVERED,
@@ -27,8 +30,7 @@ enum ControllerJournalEventKind {
     JOURNAL_TOPIC_ENTITIES_READY,
     JOURNAL_TOPIC_TEARDOWN_COMPLETE,
     JOURNAL_ROUTE_ENTITY_ERROR,
-    JOURNAL_ROUTE_DATA_READY,
-    JOURNAL_SHUTDOWN_REQUESTED
+    JOURNAL_TOPIC_QOS_WARNING
 };
 
 enum RouterRouteOperationalState {

@@ -328,6 +328,23 @@ Evidence:
 
 ### Phase 6: Command/Status Control Loop
 
+> **Contract pinned (D46–D49), confidence high.** The command-handling state machine
+> (`ENABLE_ROUTE`/`DISABLE_ROUTE`, duplicate-`command_id` replay, unknown-route reject,
+> idempotent re-enable/re-disable, `ERROR` re-arm) is **already implemented and tested**
+> in Phase 1 (`test_controller_phase1.cxx`) behind the `IStatusPublisher` seam; Phase 6 is
+> real DDS wiring around that existing logic, not new state-machine design. Four forks
+> resolved: D46 trims `ControllerJournalEventKind` to today's real event set (drops
+> `ROUTE_DATA_READY`/`SHUTDOWN_REQUESTED`, adds `TOPIC_QOS_WARNING`); D47 filters commands
+> by `target_node`/`target_router` via a ContentFilteredTopic (not an app-level check),
+> reusing the D37/D43 quoting pattern; D48 pins command/ack QoS to
+> `RELIABLE + VOLATILE + KEEP_LAST(16)`; D49 pins the journal writer to
+> `RELIABLE + KEEP_LAST(256)` with an unlimited reliable send window (validated 7.7 —
+> never blocks the controller thread) plus `RELIABLE_WRITER_CACHE_CHANGED_STATUS` backlog
+> monitoring from day one. The debug-mode recorder toggle stays test-only for this phase —
+> `router_main` is now wired to run real config-driven routes (D50), but that wiring has no
+> command/status admin channel yet (Phase 6's own scope), so there is still no config
+> surface to hook a real CLI/config flag into until this phase lands.
+
 Deliver:
 
 - command reader and ack writer on the LAN admin participant.
@@ -433,6 +450,7 @@ or narrows the fallback path.
 | Phase 10: keyed lifecycle mirroring | Medium | Test dispose/no-writers propagation with one generated keyed type and one DynamicData route using `reader.key_value()` or cached key fields | downstream reader observes matching instance states and keys can be recovered reliably | require generated-type route runtimes for lifecycle-sensitive topics |
 | Phase 11: harness replacement | Medium-high | Replace Routing Service for one non-critical ACT route in container startup while leaving the rest unchanged | startup ordering, peer discovery, logs, and cleanup are understandable in compose/scripts | run the router sidecar in observe-only/status-only mode before removing Routing Service |
 | Link-Metrics Capture phase (banner) | Capture design pinned (D14/D18); metric *meaning* unproven | netem correlation-experiment spike (own `spikes/` entry, Python driver): sweep delay/jitter/loss/rate/blackout one axis at a time against recorded `ActRouterLinkStats` + the ground-truth schedule; also empirically verify per-locator counter attribution and app-ack RTT probe behavior ([link-health.md](link-health.md)) | specific metrics demonstrably track specific impairments with usable lag and noise floor → a follow-up decision pins thresholds/classification feeding the `RouterHealth` rollup | metrics stay raw telemetry; no health inference ships; presence remains the only health authority |
+| Cross-cutting: router identifier scheme | Medium — mechanism proposed (D53), open sub-questions unresolved | Prototype `participant_name` (ENTITY_NAME) as the router identifier for one instance alongside the existing D15 `user_data` tag: confirm Admin Console displays it, and re-derive `DiscoveryDispatcher`'s same-node ignore + `origin_router`/D14-rollup join off `participant_name()` instead of `user_data()`; resolve the field-mapping and app-participant-collision sub-questions in D53 first | loop-safety and rollup joins work identically off the new field, and no ACT app participant's own `EntityName` collides with the router sentinel | keep `user_data` as the sole mechanism identifier and add `participant_name` only as an additive Admin Console display label (D53 fallback) |
 
 Investigation order should be: Phase 3 attach/detach, Phase 9 serialized CDR API, Phase 10
 key recovery, Phase 5 auto QoS, Phase 8 partition changes, then Phase 11 harness sequencing.
@@ -520,6 +538,11 @@ Routing Service.
   participant discovery). In-place change is the premise for Phase 8; recreate is the fallback.
 - Should route definitions eventually support multi-output fanout, or should ACT keep one
   route per input/output pair for clarity?
+- Should the D15 `user_data` router-tag mechanism be replaced by `participant_name`
+  (ENTITY_NAME) as the router identifier, for native Admin Console visibility? Scoped as an
+  action item, not yet decided or implemented — see [design-decisions.md](design-decisions.md)
+  D53 for the full surface list and open sub-questions (field mapping, app-participant
+  collision risk).
 
 ## Relationship To Current Roadmap
 

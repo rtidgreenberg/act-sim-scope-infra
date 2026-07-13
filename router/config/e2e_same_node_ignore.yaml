@@ -1,0 +1,48 @@
+# e2e_same_node_ignore.yaml — single router_main fixture for the D15 same-node-ignore
+# test (router/test_e2e/test_same_node_ignore.py). Python port of the retired C++
+# test/test_runtime_spine.cxx's distinctive coverage.
+#
+# ONE router (node TestNode, tag act.router=TestNode/spine), route ignore_r1 with EXPLICIT
+# "default" QoS on both legs — no auto-QoS readiness gate (D45), so a single discovered
+# application input publication is enough to drive the route to ROUTE_ENABLED. That lets
+# the test distinguish a genuine app writer (routed -> ENABLED) from a same-node
+# router-tagged writer (ignored via dds::pub::ignore, D15 -> route never enables).
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py.
+
+node:
+  name: TestNode
+  role: platform
+
+router:
+  id: 7
+  name: spine
+  type_name: ExampleCommand
+  admin_participant: lan_in
+
+types:
+  xml: router/config/example_types.xml
+
+participants:
+  lan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+  lan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+
+routes:
+  - name: ignore_r1
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: SameNodeCmd
+    source_side:
+      input:
+        participant: lan_in
+        reader_qos: default
+      output:
+        participant: lan_out
+        writer_qos: default

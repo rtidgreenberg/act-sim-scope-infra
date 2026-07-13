@@ -59,6 +59,10 @@ void RouterController::post(const ControllerEvent &event) {
     queue_.post(event);
 }
 
+void RouterController::republish_status() {
+    status_->publish(build_snapshot());
+}
+
 void RouterController::drain() {
     std::vector<ControllerEvent> events = queue_.drain();
     for (size_t i = 0; i < events.size(); ++i) {

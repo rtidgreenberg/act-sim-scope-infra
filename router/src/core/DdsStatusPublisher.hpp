@@ -23,7 +23,9 @@ namespace router {
 
 class DdsStatusPublisher : public IStatusPublisher {
 public:
-    // participant must be enabled before construction.
+    // participant may be disabled at construction (D52 disabled startup): the writer is
+    // then created disabled and enabled with the participant. publish() before enable is
+    // a no-op (see the NotEnabledError branch); router_main re-publishes after enable.
     // topic_name is the DDS topic to publish on (e.g. "ActRouterStatus").
     DdsStatusPublisher(dds::domain::DomainParticipant participant,
                        const std::string &topic_name);

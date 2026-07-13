@@ -51,11 +51,25 @@ observers receive the current snapshot on match from durability, so there is no
 only (startup + every `state_revision` bump, D17). Observer-side aliveness rides the status
 writer's liveliness, not sample cadence; nothing durable crosses the WAN.
 
-Controller journal writer QoS (LAN, debug analysis): `RELIABLE + VOLATILE` with bounded
-history/resource limits. It is an analysis stream, not state; late joiners use
-`RouterStatus` for current state and a live recorder for event history. The controller must
-not block indefinitely on journal backpressure; if debug recording cannot keep up, the
-drop/backpressure policy must be explicit and visible in structured logs.
+Command reader / ack writer QoS (LAN, D48): `RELIABLE + VOLATILE + KEEP_LAST(16)` on both
+`ActRouterCommand` and `ActRouterCommandAck`. No durability: duplicate `command_id` replay
+is already handled at the app layer by the controller's bounded ack cache (D4), so a
+resent command gets its cached ack republished regardless of DDS-history availability.
+Depth 16 absorbs a startup burst of commands without needing `KEEP_ALL`. The command
+reader is built on a **ContentFilteredTopic** (`target_node = %0 AND target_router = %1`,
+this router's own identity as the CFT parameters) so a misdirected command never reaches
+the reader callback at all — D47, reusing the D37/D43 quoting pattern (no ambiguity here:
+the parameters are known `std::string` identity fields, not YAML scalars).
+
+Controller journal writer QoS (LAN, debug analysis, D49): `RELIABLE + KEEP_LAST(256)` with
+the reliable send window set to `LENGTH_UNLIMITED` (`BuiltinQosLib::Generic.KeepLastReliable`
+pattern, validated 7.7) — `write()` never blocks the controller thread even with a slow
+matched debug reader; under sustained backpressure the oldest unacknowledged samples are
+overwritten rather than the call stalling. Backlog is observed via a `StatusCondition` on
+`RELIABLE_WRITER_CACHE_CHANGED_STATUS` (high/low watermark on the unacknowledged count),
+logged as `journal_falling_behind` — `PUBLICATION_MATCHED_STATUS` only reports whether a
+debug reader is attached, not whether it is keeping up. It is an analysis stream, not state;
+late joiners use `RouterStatus` for current state and a live recorder for event history.
 
 This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
 router/link presence + a **compact status summary** across the mesh — see
@@ -86,6 +100,9 @@ enum RouterCommandKind {
     SET_PARTICIPANT_PARTITION
 };
 
+// Trimmed to exactly today's ControllerEventKind set (D46): no ROUTE_DATA_READY (no such
+// controller event exists; per-sample journaling would be a firehose) or SHUTDOWN_REQUESTED
+// (shutdown is procedural, not a queued event); TOPIC_QOS_WARNING added (D39/D45).
 enum ControllerJournalEventKind {
     JOURNAL_COMMAND_RECEIVED,
     JOURNAL_PUBLICATION_DISCOVERED,
@@ -94,8 +111,7 @@ enum ControllerJournalEventKind {
     JOURNAL_TOPIC_ENTITIES_READY,
     JOURNAL_TOPIC_TEARDOWN_COMPLETE,
     JOURNAL_ROUTE_ENTITY_ERROR,
-    JOURNAL_ROUTE_DATA_READY,
-    JOURNAL_SHUTDOWN_REQUESTED
+    JOURNAL_TOPIC_QOS_WARNING
 };
 
 enum RouterRouteOperationalState {

@@ -9,7 +9,8 @@
 #   router_main          Phase-0 entry point (no DDS): validate config, print identity.
 #   test_config_identity no-DDS unit test for the config identity reader.
 #   test_admin_types     compiles + exercises the generated admin types (links Connext).
-#   test_discovery_smoke Phase-2 builtin discovery smoke for generated admin endpoints.
+# DDS integration tests (discovery smoke, forwarding, auto-QoS) live in Python under
+# router/test_e2e/ — see that dir's README and D52.
 #
 # Modeled on the proven relay/cpp/CMakeLists.txt. rtiddsgen generates RouterAdminTypes
 # from admin/RouterAdminTypes.idl at configure/build time (no committed generated code).
@@ -53,12 +54,23 @@ connextdds_rtiddsgen_run(
     VAR RouterAdminTypes
 )
 
-# --- router_main: Phase-0 skeleton, no DDS entities created ---
+# --- router_main: real config-driven router process (Phases 3-5 wiring) ---
 add_executable(router_main
     src/router_main.cxx
-    src/config/RouterIdentity.cxx
+    src/config/RouteConfigParser.cxx
+    src/core/RouterState.cxx
+    src/core/RouterController.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/DiscoveryDispatcher.cxx
+    src/core/DdsStatusPublisher.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    src/core/DynamicRouteFactory.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
 )
-target_include_directories(router_main PRIVATE src)
+target_include_directories(router_main PRIVATE
+    src
+    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(router_main RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
 
 # --- Tests ---
 enable_testing()
@@ -100,106 +112,28 @@ target_include_directories(test_admin_types PRIVATE
 target_link_libraries(test_admin_types RTIConnextDDS::cpp2_api)
 add_test(NAME admin_types COMMAND test_admin_types)
 
-# Phase 2: real builtin discovery smoke. Uses UDPv4-only participant QoS, a
-# per-process default DDS domain, and real generated admin endpoint topic names.
-add_executable(test_discovery_smoke
-    test/test_discovery_smoke.cxx
-    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
-)
-target_include_directories(test_discovery_smoke PRIVATE
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(test_discovery_smoke RTIConnextDDS::cpp2_api)
-add_test(NAME discovery_smoke COMMAND test_discovery_smoke)
-set_tests_properties(discovery_smoke PROPERTIES
-    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+# Phase 2 builtin discovery smoke migrated to Python (D52 test-suite policy: integration
+# tests are Python, unit tests stay C++). See router/test_e2e/test_discovery_smoke.py.
 
-# Phase 2.5: thin real runtime spine smoke.
-# Proves Connext builtin discovery → DiscoveryDispatcher → RouterController →
-# DdsStatusPublisher → observable DDS status sample (D30/D31).
-add_executable(test_runtime_spine
-    test/test_runtime_spine.cxx
-    src/core/RouterState.cxx
-    src/core/RouterController.cxx
-    src/core/ParticipantRegistry.cxx
-    src/core/DiscoveryDispatcher.cxx
-    src/core/DdsStatusPublisher.cxx
-    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
-)
-target_include_directories(test_runtime_spine PRIVATE
-    src
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(test_runtime_spine RTIConnextDDS::cpp2_api)
-add_test(NAME runtime_spine COMMAND test_runtime_spine)
-set_tests_properties(runtime_spine PROPERTIES
-    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+# Phase 2.5 runtime-spine smoke (builtin discovery -> DiscoveryDispatcher ->
+# RouterController -> DdsStatusPublisher -> observable status) migrated to Python against
+# the real router_main + real factory (D52 test-suite policy). Its distinctive coverage —
+# the D15 same-node-ignore contract (a same-node router publication is ignored; a genuine
+# app publication is routed) — is router/test_e2e/test_same_node_ignore.py. The former C++
+# test_runtime_spine.cxx (which asserted this via a fake factory's create-count) was
+# retired accordingly.
 
-# Phase 3: one discovered route forwards one topic end-to-end (real EntityFactory,
-# TypeResolver, QosResolver, AsyncWaitSetDispatcher). Proves discovery → dynamic entity
-# creation → forwarding → status ENABLED, and D32 teardown on source loss.
-add_executable(test_route_forward
-    test/test_route_forward.cxx
-    src/core/RouterState.cxx
-    src/core/RouterController.cxx
-    src/core/ParticipantRegistry.cxx
-    src/core/DiscoveryDispatcher.cxx
-    src/core/DdsStatusPublisher.cxx
-    src/core/AsyncWaitSetDispatcher.cxx
-    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
-)
-target_include_directories(test_route_forward PRIVATE
-    src
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(test_route_forward RTIConnextDDS::cpp2_api)
-add_test(NAME route_forward COMMAND test_route_forward)
-set_tests_properties(route_forward PROPERTIES
-    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+# Phase 3 route forwarding and Phase 4 DynamicData + ContentFilteredTopic forwarding are
+# now covered end-to-end in Python against the real router_main pair (D52 test-suite
+# policy): router/test_e2e/test_platform_status_route.py (forwarding) and
+# test_control_command_route.py (DynamicData + msg.destination CFT). The former C++
+# test_route_forward.cxx / test_dynamic_forward.cxx were retired accordingly.
 
-# Phase 4 (steps 1-2): DynamicData forwarding + ContentFilteredTopic. Router loads an
-# example type from XML and forwards it as DynamicData with a destination content filter.
-add_executable(test_dynamic_forward
-    test/test_dynamic_forward.cxx
-    src/core/RouterState.cxx
-    src/core/RouterController.cxx
-    src/core/ParticipantRegistry.cxx
-    src/core/DiscoveryDispatcher.cxx
-    src/core/DdsStatusPublisher.cxx
-    src/core/AsyncWaitSetDispatcher.cxx
-    src/core/DynamicRouteFactory.cxx
-    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
-)
-target_include_directories(test_dynamic_forward PRIVATE
-    src
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_compile_definitions(test_dynamic_forward PRIVATE
-    ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
-target_link_libraries(test_dynamic_forward RTIConnextDDS::cpp2_api)
-add_test(NAME dynamic_forward COMMAND test_dynamic_forward)
-set_tests_properties(dynamic_forward PROPERTIES
-    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
-
-# Phase 5: asymmetric auto QoS + output readiness (D39/D42/D45). Weakest-request input
-# reader, strong-offer output writer with derived deadline/liveliness, readiness gating,
-# in-place deadline tightening, incompatible-QoS warnings in status.
-add_executable(test_auto_qos
-    test/test_auto_qos.cxx
-    src/core/RouterState.cxx
-    src/core/RouterController.cxx
-    src/core/ParticipantRegistry.cxx
-    src/core/DiscoveryDispatcher.cxx
-    src/core/DdsStatusPublisher.cxx
-    src/core/AsyncWaitSetDispatcher.cxx
-    src/core/DynamicRouteFactory.cxx
-    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
-)
-target_include_directories(test_auto_qos PRIVATE
-    src
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_compile_definitions(test_auto_qos PRIVATE
-    ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
-target_link_libraries(test_auto_qos RTIConnextDDS::cpp2_api)
-add_test(NAME auto_qos COMMAND test_auto_qos)
-set_tests_properties(auto_qos PROPERTIES
-    WORKING_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
+# Phase 5 asymmetric auto QoS + output readiness (D39/D42/D45) is now covered end-to-end
+# in Python against the real router_main (D52 test-suite policy): readiness gating,
+# resolved reader/writer QoS summaries, in-place deadline tightening, and incompatible-QoS
+# warnings are asserted off the RouterStatus stream in router/test_e2e/test_auto_qos.py.
+# The former C++ test_auto_qos.cxx was retired accordingly.
 
 # Phase 4 (step 3): role-aware route config parsing (yaml-cpp, no DDS).
 add_executable(test_route_config

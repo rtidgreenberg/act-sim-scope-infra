@@ -1709,3 +1709,440 @@ never leaves ENABLED, data flows to the new reader). `test_controller_phase1` ga
 
 **Docs changed.** `implementation-plan.md` (Phase 5 banner → shipped);
 `QosResolver.hpp`/`QosAliasPolicy.hpp` comments (alias lookup → Phase 7).
+
+---
+
+## D46 — Controller journal enum trimmed to today's real event set; `JOURNAL_TOPIC_QOS_WARNING` added (2026-07-13, accepted; Phase 6 review)
+
+**Context.** Reading `RouterEvents.hpp` against the `ControllerJournalEventKind` enum in
+`RouterAdminTypes.idl`/`command-status.md` before starting the Phase 6 review surfaced drift:
+`JOURNAL_ROUTE_DATA_READY` and `JOURNAL_SHUTDOWN_REQUESTED` have no matching
+`ControllerEventKind` today, and `TopicQosWarning` (added by D39/D45, after the journal enum
+was written) has no `JOURNAL_*` counterpart at all. Neither type is referenced anywhere in
+`router/src` or `router/test` yet, so the enum was safe to correct directly rather than carry
+the drift into Phase 6.
+
+**Decision.** `JOURNAL_ROUTE_DATA_READY` and `JOURNAL_SHUTDOWN_REQUESTED` are **dropped**:
+no `RouteDataReady`/`ShutdownRequested` controller event exists, per-sample journaling would
+turn the debug journal into a firehose (contradicts "one sample per processed controller
+event"), and shutdown is handled procedurally today (`Concurrency Rules`' ordered
+stop-intake/detach/close sequence), not through the event queue. `JOURNAL_TOPIC_QOS_WARNING`
+is **added** so every `ControllerEventKind` the controller actually processes has a journal
+counterpart. The enum is now exactly the journaled event set, no forward-looking
+placeholders.
+
+**Docs changed.** `command-status.md` (`ControllerJournalEventKind` in the Admin IDL Sketch —
+the authoritative copy); `RouterAdminTypes.idl` (transcribed copy, kept in sync per its own
+header comment).
+
+---
+
+## D47 — Command target filtering is a ContentFilteredTopic on `target_node`/`target_router`, not an app-level check (2026-07-13, accepted; Phase 6 review, refines code-architecture.md's CommandHandler wording)
+
+**Context.** `code-architecture.md`'s `CommandHandler` bullet says it "performs cheap
+target/idempotency checks" — read literally that's an app-level field compare, not a DDS
+filter. But Tenet 9 (simplicity first — prefer DDS-native mechanisms) lists "CFTs for
+filtering" as a first-class example, and Phase 4 already validated exactly this shape (D37:
+`msg.destination = %0`, single-quoted string parameter) for the platform-destination route
+filter.
+
+**Decision.** The command reader uses a **ContentFilteredTopic** on `RouterCommand`
+(`target_node = %0 AND target_router = %1`), reusing the D37/D43 quoting approach. Unlike
+the D37 CFT, the two parameter values here are this router's own identity strings
+(`RouterIdentityInfo::node_name`/`router_name`), known at construction time as plain
+`std::string` — not YAML scalars — so there is no D43 quote-vs-plain ambiguity to resolve;
+the parameters are simply wrapped in single quotes directly. `command_id` idempotency stays
+app-level in the controller (D4/D8) — DDS cannot do that part, per Tenet 9's own carve-out.
+This keeps the reader thin: a non-matching command never reaches the callback at all, rather
+than being received and discarded by an `if`.
+
+**Docs changed.** `code-architecture.md` (`CommandHandler` bullet: CFT-based target
+filtering, idempotency stays app-level); `command-status.md` (command reader construction
+note).
+
+---
+
+## D48 — `RouterCommand`/`RouterCommandAck` QoS: `RELIABLE` + `VOLATILE` + `KEEP_LAST(16)` on both (2026-07-13, accepted; Phase 6 review)
+
+**Context.** Neither topic's QoS was pinned anywhere before Phase 6. Commands are
+control-plane traffic that must not be silently dropped (favors `RELIABLE`), but durability
+was an open question — does a late-joining sender/observer need history replay?
+
+**Decision.** Both the command reader and the ack writer are `RELIABLE` + `VOLATILE` +
+`KEEP_LAST(16)`. No durability is needed on either side: duplicate `command_id` replay
+already happens at the app layer via the controller's bounded ack cache (D4) — a sender that
+resends the same `command_id` gets the cached ack republished regardless of whether the
+original ack sample is still available from DDS history. Depth 16 absorbs a burst of
+commands (e.g., several `ENABLE_ROUTE`s at startup) without needing `KEEP_ALL`.
+
+**Docs changed.** `command-status.md` (new QoS paragraph for the command/ack topics,
+alongside the existing D26 status-writer QoS paragraph).
+
+---
+
+## D49 — Controller journal writer: `RELIABLE` + `KEEP_LAST(256)` with the reliable send window `LENGTH_UNLIMITED`; backlog observed via `RELIABLE_WRITER_CACHE_CHANGED_STATUS` (2026-07-13, accepted; Phase 6 review)
+
+**Context.** `command-status.md` required the journal writer to never block the controller
+thread on backpressure, with an explicit drop/backlog policy — left unresolved pending
+validation.
+
+**Validated against Connext 7.7** (`ask_connext_question`, 2026-07-13): a `RELIABLE` writer's
+`write()` can block for two independent reasons — a full reliable send window
+(`rtps_reliable_writer.{min,max}_send_window_size`), or (with `KEEP_ALL`) exhausted
+`resource_limits` with no fully-ACKed sample to evict. With `KEEP_LAST`, history fullness
+alone never blocks — the writer evicts the oldest sample in the instance/cache and returns
+success regardless of ACK state — so the **only** remaining blocking path is the send
+window. Setting `rtps_reliable_writer.max_send_window_size` /
+`min_send_window_size` to `LENGTH_UNLIMITED` (the documented `BuiltinQosLib::
+Generic.KeepLastReliable` pattern) removes that path too: `write()` never blocks, at the cost
+of old unacknowledged samples being overwritten under sustained backpressure — the right
+tradeoff for a debug journal attached to the controller's strand. `PUBLICATION_MATCHED_STATUS`
+only reports attach/detach of a debug reader, not whether it's keeping up;
+`RELIABLE_WRITER_CACHE_CHANGED_STATUS` (high/low watermark on unacknowledged sample count) is
+the correct backlog signal.
+
+**Decision.** Journal writer QoS: `RELIABLE`, `KEEP_LAST(256)`, reliable send window
+`LENGTH_UNLIMITED`. A `StatusCondition` on `RELIABLE_WRITER_CACHE_CHANGED_STATUS` is wired
+from Phase 6 (not deferred): crossing the high watermark logs
+`Log::warn("journal_falling_behind", ...)`. This is observability-only — it never feeds back
+into route control (code-architecture.md's existing constraint).
+
+**Docs changed.** `command-status.md` (journal writer QoS paragraph, replacing the
+"must be explicit" open item with the resolved shape); `code-architecture.md`
+(`ControllerJournalPublisher` bullet: QoS + backlog-monitoring note).
+
+---
+
+## D50 — `router_main` wired to run real config-driven routes; QoS-alias/multi-type dispatch stay deferred; first Python e2e coverage uses dedicated single-type fixtures (2026-07-13, accepted; closes the router_main wiring gap ahead of the Python e2e suite)
+
+**Context.** Phases 0-5 (D1-D45) were proven only inside ad-hoc `main()` functions of the
+C++ test binaries (`test_route_forward.cxx`, `test_dynamic_forward.cxx`, etc.) — the actual
+shipped `router_main.cxx` remained the Phase-0 skeleton: it validated config, printed one
+log line, and exited, creating zero DDS entities. That made it impossible to write real
+end-to-end tests (Python or otherwise) against the actual router process, since there was
+no real, standalone router to subprocess-launch.
+
+Two pre-existing, deliberately deferred library boundaries constrain what a wired
+`router_main` can run today, independent of this decision:
+- `QosAliasPolicy`/`QosResolver` only resolve `""`/`"default"` — named aliases (`wan_event`,
+  `wan_status`, `control_wan_udpv4_qos`, ...) are unresolvable until Phase 7's QoS-library
+  lookup (D45).
+- `DynamicRouteFactory` binds **one** DynamicData type for its entire process lifetime
+  (D34/D35) — multi-type dispatch by discovered type name is not implemented. A route set
+  spanning more than one type cannot run in a single `router_main` process yet.
+
+Both `control-platform.yaml` and `platform-team.yaml` as committed hit at least one of
+these (named QoS aliases throughout; `control-platform.yaml`'s `platform_events` route is
+also multi-type). `platform-team.yaml`'s flat `input`/`output` route shape (no
+`source`/`destination`/`*_side` keys) is additionally unparsed by `RouteConfigParser` today
+— consistent with Phase 8 (team partitions) being unstarted, not a regression.
+
+**Decision.**
+1. `router_main.cxx` now assembles the real object graph already proven in the Phase 3-5
+   test mains — `RouteConfigParser` → `TypeResolver` → `ParticipantRegistry` →
+   `DdsStatusPublisher` → `AsyncWaitSet`/`AsyncWaitSetDispatcher` → `QosResolver` →
+   `DynamicRouteFactory` → `RouterController` → `DiscoveryDispatcher` — runs until
+   `SIGINT`/`SIGTERM` (mirroring the existing `relay/cpp/isc_relay.cxx` signal idiom), then
+   shuts down in the proven order (`route_disp.shutdown()` → `discovery.shutdown()` →
+   `drain.stop()` → `aws.stop()`). `--role`/`--node-name` CLI overrides let one config file
+   be launched twice, once per node role, matching how `control-platform.yaml` is meant to
+   be loaded (once on the control node, once on each platform node).
+2. `RouteConfig` gains `types_xml_path`/`qos_library_paths` (parsed, not yet applied beyond
+   a fail-fast existence check) and `router.type_name` — the one DynamicData type name this
+   process's `DynamicRouteFactory` binds to. If a config has active routes but no
+   `type_name`, `router_main` refuses to start rather than silently building the wrong type
+   (the D34/D35 guard).
+3. Path resolution: `types.xml`/`qos_libraries` paths in the YAML are repo-root-relative (as
+   literally authored), so `router_main` requires `cwd` == repo root and fails fast naming
+   the resolved path if a file is missing, rather than inventing a path-rewriting rule the
+   YAML wasn't authored for. `router/README.md`'s run examples are corrected accordingly.
+4. Two real, in-scope bugs fixed: `control-platform.yaml`'s `platform_primary_status` route
+   named its topic `PlatformStatus`; the real ACT system (`harness/act/node_sim/python/*`,
+   `act_types.xml`) uses `PlatformPrimaryStatus` — corrected. The stale "Phase 0" status
+   blurb in `router/README.md` is updated to Phases 0-5 shipped / Phase 6 next.
+5. Since neither committed production YAML can run as a single process today (item above),
+   two dedicated fixtures are added for the Python e2e suite:
+   `router/config/e2e_control_command.yaml` and `router/config/e2e_platform_status.yaml` —
+   each mirrors `control-platform.yaml`'s topology for exactly one route/type, with
+   `qos: ""` (exercising the real Phase 5 auto-QoS, not a fixed alias) instead of named
+   aliases. This is the same escape hatch the project's own confidence notes already
+   endorse ("use `dynamic_data` for the first working route... don't block earlier slices
+   on deferred items") — applied to test fixtures rather than route implementation.
+6. `DrainThread` (duplicated verbatim in both C++ test mains) is promoted to
+   `router/src/core/DrainThread.hpp` and reused by `router_main.cxx` and both tests — pure
+   refactor, no behavior change.
+
+**Docs changed.** `router/README.md` (build/run instructions, status section).
+`docs/cpp_router/implementation-plan.md` (Phase 6 contract note corrected: `router_main` is
+wired, just without a command/status admin channel yet).
+
+**Not done here (tracked, not silently skipped).** Phase 7 QoS-alias/XML lookup; D34/D35
+multi-type dispatch; `platform-team.yaml`'s flat-route-shape parsing (Phase 8);
+`participant_partition` application in `ParticipantRegistry`. Running the real
+`control-platform.yaml`/`platform-team.yaml` end-to-end through `router_main` needs those
+items first.
+
+---
+
+## D51 — Auto-QoS output-writer readiness gate deadlocks two independent `router_main` processes on a WAN hop; e2e fixtures route around it with `writer_qos: default` (2026-07-13, accepted; D50 code-review follow-up)
+
+**Context.** Bringing up the two `router_e2e` fixtures end-to-end (D50) hung indefinitely:
+neither router process's route ever left `DISCOVERY_PARTIAL`. Root cause is in
+`RouterState.cxx::derive_topic_discovery` (Phase 5, D39 — not touched by D50, pre-existing):
+an auto-QoS (`""`) output writer's `qos_resolved` requires `!topic.matched_readers.empty()`
+before the topic can build at all, so it can derive the writer's deadline/liveliness from an
+already-discovered reader. That holds trivially in the Phase 3-5 C++ test mains (an external
+sink reader always pre-exists, independent of the router under test), but breaks when **two
+separate `router_main` processes** each own one side of a WAN hop with `""` on the
+WAN-crossing leg: each side's output writer needs a matched reader to build, and the only
+possible match is the *other* side's not-yet-built reader — neither side can ever go first.
+
+`RouterController::maybe_tighten_deadline` already implements the right shape of fix (build
+now with a safe default, correct in place once a real reader appears) but only runs once a
+topic has already reached `TOPIC_FORWARDING`/`TOPIC_CREATING` — it is never invoked to
+unblock the initial `TOPIC_IDLE` → `TOPIC_CREATING` transition `derive_topic_discovery`
+gates. Extending that pattern to the initial transition is the deeper fix, but it changes
+already-shipped, already-tested Phase 5 semantics (`test_auto_qos.cxx`) and needs its own
+design pass — out of scope for closing out D50's e2e baseline.
+
+**Decision.** Route around the gate in config, not in the library: `writer_qos: default` on
+the WAN-crossing output leg (`source_side.output`) in both `router/config/
+e2e_control_command.yaml` and `e2e_platform_status.yaml`, instead of leaving it empty/auto.
+`output_uses_auto_qos()` is a plain `.empty()` check on the alias string, so a non-empty
+`"default"` bypasses the gate entirely — no core library change. LAN-local legs (matched by
+a real, always-present external reader/writer, exactly like the C++ test rigs) keep `""`.
+
+**Verified not live in production shape.** `control-platform.yaml`'s WAN-crossing legs
+already use non-empty named aliases (`wan_event`, `wan_status`), so `output_uses_auto_qos()`
+already returns `false` there today, independent of Phase 7 — the production config was
+authored to sidestep this gate by construction, same pattern as this fix. The gate remains a
+real, general landmine for any *future* route/config that puts `""` on a WAN-crossing leg
+between two independent `router_main` processes — not fixed, only avoided for the two
+fixtures.
+
+**Also fixed this pass (code-review follow-up, same session as D50):**
+- `router_main.cxx` force-includes the admin participant regardless of its own `role:` tag
+  (needed so command/status always has a home participant); this now also validates that
+  tag against `cfg.node_role` when non-empty (`admin_participant_role_mismatch`), so a
+  role-inconsistent admin participant fails fast instead of silently binding the wrong LAN.
+- `RouterController` is now constructed with the same role-filtered participant list used to
+  build `ParticipantRegistry`, not the full unfiltered `cfg.participants` — the published
+  `RouterStatus` no longer lists participants this process never actually created.
+- `has_participant()` (previously anonymous-namespace-scoped in `RouteConfigParser.cxx`) is
+  exposed via `RouteConfigParser.hpp` and reused by `router_main.cxx`'s admin-participant and
+  route-participant checks instead of three independent linear scans.
+- `router/test_e2e/conftest.py`'s `RouterProcess.returncode` now calls `poll()` (Python's
+  `Popen.returncode` never self-updates); `write_until_seen()` gained an optional
+  `check_alive` callback so a crashed router process fails a test immediately with a clear
+  message instead of waiting out the full timeout. Both e2e tests pass
+  `check_alive=lambda: control_proc.is_alive() and platform_proc.is_alive()`.
+
+**Second flake found while confirming the fix (repeated `pytest` runs, ~50% fail rate):**
+even with the deadlock fixed, `test_status_reaches_control` and
+`test_command_reaches_only_addressed_platform` failed intermittently, always the same
+signature: `publication_pending_participant` followed by `pending_publication_dropped`
+~30-40s later in one side's log — that side's `DiscoveryDispatcher` saw the other
+router's SEDP endpoint data but never received its SPDP participant announcement.
+Validated against Connext 7.7 docs (`ask_connext_question`): default
+`participant_liveliness_assert_period` (the periodic SPDP re-announcement, once the
+5-message initial burst is exhausted) is **30s**. Two `router_main` processes launched
+back-to-back via `subprocess.Popen` can plausibly have one miss the other's brief initial
+burst (ordinary process-spawn/exec/dynamic-link jitter), leaving it waiting up to ~30s for
+the next periodic announcement — enough to burn through `write_until_seen`'s own timeout
+and surface as a confusing "sample never arrived" test failure rather than a discovery-
+timing issue. Fixed by adding `conftest.py`'s `wait_for_mutual_discovery()`: `router_pair`
+now blocks (up to 35s, polling both router logs for `participant_router_tagged`) until both
+processes have actually discovered each other's participant *before* the timed test body
+starts, so SPDP variance no longer competes with the test's own timeout for what it's
+actually meant to measure (routing, not discovery). `write_until_seen`'s default timeout
+was lowered back to 15s accordingly, now that it only needs to cover SEDP/route-build, not
+SPDP.
+
+**Repeated `pytest` runs after this mitigation still failed intermittently** (`wait_for_
+mutual_discovery` itself timing out at 35s — one side's log showed zero `participant_
+router_tagged` lines for the whole run), which prompted checking whether this is really an
+environmental/VM multicast reliability issue (as the "30s SPDP retry" theory assumed) or a
+bug in the router's own discovery code. **It's the latter.** Two standalone Python probe
+scripts (`discovered_participants()`, zero router/`DiscoveryDispatcher`/`AsyncWaitSet`
+code) were run as separate OS processes on the same domains `router_main` uses:
+- One participant per process (matching nothing router-specific): 5/5 runs, mutual
+  discovery in 0.05-1.0s.
+- **Two** participants per process, one per domain, exactly matching `router_main`'s real
+  LAN+WAN topology (still zero router code): 6/6 runs, mutual discovery in 0.05-1.1s.
+
+11/11 successes, no VM/multicast unreliability at all — ruling out the environment. The
+flakiness is real and lives specifically in `ParticipantRegistry`/`DiscoveryDispatcher`/how
+`router_main` wires the `AsyncWaitSet` (a likely candidate: a timing/ordering gap between
+participant creation, `AsyncWaitSet` condition attachment, and `aws.start()`, though this
+is not yet confirmed). **Left as a known, tracked, unresolved issue** — `wait_for_mutual_
+discovery()` remains in place as a mitigation (it turns the flake into a slow-but-honest
+fixture-setup failure instead of a misleading "sample never arrived" test failure), but the
+root cause in the library itself is not fixed. Next step if picked up: instrument
+`DiscoveryDispatcher::attach_participant`/`on_participant` to log exactly when each
+`ReadCondition` is attached relative to `aws.start()` and participant enablement, and
+compare against the timeline of a reproduced failure.
+
+> **Resolved by D52.** The "likely candidate" above was confirmed and fixed: participants
+> were enabled at construction, before the builtin-reader conditions were attached and the
+> `AsyncWaitSet` was started. See D52.
+
+**Docs changed.** `router/config/e2e_control_command.yaml` and `e2e_platform_status.yaml`
+(header comments correctly point here instead of D50); `router/test_e2e/README.md`.
+
+---
+
+## D52 — Disabled startup: create participants disabled, attach conditions + start the AsyncWaitSet, then enable — fixes the D51 flaky-discovery race (2026-07-13, accepted; resolves D51's tracked unresolved issue)
+
+**Context.** D51 left the flaky mutual-discovery failure as a confirmed-but-unfixed
+library bug: two back-to-back `router_main` processes intermittently (~50%+ over repeated
+runs) failed to discover each other's participant — one side logging
+`publication_pending_participant` (it saw the peer's SEDP endpoint) but *zero*
+`participant_router_tagged` for the whole run (it never processed the peer's SPDP
+announcement). D51's standalone Python probes proved the DDS layer delivers discovery
+reliably (11/11), so the fault was in how the router consumes it.
+
+**Root cause (D51's "likely candidate", now confirmed).** `router_main` created its
+`DomainParticipant`s **enabled** (`ParticipantRegistry` ctor, then default factory
+auto-enable), which starts SPDP/SEDP discovery immediately — a substantial construction
+window *before* `DiscoveryDispatcher` attaches the builtin-reader `ReadCondition`s and
+`aws.start()` runs. A peer's SPDP announcement arriving in that enable→`start()` window
+lands in the participant builtin-reader cache and sets the participant `ReadCondition`'s
+`trigger_value` true **before** the `AsyncWaitSet` is dispatching. The AWS's handler
+dispatch is effectively **edge-triggered** (it must be, to avoid busy-looping on a
+persistently-true `DataState::any()` condition nothing has drained), so a condition
+already true at `start()` that never re-transitions false→true is **never dispatched** —
+`on_participant` is never called for that peer, its participant stays unknown forever, and
+its later-arriving SEDP publication (which *does* produce a genuine post-start transition
+on the *publication* condition) is parked pending a participant that will never resolve.
+The Connext 7.7 docs describe the `WaitSet`/`ReadCondition` model as level-triggered and
+say already-true conditions *should* be serviced (`ask_connext_question`), but that is
+documented as inference with no explicit guarantee, and the observed behavior (condition
+true for the full 35s yet never dispatched while the AWS was demonstrably running) is
+inconsistent with reliable level-triggering. Either way the fix is the same.
+
+**Why the C++ Phase 3-5 test mains never hit it.** `test_route_forward.cxx` /
+`test_dynamic_forward.cxx` / `test_auto_qos.cxx` create every discoverable peer (source
+writer, sink reader, status probe) **after** `aws.start()`, so no discovery sample can
+arrive during the enable→`start()` window — every sample yields a post-start transition
+and is dispatched. `test_discovery_smoke.cxx` uses a synchronous `WaitSet` in an explicit
+polling loop (genuinely level-triggered, re-checked each iteration) and is likewise
+immune. Only two independent `router_main` processes coming up concurrently expose the
+race.
+
+**Decision.** Adopt the deferred D12 "disabled startup" ordering, which is also RTI's
+recommended pattern (`ask_connext_question`):
+1. Create participants **disabled** — `ParticipantRegistry(configs, autoenable=false)`
+   flips the process-global `DomainParticipantFactory` `EntityFactory` to
+   `ManuallyEnable()` for the construction loop, then restores it (the factory QoS is a
+   singleton; restore even on exception so later creation elsewhere is unaffected).
+2. Attach the builtin-reader `ReadCondition`s (`DiscoveryDispatcher` ctor) and
+   `aws.start()` — both valid while the participant is disabled.
+3. `registry.enable_all()` — enable participants **last**. `enable()` recursively enables
+   the builtin subscriber/readers and any child entities created while disabled (verified
+   for 7.7: recursion holds because the participant's own `EntityFactory` autoenable is
+   true, per Users Manual §18.2.1).
+Discovery traffic now begins only after the AWS is dispatching, so every sample is a
+genuine post-start transition — nothing is stranded.
+
+**`autoenable` defaults to true.** Only `router_main` opts into disabled startup; the C++
+test mains keep the enabled default (safe — peers come after `start()`), so this is a
+zero-blast-radius change to already-shipped Phase 3-5 tests. As those integration tests
+migrate to Python they can be dropped rather than reworked.
+
+**Startup-snapshot follow-on.** `RouterController`'s constructor publishes its revision-0
+status snapshot, which now runs while the admin participant is still disabled — a no-op on
+a disabled writer. `DdsStatusPublisher::publish` swallows the expected
+`dds::core::NotEnabledError` (debug log, not warn), and `router_main` calls the new
+`RouterController::republish_status()` after `enable_all()` (before the `DrainThread`
+starts, so it cannot race controller state) to put the snapshot on the now-live writer.
+
+**Verified.** New Python regression test `router/test_e2e/test_discovery_startup.py`
+asserts *prompt* mutual discovery (both sides log `participant_router_tagged` within 10s —
+above SEDP/route-build, far below the 30s SPDP retry the flake hid behind), parametrized
+over 6 iterations, deliberately NOT using `router_pair`'s `wait_for_mutual_discovery` mask.
+Fixed binary: 6/6 pass, discovery in 0.2-1.4s. Reverting only the `autoenable` flag to
+`true` and rebuilding: 2/6 fail with the exact D51 signature (one side stranded,
+`control saw platform: False` / `platform saw control: True`), confirming causality. Full
+C++ suite (9 tests) and Python e2e suite (8 tests) green; no stray `/dev/shm` segments.
+`wait_for_mutual_discovery()` stays as belt-and-suspenders, no longer load-bearing.
+
+**Files changed.** `router/src/core/ParticipantRegistry.{hpp,cxx}` (disabled creation +
+`enable_all()`); `router/src/router_main.cxx` (opt into disabled startup; `enable_all()` +
+`republish_status()` after `aws.start()`); `router/src/core/RouterController.{hpp,cxx}`
+(`republish_status()`); `router/src/core/DdsStatusPublisher.{hpp,cxx}` (`NotEnabledError`
+handling + comment); `router/test_e2e/test_discovery_startup.py` (new).
+
+---
+
+## D53 — Action item (proposed, not yet implemented): replace the D15 `user_data` router tag with `participant_name` (ENTITY_NAME) as the router identifier (2026-07-13, proposed — scoping only)
+
+**Context.** D15 gives every router participant `user_data = act.router=<node>/<router>`,
+which is programmatically load-bearing, not just descriptive: `DiscoveryDispatcher`
+(`extract_router_tag`/`is_same_node`) parses it to (a) ignore same-node sibling
+publications (loop safety) and (b) join discovered-participant GUID → `origin_router`, which
+feeds the presence roster and the D14 link-stats rollup key. Nothing today sets
+`participant_name` (`rti::core::policy::EntityName`), so router participants show up in
+RTI Admin Console unnamed (GUID only) — Admin Console reads discovery metadata but does not
+decode the `user_data` tag format. Validated against 7.7 (`ask_connext_question`,
+2026-07-13): `participant_name` is a distinct QoS from `user_data` (structured
+`{name, role_name}`, ≤255 chars each, no uniqueness requirement), is native Admin Console
+and RTI-tooling display data, is set-once-before-enable (same effective constraint as the
+tag today), and is readable off the same builtin-topic sample `DiscoveryDispatcher` already
+reads (`dds::topic::ParticipantBuiltinTopicData::participant_name()`) — no new builtin-topic
+type or read path required.
+
+**Requested scope: full replacement**, i.e. `participant_name` becomes the sole router
+identifier and `user_data` on router participants goes away, not an additive
+display-only field alongside the tag.
+
+**Surfaces this touches (scoped, not yet changed):**
+
+- `router/src/core/ParticipantRegistry.{hpp,cxx}` — `Config::user_data_tag` and
+  `make_participant_qos`'s `UserData` QoS insertion become an `EntityName` QoS insertion.
+- `router/src/core/DiscoveryDispatcher.{hpp,cxx}` — `extract_router_tag(UserData)`,
+  `is_same_node`, and the `own_router_tag_` member all currently parse the composite
+  `act.router=<node>/<router>` string; they would read `participant_name()` (returning
+  `rti::core::optional_value<std::string>` for `name()`/`role_name()`) instead of
+  `user_data()`.
+- `router/src/router_main.cxx` — where the composite tag string is assembled today.
+- Docs: this entry supersedes D15's tag mechanism (D15's ignore/loop-safety *decision*
+  stands; only the identifier field changes) — `code-architecture.md`
+  (`ParticipantRegistry`/`DiscoveryDispatcher` bullets), `implementation-plan.md` (Phase 2
+  deliverable bullet: "`origin_router` comes from the participant `user_data` tag join"),
+  `link-health.md` (D14 rollup-key wording, GUID→router join).
+
+**Open sub-questions to resolve before implementing (not decided here):**
+
+1. **Field mapping.** `EntityName` is two structured fields, not one string. Candidates:
+   `name = <router>`, `role_name = <node>` (cleanest — removes the `/`-splitting
+   `node_of()` helper in `is_same_node` entirely); or keep a single composite string in
+   `name` for minimal-diff parity with today's format. Leans toward the structured mapping
+   given it removes string-parsing, but not decided.
+2. **Router-participant sentinel.** Today's `act.router=` prefix on `user_data` also acts
+   as a namespace guard: `user_data` is a private byte buffer the router owns exclusively,
+   so any value starting with that prefix is unambiguously a router tag. `participant_name`
+   is not private — any application participant may set its own `EntityName` for its own
+   debugging purposes, and nothing here has verified whether ACT platform/control apps
+   already do. Without a reserved sentinel (e.g. requiring `role_name == "act.router"`
+   rather than free node text), an app that happens to set a `participant_name` could be
+   misread as a router by `is_same_node`/the `origin_router` join. **Needs verification
+   against the ACT app side before implementation**, not just the router repo.
+3. **Re-validation.** D15's ignore/loop-safety mechanics were validated against 7.7 via
+   `ask_connext_question` for the `user_data` path specifically; the accessor swap to
+   `participant_name()` is mechanically confirmed in this session but the end-to-end
+   same-node-ignore and D14-rollup-join behavior off the new field has not been
+   test-verified the way D15/D52 were (no standalone spike run yet).
+
+**Fallback if this stalls or the sentinel/collision question can't be resolved cleanly:**
+keep `user_data` as the sole *mechanism* identifier (D15 unchanged) and add
+`participant_name` **additively**, populated from the same `router_name`/`node_name` already
+in `RouterController`'s identity struct, purely for Admin Console display. That is
+zero-risk to D15/D14 but does not remove `user_data` as requested here.
+
+**Status.** Scoping only — no code changed by this entry. Not scheduled to a specific
+phase; likely bundled with a future discovery/presence-touching phase rather than run as its
+own phase, given the small diff surface once sub-questions 1-2 are resolved.
+
+**Docs changed.** This entry only. Implementation (if this proceeds past the open
+sub-questions) will also touch `code-architecture.md`, `implementation-plan.md`,
+`link-health.md`, and record a follow-up decision here noting D15's mechanism superseded.

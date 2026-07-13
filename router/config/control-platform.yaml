@@ -3,8 +3,11 @@
 # route is defined once; the local node.role selects source_side vs destination_side.
 #
 # Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
-# Phase 0 only reads node.* and router.* (identity). The route/QoS/participant sections
-# below are the shipped shape for later phases and are not parsed yet.
+# router_main parses the full route/participant shape below (RouteConfigParser), but the
+# named qos_profiles aliases (wan_event, wan_status, etc.) are unresolvable until Phase 7
+# (D45) and this config has no router.type_name, so router_main will refuse to run it as
+# a single process today — see router/config/e2e_*.yaml for a config it can run now, and
+# docs/cpp_router/design-decisions.md D50.
 
 node:
   name: Platform_30
@@ -15,6 +18,9 @@ router:
   name: platform-30-control-platform
   config_set: control-platform
   default_forwarding_mode: dynamic_data
+  # Default admin participant for this file's own (platform) role; a control-node
+  # deployment of this same file overrides this with --admin-participant control_lan.
+  admin_participant: platform_lan
 
 control:
   domain: 100
@@ -86,7 +92,7 @@ routes:
     source: platform
     destination: control
     topics:
-      - name: PlatformStatus
+      - name: PlatformPrimaryStatus
     source_side:
       input:
         participant: platform_lan

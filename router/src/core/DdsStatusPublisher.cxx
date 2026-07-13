@@ -30,6 +30,11 @@ DdsStatusPublisher::DdsStatusPublisher(dds::domain::DomainParticipant participan
 void DdsStatusPublisher::publish(std::shared_ptr<const RouterStatus> snapshot) {
     try {
         writer_.write(*snapshot);
+    } catch (const dds::core::NotEnabledError &) {
+        // Expected during disabled startup (D52): the controller's constructor-time
+        // snapshot is written before the participant/writer is enabled. router_main
+        // re-publishes via RouterController::republish_status() after enable_all().
+        Log::debug("status_publish_skipped_not_enabled", {});
     } catch (const std::exception &e) {
         Log::warn("status_publish_failed", {{"error", e.what()}});
     }

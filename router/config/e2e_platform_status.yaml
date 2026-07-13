@@ -1,0 +1,61 @@
+# e2e_platform_status.yaml — router_main-runnable fixture for the Python e2e suite
+# (router/test_e2e/). Same shape as control-platform.yaml's platform_primary_status route
+# (after the D50 topic-name fix: PlatformPrimaryStatus, not the stale PlatformStatus), with
+# the same Phase 7/D34-D35 workarounds as e2e_control_command.yaml (qos: "" on LAN-local
+# legs, writer_qos: default on the WAN-crossing output leg to avoid the real auto-QoS
+# output-readiness deadlock between two independent router_main processes — D51 — single
+# router.type_name) — see that file's header, docs/cpp_router/design-decisions.md D50/D51.
+#
+# Loaded twice by the test harness against the SAME file: once with --role platform, once
+# with --role control. Domain placeholders are substituted per test run for isolation —
+# see router/test_e2e/conftest.py.
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role
+
+router:
+  id: 30
+  name: e2e-platform-status
+  type_name: platform_primary_status
+  # Default admin participant for the file's own (platform) role; the control-role
+  # process launched against this same file overrides this with
+  # --admin-participant control_lan (see router/test_e2e/conftest.py).
+  admin_participant: platform_lan
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: __DOMAIN_CONTROL_LAN__
+  control_wan:
+    role: control
+    domain: __DOMAIN_WAN__
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  platform_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+
+routes:
+  - name: platform_primary_status
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformPrimaryStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: default
+    destination_side:
+      input:
+        participant: control_wan
+      output:
+        participant: control_lan

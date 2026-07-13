@@ -26,7 +26,32 @@ struct RouteConfig {
     // Concrete active-side routes for this node (routes where node.role is source or
     // destination); each already reduced to the selected side's input/output.
     std::vector<RouterRouteSpec> routes;
+    // Repo-root-relative paths as literally written in the YAML (router_main resolves
+    // them against its cwd, which must be the repo root — see router/README.md).
+    std::string types_xml_path;               // types.xml
+    std::vector<std::string> qos_library_paths; // qos_libraries (not yet applied to
+                                                // entity QoS — Phase 7, D45 — carried
+                                                // here only so router_main can fail fast
+                                                // on a missing file).
+    // router.type_name: the single DynamicData type (registered in types_xml_path) this
+    // process's DynamicRouteFactory is bound to. DynamicRouteFactory binds one type name
+    // for its whole lifetime (D34/D35 — multi-type dispatch is deferred), so a config
+    // whose active routes span more than one type cannot be served by one router_main
+    // process yet; router_main fails fast rather than silently mis-typing a route.
+    std::string type_name;
+    // router.admin_participant: which participant (by name, must exist in participants)
+    // carries the command/status admin channel — command-status.md's "admin rides the
+    // local LAN participant" decision, made explicit instead of inferred from a "_lan"
+    // name-suffix heuristic (D50 follow-up). Empty is allowed only when participants
+    // has exactly one entry.
+    std::string admin_participant;
 };
+
+// True if some participant in the list has this exact name. Shared by parse_route_config's
+// own endpoint-existence checks and by router_main.cxx's admin_participant validation —
+// one definition of "does this participant exist" for both callers.
+bool has_participant(const std::vector<ParticipantState> &participants,
+                    const std::string &name);
 
 // Parse the config at path. Optional role_override/name_override let one config file be
 // loaded "as" either node role for testing both sides; empty => use the file's node.*.

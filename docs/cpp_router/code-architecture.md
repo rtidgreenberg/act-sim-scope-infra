@@ -109,8 +109,12 @@ RouterInstance
   of the team router's LAN participant) by construction (D15).
 - `AsyncWaitSetDispatcher` owns the `AsyncWaitSet`; it attaches route read conditions as
   routes become active and detaches them when routes are disabled, rediscovered, or rebuilt.
-- `CommandHandler` parses command samples, performs cheap target/idempotency checks, and
-  posts accepted mutations to `RouterController`.
+- `CommandHandler` reads `RouterCommand` through a **ContentFilteredTopic**
+  (`target_node = %0 AND target_router = %1`, this router's own identity as the CFT
+  parameters, D47) — a misdirected command never reaches the callback. `command_id`
+  idempotency stays app-level in the controller (D4/D8; DDS cannot do that part). QoS:
+  `RELIABLE + VOLATILE + KEEP_LAST(16)` (D48). Accepted mutations are posted to
+  `RouterController` as `CommandReceived`.
 - `StatusPublisher` emits one aggregate `RouterStatus` sample after startup, accepted
   commands, discovery-driven activation/deactivation, and errors; it includes the presence
   roster. Writer QoS (LAN): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late joiners get
@@ -121,7 +125,13 @@ RouterInstance
   route/topic delta, and requested side effects. Its writer is always created with the
   admin/status plumbing, but the recorder reader exists only in debug mode; with no matched
   reader, the journal produces no event-log data traffic beyond normal DDS endpoint
-  discovery.
+  discovery. QoS (D49): `RELIABLE + KEEP_LAST(256)` with the reliable send window
+  `LENGTH_UNLIMITED` — `write()` never blocks the controller thread even under a slow
+  matched debug reader (old unacknowledged samples are overwritten instead). Backlog is
+  watched via a `StatusCondition` on `RELIABLE_WRITER_CACHE_CHANGED_STATUS`
+  (`PUBLICATION_MATCHED_STATUS` only reports attach/detach, not keeping-up), logged as
+  `journal_falling_behind`; this is observability-only and never feeds back into route
+  control.
 - `PresenceMonitor` publishes this router's compact `RouterHealth` summary over the WAN and
   subscribes to peers', maintaining the `router_id → {state, last-seen, participant GUID, summary}`
   roster. It republishes the aggregated connected-router list over the LAN on `ActRouterMeshStatus`.
@@ -261,7 +271,7 @@ The controller should process these event categories on one serialized strand or
 
 | Event | Source | Controller action |
 |---|---|---|
-| `CommandReceived` | command reader | validate command id and route target (events are post-admission — node/router targeting is the command reader's job, D24), update desired state, publish ack, reconcile route |
+| `CommandReceived` | command reader | validate command id (events are post-admission — node/router targeting already happened via the CFT, D24/D47), update desired state, publish ack, reconcile route |
 | `PublicationDiscovered` | discovery dispatcher | upsert per-topic matched sets (D22), warn on unexpected origin for the leg (D29), try to activate matching desired-enabled routes |
 | `SubscriptionDiscovered` | discovery dispatcher | update output readiness for `auto` writer QoS routes |
 | `EndpointLost` | discovery dispatcher or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |

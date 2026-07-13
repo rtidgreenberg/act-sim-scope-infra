@@ -76,6 +76,10 @@ struct RouteState {
 struct ParticipantState {
     std::string name;
     std::int32_t domain = 0;
+    std::string role;   // YAML participants.<name>.role — config-time only, matched
+                        // against node.role to select which participants this process
+                        // actually needs (D50 follow-up: participants were previously
+                        // built unconditionally regardless of role).
     std::string participant_partition;
     std::string qos_profile_alias;
 };
