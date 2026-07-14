@@ -399,16 +399,70 @@ Evidence (6b, D56):
 
 ### Phase 7: Platform Status And Events Replacement
 
-Deliver:
+> **Contract pinned (D59–D63); readiness pass 2026-07-14.** The original stub silently
+> embedded two deferred library features and two never-wired mechanisms — none earning the
+> table's "High" rating on their own. The readiness pass sliced the phase and validated its
+> three Connext-hard assumptions up front (`ask_connext_question`, 2026-07-14): multi-XML
+> `QosProvider` alias resolution, partition+CFT orthogonality, and discovery `type_name()`
+> feeding `QosProvider::extensions().type()`. Confidence **high** with the slice order below.
+> Delivering all four slices runs the real production `control-platform.yaml` (Milestone 2);
+> afterward D50's blocker list collapses to only the Phase 8 items.
+>
+> **Pivot (D64, 2026-07-14) — read before implementing 7b/7c.** The design later shifted to
+> **create-and-observe**: the router has no local type objects, learns each topic's type
+> **inline from discovery** (`data.type`, rti_view model — spike-proven, `spikes/type_discovery/`),
+> builds both legs from it, and lets **DDS own matching** (`matched_publications()`), retiring
+> the controller's topic-name matching and the D39/D51 readiness gate. This **reshapes 7c**
+> (type object from the wire, not a `type_name()`→catalog lookup) and makes **7b** nearly free
+> (a partition mismatch is just a zero matched-count, not a false-green). The type-acquisition +
+> CFT-on-wire-type pieces are spike-proven (high); the matching-authority refactor (superseding
+> D12/D20/D22, retiring the D39/D51 gate) is **direction-pinned but needs its own
+> implementation-readiness pass + a `matched_publications`/`SUBSCRIPTION_MATCHED` DynamicData
+> spike before coding** — do not implement it straight from D59–D63. D60 (7a QoS aliases) is
+> unaffected in intent but its `QosProvider` API specifics are MCP-sourced and unverified.
 
-- `platform_primary_status` route.
-- `platform_events` route for `PlatformCommandAck` and `ContactReport`.
-- explicit WAN `PLATFORM` partition handling.
+Deliver (slice order, riskiest primitive isolated in 7c):
 
-Evidence:
+- **7a — QoS-alias XML resolution (D60).** The deferred D45 work. Parse `qos_profiles:` (the
+  `wan_event → WAN_QOS_LIB::event_qos` indirection, currently unparsed); build a `QosProvider`
+  over `qos_libraries` via `QosProviderParams::url_profile`; `QosResolver` resolves named
+  aliases (`provider.datareader_qos("LIB::profile")` / `datawriter_qos(...)`); widen
+  `is_resolvable_qos_alias` to any alias in the loaded map; apply participant `qos:` in
+  `ParticipantRegistry`. A named alias fully specifies the endpoint and short-circuits the
+  D39/D42 auto-derivation and the D51 readiness gate (`output_uses_auto_qos()` stays
+  `.empty()`).
+- **7b — Publisher/Subscriber partition application (D61).** Apply
+  `publisher_partition`/`subscriber_partition` (parsed but dropped today) to the per-build
+  `Publisher`/`Subscriber`. A partition mismatch is a non-match (`DISCOVERY_PARTIAL`), **not**
+  an incompatible-QoS event — the discovery-time log records each endpoint's partition so it
+  stays diagnosable.
+- **7c — Per-topic (multi-)type resolution (D62).** Retire process-global `router.type_name`;
+  resolve each topic's DynamicType from its discovery-resolved `type_name()` (D20
+  first-resolved-wins). One `DynamicRouteFactory` serves all types, so `platform_events`
+  (`PlatformCommandAck` + `ContactReport`) and the four-type full config run in one process.
+- **7d — Full `control-platform.yaml` end-to-end.** Control-node + platform-node `router_main`
+  pair on the real production config; `control_command`, `platform_primary_status`, and
+  `platform_events` all cross the WAN; `platform_detail_status` toggled via the Phase 6
+  `ENABLE_ROUTE` loop. Includes the D63 counter path: wire `RouteTopicRuntime::forwarded()` →
+  `TopicRouteState.samples_forwarded` and publish it via a periodic refresh tick that
+  republishes `RouterStatus` **without** bumping `state_revision` (the one sanctioned
+  exception to D5, so counters are observable in steady state).
 
-- control receives primary status and events from one platform without Routing Service.
-- status snapshots show sample counters advancing per route.
+Evidence (mapped 1:1 to named Python e2e tests — D59):
+
+- **E1/E2** (7a) a route using `wan_status`/`wan_event` aliases forwards; the participant
+  `*_wan_udpv4_qos` profile is applied → `test_qos_alias_route.py` + `config/e2e_qos_alias.yaml`.
+- **E3** (7b) a PLATFORM-partitioned route matches only a PLATFORM-partitioned reader; a
+  mismatched/empty-partition reader never matches (route stays `DISCOVERY_PARTIAL`, no
+  incompatible-QoS event) → `test_wan_partition.py` + `config/e2e_partition.yaml`.
+- **E4** (7c) `platform_events` forwards both `PlatformCommandAck` and `ContactReport` from a
+  single `router_main` process → `test_platform_events.py`.
+- **E5** (7d) full `control-platform.yaml` control+platform pair: all three enabled routes
+  cross the WAN without Routing Service → `test_control_platform_full.py`.
+- **E6** (7d/D63) `RouterStatus` shows per-route `samples_forwarded` advancing for an active
+  route (asserted within E5).
+- **E7** (7d) `ENABLE_ROUTE platform_detail_status` starts detail-status flow from the target
+  only → `test_detail_status_toggle.py`.
 
 ### Phase 8: Team Partition Route
 

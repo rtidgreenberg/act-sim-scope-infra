@@ -413,6 +413,10 @@ This resolves the Phase 2 confidence-investigation row.
 **Amended by D16** — participant-purge fan-out into per-endpoint `EndpointLost` is defined
 there (the pending purge-semantics item above is resolved).
 
+**Superseded (matching only) by D64** — the builtin readers stay (type acquisition,
+loop-safety, presence, diagnosis), but per-topic *matching* moves to DDS
+(`matched_publications()`), not controller topic-name re-derivation.
+
 **Amended by D28/D30** — removal handling is uniform native per-endpoint instance
 transitions (the "graceful dispose now / purge pending" split is gone), and the dispatcher keeps
 no endpoint cache: the upsert semantics live in the controller's matched sets, and the
@@ -856,6 +860,12 @@ untested in Phase 2.
 `origin_router`/`ignored` sidecar; the dispatcher-side GUID-keyed record cache is deleted (the
 dispatcher keeps only the participant table). Controller-side matching, the matched sets,
 and the Phase 1 fake-dispatcher consequence are unchanged.
+
+**Superseded by D64** — controller-side matching and the per-topic matched-endpoint sets are
+replaced by DDS's own `matched_publications()`/`matched_subscriptions()` on the created route
+entities (create-and-observe). The controller keeps lifecycle/state, not matching. (Phase 1's
+fake-driven tests remain valid for the state machine; the matching they exercised moves to a
+DDS-backed spike per D64's readiness prerequisite.)
 
 ---
 
@@ -2353,3 +2363,341 @@ this). Uncommitted in the working tree at write time.
 **Docs changed.** `implementation-plan.md` (Phase 6 banner: 6b implemented, phase complete);
 `code-architecture.md` (`ControllerJournalPublisher`/`IControllerJournal` now implemented);
 `README` (`router/test_e2e`); this entry.
+
+---
+
+## D59 — Phase 7 sliced into 7a (QoS-alias XML) / 7b (partitions) / 7c (multi-type) / 7d (full config e2e); evidence→test map (2026-07-14, accepted; Phase 7 implementation-readiness pass)
+
+**Context.** Readiness pass before implementing Phase 7 (same treatment Phase 6 got in
+D54–D56). Unlike Phases 1–6, Phase 7 in `implementation-plan.md` was still the original
+6-line stub — no pinned contract, no D-numbers, no evidence→test map. Reading the stub's
+three "Deliver" bullets against the tree surfaced that Phase 7 silently embeds **two
+deferred library features and two never-wired mechanisms**, none previously validated
+against 7.7:
+
+- **QoS-alias XML resolution** is deferred *to* Phase 7 (D45/D50): `is_resolvable_qos_alias`
+  honors only `""`/`"default"` (`QosAliasPolicy.hpp`), but production `control-platform.yaml`
+  uses `wan_event`/`wan_status`/`lan_status_1hz` and participant `control_wan_udpv4_qos`/
+  `platform_wan_udpv4_qos`. The `qos_profiles:` alias→`LIB::profile` indirection map is not
+  even parsed by `RouteConfigParser` today.
+- **Multi-type dispatch** is deferred (D34/D35): `DynamicRouteFactory` binds one type for the
+  whole process and `router.type_name` is a single scalar, but `platform_events` carries two
+  types (`PlatformCommandAck`, `ContactReport`) and the full config spans four.
+- **Partition application**: `publisher_partition`/`subscriber_partition` are parsed onto the
+  endpoint spec but never applied — `RouteEntityFactory` builds `Publisher`/`Subscriber` with
+  default QoS.
+- **Sample counters**: `RouteTopicRuntime::forwarded()` counts locally but
+  `TopicRouteState.samples_forwarded` is read into status and never written from it, so status
+  always reports 0; and D5 forbids counter deltas from bumping `state_revision`, so even once
+  wired, "counters advancing" is not observable without a refresh path.
+
+**Decision.** Phase 7 lands as four slices, each independently reviewable, riskiest-primitive
+first per Tenet order. All four are in Phase 7 scope (delivers the real production
+`control-platform.yaml`, Milestone 2).
+
+- **7a — QoS-alias XML resolution** (D60). Parse `qos_profiles:`; load `qos_libraries` into a
+  `QosProvider`; resolve named aliases; apply participant `qos:`. First cross-cutting slice.
+- **7b — Publisher/Subscriber partition application** (D61). Apply endpoint partitions;
+  smallest, isolated.
+- **7c — Per-topic (multi-)type resolution** (D62). Retire process-global `router.type_name`;
+  resolve each topic's DynamicType from its discovery-resolved type name. Critical-path risk.
+- **7d — Full `control-platform.yaml` end-to-end** (D63 for the counter path). Control-node +
+  platform-node `router_main` pair on the real production config; all three enabled routes
+  forward; `platform_detail_status` toggled via the Phase 6 `ENABLE_ROUTE` loop; counters
+  advance. After 7d, D50's blocker list collapses to only the Phase 8 items
+  (`platform-team.yaml` flat-route parsing, `participant_partition` application).
+
+**Evidence→test map** (Python e2e, real `router_main`, probe reads via DynamicData —
+same harness as D56):
+
+- **E1** (7a) a route using `wan_status`/`wan_event` aliases forwards; **E2** the participant
+  `*_wan_udpv4_qos` profile is applied → `router/test_e2e/test_qos_alias_route.py` +
+  `router/config/e2e_qos_alias.yaml`.
+- **E3** (7b) a PLATFORM-partitioned route matches only a PLATFORM-partitioned reader;
+  a `""`/mismatched-partition reader never matches (route stays `DISCOVERY_PARTIAL`, no
+  incompatible-QoS event — D61) → `router/test_e2e/test_wan_partition.py` +
+  `router/config/e2e_partition.yaml`.
+- **E4** (7c) `platform_events` forwards both `PlatformCommandAck` and `ContactReport` from a
+  single `router_main` process → `router/test_e2e/test_platform_events.py`.
+- **E5** (7d) full `control-platform.yaml` control+platform pair: `control_command`,
+  `platform_primary_status`, and `platform_events` all cross the WAN → 
+  `router/test_e2e/test_control_platform_full.py`.
+- **E6** (7d/D63) `RouterStatus` shows per-route `samples_forwarded` advancing for an active
+  route (asserted within E5).
+- **E7** (7d) `ENABLE_ROUTE platform_detail_status` starts detail-status flow from the target
+  only → `router/test_e2e/test_detail_status_toggle.py` (exercises the Phase 6 command loop).
+
+**Connext validations run before pinning** (`ask_connext_question`, 2026-07-14): (1)
+`QosProvider` from multiple XML files via `rti::core::QosProviderParams::url_profile` +
+`provider.datareader_qos("LIB::profile")`/`datawriter_qos(...)`; (2) Partition + CFT are
+orthogonal, both apply, and partition mismatch is **not** an incompatible-QoS event; (3)
+`PublicationBuiltinTopicData::type_name()` reports the struct name (e.g.
+`platform_primary_status`), feeding `QosProvider::extensions().type(type_name)` directly.
+Details in D60/D61/D62.
+
+**Rationale.** Small diffs, hardest primitive (multi-type) isolated in 7c; the three
+Connext-hard assumptions are validated up front, so each slice is high confidence going in —
+matching the phase's "High" rating in the plan table, which the stub did not earn on its own.
+
+**Docs changed.** `implementation-plan.md` (Phase 7 banner + Deliver/Evidence rewritten as
+the four-slice contract with named tests); this entry (umbrella), D60–D63 (per-slice
+contracts).
+
+---
+
+## D60 — Phase 7a: QoS-alias XML resolution via a `QosProvider` over `qos_libraries`; named alias short-circuits auto-QoS derivation and the D51 gate (2026-07-14, accepted; Phase 7 review)
+
+**Context.** The deferred D45 work. `control-platform.yaml` names aliases on both endpoints
+(`writer_qos: wan_event`, `reader_qos: wan_status`, `reader_qos: lan_status_1hz`) and on
+participants (`qos: control_wan_udpv4_qos`). Three parsing/resolution gaps: `qos_profiles:`
+(the `wan_event → WAN_QOS_LIB::event_qos` indirection) is unparsed; `is_resolvable_qos_alias`
+rejects everything but `""`/`"default"`; participant `qos:` is not applied.
+
+**Validated against 7.7** (`ask_connext_question`, 2026-07-14): construct one
+`dds::core::QosProvider` over several files with
+`rti::core::QosProviderParams params; params.url_profile(urls); dds::core::QosProvider(params);`
+then fetch named QoS with `provider.datareader_qos("WAN_QOS_LIB::status_qos")` /
+`provider.datawriter_qos("WAN_QOS_LIB::status_qos")`. Profile-name format is exactly
+`"Library::Profile"`.
+
+**Decision.**
+
+- `RouteConfigParser` parses `qos_profiles:` into `RouteConfig` as an alias→`LIB::profile`
+  map. The endpoint `reader_qos`/`writer_qos` and participant `qos:` values are **alias
+  keys** into that map; the map value is the `QosProvider` profile path.
+- `QosResolver` gains a `QosProvider` built (via `QosProviderParams::url_profile`) from
+  `qos_library_paths`, plus the `qos_profiles` map. `reader_qos(alias)`/`writer_qos(alias)`
+  resolve a named alias to `provider.datareader_qos(profiles[alias])` /
+  `datawriter_qos(...)`; `""` and `"default"` keep their D39 meanings unchanged.
+- `is_resolvable_qos_alias` (`QosAliasPolicy.hpp`) widens: an alias is resolvable iff it is
+  `""`, `"default"`, or a key in the loaded `qos_profiles` map. Because the predicate is now
+  config-dependent, it takes the `qos_profiles` set (the config-load check
+  `validate_qos_aliases` and the runtime `QosResolver` both consult the same map — the D44
+  no-drift rule holds by construction).
+- **A named alias fully specifies the endpoint QoS**: it short-circuits the D39/D42
+  auto-derivation (deadline/liveliness are the profile's, not derived) and the D51 readiness
+  gate. `output_uses_auto_qos()` stays a plain `.empty()` check — a named alias is non-empty,
+  so the gate is bypassed exactly as `control-platform.yaml`'s WAN legs already rely on
+  (D51). This is now stated contract, not incidental behavior.
+- Participant `qos:` is applied in `ParticipantRegistry` from the same provider
+  (`provider.participant_qos(profiles[alias])`), preserving disabled-startup ordering (D52).
+- `QosResolver::summarize()` is extended to report the resolved reliability/durability/
+  deadline/liveliness of an arbitrary alias profile for status (D45 summaries), not just the
+  auto profiles.
+
+**Docs changed.** `implementation-plan.md` (Phase 7a); `QosResolver.hpp`/`QosAliasPolicy.hpp`
+header comments (alias lookup now implemented); this entry.
+
+**Reshaped by D64** — the alias contract stands, but the `QosProvider` API specifics here
+(`QosProviderParams::url_profile`, `provider.datareader_qos`/`datawriter_qos`) are
+**MCP-sourced and not build-verified**; confirm against the build before use (connext-ai-issues
+guardrail).
+
+---
+
+## D61 — Phase 7b: apply endpoint Publisher/Subscriber PARTITION QoS; a partition mismatch is a non-match, not an incompatible-QoS event (2026-07-14, accepted; Phase 7 review)
+
+**Context.** `RouterRouteEndpointSpec.publisher_partition`/`subscriber_partition` are parsed
+(`RouteConfigParser.cxx`) but `RouteEntityFactory` builds `dds::pub::Publisher(out_dp)` /
+`dds::sub::Subscriber(in_dp)` with default (empty `""`) partition — so
+`control-platform.yaml`'s `CONTROL`/`PLATFORM` WAN partitions have no effect. Phase 7's
+"explicit WAN PLATFORM partition handling" deliverable.
+
+**Validated against 7.7** (`ask_connext_question`, 2026-07-14): Partition and
+ContentFilteredTopic are orthogonal — partition gates association first, then the CFT filters
+samples on matched pairs; set via `PublisherQos << dds::core::policy::Partition({"PLATFORM"})`
+/ `SubscriberQos << Partition({...})`. **Load-bearing caveat: a partition mismatch is NOT
+reported as an incompatible-QoS status** — mismatched endpoints simply never match, so the
+D39/D45 `REQUESTED/OFFERED_INCOMPATIBLE_QOS` warnings will not explain a partition problem.
+
+**Decision.**
+
+- `RouteEntityFactory` sets `Partition` on the per-build `Publisher` from
+  `view.spec.output.publisher_partition` and on the `Subscriber` from
+  `view.spec.input.subscriber_partition`; empty ⇒ default `""` partition (no change from
+  today). One partition string per endpoint for the POC (the field is scalar); wildcard/multi
+  deferred until a route needs it.
+- Because a partition mismatch is invisible to the incompatible-QoS path, the route surfaces
+  it as it already surfaces "no writer discovered": the topic stays at `DISCOVERY_PARTIAL`
+  with no matched endpoint. To keep it diagnosable, the discovery-time structured log (D17
+  endpoint inventory) records each discovered endpoint's partition, so an operator can see
+  "app writer on partition X, route input expects Y" in the log even though status shows only
+  `DISCOVERY_PARTIAL`. No new status field.
+- Partition is part of the D19 captured discovery subset already; controller matching is
+  unchanged (DDS does the partition gating — the router does not re-implement it), consistent
+  with D15's "enforcement is DDS-level, not route-matching logic."
+
+**Docs changed.** `implementation-plan.md` (Phase 7b); `code-architecture.md`
+(`RouteEntityFactory` partition-application note); this entry.
+
+**Refined by D64** — under create-and-observe, a partition mismatch shows as the created
+entity's **matched-count = 0** (surfaced as a status reason), not a controller-side
+`DISCOVERY_PARTIAL` guess; the false-green is dissolved, not just diagnosed.
+
+---
+
+## D62 — Phase 7c: per-topic DynamicType resolution from discovery `type_name()`; retire process-global `router.type_name` (2026-07-14, accepted; amends D34/D35, D50)
+
+**Context.** `DynamicRouteFactory` binds one type name for the whole process
+(`DynamicRouteFactory.hpp`), and `router_main` requires a single `router.type_name` (D50 Gap-C
+guard). `platform_events` carries two types and the full config four, so neither can run in
+one process. `TypeResolver::get_dynamic_type(name)` already resolves *any* type by name — the
+limitation is purely that the factory is bound once and the route spec has no per-topic type
+source (topic name ≠ type name: topic `PlatformPrimaryStatus`, type `platform_primary_status`).
+
+**Validated against 7.7** (`ask_connext_question`, 2026-07-14):
+`PublicationBuiltinTopicData::type_name()` reports the registered **struct** name
+(`platform_primary_status`), distinct from `topic_name()` (`PlatformPrimaryStatus`), and can
+be passed directly to `QosProvider::extensions().type(type_name)` provided the loaded XML
+registers that exact name. Pitfall recorded: it is the type-name string, never the topic name.
+
+**Decision.**
+
+- The type name for a route topic comes from the controller's already-resolved
+  `resolved_type_name` (D20 first-resolved-wins, sourced from discovery `type_name()`), not
+  from a process-global config scalar. `router.type_name` is **retired** — `router_main` no
+  longer needs it and the D50 Gap-C guard is removed.
+- `IEntityFactory::create_topic_entities` gains the resolved type name (the controller has it
+  at build-issue time); `DynamicRouteFactory::make_topic`/`ensure_type_available` resolve the
+  DynamicType per topic from that name instead of a single `type_name_` member. One
+  `DynamicRouteFactory` instance now serves all DynamicData topics regardless of type.
+- The generated-type lane (Phase 3, admin types) is unaffected — it keeps its
+  compile-time-registered names.
+- Consequence for D50: item 2 of its "not done" list (multi-type dispatch) is closed here;
+  running the full `control-platform.yaml` in one process per node becomes possible (7d),
+  leaving only the Phase 8 items (`platform-team.yaml` flat-route parsing,
+  `participant_partition`).
+
+**Docs changed.** `implementation-plan.md` (Phase 7c); `DynamicRouteFactory.hpp`,
+`code-architecture.md`, `RouteConfigParser.hpp` (`type_name` retirement); D50 (amend note:
+Gap C closed); this entry.
+
+**Reshaped by D64** — `router.type_name` is still retired, but the per-topic type is the
+**type object read from discovery** (`data.type`, rti_view model), not a discovery
+`type_name()`→catalog resolution (there is no local catalog) and no per-topic `type:` config
+key. Spike-proven (`spikes/type_discovery`).
+
+---
+
+## D63 — Phase 7d: wire `forwarded()` → `samples_forwarded` in status via a periodic refresh tick that does not bump `state_revision` (2026-07-14, accepted; Phase 7 review, refines D5)
+
+**Context.** Phase 7's second evidence bullet ("status snapshots show sample counters
+advancing per route") is unsupported today: `RouteTopicRuntime::forwarded()` counts on the
+AsyncWaitSet worker thread, but `TopicRouteState.samples_forwarded` is only ever read into
+status, never written from the runtime, so status reports 0. Worse, D5 deliberately excludes
+counter deltas from the `state_revision` increment predicate ("counters advance inside a
+revision"), and status publishes on revision change — so even after wiring the counter,
+counters would only appear in status when some *other* change republishes it, i.e. never in
+steady state.
+
+**Decision.**
+
+- A periodic **status-refresh tick** (config-fixed cadence, default 1 s — reusing the D14
+  `LinkStatsCollector` tick precedent and its "measurement cadence is config-fixed, not
+  adaptive" reasoning) runs on the controller strand: it pulls each active topic's
+  `forwarded()`/lifecycle count into `TopicRouteState`, and if any counter changed,
+  **republishes `RouterStatus` without bumping `state_revision`**. This is the one sanctioned
+  exception to "status publishes only on revision change": D5 stays authoritative for what
+  *changes revision*; the refresh tick republishes the same revision with fresh counters.
+  Observers reading `state_revision` for change detection are unaffected (it does not move);
+  observers watching counters see them advance at the tick cadence.
+- The counter pull is strand-confined (no cross-thread read of the runtime): the tick posts a
+  `RefreshCounters` controller event, and the handler reads the runtimes it owns — consistent
+  with the single-strand rule (D3/D12). The runtime's `forwarded()` is a plain relaxed
+  counter; exact-at-tick sampling is sufficient for the "advancing" evidence.
+- Scope note: this is the counter-observability path only. The D14 link-stats tick remains
+  separate (LAN-only `ActRouterLinkStats`, its own phase); this tick is the controller's own
+  status republish. If both ticks coexist later they can share one timer, not designed here.
+
+**Docs changed.** `implementation-plan.md` (Phase 7d evidence); `code-architecture.md`
+(`RouterController` refresh-tick + the D5 republish-without-revision-bump exception);
+`command-status.md` (status cadence note: revision-change OR counter-refresh tick); this
+entry.
+
+---
+
+## D64 — Create-and-observe: types learned inline from discovery, DDS is the matching authority; supersedes the discovery-gated controller matching (2026-07-14, accepted direction; supersedes the matching half of D12/D20/D22 and the D39/D51 readiness gate; reshapes D62; amends D13/D35)
+
+**Context.** The Phase 7 design discussion adopted a sharper premise than the earlier docs
+assumed: **the router has topic names from config but NO local type objects** for the
+forwarded application payloads (D35's router-authored XML is illustrative/reference only, not
+a runtime dependency), and a LAN app may not even be a matching Connext version. Two threads
+converged:
+
+1. **Type acquisition.** To build a `DynamicData` reader/writer the router needs the
+   `DynamicType`; with no local XML it must learn it from discovery. The `spikes/type_discovery`
+   spike proved (Connext 7.7, stable 3/3, Part C decisive with the TypeLookup channel
+   *disabled*) that a no-type participant reads the **COMPLETE** type object straight off the
+   builtin discovery data (`data.type` on `publication_reader`/`subscription_reader` — the
+   `rti_view`/`rtiddsspy` model), **inline in SEDP**, for a small type, from both a discovered
+   **writer and reader**, with no `request_types_filter` and no matching local endpoint — and a
+   `ContentFilteredTopic` built from that wire-learned type filters correctly.
+2. **Matching.** The controller today re-derives matching from builtin discovery by topic name
+   (`RouterController::apply_publication`), which is a second, incomplete implementation of what
+   DDS already computes — the source of the D61 partition false-green (a cross-partition writer
+   counts as matched → route reaches `ENABLED` → DDS never associates → zero samples, and the
+   incompatible-QoS path is silent because partition mismatch is not a QoS event).
+
+**Decision (accepted direction; the matching-authority refactor needs its own readiness pass
+before coding — see "Not yet proven").**
+
+- **Type acquisition = read the type object directly from discovery.** The router learns each
+  route topic's `DynamicType` from `data.type` on the builtin readers (the rti_view model), not
+  from a name→catalog lookup (there is no local catalog). This **supersedes D13's
+  `request_types_filter`/TypeLookup framing** for the ACT (small-type) case; `request_types_filter`
+  remains a documented **fallback** only for a type whose TypeObject exceeds the inline size
+  threshold (C++-only on this install — see the connext-ai-issues submodule).
+- **Learn-from-LAN rule.** Each router learns a route topic's type from its **local LAN app
+  endpoint** — the app *writer* on the source side, the app *reader* on the destination side —
+  then builds **both legs** (LAN + WAN) with that one type object. Symmetric; the WAN never
+  learns, so **D13's LAN-only posture is preserved** even with no local XML.
+- **Creation gate = "type resolved," not "match predicted."** A route topic's entities are
+  created as soon as its type is known from the local LAN endpoint — not when the controller
+  predicts a topic-name match.
+- **DDS is the matching authority (create-and-observe).** Once entities exist, route
+  connectivity and per-topic discovery state are driven by the entities' own
+  `matched_publications()` / `matched_subscriptions()` (`SUBSCRIPTION_MATCHED` /
+  `PUBLICATION_MATCHED`), **not** by the controller re-deriving matching by topic name. This
+  **supersedes the matching half of D12/D20/D22** (controller topic-name matching + the
+  per-topic matched-endpoint sets) and **retires the D39/D51 auto-QoS output-readiness gate**
+  (create with a safe default, adjust in place). Builtin discovery is demoted to: type
+  acquisition, loop-safety (D15, unchanged), presence/link-stats (D14), and **near-miss
+  diagnosis** (e.g. "a writer exists on this topic but on the wrong partition"). The D61
+  partition false-green **dissolves**: a cross-partition writer is simply absent from
+  `matched_publications()`; no re-derivation, no partition-regex to replicate.
+
+**Reconciliation of prior Phase 7 decisions.**
+
+- **D62 (multi-type)** is reshaped: `router.type_name` is still retired, but the per-topic type
+  is the **type object from `data.type`**, not a discovery-`type_name()`→catalog resolution
+  (there is no catalog). No per-topic `type:` config key is added (the earlier "config `type:`"
+  idea is dropped — the type is learned from the wire).
+- **D61 (partitions)** is refined: the honest "built-but-not-connected" signal is the created
+  entity's **matched-count = 0**, not a controller-side `DISCOVERY_PARTIAL` guess. Surface it as
+  a status reason, not a new operational state (do not overload `DEGRADED`; keep the D2/D11
+  contract).
+- **D60 (QoS aliases)** is unaffected in intent (QoS aliases are orthogonal to type/matching),
+  but its specific `QosProvider` API calls (`QosProviderParams::url_profile`,
+  `provider.datareader_qos/datawriter_qos`) are **MCP-sourced and not build-verified** — confirm
+  against the build before use (connext-ai-issues guardrail).
+- **D59 slicing** is reframed: 7b (partitions) becomes nearly free under create-and-observe, and
+  7c changes from "per-topic type resolution from discovery `type_name()`" to "type object from
+  discovery + create-and-observe."
+
+**Evidence.** `spikes/type_discovery/` (PLAN.md; Parts A/B/C), 3/3 stable, `/dev/shm` clean,
+Connext 7.7.0. Three MCP claims disproved along the way are recorded in the
+`docs/connext-ai-issues` submodule (build is the arbiter).
+
+**Not yet proven (tracked — do not implement the matching-authority refactor before this).**
+The `matched_publications()` / `SUBSCRIPTION_MATCHED` surface for `DynamicData` route entities
+(timing, the create-then-observe state model, the created-but-unmatched status reason) is **not
+yet spiked**, and retiring the controller matching + D39/D51 gate is a change to shipped
+Phase 1–5 code. This decision pins the **direction**; a follow-up implementation-readiness pass
+(like D54/D59) must slice it and a spike must validate the matched-status surface first. The
+type-acquisition and CFT-on-wire-type pieces are already spike-proven (high confidence).
+
+**Docs changed.** This entry; amend pointers on D12/D20/D22 (matching superseded), D39/D51
+(gate retired), D13/D35 (type learned from wire), D60/D61/D62 (reconciled above);
+`implementation-plan.md` (Phase 7 banner: create-and-observe pivot + the readiness-pass
+prerequisite). `code-architecture.md` reconciliation deferred to the matching-authority
+readiness pass.
