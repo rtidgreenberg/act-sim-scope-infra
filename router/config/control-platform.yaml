@@ -42,7 +42,7 @@ qos_profiles:
   platform_wan_udpv4_qos: WAN_QOS_LIB::platform_participant_udpv4_qos
   wan_event: WAN_QOS_LIB::event_qos
   wan_status: WAN_QOS_LIB::status_qos
-  lan_status_1hz: LAN_QOS_LIB::status_1hz_qos
+  lan_status_1hz: LAN_QOS_LIB::status_1sec_qos
 
 participants:
   control_lan:

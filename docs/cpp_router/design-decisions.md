@@ -2493,6 +2493,27 @@ header comments (alias lookup now implemented); this entry.
 **MCP-sourced and not build-verified**; confirm against the build before use (connext-ai-issues
 guardrail).
 
+**Spike-validated (`spikes/qos_alias/`, 2026-07-14, 3/3).** The mechanism works against the
+real production QoS libs (load + resolve + apply + match + participant-from-profile), but the
+spike surfaced three concrete additions 7a must absorb — the reason it was not high-confidence
+on paper:
+1. **The production QoS libs are templated with 14 env vars** (`*_LAN_PEER*`, `*_WAN_PEER*`,
+   `WAN_HB_PERIOD_SEC`, `WAN_TTL`, `WAN_TIMEOUT_SEC`, …) and do **not parse** unless they are
+   defined. `router_main` must supply/propagate them and fail fast naming a missing one.
+2. **The WAN participant profile has an env-var constraint:** `participant_liveliness_assert_period`
+   is hardcoded 30 s and `lease_duration = $(WAN_TIMEOUT_SEC)`; Connext requires assert < lease,
+   so **`WAN_TIMEOUT_SEC` must be > 30** (XML default 100) or the participant fails to create
+   with "Inconsistent QoS".
+3. **`control-platform.yaml` named a non-existent profile (now fixed):** `lan_status_1hz →
+   LAN_QOS_LIB::status_1hz_qos` (the lib has `status_1sec_qos`). Fixed to `status_1sec_qos`.
+   `validate_qos_aliases` must still check profile **existence in the loaded provider**, not
+   just the `is_resolvable_qos_alias` string rule, so this class of error is caught at load.
+
+**API confirmed (Python):** multi-file load is `QosProvider(";".join(paths))`; resolve via
+`datareader_qos_from_profile`/`datawriter_qos_from_profile`/`participant_qos_from_profile` — not
+D60's `datareader_qos(...)`. The C++ `QosProvider` surface is still a compile-check at
+implementation time.
+
 ---
 
 ## D61 — Phase 7b: apply endpoint Publisher/Subscriber PARTITION QoS; a partition mismatch is a non-match, not an incompatible-QoS event (2026-07-14, accepted; Phase 7 review)
@@ -2684,17 +2705,27 @@ before coding — see "Not yet proven").**
   7c changes from "per-topic type resolution from discovery `type_name()`" to "type object from
   discovery + create-and-observe."
 
-**Evidence.** `spikes/type_discovery/` (PLAN.md; Parts A/B/C), 3/3 stable, `/dev/shm` clean,
-Connext 7.7.0. Three MCP claims disproved along the way are recorded in the
-`docs/connext-ai-issues` submodule (build is the arbiter).
+**Evidence.** `spikes/type_discovery/` (Parts A/B/C, 3/3) and `spikes/matched_endpoints/`
+(Parts A/B/C, 4/4), stable, `/dev/shm` clean, Connext 7.7.0. Three MCP claims disproved along
+the way are recorded in the `docs/connext-ai-issues` submodule (build is the arbiter).
 
-**Not yet proven (tracked — do not implement the matching-authority refactor before this).**
-The `matched_publications()` / `SUBSCRIPTION_MATCHED` surface for `DynamicData` route entities
-(timing, the create-then-observe state model, the created-but-unmatched status reason) is **not
-yet spiked**, and retiring the controller matching + D39/D51 gate is a change to shipped
-Phase 1–5 code. This decision pins the **direction**; a follow-up implementation-readiness pass
-(like D54/D59) must slice it and a spike must validate the matched-status surface first. The
-type-acquisition and CFT-on-wire-type pieces are already spike-proven (high confidence).
+**Spike-proven (2026-07-14).** Both halves are now validated against Connext 7.7.0:
+- Type acquisition — `spikes/type_discovery/` (COMPLETE type read inline from discovery, from
+  a writer and a reader; Part C decisive with TypeLookup disabled).
+- Matching authority — `spikes/matched_endpoints/` (4/4 stable): DDS's own
+  `matched_publications()`/`matched_subscriptions()` are the connectivity truth; a
+  cross-partition writer never enters a CFT route reader's `matched_publications` (the D61
+  **false-green is dissolved, not merely diagnosed**), a same-partition writer matches, and
+  created-but-unmatched is an observable zero.
+
+**Still to do before implementing (the readiness pass, NOT a spike).** Retiring the controller
+topic-name matching + the matched-endpoint sets (D12/D20/D22) and the D39/D51 gate, in favor of
+entity-`matched_*`-driven discovery state, is a change to shipped, tested Phase 1–5 code. It
+needs its own D54/D59-style slicing: choose the poll-vs-`SUBSCRIPTION_MATCHED`-StatusCondition
+mechanism (reuse the Phase 5 StatusCondition/AsyncWaitSet pattern), wire the
+created-but-unmatched **status reason** (not a new operational state — keep the D2/D11
+contract), and confirm the C++ `matched_publications`/StatusCondition call surface by compile
+(the MCP is not trusted). The behavior/API is proven; the code refactor is the remaining work.
 
 **Docs changed.** This entry; amend pointers on D12/D20/D22 (matching superseded), D39/D51
 (gate retired), D13/D35 (type learned from wire), D60/D61/D62 (reconciled above);

@@ -414,12 +414,20 @@ Evidence (6b, D56):
 > builds both legs from it, and lets **DDS own matching** (`matched_publications()`), retiring
 > the controller's topic-name matching and the D39/D51 readiness gate. This **reshapes 7c**
 > (type object from the wire, not a `type_name()`→catalog lookup) and makes **7b** nearly free
-> (a partition mismatch is just a zero matched-count, not a false-green). The type-acquisition +
-> CFT-on-wire-type pieces are spike-proven (high); the matching-authority refactor (superseding
-> D12/D20/D22, retiring the D39/D51 gate) is **direction-pinned but needs its own
-> implementation-readiness pass + a `matched_publications`/`SUBSCRIPTION_MATCHED` DynamicData
-> spike before coding** — do not implement it straight from D59–D63. D60 (7a QoS aliases) is
-> unaffected in intent but its `QosProvider` API specifics are MCP-sourced and unverified.
+> (a partition mismatch is just a zero matched-count, not a false-green). Type acquisition +
+> CFT-on-wire-type are spike-proven (`spikes/type_discovery/`, high), and the matching-authority
+> refactor is now **behavior/API-proven** (`spikes/matched_endpoints/`, 4/4: partition mismatch
+> → zero matches, false-green dissolved). What remains is the **code refactor into the shipped
+> controller** (superseding D12/D20/D22, retiring the D39/D51 gate) — still needs its own
+> implementation-readiness pass; do not implement straight from D59–D63.
+>
+> **7a spike-validated (`spikes/qos_alias/`, D60).** The alias mechanism works against the real
+> production QoS libs, but 7a must also: (a) require/propagate the QoS-lib **env vars** (14 of
+> them, incl. `WAN_TIMEOUT_SEC > 30` or the WAN participant QoS is inconsistent); (b) make
+> `validate_qos_aliases` check profile **existence** in the loaded provider; (c) `control-platform.yaml`'s
+> broken `lan_status_1hz` alias is **fixed** (→ `status_1sec_qos`). C++ `QosProvider`
+> API is a compile-check. With these, **7a is high-confidence and pivot-independent — the
+> recommended next slice to implement.**
 
 Deliver (slice order, riskiest primitive isolated in 7c):
 
