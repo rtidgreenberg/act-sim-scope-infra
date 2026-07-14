@@ -30,11 +30,14 @@ class RouterController {
 public:
     // Phase 1: routes from fixture specs only (D10); participants read-only from
     // config for status completeness (D7). Publishes the startup snapshot (revision 0).
+    // journal is optional (D55): nullptr (the default, e.g. Phase 1 tests) disables the
+    // debug journal entirely — additive, no behavior change.
     RouterController(const RouterIdentityInfo &identity,
                      const std::vector<RouterRouteSpec> &route_specs,
                      const std::vector<ParticipantState> &participants,
                      IEntityFactory *entity_factory,
-                     IStatusPublisher *status_publisher);
+                     IStatusPublisher *status_publisher,
+                     IControllerJournal *journal = nullptr);
 
     // Thread-safe (MPSC producer side, D12).
     void post(const ControllerEvent &event);
@@ -54,7 +57,17 @@ public:
     const MutableRouterState &state() const { return state_; }
 
 private:
+    // Process one drained event on the strand: fingerprint, process, publish-if-changed,
+    // then emit one journal record (D55). Shared by drain() and wait_and_drain().
+    void process_one(const ControllerEvent &event);
     void process(const ControllerEvent &event);
+
+    // Build the debug journal record for a just-processed event (D55/D56): maps the event
+    // kind (D46), stamps pre/post state_revision + state_changed, and fills the
+    // decision/reason from the event's outcome (the cached ack for commands). Mutates only
+    // the journal sequence counter.
+    ControllerJournalRecord build_journal_record(const ControllerEvent &event,
+                                                 std::uint64_t pre_revision);
 
     void handle_command(const RouterCommand &cmd);
     void handle_enable(const RouterCommand &cmd, RouterCommandAck &ack);
@@ -88,6 +101,8 @@ private:
     EventQueue queue_;
     IEntityFactory *factory_;
     IStatusPublisher *status_;
+    IControllerJournal *journal_;    // optional debug journal (D55); nullptr = disabled
+    std::uint64_t journal_sequence_; // monotonic per-record sequence (D55)
     std::string current_cause_; // accepted command id during this event, else empty (D8)
 };
 

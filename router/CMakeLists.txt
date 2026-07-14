@@ -64,6 +64,7 @@ add_executable(router_main
     src/core/DiscoveryDispatcher.cxx
     src/core/DdsStatusPublisher.cxx
     src/core/CommandReader.cxx
+    src/core/ControllerJournalPublisher.cxx
     src/core/AsyncWaitSetDispatcher.cxx
     src/core/DynamicRouteFactory.cxx
     ${RouterAdminTypes_CXX11_GENERATED_SOURCES}

@@ -120,10 +120,11 @@ RouterInstance
   roster. Writer QoS (LAN): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late joiners get
   the current snapshot from durability; publication is change-driven only, never periodic,
   and observer-side aliveness rides the writer's liveliness (D26).
-- `ControllerJournalPublisher` implements the nullable `IControllerJournal` seam on
-  `RouterController` (symmetric with `IStatusPublisher`, D55; invoked once per processed
-  event from `process()`, and `nullptr` in the Phase 1 controller tests so they stay
-  unchanged). It emits one LAN-local analysis sample per processed controller
+- `ControllerJournalPublisher` (implemented, D58) implements the nullable `IControllerJournal`
+  seam on `RouterController` (symmetric with `IStatusPublisher`, D55; invoked once per
+  processed event from the shared `process_one()` helper, and `nullptr` in the Phase 1
+  controller tests so they stay unchanged). It emits one LAN-local analysis sample per
+  processed controller
   event with the input event, controller decision/outcome, pre/post revision, affected
   route/topic delta, and requested side effects. Its writer is always created with the
   admin/status plumbing, but the recorder reader exists only in debug mode; with no matched

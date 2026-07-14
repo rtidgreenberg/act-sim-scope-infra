@@ -31,6 +31,7 @@
 #include "config/RouteConfigParser.hpp"
 #include "core/AsyncWaitSetDispatcher.hpp"
 #include "core/CommandReader.hpp"
+#include "core/ControllerJournalPublisher.hpp"
 #include "core/DdsStatusPublisher.hpp"
 #include "core/DiscoveryDispatcher.hpp"
 #include "core/DrainThread.hpp"
@@ -280,13 +281,20 @@ int main(int argc, char **argv) {
         QosResolver qos;
         DynamicRouteFactory factory(registry, types, qos, route_disp, cfg.type_name);
 
+        // Phase 6 slice 6b: controller journal (debug analysis). Its backlog StatusCondition
+        // attaches to the AWS here, before aws.start()/enable_all() (D52). The writer is
+        // always created; it emits no data traffic until a recorder reader matches. Declared
+        // before ctrl so ctrl can hold the IControllerJournal seam (D55).
+        ControllerJournalPublisher journal_pub(admin_dp, aws);
+
         RouterIdentityInfo identity;
         identity.node_name = cfg.node_name;
         identity.router_name = cfg.router_name;
         identity.router_id = static_cast<std::uint32_t>(cfg.router_id);
         identity.status_id = cfg.router_name + "-" + std::to_string(::getpid());
 
-        RouterController ctrl(identity, cfg.routes, filtered_participants, &factory, &status_pub);
+        RouterController ctrl(identity, cfg.routes, filtered_participants, &factory,
+                              &status_pub, &journal_pub);
         factory.set_controller(&ctrl);
 
         DiscoveryDispatcher discovery(aws, ctrl, registry, router_tag);
@@ -329,6 +337,7 @@ int main(int argc, char **argv) {
         discovery.shutdown();
         command_reader.shutdown();
         drain.stop();
+        journal_pub.shutdown();
         aws.stop();
         Log::info("router.stop.ok", {});
         return 0;

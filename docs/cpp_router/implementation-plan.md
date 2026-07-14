@@ -328,7 +328,7 @@ Evidence:
 
 ### Phase 6: Command/Status Control Loop
 
-> **Contract pinned (D46–D49), confidence high.** The command-handling state machine
+> **IMPLEMENTED — Phase 6 complete (6a = D57, 6b = D58).** Contract pinned (D46–D49). The command-handling state machine
 > (`ENABLE_ROUTE`/`DISABLE_ROUTE`, duplicate-`command_id` replay, unknown-route reject,
 > idempotent re-enable/re-disable, `ERROR` re-arm) is **already implemented and tested**
 > in Phase 1 (`test_controller_phase1.cxx`) behind the `IStatusPublisher` seam; Phase 6 is
@@ -376,7 +376,7 @@ Evidence (6a, D56):
 - **E-CFT** a command addressed to a different `target_node`/`target_router` never changes
   route state and draws no ack (the D47 CFT drops it before the callback).
 
-**Slice 6b — controller journal.** Deliver:
+**Slice 6b — controller journal. IMPLEMENTED (D58) — Phase 6 complete.** Deliver:
 
 - `IControllerJournal` seam on `RouterController` (nullable; Phase 1 tests pass `nullptr`,
   D55) and its real implementation `ControllerJournalPublisher` on the LAN admin

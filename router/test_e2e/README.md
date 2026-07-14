@@ -49,14 +49,20 @@ Both tests use dedicated fixtures (`router/config/e2e_control_command.yaml`,
   `DISABLE_ROUTE` / duplicate-`command_id` at one router over the DDS `ActRouterCommand`
   channel and asserts acks (`ActRouterCommandAck`), route state/`state_revision` off
   `ActRouterStatus`, and that an off-target command is dropped by the D47 CFT.
+- **`test_controller_journal.py`** — Phase 6 slice 6b (D58): a `ControllerJournalRecord`
+  reader on `ActRouterControllerJournal` (= "debug mode") asserts one record per processed
+  controller event with decision/pre-post revision, strictly-increasing `event_sequence`,
+  unchanged route behavior with the journal attached, and no `journal_falling_behind` under
+  normal load (D49 backlog signal wired but not force-tested).
 
 ## Explicitly NOT covered here
 
-- **Phase 6** (command/status DDS control loop) — sliced 6a/6b (D54). **Slice 6a is
-  implemented** (D57): `test_router_admin_commands.py` (+ config `e2e_admin_commands.yaml`)
-  drives `ENABLE_ROUTE`/`DISABLE_ROUTE`/duplicate-`command_id` over DDS and asserts the D47
-  CFT target filter, acks, and route state/revision. **Slice 6b is not yet implemented**:
-  the controller journal (`test_controller_journal.py`, D55/D56).
+- **Phase 6** (command/status DDS control loop) — **complete** (sliced 6a/6b, D54). 6a
+  (D57): `test_router_admin_commands.py` drives `ENABLE_ROUTE`/`DISABLE_ROUTE`/duplicate-
+  `command_id` over DDS and asserts the D47 CFT target filter, acks, and route state/revision.
+  6b (D58): `test_controller_journal.py` asserts the controller journal
+  (`ActRouterControllerJournal`) records, `event_sequence` ordering, unchanged route
+  behavior with the journal attached, and `journal_falling_behind` absent under normal load.
 - **Phase 7** (QoS-library/XML alias lookup, D45) — named QoS aliases (`wan_event`,
   `wan_status`, ...) are unresolvable; the e2e fixtures use `qos: ""` (the real Phase 5
   auto-QoS), not the production aliases.

@@ -54,4 +54,16 @@ struct IStatusPublisher {
     virtual void publish_ack(const RouterCommandAck &ack) = 0;
 };
 
+// Debug-analysis journal seam (Phase 6 slice 6b, D55). The controller invokes record()
+// exactly once per processed ControllerEvent, carrying the input event, decision/outcome,
+// and pre/post state_revision. It is OPTIONAL: the controller holds an IControllerJournal*
+// that is nullptr by default (Phase 1 tests pass nothing), in which case no record is built
+// — the seam is additive with zero behavior change. The real DDS-backed implementation
+// (ControllerJournalPublisher) writes the record as a generated ControllerJournalRecord with
+// D49 QoS. Observability only: record() must never block route control (D49 send-window fix).
+struct IControllerJournal {
+    virtual ~IControllerJournal() {}
+    virtual void record(const ControllerJournalRecord &rec) = 0;
+};
+
 } // namespace router

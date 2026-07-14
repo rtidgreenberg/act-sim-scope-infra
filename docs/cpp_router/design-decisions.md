@@ -2296,3 +2296,60 @@ time.
 **Docs changed.** `implementation-plan.md` (Phase 6 banner: 6a marked implemented);
 `README` (`router/test_e2e`); this entry. Next on this thread: slice 6b (controller journal,
 D55).
+
+---
+
+## D58 — Phase 6 slice 6b (controller journal) IMPLEMENTED; Phase 6 COMPLETE (2026-07-14, accepted; closes 6b per D55/D56)
+
+**What shipped.** The D55 seam and its DDS implementation:
+
+- `IControllerJournal` seam (`Interfaces.hpp`) + a nullable `IControllerJournal*` on
+  `RouterController` (defaulted `nullptr`, D55). `drain()`/`wait_and_drain()` now share a
+  `process_one()` helper that, after `publish_if_changed`, builds one
+  `ControllerJournalRecord` per processed event and calls `journal_->record()` — skipped
+  entirely when the pointer is null. **Phase 1 tests pass nothing and the 18-case
+  `test_controller_phase1` suite stays green unchanged** (verified) — additive, zero behavior
+  change as promised.
+- Record contents (`build_journal_record`): event kind mapped 1:1 to
+  `ControllerJournalEventKind` (D46); `pre_state_revision`/`post_state_revision`/
+  `state_changed` from the revision before/after the event; `decision`/`reason` from the
+  event's outcome — for a command, the cached ack (`accepted`/`rejected` + message, D4), so
+  even a duplicate-replay journals the original decision with `state_changed=false`;
+  `action` = `status_published` iff state changed. `event_sequence` is a monotonic
+  per-controller counter. `payload_json` is left empty (reserved for future enrichment).
+- `ControllerJournalPublisher` (`ControllerJournalPublisher.{hpp,cxx}`): writer on
+  `ActRouterControllerJournal` with D49 QoS — `RELIABLE` + `KEEP_LAST(256)` + reliable send
+  window `min/max_send_window_size(-1)` (unlimited) so `write()` never blocks the strand.
+  Backlog watched via a `StatusCondition` on `RELIABLE_WRITER_CACHE_CHANGED_STATUS` attached
+  to the shared `AsyncWaitSet`; `on_backlog()` logs `journal_falling_behind` on the rising
+  edge past a `128` unacked threshold (half the depth), `journal_caught_up` on the falling
+  edge. Wired into `router_main` before `aws.start()`/`enable_all()` (D52 ordering), declared
+  before `RouterController` so it can hold the seam; `shutdown()` after `drain.stop()`.
+
+**Connext API note (contradicts the MCP validator).** `validate_modern_cpp_code` got the
+send-window QoS (literal `-1`, since it didn't accept the `dds::core::LENGTH_UNLIMITED`
+symbol) and the extension status accessor
+(`writer.extensions().reliable_writer_cache_changed_status()`) right, but it asserted the
+condition handler is installed via `sc.handler(...)` — that does **not** compile against this
+7.7 install. The correct call is `sc->handler(...)` (arrow — the handler lives on the
+condition delegate), matching the existing Phase 5 `RouteRuntime` StatusConditions. Validator
+output is a strong hint, not ground truth; the build is the arbiter.
+
+**Test.** `router/test_e2e/test_controller_journal.py` (reuses `e2e_admin_commands.yaml`): a
+Python `ControllerJournalRecord` reader IS "debug mode" (D56) — asserts a COMMAND_RECEIVED
+record (decision `accepted`, affected route, real pre<post bump), discovery/entities-ready
+records while the route builds, strictly-increasing `event_sequence`, the route still
+reaching `ROUTE_ENABLED` with the journal attached (behavior unchanged by observation), and
+`journal_falling_behind` ABSENT under normal load (D49 backlog signal wired-not-forced; real
+backpressure deferred to a stress phase). Probe gained a `JournalCollector` (buffers records
+across queries — `ControllerJournalRecord` is keyless, so a bare `take()` loop would discard
+records for other queries, same rationale as `AckCollector`). The journal is VOLATILE, so the
+test waits for the reader↔writer match before driving events.
+
+**Evidence.** C++ ctest 4/4 (Phase 1 unchanged); Python e2e 13/13; journal test stable 5/5
+reruns; no `/dev/shm` leaks, no stray `router_main`. **Phase 6 is complete** (6a = D57, 6b =
+this). Uncommitted in the working tree at write time.
+
+**Docs changed.** `implementation-plan.md` (Phase 6 banner: 6b implemented, phase complete);
+`code-architecture.md` (`ControllerJournalPublisher`/`IControllerJournal` now implemented);
+`README` (`router/test_e2e`); this entry.

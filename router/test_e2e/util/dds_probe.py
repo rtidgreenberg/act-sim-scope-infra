@@ -232,6 +232,61 @@ class AckCollector:
         return None
 
 
+# ControllerJournalEventKind ordinals (RouterAdminTypes.idl declaration order, D46).
+JOURNAL_KIND = {0: "COMMAND_RECEIVED", 1: "PUBLICATION_DISCOVERED",
+                2: "SUBSCRIPTION_DISCOVERED", 3: "ENDPOINT_LOST",
+                4: "TOPIC_ENTITIES_READY", 5: "TOPIC_TEARDOWN_COMPLETE",
+                6: "ROUTE_ENTITY_ERROR", 7: "TOPIC_QOS_WARNING"}
+
+
+class JournalCollector:
+    """Accumulating reader for ControllerJournalRecord (the debug journal, D55/D56).
+    ControllerJournalRecord has no @key, so take() drains every cached record at once — this
+    buffers all records into `records` so successive wait_for() queries (e.g. first for a
+    COMMAND_RECEIVED, then for discovery records) never lose each other's samples. Scope one
+    per test. A matched Python reader IS "debug mode" (D56): the router's journal writer
+    produces no data traffic until this reader discovers it."""
+
+    def __init__(self, journal_reader):
+        self._reader = journal_reader
+        self.records = []
+
+    def _drain(self):
+        for sample in self._reader.take():
+            if not sample.info.valid:
+                continue
+            d = sample.data
+            self.records.append({
+                "event_kind": JOURNAL_KIND.get(int(d["event_kind"]), "?"),
+                "event_sequence": int(d["event_sequence"]),
+                "pre": int(d["pre_state_revision"]),
+                "post": int(d["post_state_revision"]),
+                "state_changed": bool(d["state_changed"]),
+                "route": d["route_name"],
+                "topic": d["topic_name"],
+                "command_id": d["command_id"],
+                "decision": d["decision"],
+                "reason": d["reason"],
+            })
+
+    def wait_for(self, predicate, timeout_s=15.0, poll_s=0.1, check_alive=None):
+        """Poll until at least one accumulated record satisfies predicate, returning ALL
+        matching records (or whatever matched by timeout). Records stay buffered for later
+        queries."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if check_alive is not None and not check_alive():
+                raise RuntimeError("JournalCollector.wait_for: check_alive() returned "
+                                   "False — router process likely exited early")
+            self._drain()
+            matched = [r for r in self.records if predicate(r)]
+            if matched:
+                return matched
+            time.sleep(poll_s)
+        self._drain()
+        return [r for r in self.records if predicate(r)]
+
+
 def wait_for_route(status_reader, route_name, predicate, timeout_s=20.0, poll_s=0.25,
                    check_alive=None):
     """Poll read_route_facts until predicate(facts) is true, returning the facts (or the

@@ -20,15 +20,42 @@ std::string kind_name(RouterCommandKind kind) {
     return "?";
 }
 
+// Internal ControllerEventKind -> wire ControllerJournalEventKind (D46: the two enums are
+// 1:1 by construction, so every case maps).
+ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
+    switch (kind) {
+    case ControllerEventKind::CommandReceived:
+        return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED;
+    case ControllerEventKind::PublicationDiscovered:
+        return ControllerJournalEventKind::JOURNAL_PUBLICATION_DISCOVERED;
+    case ControllerEventKind::SubscriptionDiscovered:
+        return ControllerJournalEventKind::JOURNAL_SUBSCRIPTION_DISCOVERED;
+    case ControllerEventKind::EndpointLost:
+        return ControllerJournalEventKind::JOURNAL_ENDPOINT_LOST;
+    case ControllerEventKind::TopicEntitiesReady:
+        return ControllerJournalEventKind::JOURNAL_TOPIC_ENTITIES_READY;
+    case ControllerEventKind::TopicTeardownComplete:
+        return ControllerJournalEventKind::JOURNAL_TOPIC_TEARDOWN_COMPLETE;
+    case ControllerEventKind::RouteEntityError:
+        return ControllerJournalEventKind::JOURNAL_ROUTE_ENTITY_ERROR;
+    case ControllerEventKind::TopicQosWarning:
+        return ControllerJournalEventKind::JOURNAL_TOPIC_QOS_WARNING;
+    }
+    return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
+}
+
 } // namespace
 
 RouterController::RouterController(const RouterIdentityInfo &identity,
                                    const std::vector<RouterRouteSpec> &route_specs,
                                    const std::vector<ParticipantState> &participants,
                                    IEntityFactory *entity_factory,
-                                   IStatusPublisher *status_publisher)
+                                   IStatusPublisher *status_publisher,
+                                   IControllerJournal *journal)
         : factory_(entity_factory),
-          status_(status_publisher) {
+          status_(status_publisher),
+          journal_(journal),
+          journal_sequence_(0) {
     state_.node_name = identity.node_name;
     state_.router_name = identity.router_name;
     state_.router_id = identity.router_id;
@@ -66,20 +93,27 @@ void RouterController::republish_status() {
 void RouterController::drain() {
     std::vector<ControllerEvent> events = queue_.drain();
     for (size_t i = 0; i < events.size(); ++i) {
-        std::vector<std::string> pre = fingerprints();
-        current_cause_.clear();
-        process(events[i]);
-        publish_if_changed(pre);
+        process_one(events[i]);
     }
 }
 
 void RouterController::wait_and_drain(std::chrono::milliseconds timeout) {
     std::vector<ControllerEvent> events = queue_.wait_and_drain(timeout);
     for (size_t i = 0; i < events.size(); ++i) {
-        std::vector<std::string> pre = fingerprints();
-        current_cause_.clear();
-        process(events[i]);
-        publish_if_changed(pre);
+        process_one(events[i]);
+    }
+}
+
+void RouterController::process_one(const ControllerEvent &event) {
+    std::vector<std::string> pre = fingerprints();
+    std::uint64_t pre_revision = state_.state_revision;
+    current_cause_.clear();
+    process(event);
+    publish_if_changed(pre);
+    // Debug journal (D55): one record per processed event, after the status publish so the
+    // post-revision reflects any bump. Skipped entirely when no journal is attached.
+    if (journal_ != nullptr) {
+        journal_->record(build_journal_record(event, pre_revision));
     }
 }
 
@@ -110,6 +144,75 @@ void RouterController::process(const ControllerEvent &event) {
         apply_qos_warning(event);
         break;
     }
+}
+
+ControllerJournalRecord RouterController::build_journal_record(
+        const ControllerEvent &event, std::uint64_t pre_revision) {
+    ControllerJournalRecord rec;
+    rec.target_node = state_.node_name;
+    rec.target_router = state_.router_name;
+    rec.router_id = state_.router_id;
+    rec.status_id = state_.status_id;
+    rec.event_sequence = ++journal_sequence_;
+    rec.timestamp_unix_nanos = static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    rec.event_kind = journal_kind(event.kind);
+    rec.pre_state_revision = pre_revision;
+    rec.post_state_revision = state_.state_revision;
+    rec.state_changed = (state_.state_revision != pre_revision);
+
+    switch (event.kind) {
+    case ControllerEventKind::CommandReceived: {
+        rec.command_id = event.command.command_id;
+        rec.route_name = event.command.route_name;
+        // A processed command ALWAYS has its ack cached by command_id (D4) — every
+        // handle_command path caches one, for both fresh and duplicate-replay commands — and
+        // that ack IS the decision. If it were somehow absent, decision stays empty (a
+        // truthful "unknown") rather than a fabricated outcome.
+        std::map<std::string, RouterCommandAck>::const_iterator it =
+                state_.ack_by_command_id.find(event.command.command_id);
+        if (it != state_.ack_by_command_id.end()) {
+            rec.decision = it->second.accepted ? "accepted" : "rejected";
+            rec.reason = it->second.message;
+        }
+        break;
+    }
+    case ControllerEventKind::PublicationDiscovered:
+    case ControllerEventKind::SubscriptionDiscovered:
+    case ControllerEventKind::EndpointLost:
+        rec.endpoint_guid = event.endpoint.guid;
+        rec.decision = rec.state_changed ? "state_updated" : "no_change";
+        break;
+    case ControllerEventKind::TopicEntitiesReady:
+    case ControllerEventKind::TopicTeardownComplete:
+        rec.route_name = event.route_name;
+        rec.topic_name = event.topic_name;
+        rec.entity_generation = event.entity_generation;
+        rec.decision = rec.state_changed ? "state_updated" : "no_change";
+        break;
+    case ControllerEventKind::TopicQosWarning:
+        // Distinct decision (not the generic state_updated/no_change): a QoS warning is the
+        // exact diagnostic the journal exists to surface, so it shouldn't read as a no-op.
+        rec.route_name = event.route_name;
+        rec.topic_name = event.topic_name;
+        rec.entity_generation = event.entity_generation;
+        rec.decision = "qos_warning";
+        rec.reason = event.qos_warning;
+        break;
+    case ControllerEventKind::RouteEntityError:
+        rec.route_name = event.route_name;
+        rec.topic_name = event.topic_name;
+        rec.entity_generation = event.entity_generation;
+        rec.decision = "error";
+        rec.reason = event.error;
+        break;
+    }
+
+    // Status is published iff externally-visible state changed (publish_if_changed) — so
+    // that IS the side effect this event triggered.
+    rec.action = rec.state_changed ? "status_published" : "none";
+    return rec;
 }
 
 // --- Commands (post-admission, D24) ---
