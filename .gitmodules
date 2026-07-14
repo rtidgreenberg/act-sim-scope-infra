@@ -2,3 +2,6 @@
 	path = harness/act
 	url = https://github.com/rticommunity/rticonnextdds-usecases-act.git
 	branch = dev
+[submodule "docs/connext-ai-issues"]
+	path = docs/connext-ai-issues
+	url = https://github.com/rtidgreenberg/connext-ai-issues.git

@@ -59,6 +59,31 @@ QoS, and behavior:
 - `validate_xml_code` for QoS XML (schema-checks and fixes).
 - `validate_modern_cpp_code` for C++11 Connext API code.
 
+**The MCP is a strong hint, NOT ground truth — the build/a run/introspection is the arbiter.**
+It has been wrong repeatedly on this install (Python-binding surface, QoS-field names, XML
+schema, discovery/type behavior). Therefore:
+- **Before** relying on an MCP answer for anything load-bearing, first sync the doc, then
+  check [`docs/connext-ai-issues/connext-ai-issues.md`](../docs/connext-ai-issues/connext-ai-issues.md)
+  for a matching known-wrong entry. That path is a git submodule
+  (`rtidgreenberg/connext-ai-issues`) **shared across repos** — its content can move forward
+  without this repo's pinned commit knowing, so pull before trusting it:
+  `git submodule update --init` if it's empty, then `cd docs/connext-ai-issues && git pull`
+  to fetch entries other repos may have added.
+- **Verify** MCP claims against the build, a runnable spike, `dir()`/`grep` of the actual
+  headers/`rti.connextdds` binding, or `$NDDSHOME/doc` — never present an unverified MCP claim
+  as fact.
+- **When the build/empirical evidence contradicts the MCP, append an entry** to
+  `docs/connext-ai-issues/connext-ai-issues.md` (newest at bottom: date, tool, claimed, actual,
+  verified). This needs a two-part sync so other repos and this repo's own history both pick
+  it up:
+  1. `cd docs/connext-ai-issues && git commit -am "..." && git push` (commit/push inside the
+     submodule itself).
+  2. Back in the parent repo, `git add docs/connext-ai-issues && git commit` (and push) to
+     re-pin this repo's submodule pointer to that new commit — otherwise a fresh clone or
+     `submodule update` here would reset back to the old entry.
+- **After every response that used or asserted an MCP Connext claim, cross-check it against
+  `docs/connext-ai-issues/connext-ai-issues.md`** before presenting it.
+
 Instance-state consistency (ISC) findings validated against 7.7.0 (see
 `docs/cpp_router/`): native `RECOVER_INSTANCE_STATE_CONSISTENCY` recovers only the
 **same-physical-writer reconnect** case (Scenario A). Recovery across a **restarted writer
