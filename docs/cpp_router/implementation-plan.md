@@ -344,28 +344,58 @@ Evidence:
 > `router_main` is now wired to run real config-driven routes (D50), but that wiring has no
 > command/status admin channel yet (Phase 6's own scope), so there is still no config
 > surface to hook a real CLI/config flag into until this phase lands.
+>
+> **Sliced 6a/6b (D54, readiness pass 2026-07-14).** 6a is the command/ack/status loop —
+> real-DDS wiring around the already-tested state machine; 6b is the controller journal —
+> the only part needing a new seam (`IControllerJournal`, D55) through the green Phase 1
+> controller. Evidence bullets are mapped 1:1 onto named Python e2e tests (D56).
 
-Deliver:
+**Slice 6a — command/status/ack control loop. IMPLEMENTED (D57).** Deliver:
 
-- command reader and ack writer on the LAN admin participant.
-- `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate command handling; late-joiner catch-up
-  comes from status durability.
-- aggregate `RouterStatus` publication after accepted changes.
-- controller event/decision journal writer on the LAN admin participant. The writer is
-  always created with the command/status plumbing, but the recorder/subscriber is launched
-  only in debug mode; without a matched debug reader, the journal produces no data-sample
+- `CommandReader` on the LAN admin participant: a **ContentFilteredTopic** on
+  `target_node`/`target_router` (D47), `RELIABLE + VOLATILE + KEEP_LAST(16)` (D48), posting
+  accepted commands to the controller as `CommandReceived`.
+- real ack writer — `DdsStatusPublisher::publish_ack` (today a no-op) becomes a live
+  `RouterCommandAck` writer, `RELIABLE + VOLATILE + KEEP_LAST(16)` (D48).
+- `ENABLE_ROUTE`, `DISABLE_ROUTE`, and duplicate-`command_id` handling (all already in the
+  Phase 1 controller); aggregate `RouterStatus` publication after accepted changes;
+  late-joiner catch-up comes from status durability (D26).
+- New Python e2e test `router/test_e2e/test_router_admin_commands.py` + config
+  `router/config/e2e_admin_commands.yaml` (one route `enabled: false`).
+
+Evidence (6a, D56):
+
+- **E1** disabled route appears in startup `RouterStatus` as `ROUTE_DISABLED` with no
+  entities.
+- **E2** `ENABLE_ROUTE` moves it to `ROUTE_WAITING_FOR_DISCOVERY` or `ROUTE_ENABLED`
+  depending on discovery readiness; `ack.accepted`; `state_revision` bumps.
+- **E3** `DISABLE_ROUTE` detaches read conditions, closes route entities (topics
+  `TOPIC_IDLE`), forwarding stops; `ack.accepted`.
+- **E4** duplicate `command_id` returns the original ack byte-for-byte and does not
+  increment `state_revision`.
+- **E-CFT** a command addressed to a different `target_node`/`target_router` never changes
+  route state and draws no ack (the D47 CFT drops it before the callback).
+
+**Slice 6b — controller journal.** Deliver:
+
+- `IControllerJournal` seam on `RouterController` (nullable; Phase 1 tests pass `nullptr`,
+  D55) and its real implementation `ControllerJournalPublisher` on the LAN admin
+  participant: `RELIABLE + KEEP_LAST(256)` with the reliable send window `LENGTH_UNLIMITED`
+  (D49) so `write()` never blocks the controller thread; backlog watched via a
+  `RELIABLE_WRITER_CACHE_CHANGED_STATUS` `StatusCondition` → `journal_falling_behind` log.
+  The writer is always created with the command/status plumbing; the recorder reader exists
+  only in debug mode (= a matched reader), so without one the journal produces no data-sample
   traffic beyond normal DDS endpoint discovery.
+- New Python e2e test `router/test_e2e/test_controller_journal.py`.
 
-Evidence:
+Evidence (6b, D56):
 
-- disabled detail-status route appears in startup status with no entities.
-- `ENABLE_ROUTE` moves it to waiting or enabled depending on discovery readiness.
-- `DISABLE_ROUTE` detaches read conditions and closes route entities.
-- duplicate `command_id` returns the original ack and does not increment state revision.
-- with debug recorder enabled, every processed controller event records the input event,
-  controller decision/outcome, pre/post `state_revision`, affected route/topic delta, and
-  requested factory/status actions; with no recorder reader matched, route behavior and
-  status publication are unchanged.
+- **E5** with the journal reader matched, every processed controller event records the input
+  event, controller decision/outcome, pre/post `state_revision`, affected route/topic delta,
+  and requested factory/status actions; with no reader matched, route behavior and status
+  publication are unchanged. The D49 backlog signal is wired but not force-produced —
+  `journal_falling_behind` is asserted **absent** under normal load; real backpressure
+  verification is deferred to a future stress/soak phase.
 
 ### Phase 7: Platform Status And Events Replacement
 

@@ -1,0 +1,56 @@
+# e2e_admin_commands.yaml — single router_main fixture for the Phase 6 slice 6a command
+# control loop e2e test (router/test_e2e/test_router_admin_commands.py, D54/D56).
+#
+# ONE router process (role: platform). Route admin_r1 starts DISABLED (enabled: false) so
+# the test can observe it in the startup RouterStatus with no entities (E1), then drive it
+# to ROUTE_ENABLED / ROUTE_DISABLED over the DDS command channel (E2/E3).
+#
+# The admin channel (ActRouterCommand / ActRouterCommandAck / ActRouterStatus) rides the
+# admin participant wan_in (control_lan domain), which is also where the test's app source
+# writer lives — so a single Python probe on the control_lan domain drives commands, reads
+# acks + status, and publishes the source sample that activates the route.
+#
+# The output leg uses writer_qos: default (not auto "") so the route reaches ROUTE_ENABLED
+# as soon as the input writer is discovered — no output-reader readiness gate (D45) to
+# satisfy, keeping this test about the command loop, not QoS. This is a single process, so
+# it does NOT hit the D51 two-process auto-QoS deadlock regardless.
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py
+# (control_lan -> admin/input domain, platform_lan -> output domain; wan unused here).
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 6
+  name: admincmd
+  type_name: ExampleCommand
+  admin_participant: wan_in
+
+types:
+  xml: router/config/example_types.xml
+
+participants:
+  wan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+  lan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+
+routes:
+  - name: admin_r1
+    enabled: false
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: AdminCmdTopic
+    source_side:
+      input:
+        participant: wan_in
+        reader_qos: ""
+      output:
+        participant: lan_out
+        writer_qos: default

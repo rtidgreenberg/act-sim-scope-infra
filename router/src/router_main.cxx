@@ -30,6 +30,7 @@
 
 #include "config/RouteConfigParser.hpp"
 #include "core/AsyncWaitSetDispatcher.hpp"
+#include "core/CommandReader.hpp"
 #include "core/DdsStatusPublisher.hpp"
 #include "core/DiscoveryDispatcher.hpp"
 #include "core/DrainThread.hpp"
@@ -289,6 +290,14 @@ int main(int argc, char **argv) {
         factory.set_controller(&ctrl);
 
         DiscoveryDispatcher discovery(aws, ctrl, registry, router_tag);
+
+        // Phase 6 slice 6a: LAN admin command channel. Attached to the AWS BEFORE
+        // aws.start()/enable_all() (same D52 reason as discovery — an edge-triggered
+        // condition attached after enable could strand a command that arrives in the gap).
+        // The D47 CFT keys on this router's own identity, so only commands addressed here
+        // reach the callback; the controller runs the state machine and DdsStatusPublisher
+        // writes the ack.
+        CommandReader command_reader(aws, ctrl, admin_dp, cfg.node_name, cfg.router_name);
         aws.start();
 
         // D52: only now, with every builtin-reader condition attached and the
@@ -318,6 +327,7 @@ int main(int argc, char **argv) {
         Log::info("router.stop.begin", {});
         route_disp.shutdown();
         discovery.shutdown();
+        command_reader.shutdown();
         drain.stop();
         aws.stop();
         Log::info("router.stop.ok", {});

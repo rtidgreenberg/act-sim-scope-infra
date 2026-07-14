@@ -70,6 +70,10 @@ overwritten rather than the call stalling. Backlog is observed via a `StatusCond
 logged as `journal_falling_behind` — `PUBLICATION_MATCHED_STATUS` only reports whether a
 debug reader is attached, not whether it is keeping up. It is an analysis stream, not state;
 late joiners use `RouterStatus` for current state and a live recorder for event history.
+The controller feeds it through a nullable `IControllerJournal` seam invoked once per
+processed event (D55); `nullptr` disables journaling with no behavior change (the Phase 1
+controller tests pass `nullptr`). Phase 6 lands this in slice 6b, after the 6a command/ack/
+status loop (D54).
 
 This is distinct from the one liveliness-bearing WAN topic, **`RouterHealth`**, which carries
 router/link presence + a **compact status summary** across the mesh — see

@@ -144,6 +144,8 @@ def writer_qos(reliability=None, durability=None, ownership=None):
 ROUTE_STATE = {0: "ROUTE_DISABLED", 1: "ROUTE_WAITING_FOR_DISCOVERY", 2: "ROUTE_RESOLVING",
                3: "ROUTE_ENABLED", 4: "ROUTE_DEGRADED", 5: "ROUTE_ERROR"}
 DISCOVERY_STATE = {0: "DISCOVERY_NONE", 1: "DISCOVERY_PARTIAL", 2: "DISCOVERY_READY"}
+TOPIC_STATE = {0: "TOPIC_IDLE", 1: "TOPIC_CREATING", 2: "TOPIC_FORWARDING",
+               3: "TOPIC_TEARING_DOWN", 4: "TOPIC_ERROR"}
 
 
 def read_route_facts(status_reader, route_name):
@@ -162,15 +164,72 @@ def read_route_facts(status_reader, route_name):
                 "state": ROUTE_STATE.get(int(data[f"routes[{i}].state"]), "?"),
                 "discovery": DISCOVERY_STATE.get(
                     int(data[f"routes[{i}].discovery_state"]), "?"),
+                "topic_count": len(data[f"routes[{i}].topic_status"]),
+                "topic_state": None,
                 "reader_summary": "", "writer_summary": "", "qos_warning": "",
             }
             if len(data[f"routes[{i}].topic_status"]) > 0:
                 base = f"routes[{i}].topic_status[0]"
+                f["topic_state"] = TOPIC_STATE.get(
+                    int(data[f"{base}.topic_state"]), "?")
                 f["reader_summary"] = data.get_string(f"{base}.reader_qos_summary")
                 f["writer_summary"] = data.get_string(f"{base}.writer_qos_summary")
                 f["qos_warning"] = data.get_string(f"{base}.qos_warning")
             facts = f
     return facts
+
+
+def read_status_revision(status_reader):
+    """Return the newest RouterStatus sample's top-level state_revision (D5 global
+    counter), or None if no valid sample yet. RouterStatus is KEEP_LAST(1) per
+    (target_node, target_router) instance, so read() yields the current snapshot."""
+    rev = None
+    for data, info in status_reader.read():
+        if not info.valid:
+            continue
+        rev = int(data["state_revision"])
+    return rev
+
+
+class AckCollector:
+    """Buffered reader for RouterCommandAck. `RouterCommandAck` has no @key, so a single
+    take() drains every cached ack regardless of command_id — a bare take()-and-match loop
+    would silently discard acks for other in-flight commands. This collector take()s into a
+    per-command_id buffer each poll and pops the requested one, so waiting on command A
+    never loses command B's ack. Scope one per test (owns the buffer); no cross-test state.
+
+    wait() returns {command_id, route_name, accepted, message} or None on timeout. Each ack
+    is returned once (popped); a duplicate-command_id replay re-published by the router (D4)
+    arrives as a fresh sample on the next send and is collected on the next wait()."""
+
+    def __init__(self, ack_reader):
+        self._reader = ack_reader
+        self._by_id = {}
+
+    def wait(self, command_id, timeout_s=10.0, poll_s=0.1, check_alive=None):
+        if command_id in self._by_id:
+            return self._by_id.pop(command_id)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if check_alive is not None and not check_alive():
+                raise RuntimeError("AckCollector.wait: check_alive() returned False — "
+                                   "router process likely exited early")
+            # Drain the whole batch into the buffer FIRST (take() already removed it from
+            # the reader cache), then check — never return mid-batch and drop the rest.
+            for sample in self._reader.take():
+                if not sample.info.valid:
+                    continue
+                d = sample.data
+                self._by_id[d["command_id"]] = {
+                    "command_id": d["command_id"],
+                    "route_name": d["route_name"],
+                    "accepted": bool(d["accepted"]),
+                    "message": d["message"],
+                }
+            if command_id in self._by_id:
+                return self._by_id.pop(command_id)
+            time.sleep(poll_s)
+        return None
 
 
 def wait_for_route(status_reader, route_name, predicate, timeout_s=20.0, poll_s=0.25,

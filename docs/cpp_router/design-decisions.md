@@ -2146,3 +2146,153 @@ own phase, given the small diff surface once sub-questions 1-2 are resolved.
 **Docs changed.** This entry only. Implementation (if this proceeds past the open
 sub-questions) will also touch `code-architecture.md`, `implementation-plan.md`,
 `link-health.md`, and record a follow-up decision here noting D15's mechanism superseded.
+
+---
+
+## D54 — Phase 6 split into 6a (command/status/ack control loop) and 6b (controller journal) (2026-07-14, accepted; Phase 6 implementation-readiness pass)
+
+**Context.** Readiness pass before implementing Phase 6. The command/ack/status loop is
+real-DDS wiring around the **already-tested** Phase 1 state machine: a live command source
+posts `CommandReceived` into the existing `RouterController::post`, the existing
+`handle_command` runs, and the existing `IStatusPublisher::publish_ack` seam (today a
+labeled no-op in `DdsStatusPublisher`) gets a real writer. The controller **journal** is the
+only part of Phase 6 that needs a *new seam through the already-green Phase 1 controller* —
+there is no journal hook today. Bundling the two makes one large diff that mixes low-risk
+wiring with a change to tested code.
+
+**Decision.** Phase 6 lands as two slices.
+
+- **6a — control loop.** `CommandReader` (D47 CFT on `target_node`/`target_router`, D48 QoS)
+  posting `CommandReceived`; real `DdsStatusPublisher::publish_ack` (ack writer, D48 QoS)
+  replacing the no-op; aggregate `RouterStatus` after accepted commands (already the
+  controller's behavior — 6a just gives it a live command source and a live ack sink). Covers
+  evidence bullets E1–E4 + the new E-CFT item (D56). New Python test
+  `router/test_e2e/test_router_admin_commands.py` + config `router/config/e2e_admin_commands.yaml`
+  (one route `enabled: false` so the startup-disabled evidence has something to observe).
+- **6b — journal.** `ControllerJournalPublisher` + the D55 `IControllerJournal` seam + D46
+  enum + D49 QoS + backlog `StatusCondition`. Covers evidence bullet E5 (D56). New Python
+  test `router/test_e2e/test_controller_journal.py`.
+
+**Rationale.** Small, independently reviewable diffs; the tested controller is untouched
+until 6b, where the change is isolated and additive (D55). Matches the plan's own framing of
+the debug recorder as a separable concern (the recorder reader only exists in debug mode).
+
+**Docs changed.** `implementation-plan.md` (Phase 6 banner + Deliver/Evidence split into
+6a/6b with named tests); `README` (`router/test_e2e` Phase-6 line → two-slice plan); this
+entry.
+
+---
+
+## D55 — Controller journal seam is a nullable `IControllerJournal*` on `RouterController` (2026-07-14, accepted; Phase 6 review)
+
+**Context.** Evidence bullet E5 requires one journal record per processed controller event
+carrying the input event, controller decision/outcome, pre/post `state_revision`, affected
+route/topic delta, and requested side effects. `RouterController` has no journal hook today.
+Reconstructing records externally from the `RouterStatus` + `RouterCommandAck` streams cannot
+capture decision/reason/action or the true pre-state, and collapses multi-event bursts — it
+does not satisfy the bullet (the rejected alternative).
+
+**Decision.** `RouterController` gains a nullable `IControllerJournal*` (symmetric with
+`IStatusPublisher*`), invoked **once per processed event from `process()`** with the full
+pre/post context the controller already computes for the D5 change predicate. `nullptr` = no
+journaling: **all Phase 1 tests pass `nullptr`**, so the existing 18-case
+`test_controller_phase1.cxx` suite stays green unchanged — the seam is additive with zero
+behavior change. The real DDS-backed `ControllerJournalPublisher` implements the seam (D46
+enum, D49 QoS). The record's `pre_state_revision`/`post_state_revision`/`state_changed` reuse
+the before/after fingerprint the controller already takes per event (D5/D23);
+`decision`/`reason`/`action` are the handler's own outcome strings.
+
+**Validated.** No Connext API question — this is an internal C++ seam. The record type
+(`ControllerJournalRecord`) and enum (`ControllerJournalEventKind`, D46) already exist in
+`RouterAdminTypes.idl`.
+
+**Docs changed.** `code-architecture.md` (`ControllerJournalPublisher` bullet + Interfaces
+list: names the `IControllerJournal` seam and the nullptr-in-tests rule);
+`command-status.md` (journal section: seam note); this entry.
+
+---
+
+## D56 — Phase 6 evidence→test mapping; the D47 CFT target-filter is an explicit evidence item; D49 backlog signal is wired-not-forced (2026-07-14, accepted; Phase 6 review)
+
+**Context.** The plan's Phase 6 evidence bullets were prose, not mapped to named tests the
+way Phase 5's were (D45 → `test_auto_qos.py`). Two test-scope calls were open: whether the
+D47 CFT target filter gets its own assertion, and whether the D49 backlog signal
+(`journal_falling_behind`) is force-tested.
+
+**Decision.** Python e2e, real `router_main`; the probe reads acks + status + journal as
+DynamicData via the existing `admin_types_xml` fixture; **"debug mode" = a matched Python
+journal reader** (no separate recorder process — the reader's existence is the toggle).
+
+Evidence→test mapping:
+
+- **E1** disabled route in startup status with no entities → `test_router_admin_commands.py`:
+  `RouterStatus` at startup shows the `enabled: false` route as `ROUTE_DISABLED`, empty
+  `topic_status` / no entities.
+- **E2** `ENABLE_ROUTE` → route reaches `ROUTE_WAITING_FOR_DISCOVERY` (no app writer present)
+  then `ROUTE_ENABLED` (app writer present); `ack.accepted`; `state_revision` bumps.
+- **E3** `DISABLE_ROUTE` → `ROUTE_DISABLED`, topics `TOPIC_IDLE`, forwarding stops;
+  `ack.accepted`.
+- **E4** duplicate `command_id` → second ack byte-identical to the first; `state_revision`
+  unchanged (the D4 cached-ack replay path).
+- **E-CFT** (new explicit item): a command whose `target_node`/`target_router` is **not** this
+  router never changes route state and draws no ack — the D47 CFT drops it before the
+  callback. Without this assertion the CFT is untested.
+- **E5** journal (6b, `test_controller_journal.py`): with the Python journal reader matched,
+  driving a command + a discovery event produces `ControllerJournalRecord` samples with the
+  expected `event_kind`, pre/post revision, route/topic, and decision/action; route
+  behavior/status is identical to the 6a run whether or not the journal reader is attached.
+
+D49 backlog signal: the `RELIABLE_WRITER_CACHE_CHANGED_STATUS` `StatusCondition` +
+`journal_falling_behind` log line are **wired** in 6b, but backlog is **not force-produced** —
+deterministically stalling a `KEEP_LAST(256)` / unlimited-send-window writer is impractical in
+a functional test. 6b asserts `journal_falling_behind` is **absent** under normal load (no
+false positive). Real backpressure verification is deferred to a future stress/soak phase
+(recorded as a confidence-increasing investigation, not a Phase 6 gate).
+
+**Docs changed.** `implementation-plan.md` (Phase 6 Evidence rewritten as the mapped list,
+split 6a/6b); this entry.
+
+---
+
+## D57 — Phase 6 slice 6a (command/ack/status control loop) IMPLEMENTED (2026-07-14, accepted; closes 6a per D54/D56)
+
+**What shipped.** The D54 slice 6a landed against the D56 test plan:
+
+- `CommandReader` (`router/src/core/CommandReader.{hpp,cxx}`): a `RouterCommand` reader on
+  the admin participant through a `ContentFilteredTopic`
+  (`target_node = %0 AND target_router = %1`, this router's identity single-quoted, D47) +
+  `RELIABLE + VOLATILE + KEEP_LAST(16)` (D48); its `ReadCondition` is attached to the shared
+  `AsyncWaitSet` and its handler `take()`s and posts `CommandReceived` (D24) to the existing
+  controller state machine. CFT-on-a-generated-type + `ReadCondition` + `AsyncWaitSet` was
+  validated via `ask_connext_question` before coding (no `@top_level` requirement; SQL
+  single-quote rule is type-agnostic).
+- Real ack writer: `DdsStatusPublisher::publish_ack` (was a labeled no-op) now writes
+  `RouterCommandAck` on `ActRouterCommandAck` with `RELIABLE + VOLATILE + KEEP_LAST(16)`
+  (D48), same `NotEnabledError` guard as `publish()` for D52 disabled startup.
+- `router_main` wiring: `CommandReader` is constructed after `DiscoveryDispatcher` and
+  **before** `aws.start()`/`registry.enable_all()` (same D52 edge-trigger reason — a command
+  arriving in the gap would otherwise strand), and `shutdown()` on the stop path before
+  `aws.stop()`.
+- Fixture + test: `router/config/e2e_admin_commands.yaml` (one router, route `admin_r1`
+  `enabled: false`, output leg `writer_qos: default` so ENABLE reaches `ROUTE_ENABLED` on
+  input-writer discovery alone — no auto-QoS output-reader gate, keeping the test about the
+  command loop) and `router/test_e2e/test_router_admin_commands.py` (E1–E4 + E-CFT).
+
+**Two small clarifications surfaced while testing** (neither changes a prior decision):
+
+- "Disabled route with no entities" (E1) is **not** zero `topic_status` rows — a configured
+  topic always carries one row; when no entities exist it is `TOPIC_IDLE` with empty
+  reader/writer QoS summaries. The test asserts `TOPIC_IDLE` + empty summaries (the probe's
+  `read_route_facts` gained a `topic_state` field), which is the accurate "no entities"
+  signal and the same signal E3 uses after `DISABLE_ROUTE` tears the build down.
+- Ack topic name is `ActRouterCommandAck` (already named in command-status.md's D48
+  paragraph; made concrete as the `DdsStatusPublisher` default).
+
+**Evidence.** C++ ctest 4/4 (unchanged — no C++ integration test added, per D52 policy);
+Python e2e 12/12 (new `test_router_admin_commands.py` among them), the new test stable 5/5
+reruns, no `/dev/shm` leaks, no stray `router_main`. Uncommitted in the working tree at write
+time.
+
+**Docs changed.** `implementation-plan.md` (Phase 6 banner: 6a marked implemented);
+`README` (`router/test_e2e`); this entry. Next on this thread: slice 6b (controller journal,
+D55).

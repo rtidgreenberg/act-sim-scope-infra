@@ -1,42 +1,44 @@
-// DdsStatusPublisher.hpp — real IStatusPublisher backed by a Connext DataWriter.
+// DdsStatusPublisher.hpp — real IStatusPublisher backed by Connext DataWriters.
 //
 // Creates a RouterStatus DataWriter on the supplied participant with
-// RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1) QoS (D26).
-//
-// publish_ack() is a Phase 6 placeholder — command-ack plumbing arrives with the
-// full admin channel. For now it is a no-op so the controller seam is satisfied.
+// RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1) QoS (D26), and — as of Phase 6 slice 6a — a
+// RouterCommandAck DataWriter with RELIABLE + VOLATILE + KEEP_LAST(16) QoS (D48). The
+// controller drives both seams (publish on state change, publish_ack on each processed
+// command); this class owns the wire.
 
 #pragma once
 
 #include "Interfaces.hpp"
+
+#include "RouterAdminTypes.hpp"
 
 #include <dds/dds.hpp>
 
 #include <memory>
 #include <string>
 
-// RouterStatus and RouterCommandAck are generated types (no module namespace).
-struct RouterStatus;
-struct RouterCommandAck;
-
 namespace router {
 
 class DdsStatusPublisher : public IStatusPublisher {
 public:
-    // participant may be disabled at construction (D52 disabled startup): the writer is
-    // then created disabled and enabled with the participant. publish() before enable is
-    // a no-op (see the NotEnabledError branch); router_main re-publishes after enable.
-    // topic_name is the DDS topic to publish on (e.g. "ActRouterStatus").
+    // participant may be disabled at construction (D52 disabled startup): the writers are
+    // then created disabled and enabled with the participant. publish()/publish_ack()
+    // before enable is a no-op (see the NotEnabledError branch); router_main re-publishes
+    // status after enable. status_topic is the RouterStatus topic (e.g. "ActRouterStatus");
+    // ack_topic defaults to the command-status.md RouterCommandAck topic name.
     DdsStatusPublisher(dds::domain::DomainParticipant participant,
-                       const std::string &topic_name);
+                       const std::string &status_topic,
+                       const std::string &ack_topic = "ActRouterCommandAck");
 
     void publish(std::shared_ptr<const RouterStatus> snapshot) override;
-    void publish_ack(const RouterCommandAck &ack) override; // Phase 6 no-op
+    void publish_ack(const RouterCommandAck &ack) override;
 
 private:
     dds::pub::Publisher publisher_;
     dds::topic::Topic<RouterStatus> topic_;
     dds::pub::DataWriter<RouterStatus> writer_;
+    dds::topic::Topic<RouterCommandAck> ack_topic_;
+    dds::pub::DataWriter<RouterCommandAck> ack_writer_;
 };
 
 } // namespace router
