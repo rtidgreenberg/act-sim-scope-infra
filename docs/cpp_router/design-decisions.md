@@ -2799,3 +2799,114 @@ re-ran clean — no regression to the `""`/`"default"`-only configs.
 
 **Docs changed.** This entry; `implementation-plan.md` (Phase 7a marked delivered);
 `docs/connext-ai-issues/connext-ai-issues.md` (construction-path correction).
+
+---
+
+## D66 — D64 implementation-readiness pass: matching-authority refactor sliced (7m before 7b/7c); StatusCondition-driven match state; zero matches is a status reason, not a teardown; one wire type per topic per process (2026-07-15, accepted; executes D64's "still to do", reshapes D59's slice order)
+
+**Context.** D64 accepted the create-and-observe direction and explicitly required a
+D54/D59-style readiness pass before touching the shipped controller: choose the observation
+mechanism, wire the created-but-unmatched status surface without breaking the D2/D11
+contract, state the type-versioning rule, and confirm the C++ call surface by compile (the
+MCP is not trusted). This entry is that pass. The C++ surface is now **compile-verified**
+(`spikes/matched_endpoints/cpp_compile_check.cxx`, `-fsyntax-only` with the router's own
+flags, clean): `dds::sub::matched_publications(reader)` / `dds::pub::matched_subscriptions
+(writer)` → `InstanceHandleSeq`; `subscription_matched_status()` /
+`publication_matched_status()` (counts + last handle); `StatusCondition` with
+`StatusMask::subscription_matched()`/`publication_matched()` attached to the
+`AsyncWaitSet`; `matched_publication_data(reader, handle)`; and the 7c wire-type read
+`PublicationBuiltinTopicData->type()` → `optional<DynamicType>` → `StructType` →
+`Topic<DynamicData>`/reader/writer.
+
+**Decisions.**
+
+1. **Observation mechanism: StatusConditions, not polling.** Each route entity's
+   `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED` status rides the entity's existing
+   StatusCondition on the `AsyncWaitSet` — the same `RouteTopicRuntime` callback pattern
+   the D39/D45 incompatible-QoS warnings already use. The handler posts a new controller
+   event `TopicMatchChanged{route, topic, side, current_count, generation}` (thread-safe
+   MPSC `post()`, stale-stamp discarded like every D21/D23 completion). Polling is
+   rejected as the primary mechanism; the D63 refresh tick MAY re-sample counts as a
+   consistency backstop, but nothing depends on it.
+2. **Matched counts are the discovery truth for a live build.** `TopicRouteState` gains
+   `input_matched_count`/`output_matched_count`, updated only by `TopicMatchChanged`.
+   For a built topic, `derive_topic_discovery` maps counts onto the existing enum
+   (both sides ≥ 1 → `READY`; one side → `PARTIAL`; none → `NONE`) — no IDL enum change.
+   `RouterRouteTopicStatus` gains `input_matched`/`output_matched` integers plus a
+   `match_reason` string (`"input_unmatched"`/`"output_unmatched"`/empty) so the
+   created-but-unmatched zero is directly visible. **No new operational state** — the
+   D2/D11 tables are unchanged; the reason string is status-only (D64's instruction).
+3. **Zero matches is NOT a teardown.** The `TOPIC_FORWARDING → TEARING_DOWN` edge on
+   discovery regression is retired for live builds: entities persist while unmatched
+   (that is the point of create-and-observe — an unmatched entity is an observable zero,
+   and DDS rematches without our help). Teardown remains command-driven
+   (`DISABLE_ROUTE`), abort-driven (creation-time regression no longer exists — see 4),
+   and error-driven. Consequence: the derived `DEGRADED` value narrows to
+   teardown-in-progress; "was forwarding, peer gone" reads as
+   `ENABLED`/`TOPIC_FORWARDING` + `match_reason` + counts at zero.
+4. **Creation gate = "type available", and in 7m that means immediately on enable.** The
+   D39/D51 output-readiness gate is retired (`output_uses_auto_qos` stops gating; the
+   predicate survives only to mark which routes use writer-QoS derivation). Slice 7m
+   keeps today's XML `TypeResolver`, where the type is always available, so entities are
+   created directly when a route (re-)enables; 7c swaps the type source to the wire and
+   reintroduces the wait honestly (`TOPIC_IDLE` until the local LAN endpoint's inline
+   type object arrives — the D64 learn-from-LAN rule; `TypeResolved` becomes a real
+   controller event there).
+5. **Writer-QoS derivation survives as best-effort input, not a gate.** At creation the
+   auto-output writer derives deadline/liveliness from the readers *currently known* via
+   builtin discovery (possibly none → the D39 strong baseline with default liveliness).
+   Deadline keeps its in-place tightening path (mutable, D39). Liveliness is immutable:
+   a stricter reader arriving after creation surfaces through the existing
+   incompatible-QoS warning (loud, names the policy), remedy = a named alias (7a) or a
+   `DISABLE`/`ENABLE` re-arm (the rebuild derives from the now-known readers). The
+   matched-endpoint maps (`matched_writers`/`matched_readers`) are **demoted from
+   matching authority to derivation-and-diagnosis input** (deadline/liveliness
+   derivation, D17 near-miss logging); they gate nothing.
+6. **Type authority (the versioning rule D64 left unstated).** Per topic per process:
+   **first-learned-wins from the local LAN endpoint**, D20's spirit carried from name to
+   type object. Both legs of this process's route use that one object. Cross-router
+   version skew (control-side learned v1, platform-side learned v2) is tolerated by DDS
+   type assignability on the WAN match — each leg is its own DDS relationship (Tenet 2);
+   a non-assignable pair simply never matches and reads as unmatched + a near-miss log
+   naming the type. A later *local* endpoint with a different type object on an
+   already-resolved topic: `type_conflict` log, ignored, no rebuild (unchanged posture).
+   A discovered endpoint whose TypeObject is not inline (exceeds the SEDP threshold):
+   loud `type_not_inline` log; the `request_types_filter` fallback (C++-only on this
+   install) is wired only when a real type needs it.
+7. **Builtin discovery's remaining jobs** (unchanged by the refactor): D15 loop-safety
+   ignores, D17 endpoint inventory + near-miss diagnosis, D14 presence/link-stats join,
+   QoS-derivation input (5), and — from 7c — type acquisition (`data->type()`).
+
+**Slicing (reshapes D59's order; 7a already shipped, D65).**
+
+- **7m — matching-authority refactor** (new slice, lands first): `TopicMatchChanged`
+  event + StatusCondition wiring in `RouteTopicRuntime`; matched counts + `match_reason`
+  in state/status/IDL; retire the creation gate and the regression-teardown edge;
+  demote the matched-endpoint maps per (5). Phase 1 unit tests migrate with the
+  contract: the fake factory posts `TopicMatchChanged`, and the D2 conformance edges
+  that drove teardown-on-regression retire with the edge.
+- **7b — partitions** rides 7m (its original D61 surface is one `PublisherQos`/
+  `SubscriberQos` partition apply; the mismatch evidence is 7m's observable zero).
+- **7c — wire-type acquisition** per (4)/(6): `DiscoveryDispatcher` reads
+  `data->type()` off the local LAN builtin readers, posts `TypeResolved`; retire
+  `router.type_name`; `example_types.xml` stays for test *peers* and admin types stay
+  generated.
+- **7d — unchanged** (full config e2e + D63 counter tick; the tick has no dependency on
+  7m and may land any time).
+
+**Evidence→test map.**
+
+- 7m: full existing e2e suite green (matched-path behavior is unchanged); new
+  `router/test_e2e/test_create_and_observe.py` — an enabled route on an empty domain
+  reaches `TOPIC_FORWARDING` with both counts 0 and `match_reason` set, then matches and
+  forwards when the peer appears, with counts advancing in status.
+- 7b: `test_wan_partition.py` (D59 E3) — mismatched partition = held-zero counts +
+  reason, never a false `READY`; matched partition forwards.
+- 7c: `test_platform_events.py` (D59 E4) — two types, one process, types learned from
+  the wire (no `type_name` in config).
+- 7d: unchanged (D59 E5–E7).
+
+**Docs changed.** This entry; `implementation-plan.md` (Phase 7 banner: readiness pass
+complete, slice order 7m → 7b → 7c → 7d; 7b/7c bullets reshaped);
+`spikes/matched_endpoints/README.md` (compile check). `code-architecture.md`
+reconciliation lands with 7m itself (its controller/state sections change shape there).

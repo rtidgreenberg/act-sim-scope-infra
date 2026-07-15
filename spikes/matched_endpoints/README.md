@@ -24,6 +24,22 @@ python3 spikes/matched_endpoints/matched_endpoints_spike.py [base_domain_id]
   zero) but does match a `PLATFORM` writer (partition + CFT together; the false-green claim).
 - **C** — created-but-unmatched reports zero, then observes the peer when it appears.
 
+## C++ call-surface compile check (D66)
+
+`cpp_compile_check.cxx` confirms by compile (never linked or run) the Modern C++ surface
+the D64/D66 refactor uses: `matched_publications`/`matched_subscriptions`, the matched
+statuses, `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED` StatusConditions on the
+`AsyncWaitSet`, `matched_publication_data`, and the wire-type read
+(`PublicationBuiltinTopicData->type()` → `DynamicData` entities). Verified clean
+2026-07-15 with the router's own compile flags:
+
+```bash
+c++ -std=gnu++11 -DRTI_64BIT -DRTI_LINUX -DRTI_STATIC -DRTI_UNIX \
+    -isystem $NDDSHOME/include -isystem $NDDSHOME/include/ndds \
+    -isystem $NDDSHOME/include/ndds/hpp \
+    -fsyntax-only spikes/matched_endpoints/cpp_compile_check.cxx
+```
+
 ## Requirements
 
 `rti.connextdds` (Connext 7.7) and `harness/act/node_sim/datamodel/act_types.xml`.

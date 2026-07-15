@@ -417,9 +417,13 @@ Evidence (6b, D56):
 > (a partition mismatch is just a zero matched-count, not a false-green). Type acquisition +
 > CFT-on-wire-type are spike-proven (`spikes/type_discovery/`, high), and the matching-authority
 > refactor is now **behavior/API-proven** (`spikes/matched_endpoints/`, 4/4: partition mismatch
-> → zero matches, false-green dissolved). What remains is the **code refactor into the shipped
-> controller** (superseding D12/D20/D22, retiring the D39/D51 gate) — still needs its own
-> implementation-readiness pass; do not implement straight from D59–D63.
+> → zero matches, false-green dissolved). The **readiness pass is complete (D66,
+> 2026-07-15)**: the refactor is its own slice **7m**, landing before 7b/7c —
+> StatusCondition-driven `TopicMatchChanged` events, matched counts + `match_reason` in
+> status, creation gate and regression-teardown edge retired, matched-endpoint maps demoted
+> to derivation/diagnosis input, first-learned-wins type authority per topic per process.
+> C++ call surface compile-verified (`spikes/matched_endpoints/cpp_compile_check.cxx`).
+> **Implement from D66**; D61/D62's original mechanisms are superseded where D66 says so.
 >
 > **7a delivered (D60/D65, 2026-07-14).** Implemented in the shipped router (not just the
 > spike): `router_main` builds one `QosProvider` over `qos_libraries:` (via
@@ -435,7 +439,7 @@ Evidence (6b, D56):
 > route forwards end-to-end with the named profiles' actual resolved QoS on status. Full
 > existing e2e suite + `ctest` re-ran clean. See D65 for the implementation decision.
 
-Deliver (slice order, riskiest primitive isolated in 7c):
+Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
 
 - **7a — QoS-alias XML resolution (D60).** The deferred D45 work. Parse `qos_profiles:` (the
   `wan_event → WAN_QOS_LIB::event_qos` indirection, currently unparsed); build a `QosProvider`
@@ -445,14 +449,24 @@ Deliver (slice order, riskiest primitive isolated in 7c):
   `ParticipantRegistry`. A named alias fully specifies the endpoint and short-circuits the
   D39/D42 auto-derivation and the D51 readiness gate (`output_uses_auto_qos()` stays
   `.empty()`).
-- **7b — Publisher/Subscriber partition application (D61).** Apply
+- **7m — Matching-authority refactor (D64/D66).** StatusCondition-driven
+  `TopicMatchChanged` events from the route entities' own
+  `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED` statuses (the D39/D45 `RouteTopicRuntime`
+  callback pattern); `input_matched`/`output_matched` counts + `match_reason` in
+  state/status/IDL; creation gate and the regression-teardown edge retired (zero matches is
+  an observable status, entities persist); matched-endpoint maps demoted to
+  derivation/diagnosis input; Phase 1 unit tests migrated to the new contract. Types still
+  come from XML in this slice (create directly on enable); the wire-type wait lands in 7c.
+- **7b — Publisher/Subscriber partition application (D61 as refined by D64/D66).** Apply
   `publisher_partition`/`subscriber_partition` (parsed but dropped today) to the per-build
-  `Publisher`/`Subscriber`. A partition mismatch is a non-match (`DISCOVERY_PARTIAL`), **not**
-  an incompatible-QoS event — the discovery-time log records each endpoint's partition so it
-  stays diagnosable.
-- **7c — Per-topic (multi-)type resolution (D62).** Retire process-global `router.type_name`;
-  resolve each topic's DynamicType from its discovery-resolved `type_name()` (D20
-  first-resolved-wins). One `DynamicRouteFactory` serves all types, so `platform_events`
+  `Publisher`/`Subscriber` — rides 7m: a partition mismatch is the created entity's
+  held-zero matched count + `match_reason`, **not** an incompatible-QoS event; the
+  discovery-time log records each endpoint's partition so the near-miss stays diagnosable.
+- **7c — Per-topic wire-type acquisition (D62 as reshaped by D64/D66).** Retire
+  process-global `router.type_name`; `DiscoveryDispatcher` reads each local LAN endpoint's
+  inline COMPLETE type object (`data->type()`, spike-proven) and posts `TypeResolved`;
+  entities are created per topic when its type arrives (first-learned-wins per topic per
+  process, D66). One `DynamicRouteFactory` serves all types, so `platform_events`
   (`PlatformCommandAck` + `ContactReport`) and the four-type full config run in one process.
 - **7d — Full `control-platform.yaml` end-to-end.** Control-node + platform-node `router_main`
   pair on the real production config; `control_command`, `platform_primary_status`, and
@@ -462,13 +476,17 @@ Deliver (slice order, riskiest primitive isolated in 7c):
   republishes `RouterStatus` **without** bumping `state_revision` (the one sanctioned
   exception to D5, so counters are observable in steady state).
 
-Evidence (mapped 1:1 to named Python e2e tests — D59):
+Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
 
 - **E1/E2** (7a) a route using `wan_status`/`wan_event` aliases forwards; the participant
   `*_wan_udpv4_qos` profile is applied → `test_qos_alias_route.py` + `config/e2e_qos_alias.yaml`.
+- **E-M** (7m) an enabled route on an empty domain reaches `TOPIC_FORWARDING` with both
+  matched counts 0 and `match_reason` set, then matches and forwards when the peer appears
+  (counts advance in status); full existing e2e suite stays green →
+  `test_create_and_observe.py`.
 - **E3** (7b) a PLATFORM-partitioned route matches only a PLATFORM-partitioned reader; a
-  mismatched/empty-partition reader never matches (route stays `DISCOVERY_PARTIAL`, no
-  incompatible-QoS event) → `test_wan_partition.py` + `config/e2e_partition.yaml`.
+  mismatched/empty-partition reader never matches (held-zero matched count + `match_reason`,
+  no incompatible-QoS event — D66) → `test_wan_partition.py` + `config/e2e_partition.yaml`.
 - **E4** (7c) `platform_events` forwards both `PlatformCommandAck` and `ContactReport` from a
   single `router_main` process → `test_platform_events.py`.
 - **E5** (7d) full `control-platform.yaml` control+platform pair: all three enabled routes
