@@ -6,17 +6,16 @@ on both legs. The observable route facts are read off the router's RouterStatus 
 (RELIABLE+TRANSIENT_LOCAL, D26) as DynamicData, using a RouterStatus type generated from
 the admin IDL at test time (admin_types_xml fixture).
 
-Migrated by 7m (D66): the D51 output-readiness gate is retired — the route builds
-immediately at startup with the strong baseline (no readers known yet), and the old
-"route waits for a compatible reader" evidence becomes "route is ENABLED with an
-observable zero" (created-but-unmatched counts + match_reason). Asserts:
+Migrated by 7m (D66) and 7c (D70): the D51 output-readiness gate is retired and the
+route builds as soon as its type is wire-learned — here, when the first app writer
+appears (with the strong baseline: no readers known at build time). Asserts:
 
-  1. create-and-observe zero — the route is ENABLED with input/output matched counts 0
-     and match_reason naming both unmatched legs, before any app endpoint exists.
-  2. a BEST_EFFORT+VOLATILE app writer matches the weakest-request auto input reader
-     (input_matched rises; the F5 no-match case) and a plain RELIABLE+VOLATILE reader
-     matches the strong-offer baseline output writer (output_matched rises; reason
-     clears); a sample forwards end-to-end.
+  1. wait-for-type, then create-and-observe: before any endpoint exists the route WAITS
+     (no wire type, 7c); the BEST_EFFORT+VOLATILE app writer teaches the type AND
+     matches the weakest-request auto input reader (the F5 no-match case) — the route
+     is then ENABLED with output_matched == 0 / match_reason "output_unmatched".
+  2. a plain RELIABLE+VOLATILE reader matches the strong-offer baseline output writer
+     (output_matched rises; reason clears); a sample forwards end-to-end.
   3. the resolved QoS summaries ride the status: weakest-request input; the output
      writer offers the BASELINE (no derived deadline/liveliness — no readers were known
      at build time, D66 best-effort derivation).
@@ -86,22 +85,14 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
             qos=reader_qos(reliability="reliable", durability="transient_local"),
             dtype=status_type)
 
-        # (1) Create-and-observe zero: the route builds immediately (no gate, D66) and
-        # is ENABLED with both legs unmatched — an observable zero, not a wait state.
-        zero = wait_for_route(
-            status_reader, ROUTE,
-            lambda f: f["state"] == "ROUTE_ENABLED", check_alive=alive)
-        assert zero is not None and zero["state"] == "ROUTE_ENABLED", \
-            f"route never reached ROUTE_ENABLED at startup; got {zero}; log {router.log_path}"
-        assert zero["topic_state"] == "TOPIC_FORWARDING", \
-            f"expected a live build, got {zero}; log {router.log_path}"
-        assert zero["input_matched"] == 0 and zero["output_matched"] == 0, \
-            f"expected created-but-unmatched zeros, got {zero}; log {router.log_path}"
-        assert zero["match_reason"] == "input_unmatched,output_unmatched", \
-            f"match_reason {zero['match_reason']!r}; log {router.log_path}"
+        # (1) Wait-for-type (7c/D70): no endpoint exists, so no wire type and no build.
+        waiting = wait_for_route(status_reader, ROUTE, lambda f: True, check_alive=alive)
+        assert waiting is not None and waiting["state"] == "ROUTE_WAITING_FOR_DISCOVERY", \
+            f"route should wait for its wire type; got {waiting}; log {router.log_path}"
 
-        # (2a) BEST_EFFORT + VOLATILE source writer matches the weakest-request input
-        # reader (the F5 case): input_matched rises.
+        # (2a) BEST_EFFORT + VOLATILE source writer teaches the type AND matches the
+        # weakest-request input reader (the F5 case): the route builds, input_matched
+        # rises, output leg is the observable unmatched zero.
         src_writer = in_probe.writer(
             TOPIC, TYPE, qos=writer_qos(reliability="best_effort", durability="volatile"),
             dtype=cmd_type)
@@ -111,6 +102,8 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         assert in_matched is not None and in_matched["input_matched"] >= 1, \
             f"BEST_EFFORT writer never matched the input reader; got {in_matched}; " \
             f"log {router.log_path}"
+        assert in_matched["state"] == "ROUTE_ENABLED", in_matched
+        assert in_matched["output_matched"] == 0, in_matched
         assert in_matched["match_reason"] == "output_unmatched", \
             f"match_reason {in_matched['match_reason']!r}; log {router.log_path}"
 

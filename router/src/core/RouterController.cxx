@@ -43,6 +43,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
         return ControllerJournalEventKind::JOURNAL_TOPIC_QOS_WARNING;
     case ControllerEventKind::TopicMatchChanged:
         return ControllerJournalEventKind::JOURNAL_TOPIC_MATCH_CHANGED;
+    case ControllerEventKind::TypeResolved:
+        return ControllerJournalEventKind::JOURNAL_TYPE_RESOLVED;
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -164,6 +166,9 @@ void RouterController::process(const ControllerEvent &event) {
     case ControllerEventKind::TopicMatchChanged:
         apply_match_changed(event);
         break;
+    case ControllerEventKind::TypeResolved:
+        apply_type_resolved(event);
+        break;
     }
 }
 
@@ -235,6 +240,10 @@ ControllerJournalRecord RouterController::build_journal_record(
         rec.decision = rec.state_changed ? "state_updated" : "no_change";
         rec.reason = std::string(event.input_side ? "input:" : "output:")
                 + std::to_string(event.matched_count);
+        break;
+    case ControllerEventKind::TypeResolved:
+        rec.topic_name = event.topic_name;
+        rec.decision = rec.state_changed ? "state_updated" : "no_change";
         break;
     }
 
@@ -539,6 +548,22 @@ void RouterController::apply_endpoint_lost(const std::string &guid) {
     }
 }
 
+// A topic's DynamicType was learned from the wire (7c, D64/D70): open the creation gate
+// on every route carrying the topic and reconcile — an enabled waiting topic builds now.
+// First-learned-wins (D66): the flag never clears, so this is naturally idempotent.
+void RouterController::apply_type_resolved(const ControllerEvent &e) {
+    for (std::map<std::string, RouteState>::iterator r = state_.routes.begin();
+         r != state_.routes.end(); ++r) {
+        std::map<std::string, TopicRouteState>::iterator t =
+                r->second.topics.find(e.topic_name);
+        if (t == r->second.topics.end()) {
+            continue;
+        }
+        t->second.type_available = true;
+        reconcile_topic(r->second, e.topic_name);
+    }
+}
+
 // Matched-count change from a live build's own entity statuses (D64/D66) — the
 // discovery truth. Exact-stamp gated like every completion (D23); a stale event from a
 // torn-down build is discarded.
@@ -700,14 +725,16 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
     }
     TopicRouteState &topic = t->second;
 
-    // Create-and-observe (D64/D66): an enabled IDLE topic builds immediately — nothing
-    // gates on discovery (in 7m the type always comes from XML; 7c reintroduces a
-    // wait-for-type when the type is learned from the wire). Live builds are never
-    // reconciled against discovery: an unmatched entity persists as an observable zero
-    // (the D2 regression-abort and regression-teardown edges are retired); teardown is
-    // command/error-driven only.
+    // Create-and-observe (D64/D66/D70): an enabled IDLE topic builds as soon as its
+    // type is known — the ONLY creation gate is wait-for-wire-type (7c); nothing gates
+    // on matching. Live builds are never reconciled against discovery: an unmatched
+    // entity persists as an observable zero (the D2 regression-abort and
+    // regression-teardown edges are retired); teardown is command/error-driven only.
     switch (topic.topic_state) {
     case RouterRouteTopicState::TOPIC_IDLE: {
+        if (!topic.type_available) {
+            break; // wait for TypeResolved (7c, D70) — the honest wait state
+        }
         topic.entity_generation = next_generation(); // D23 stamp at build
         topic.topic_state = RouterRouteTopicState::TOPIC_CREATING;
         // Writer-side derivation from the readers currently known via builtin discovery

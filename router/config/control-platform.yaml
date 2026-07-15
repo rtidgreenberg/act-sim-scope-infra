@@ -4,10 +4,9 @@
 #
 # Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
 # router_main parses the full route/participant shape below (RouteConfigParser), but the
-# named qos_profiles aliases (wan_event, wan_status, etc.) are unresolvable until Phase 7
-# (D45) and this config has no router.type_name, so router_main will refuse to run it as
-# a single process today — see router/config/e2e_*.yaml for a config it can run now, and
-# docs/cpp_router/design-decisions.md D50.
+# named qos_profiles aliases (wan_event, wan_status, etc.) resolve via the QosProvider
+# (7a, D65) and topic types are wire-learned (7c, D70) — the full-config two-process run
+# is Phase 7d; see docs/cpp_router/design-decisions.md D66/D70.
 
 node:
   name: Platform_30

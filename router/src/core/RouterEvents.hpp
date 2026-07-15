@@ -66,7 +66,8 @@ enum class ControllerEventKind {
     TopicTeardownComplete,  // per-topic teardown completed (D21)
     RouteEntityError,       // topic-scoped (topic_name set) or route-wide (empty) (D21)
     TopicQosWarning,        // incompatible-QoS status on a live build's entity (D39/D45)
-    TopicMatchChanged       // matched-count change on a live build's entity (D64/D66)
+    TopicMatchChanged,      // matched-count change on a live build's entity (D64/D66)
+    TypeResolved            // topic's type learned from the wire (7c, D64/D70)
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -153,6 +154,12 @@ struct ControllerEvent {
         e.route_name = route;
         e.topic_name = topic;
         e.entity_generation = gen;
+        return e;
+    }
+    static ControllerEvent type_resolved(const std::string &topic) {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::TypeResolved;
+        e.topic_name = topic; // no route: applies to every route carrying the topic
         return e;
     }
     static ControllerEvent topic_match_changed(const std::string &route,

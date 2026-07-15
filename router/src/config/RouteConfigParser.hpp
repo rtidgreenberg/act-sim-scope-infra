@@ -36,12 +36,8 @@ struct RouteConfig {
     // Endpoint reader_qos:/writer_qos: and participant qos: values are alias keys into this
     // map; router_main resolves them via a QosProvider built over qos_library_paths (D60).
     std::map<std::string, std::string> qos_profiles;
-    // router.type_name: the single DynamicData type (registered in types_xml_path) this
-    // process's DynamicRouteFactory is bound to. DynamicRouteFactory binds one type name
-    // for its whole lifetime (D34/D35 — multi-type dispatch is deferred), so a config
-    // whose active routes span more than one type cannot be served by one router_main
-    // process yet; router_main fails fast rather than silently mis-typing a route.
-    std::string type_name;
+    // (router.type_name retired — 7c/D70: topic types are learned from the wire and one
+    // DynamicRouteFactory serves all types.)
     // router.admin_participant: which participant (by name, must exist in participants)
     // carries the command/status admin channel — command-status.md's "admin rides the
     // local LAN participant" decision, made explicit instead of inferred from a "_lan"

@@ -58,9 +58,9 @@ template <typename T>
 class RouteEntityFactory : public IEntityFactory {
 public:
     RouteEntityFactory(ParticipantRegistry &registry, QosResolver &qos,
-                       AsyncWaitSetDispatcher &dispatcher, const std::string &type_name)
+                       AsyncWaitSetDispatcher &dispatcher)
         : registry_(registry), qos_(qos), dispatcher_(dispatcher),
-          type_name_(type_name), controller_(nullptr) {}
+          controller_(nullptr) {}
 
     // Wire the controller after construction (completion events are posted to it).
     void set_controller(RouterController *controller) { controller_ = controller; }
@@ -70,7 +70,7 @@ public:
                                const DerivedWriterQos &derived) override {
         const std::string &route = view.spec.route_name;
         try {
-            ensure_type_available();
+            ensure_type_available(topic_name);
             if (find_topic_spec(view.spec, topic_name) == nullptr) {
                 throw std::runtime_error("topic not in route spec: " + topic_name);
             }
@@ -176,7 +176,7 @@ public:
             dispatcher_.attach(route, topic_name, std::move(runtime));
 
             Log::info("route_entities_created",
-                      {{"route", route}, {"topic", topic_name}, {"type", type_name_},
+                      {{"route", route}, {"topic", topic_name},
                        {"in", view.spec.input.participant},
                        {"out", view.spec.output.participant}});
 
@@ -230,16 +230,15 @@ public:
     }
 
 protected:
-    // --- Type-lane hooks (D41) ---
+    // --- Type-lane hooks (D41; per-topic since 7c/D70) ---
 
-    // Throw (with a message for the RouteEntityError) if the bound type is unavailable.
-    virtual void ensure_type_available() const = 0;
+    // Throw (with a message for the RouteEntityError) if this topic's type is
+    // unavailable in the lane's type source.
+    virtual void ensure_type_available(const std::string &topic_name) const = 0;
 
     // Construct the typed Topic on this participant (called only when not found).
     virtual dds::topic::Topic<T> make_topic(dds::domain::DomainParticipant dp,
                                             const std::string &name) const = 0;
-
-    const std::string &type_name() const { return type_name_; }
 
 private:
     // Topics are reused across rebuilds (readers/writers/parents close on teardown, the
@@ -256,7 +255,6 @@ private:
     ParticipantRegistry &registry_;
     QosResolver &qos_;
     AsyncWaitSetDispatcher &dispatcher_;
-    std::string type_name_;
     RouterController *controller_;
 };
 

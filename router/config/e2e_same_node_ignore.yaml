@@ -17,7 +17,6 @@ node:
 router:
   id: 7
   name: spine
-  type_name: ExampleCommand
   admin_participant: lan_in
 
 types:

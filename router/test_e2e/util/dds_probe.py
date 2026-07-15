@@ -196,16 +196,23 @@ def read_route_facts(status_reader, route_name):
                 # D64/D66 create-and-observe: live matched counts + unmatched reason.
                 "input_matched": 0, "output_matched": 0, "match_reason": "",
             }
-            if len(data[f"routes[{i}].topic_status"]) > 0:
-                base = f"routes[{i}].topic_status[0]"
-                f["topic_state"] = TOPIC_STATE.get(
-                    int(data[f"{base}.topic_state"]), "?")
-                f["reader_summary"] = data.get_string(f"{base}.reader_qos_summary")
-                f["writer_summary"] = data.get_string(f"{base}.writer_qos_summary")
-                f["qos_warning"] = data.get_string(f"{base}.qos_warning")
-                f["input_matched"] = int(data[f"{base}.input_matched"])
-                f["output_matched"] = int(data[f"{base}.output_matched"])
-                f["match_reason"] = data.get_string(f"{base}.match_reason")
+            # Per-topic rows (multi-topic routes, 7c/E4); flat fields mirror row 0.
+            f["topics"] = {}
+            for t in range(len(data[f"routes[{i}].topic_status"])):
+                base = f"routes[{i}].topic_status[{t}]"
+                row = {
+                    "topic_state": TOPIC_STATE.get(
+                        int(data[f"{base}.topic_state"]), "?"),
+                    "reader_summary": data.get_string(f"{base}.reader_qos_summary"),
+                    "writer_summary": data.get_string(f"{base}.writer_qos_summary"),
+                    "qos_warning": data.get_string(f"{base}.qos_warning"),
+                    "input_matched": int(data[f"{base}.input_matched"]),
+                    "output_matched": int(data[f"{base}.output_matched"]),
+                    "match_reason": data.get_string(f"{base}.match_reason"),
+                }
+                f["topics"][data.get_string(f"{base}.name")] = row
+                if t == 0:
+                    f.update(row)
             facts = f
     return facts
 
@@ -267,7 +274,8 @@ class AckCollector:
 JOURNAL_KIND = {0: "COMMAND_RECEIVED", 1: "PUBLICATION_DISCOVERED",
                 2: "SUBSCRIPTION_DISCOVERED", 3: "ENDPOINT_LOST",
                 4: "TOPIC_ENTITIES_READY", 5: "TOPIC_TEARDOWN_COMPLETE",
-                6: "ROUTE_ENTITY_ERROR", 7: "TOPIC_QOS_WARNING"}
+                6: "ROUTE_ENTITY_ERROR", 7: "TOPIC_QOS_WARNING",
+                8: "TOPIC_MATCH_CHANGED", 9: "TYPE_RESOLVED"}
 
 
 class JournalCollector:

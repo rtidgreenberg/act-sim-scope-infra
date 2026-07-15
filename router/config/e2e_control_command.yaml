@@ -11,9 +11,8 @@
 #     never satisfy (a real mutual-deadlock bug, not test-fixture-specific — see
 #     docs/cpp_router/design-decisions.md D51). "default" is a real, already-shipped
 #     alias, not a fixture-only workaround.
-#   - router.type_name names the ONE DynamicData type this process's DynamicRouteFactory
-#     is bound to (D34/D35 multi-type dispatch isn't implemented) — only the
-#     control_command route/type is included, not the full control-platform.yaml route set.
+#   - topic types are wire-learned (7c, D70) — only the control_command route is
+#     included, not the full control-platform.yaml route set.
 #
 # Loaded twice by the test harness against the SAME file: once with --role control, once
 # with --role platform (mirrors how control-platform.yaml is meant to be loaded on both
@@ -27,7 +26,6 @@ node:
 router:
   id: 30
   name: e2e-control-command
-  type_name: control_command
   # Default admin participant for the file's own (platform) role; the control-role
   # process launched against this same file overrides this with
   # --admin-participant control_lan (see router/test_e2e/conftest.py).

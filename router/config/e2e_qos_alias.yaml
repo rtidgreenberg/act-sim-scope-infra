@@ -24,7 +24,6 @@ node:
 router:
   id: 7
   name: qosalias
-  type_name: ExampleCommand
   admin_participant: wan_in
 
 types:

@@ -18,7 +18,6 @@ node:
 router:
   id: 5
   name: autoqos
-  type_name: ExampleCommand
   admin_participant: wan_in
 
 types:

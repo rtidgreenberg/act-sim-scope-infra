@@ -45,9 +45,10 @@ struct DiscoveryDispatcher::PendingPublication {
 DiscoveryDispatcher::DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
                                          RouterController &controller,
                                          ParticipantRegistry &registry,
-                                         const std::string &own_router_tag)
+                                         const std::string &own_router_tag,
+                                         TypeResolver &types)
     : aws_(aws), controller_(controller), own_router_tag_(own_router_tag),
-      shut_down_(false) {
+      types_(types), shut_down_(false) {
     for (const std::string &name : registry.names()) {
         attach_participant(registry.get(name));
     }
@@ -270,6 +271,10 @@ void DiscoveryDispatcher::handle_publication_sample(
     rec.has_type      = !rec.type_name.empty(); // generated-type fast path (D31)
     rec.origin_router = origin_router;
 
+    // 7c (D70): learn the topic's type from the endpoint's inline type object. After
+    // the same-node ignore above, so an ignored endpoint never teaches a type.
+    maybe_learn_type(rec.topic_name, data->type(), endpoint_guid);
+
     Log::debug("publication_discovered",
                {{"guid", endpoint_guid},
                 {"topic", rec.topic_name},
@@ -277,6 +282,32 @@ void DiscoveryDispatcher::handle_publication_sample(
                 {"has_type", rec.has_type ? "true" : "false"},
                 {"origin", origin_router}});
     controller_.post(ControllerEvent::publication_discovered(rec));
+}
+
+void DiscoveryDispatcher::maybe_learn_type(
+        const std::string &topic_name,
+        const dds::core::optional<dds::core::xtypes::DynamicType> &type,
+        const std::string &endpoint_guid) {
+    if (!type.is_set()) {
+        // Not inline (TypeObject above the SEDP threshold, or a non-XTypes peer): warn
+        // once per topic. The request_types_filter fallback is wired only when a real
+        // type needs it (D66/D70).
+        bool first;
+        {
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            first = type_not_inline_warned_.insert(topic_name).second;
+        }
+        if (first && !types_.has_topic_type(topic_name)) {
+            Log::warn("type_not_inline",
+                      {{"topic", topic_name}, {"guid", endpoint_guid}});
+        }
+        return;
+    }
+    if (types_.register_discovered_type(topic_name, type.get())) {
+        Log::info("type_learned_from_discovery",
+                  {{"topic", topic_name}, {"guid", endpoint_guid}});
+        controller_.post(ControllerEvent::type_resolved(topic_name));
+    }
 }
 
 void DiscoveryDispatcher::on_subscription(
@@ -301,6 +332,10 @@ void DiscoveryDispatcher::on_subscription(
         rec.type_name     = data.type_name();
         rec.has_type      = !rec.type_name.empty();
         rec.origin_router = ""; // subscriptions not used for same-node ignore
+
+        // 7c (D70): a discovered READER teaches its topic's type too (spike Part B) —
+        // the destination-side router learns from its local app reader.
+        maybe_learn_type(rec.topic_name, data->type(), rec.guid);
 
         // Requested-QoS subset the auto output writer derives from (D39/D42/D45).
         rec.deadline_nanos = nanos_from_duration(data.deadline().period());

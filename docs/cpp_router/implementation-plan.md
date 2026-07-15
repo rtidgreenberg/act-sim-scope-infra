@@ -469,12 +469,14 @@ Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
   (D15 — automatic rematch, no rebuild) and re-mints the RouteView for future builds.
   Proof: `test_wan_partition.py` + `config/e2e_partition.yaml` (E3 + runtime retarget,
   QoS summaries byte-identical across the change); e2e 16/16 twice, ctest 4/4. See D69.
-- **7c — Per-topic wire-type acquisition (D62 as reshaped by D64/D66).** Retire
-  process-global `router.type_name`; `DiscoveryDispatcher` reads each local LAN endpoint's
-  inline COMPLETE type object (`data->type()`, spike-proven) and posts `TypeResolved`;
+- **7c — Per-topic wire-type acquisition (D62 as reshaped by D64/D66). DELIVERED (D70,
+  2026-07-15).** `router.type_name` retired; `DiscoveryDispatcher` reads each discovered
+  endpoint's inline COMPLETE type object (`data->type()`) and posts `TypeResolved`;
   entities are created per topic when its type arrives (first-learned-wins per topic per
-  process, D66). One `DynamicRouteFactory` serves all types, so `platform_events`
-  (`PlatformCommandAck` + `ContactReport`) and the four-type full config run in one process.
+  process; learn-from-ANY-non-ignored-endpoint refines D64's learn-from-LAN — see D70).
+  One `DynamicRouteFactory` serves all types. Proof: `test_platform_events.py` (E4) — two
+  types from one process, one of them built programmatically in Python and present in NO
+  XML; ignored same-node endpoints teach no types; e2e 17/17 twice, ctest 4/4. See D70.
 - **7d — Full `control-platform.yaml` end-to-end.** Control-node + platform-node `router_main`
   pair on the real production config; `control_command`, `platform_primary_status`, and
   `platform_events` all cross the WAN; `platform_detail_status` toggled via the Phase 6

@@ -51,6 +51,11 @@ struct TopicRouteState {
     RouterRouteTopicState topic_state = RouterRouteTopicState::TOPIC_IDLE;
     std::uint64_t entity_generation = 0; // stamp at last entity build; 0 = none (D23)
     std::string resolved_type_name;      // first-resolved-wins (D20)
+
+    // 7c (D64/D70): the creation gate — true once this topic's DynamicType has been
+    // learned from the wire (TypeResolved). Process-lifetime (first-learned-wins, D66):
+    // NOT cleared with the build, so re-enable/re-arm rebuilds without a new event.
+    bool type_available = false;
     std::string last_error;
     std::uint64_t samples_forwarded = 0;
     std::uint64_t lifecycle_events_forwarded = 0;

@@ -6,16 +6,17 @@ now driven through the real router_main + real DynamicRouteFactory (config/
 e2e_same_node_ignore.yaml — one router, node TestNode, route ignore_r1, explicit "default"
 QoS on both legs).
 
-Two behaviors, both D15, expressed in create-and-observe terms (D64/D66 — the route
-builds immediately at startup, so "never enabled" became "never matched"):
+Two behaviors, both D15, expressed in create-and-observe + wire-type terms (D64/D66/D70):
   A. a writer on a participant tagged act.router=TestNode/<other> (SAME node as the router)
      is recognized as a same-node router publication and ignored (dds::pub::ignore) — the
-     router logs endpoint_ignored_same_node and the route reader's input_matched count
-     stays 0 (the ignored writer can never associate with the route input).
-  B. a genuine, untagged application writer IS routed — input_matched rises to >= 1.
+     router logs endpoint_ignored_same_node, the ignored endpoint NEVER TEACHES the
+     topic's type (D70: ignored endpoints are excluded from type acquisition too), so
+     the route stays unbuilt (ROUTE_WAITING_FOR_DISCOVERY).
+  B. a genuine, untagged application writer teaches the type AND is routed — the route
+     builds and input_matched rises to >= 1.
 
 runtime_spine asserted A via a fake factory's create-count (creates == 0); here it is
-asserted against the real router via the live build's own matched counts.
+asserted against the real router via the unbuilt wait state + matched counts.
 
 Run from the repo root (see router/test_e2e/README.md).
 """
@@ -85,15 +86,16 @@ def test_same_node_publication_ignored_real_publication_routed(
             "router never logged endpoint_ignored_same_node for the same-node peer "
             f"writer (D15); log {router.log_path}")
 
-        # Grace: with only the ignored same-node writer present, the live route reader
-        # must never match it — input_matched stays 0 (create-and-observe: the route is
-        # ENABLED with an observable zero, D66; the D15 ignore is what holds the zero).
+        # Grace: with only the ignored same-node writer present, the route must stay
+        # UNBUILT — an ignored endpoint neither teaches the topic's type (D70) nor could
+        # its writer ever match; a build here would mean the ignore leaked.
         time.sleep(2.0)
         facts = read_route_facts(status_reader, ROUTE)
         assert facts is not None, f"route {ROUTE} absent from status; log {router.log_path}"
-        assert facts["input_matched"] == 0, (
-            f"route input matched a same-node router publication — D15 ignore failed; "
+        assert facts["state"] == "ROUTE_WAITING_FOR_DISCOVERY", (
+            f"route built off a same-node router publication — D15/D70 ignore failed; "
             f"facts={facts}; log {router.log_path}")
+        assert facts["input_matched"] == 0, facts
 
         # --- B) genuine application traffic: the route input must match it ---
         held.append(app_out.reader(TOPIC, TYPE, dtype=cmd_type))

@@ -1,18 +1,12 @@
 // router_main.cxx — ACT C++ router entry point.
 //
 // Builds a real, long-running router process from a route config: parses the YAML
-// (RouteConfigParser), loads the DynamicData type XML, creates the configured DDS
-// participants, and wires discovery -> controller -> entity factory -> forwarding,
-// exactly as already proven inside the Phase 3-5 test mains (test_route_forward.cxx,
-// test_dynamic_forward.cxx) — generalized to read participants/routes from a config
-// file instead of hardcoding them. Runs until SIGINT/SIGTERM, then shuts down in the
-// same order those tests use.
-//
-// One scope boundary carried over from the library (not addressed here — see
-// docs/cpp_router/design-decisions.md D50):
-//   - DynamicRouteFactory binds ONE DynamicData type for the whole process (D34/D35);
-//     a config whose active routes span more than one type cannot run yet (checked
-//     below, fails fast rather than mis-typing a route).
+// (RouteConfigParser), creates the configured DDS participants, and wires discovery ->
+// controller -> entity factory -> forwarding. Route topic types are learned FROM THE
+// WIRE (7c, D64/D70): the DiscoveryDispatcher reads each endpoint's inline SEDP type
+// object and the controller builds a topic's entities once its type arrives — the
+// router carries no local type objects for forwarded payloads and one
+// DynamicRouteFactory serves all types. Runs until SIGINT/SIGTERM.
 //
 // Usage:
 //   router_main --config <path> [--name <router-instance-name>] [--role <node-role>]
@@ -180,17 +174,9 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Gap C guard (D34/D35): DynamicRouteFactory binds one type for the whole
-        // process. If this node has active routes but the config didn't name a single
-        // router.type_name, fail fast instead of silently building the wrong DynamicType.
-        if (!cfg.routes.empty() && cfg.type_name.empty()) {
-            Log::error("router.config.type_name_missing",
-                      {{"config", config_path},
-                       {"reason", "router.type_name required (DynamicRouteFactory binds "
-                                  "one type per process, D34/D35 multi-type dispatch not "
-                                  "yet implemented)"}});
-            return 2;
-        }
+        // router.type_name is retired (7c, D70): each topic's DynamicType is learned
+        // from the wire (inline SEDP type objects) and one DynamicRouteFactory serves
+        // all types. The old D50 Gap-C single-type guard is gone with it.
 
         if (cfg.routes.empty()) {
             Log::warn("router.routes.none_for_role",
@@ -250,6 +236,9 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Route topic types are wire-learned (D70); the XML load remains only as a
+        // legacy/debug path for configs that still name one — it is NOT on the
+        // route-build path.
         TypeResolver types;
         if (!cfg.types_xml_path.empty()) {
             types.load_types(cfg.types_xml_path);
@@ -358,7 +347,7 @@ int main(int argc, char **argv) {
 
         rti::core::cond::AsyncWaitSet aws;
         AsyncWaitSetDispatcher route_disp(aws);
-        DynamicRouteFactory factory(registry, types, qos, route_disp, cfg.type_name);
+        DynamicRouteFactory factory(registry, types, qos, route_disp);
 
         // Phase 6 slice 6b: controller journal (debug analysis). Its backlog StatusCondition
         // attaches to the AWS here, before aws.start()/enable_all() (D52). The writer is
@@ -376,7 +365,7 @@ int main(int argc, char **argv) {
                               &status_pub, &journal_pub);
         factory.set_controller(&ctrl);
 
-        DiscoveryDispatcher discovery(aws, ctrl, registry, router_tag);
+        DiscoveryDispatcher discovery(aws, ctrl, registry, router_tag, types);
 
         // Phase 6 slice 6a: LAN admin command channel. Attached to the AWS BEFORE
         // aws.start()/enable_all() (same D52 reason as discovery — an edge-triggered

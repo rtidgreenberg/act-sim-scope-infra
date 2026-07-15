@@ -92,6 +92,7 @@ private:
     void apply_entity_error(const ControllerEvent &e);
     void apply_qos_warning(const ControllerEvent &e);
     void apply_match_changed(const ControllerEvent &e);
+    void apply_type_resolved(const ControllerEvent &e);
 
     // Tighten a FORWARDING build's writer deadline in place when the derivation over
     // the current matched readers is stricter than the offer (D39/D45).

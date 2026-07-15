@@ -128,7 +128,8 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         if (router && router["id"]) {
             out.router_id = router["id"].as<std::int32_t>();
         }
-        out.type_name = get_str(router, "type_name");
+        // router.type_name retired (7c, D70): topic types are wire-learned. A leftover
+        // type_name: key in a config is silently ignored.
         out.admin_participant = get_str(router, "admin_participant");
 
         out.types_xml_path = get_str(root["types"], "xml");

@@ -13,13 +13,13 @@ drives the loop over real DDS:
 The admin types (RouterCommand/RouterCommandAck/RouterStatus) come from the admin IDL via
 the admin_types_xml fixture, exactly like test_auto_qos.py reads RouterStatus.
 
-Asserts the Phase 6 6a evidence items (D56, E2 reshaped by 7m/D66 — ENABLE builds
-immediately, created-but-unmatched is an observable zero, not a wait state):
+Asserts the Phase 6 6a evidence items (D56, E2 reshaped by 7m/D66 + 7c/D70 — ENABLE
+builds as soon as the topic's wire type is known):
   E1    disabled route appears in startup status with no entities.
   E-CFT a command addressed to another router never changes state and draws no ack.
-  E2    ENABLE_ROUTE -> ROUTE_ENABLED with input_matched 0 + match_reason (no source
-        writer yet), then input_matched >= 1 once the source writer appears; ack
-        accepted; state_revision bumps.
+  E2    ENABLE_ROUTE with no source writer -> ROUTE_WAITING_FOR_DISCOVERY (no wire type
+        yet, the 7c gate); the source writer teaches the type -> the route builds ->
+        ROUTE_ENABLED with input_matched >= 1; ack accepted; state_revision bumps.
   E4    duplicate command_id returns the original ack and does not bump state_revision.
   E3    DISABLE_ROUTE -> ROUTE_DISABLED, entities closed; ack accepted.
 
@@ -125,41 +125,36 @@ def test_admin_command_control_loop(
         assert read_status_revision(status_reader) == rev0, \
             f"off-target command bumped state_revision; log {router.log_path}"
 
-        # (E2a) ENABLE_ROUTE builds immediately (7m/D66 — no discovery gate): the route
-        # is ENABLED with an observable created-but-unmatched zero; ack accepted;
-        # revision up.
+        # (E2a) ENABLE_ROUTE with no source writer: accepted, but the topic's wire type
+        # is unknown, so the route WAITS (7c/D70 gate); revision up.
         cmd_writer.write(_command(cmd_type, "ENABLE_ROUTE", ROUTE, "enable-1",
                                   NODE, ROUTER))
         ack = acks.wait("enable-1", check_alive=alive)
         assert ack is not None and ack["accepted"], \
             f"ENABLE_ROUTE not accepted: {ack}; log {router.log_path}"
-        enabled = wait_for_route(
+        waiting = wait_for_route(
             status_reader, ROUTE,
-            lambda f: f["state"] == "ROUTE_ENABLED", check_alive=alive)
-        assert enabled is not None and enabled["state"] == "ROUTE_ENABLED", \
-            f"route never reached ROUTE_ENABLED after ENABLE_ROUTE; got {enabled}; " \
-            f"log {router.log_path}"
-        assert enabled["input_matched"] == 0, \
-            f"no source writer exists yet, expected input_matched 0; got {enabled}; " \
-            f"log {router.log_path}"
-        assert "input_unmatched" in enabled["match_reason"], \
-            f"expected an input_unmatched match_reason; got {enabled}; " \
+            lambda f: f["state"] == "ROUTE_WAITING_FOR_DISCOVERY", check_alive=alive)
+        assert waiting is not None and waiting["state"] == "ROUTE_WAITING_FOR_DISCOVERY", \
+            f"route should wait for its wire type after ENABLE_ROUTE; got {waiting}; " \
             f"log {router.log_path}"
         rev_after_enable = read_status_revision(status_reader)
         assert rev_after_enable is not None and rev_after_enable > rev0, \
             f"ENABLE_ROUTE did not bump state_revision ({rev0} -> {rev_after_enable}); " \
             f"log {router.log_path}"
 
-        # (E2b) a source writer appears -> the live route reader matches it. Keep the
-        # reference alive (a dropped DataWriter is GC'd and the endpoint lost
-        # immediately). Waiting for the count also settles the match-driven status
-        # publishes before the E4 revision-stability window below.
+        # (E2b) a source writer appears: its inline type object teaches the topic, the
+        # route builds and matches it -> ENABLED. Keep the reference alive (a dropped
+        # DataWriter is GC'd and the endpoint lost immediately). Waiting for the count
+        # also settles the match-driven status publishes before the E4
+        # revision-stability window below.
         src_writer = probe.writer(SRC_TOPIC, EX_TYPE, dtype=ex_type)  # noqa: F841
         matched = wait_for_route(
             status_reader, ROUTE,
-            lambda f: f["input_matched"] >= 1, check_alive=alive)
+            lambda f: f["state"] == "ROUTE_ENABLED" and f["input_matched"] >= 1,
+            check_alive=alive)
         assert matched is not None and matched["input_matched"] >= 1, \
-            f"route input never matched the source writer; got {matched}; " \
+            f"route never built/matched after the source writer appeared; got {matched}; " \
             f"log {router.log_path}"
 
         # (E4) duplicate command_id -> cached ack replayed, no state change / revision bump.

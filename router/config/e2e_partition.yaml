@@ -21,7 +21,6 @@ node:
 router:
   id: 8
   name: partition
-  type_name: ExampleCommand
   admin_participant: wan_in
 
 types:

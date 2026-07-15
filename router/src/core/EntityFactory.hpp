@@ -21,14 +21,16 @@ class EntityFactory : public RouteEntityFactory<T> {
 public:
     EntityFactory(ParticipantRegistry &registry, TypeResolver &types, QosResolver &qos,
                   AsyncWaitSetDispatcher &dispatcher, const std::string &type_name)
-        : RouteEntityFactory<T>(registry, qos, dispatcher, type_name), types_(types) {
+        : RouteEntityFactory<T>(registry, qos, dispatcher), types_(types),
+          type_name_(type_name) {
         types_.register_type(type_name);
     }
 
 protected:
-    void ensure_type_available() const override {
-        if (!types_.is_constructible(this->type_name())) {
-            throw std::runtime_error("type not locally supported: " + this->type_name());
+    void ensure_type_available(const std::string & /*topic_name*/) const override {
+        // Generated lane: one compiled type per factory; the topic is irrelevant.
+        if (!types_.is_constructible(type_name_)) {
+            throw std::runtime_error("type not locally supported: " + type_name_);
         }
     }
 
@@ -39,6 +41,7 @@ protected:
 
 private:
     TypeResolver &types_;
+    std::string type_name_;
 };
 
 } // namespace router

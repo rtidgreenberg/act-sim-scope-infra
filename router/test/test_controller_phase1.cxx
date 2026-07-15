@@ -1,10 +1,11 @@
 // test_controller_phase1.cxx — transition-table conformance for the controller-owned
 // state machine, driven entirely by synthetic ControllerEvents against faked seams (D3).
-// Contract: D1-D11, D21-D26, migrated to create-and-observe by D64/D66 — creation gates
-// on nothing (activate()/ENABLE build immediately), DDS is the matching authority
-// (TopicMatchChanged carries the live build's matched counts; the regression-abort and
-// regression-teardown edges are retired), and builtin-discovery records are demoted to
-// writer-QoS-derivation/diagnosis input.
+// Contract: D1-D11, D21-D26, migrated to create-and-observe by D64/D66/D70 — the only
+// creation gate is wait-for-wire-type (TypeResolved opens it; activate()/ENABLE build
+// once the type is known), DDS is the matching authority (TopicMatchChanged carries the
+// live build's matched counts; the regression-abort and regression-teardown edges are
+// retired), and builtin-discovery records are demoted to writer-QoS-derivation/diagnosis
+// input.
 //
 // The fake EntityFactory records operations but never completes them itself — tests post
 // TopicEntitiesReady / TopicTeardownComplete with the recorded generation stamp, the same
@@ -224,10 +225,11 @@ struct Fixture {
     std::uint64_t last_create_gen() const { return factory.creates.back().gen; }
 };
 
-// Drive one enabled single-topic route to FORWARDING: activate builds immediately
-// (D64/D66 — no discovery gate), then the completion event lands.
+// Drive one enabled single-topic route to FORWARDING: the topic's type arrives from the
+// wire (7c/D70 — the only creation gate), activate builds, the completion event lands.
 static std::uint64_t drive_to_forwarding(Fixture &f, const std::string &route,
                                          const std::string &topic) {
+    f.post(ControllerEvent::type_resolved(topic));
     f.activate();
     std::uint64_t gen = f.last_create_gen();
     f.post(ControllerEvent::topic_entities_ready(route, topic, gen));
@@ -237,7 +239,7 @@ static std::uint64_t drive_to_forwarding(Fixture &f, const std::string &route,
 // --- Tests ---
 
 // Startup snapshot at revision 0: disabled and enabled routes both visible before any
-// entity exists; activate() then builds the enabled route immediately (D64/D66).
+// entity exists; the enabled route waits for its wire type (7c/D70), then builds.
 static void test_startup_snapshot_then_activate() {
     std::vector<RouterRouteSpec> specs;
     specs.push_back(route_spec("off_route", false,
@@ -257,7 +259,14 @@ static void test_startup_snapshot_then_activate() {
           == RouterRouteTopicState::TOPIC_IDLE);
     CHECK(f.factory.creates.empty());
 
+    // No wire type yet: activate leaves the enabled route waiting (the honest 7c gate).
     f.activate();
+    CHECK(f.factory.creates.empty());
+    CHECK(f.route("on_route").state
+          == RouterRouteOperationalState::ROUTE_WAITING_FOR_DISCOVERY);
+
+    // The type arrives from the wire: the waiting topic builds now.
+    f.post(ControllerEvent::type_resolved("T2"));
     CHECK(f.factory.creates.size() == 1); // enabled route only
     CHECK(f.factory.creates.back().topic == "T2");
     CHECK(f.route("on_route").state == RouterRouteOperationalState::ROUTE_RESOLVING);
@@ -265,13 +274,19 @@ static void test_startup_snapshot_then_activate() {
           == RouterRouteTopicState::TOPIC_CREATING);
     CHECK(f.route("off_route").state == RouterRouteOperationalState::ROUTE_DISABLED);
     CHECK(f.revision() == 1);
+
+    // Duplicate TypeResolved: flag already set, build in flight — no change, no bump.
+    f.post(ControllerEvent::type_resolved("T2"));
+    CHECK(f.factory.creates.size() == 1);
+    CHECK(f.revision() == 1);
 }
 
-// ENABLE_ROUTE creates immediately — the creation gate is retired (D64/D66).
+// ENABLE_ROUTE creates immediately once the type is known (D64/D66/D70).
 static void test_enable_creates_immediately() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     CHECK(f.factory.creates.empty()); // disabled: nothing to build
 
@@ -284,11 +299,31 @@ static void test_enable_creates_immediately() {
     CHECK(f.revision() == 1);
 }
 
+// ENABLE before the type is known: accepted, route waits; the type's arrival builds it
+// (7c/D70 — the wait-for-type edge in both orders).
+static void test_enable_then_type_builds() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+    Fixture f(specs);
+    f.activate();
+
+    f.post(ControllerEvent::command_received(
+            command(RouterCommandKind::ENABLE_ROUTE, "c1", "r")));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.factory.creates.empty());
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_WAITING_FOR_DISCOVERY);
+
+    f.post(ControllerEvent::type_resolved("T"));
+    CHECK(f.factory.creates.size() == 1);
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_RESOLVING);
+}
+
 // Duplicate command_id: cached ack replayed, no state change, no revision bump (D4).
 static void test_duplicate_command_returns_cached_ack() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
+    f.post(ControllerEvent::type_resolved("T"));
 
     f.post(ControllerEvent::command_received(
             command(RouterCommandKind::ENABLE_ROUTE, "c1", "r")));
@@ -341,6 +376,7 @@ static void test_create_and_observe_walk() {
             1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
 
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_RESOLVING);
     CHECK(f.factory.creates.size() == 1);
@@ -413,6 +449,7 @@ static void test_disable_aborts_inflight_create() {
             1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
 
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     std::uint64_t gen = f.last_create_gen();
     CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_RESOLVING);
@@ -439,6 +476,7 @@ static void test_stale_error_after_abort_discarded() {
             1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
 
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     std::uint64_t gen = f.last_create_gen();
     f.post(ControllerEvent::command_received(
@@ -503,6 +541,7 @@ static void test_error_sticky_until_rearm() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
     Fixture f(specs);
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     std::uint64_t gen = f.last_create_gen();
 
@@ -537,8 +576,10 @@ static void test_per_topic_activation_two_topics() {
     std::vector<RouterRouteSpec> specs(1, route_spec("platform_events", true, topics));
     Fixture f(specs);
 
+    f.post(ControllerEvent::type_resolved("PlatformCommandAck"));
+    f.post(ControllerEvent::type_resolved("ContactReport"));
     f.activate();
-    CHECK(f.factory.creates.size() == 2); // both topics build immediately (D66)
+    CHECK(f.factory.creates.size() == 2); // both topics build once typed (D66/D70)
     std::uint64_t gen_ack = f.factory.creates.at(0).gen;
     std::uint64_t gen_contact = f.factory.creates.at(1).gen;
 
@@ -602,6 +643,7 @@ static void test_auto_route_creates_with_baseline() {
                           /*auto_qos=*/true));
     Fixture f(specs);
 
+    f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     CHECK(f.factory.creates.size() == 1);
     const DerivedWriterQos &d = f.factory.creates.back().derived;
@@ -618,6 +660,7 @@ static void test_writer_qos_derivation() {
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
                           /*auto_qos=*/true));
     Fixture f(specs);
+    f.post(ControllerEvent::type_resolved("T"));
 
     f.post(ControllerEvent::subscription_discovered(reader_record(
             "rd1", "T", 2000000000LL, LivelinessKindPod::Automatic, 5000000000LL)));
@@ -641,6 +684,7 @@ static void test_deadline_tightening_and_warning() {
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
                           /*auto_qos=*/true));
     Fixture f(specs);
+    f.post(ControllerEvent::type_resolved("T"));
 
     f.post(ControllerEvent::subscription_discovered(
             reader_record("rd1", "T", 2000000000LL)));
@@ -778,6 +822,7 @@ static void test_history_fifo_eviction() {
 int main() {
     RUN(test_startup_snapshot_then_activate);
     RUN(test_enable_creates_immediately);
+    RUN(test_enable_then_type_builds);
     RUN(test_duplicate_command_returns_cached_ack);
     RUN(test_rejected_command_ack_replay);
     RUN(test_create_and_observe_walk);

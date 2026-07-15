@@ -15,11 +15,23 @@
 // has_type is set to !type_name.empty() — the generated-type fast path (D31):
 // a non-empty type_name from the builtin data is sufficient for construction
 // readiness in Phase 2.5 without a full TypeLookup round-trip.
+//
+// 7c (D64/D70): the dispatcher is also the router's TYPE-ACQUISITION point — it reads
+// each discovered endpoint's inline COMPLETE type object (`data->type()`, rides SEDP —
+// spike-proven, spikes/type_discovery/) and registers it in the TypeResolver per topic
+// (first-learned-wins, D66), posting TypeResolved so the controller can build gated
+// topics. Ignored same-node router publications never teach types. An endpoint whose
+// type object is NOT inline draws a once-per-topic `type_not_inline` warning — the
+// request_types_filter fallback (C++-only on this install) is wired only when a real
+// type needs it (D66).
 
 #pragma once
 
 #include "RouterController.hpp"
 #include "ParticipantRegistry.hpp"
+#include "TypeResolver.hpp"
+
+#include <set>
 
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <dds/dds.hpp>
@@ -39,7 +51,8 @@ public:
     DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
                         RouterController &controller,
                         ParticipantRegistry &registry,
-                        const std::string &own_router_tag); // "act.router=<n>/<r>"
+                        const std::string &own_router_tag, // "act.router=<n>/<r>"
+                        TypeResolver &types);              // wire-type registry (D70)
 
     // Detach all conditions from the AsyncWaitSet. Call before aws.stop() to
     // ensure the AWS drains safely before conditions and readers are torn down.
@@ -89,9 +102,18 @@ private:
     static std::string extract_router_tag(const dds::core::policy::UserData &ud);
     bool is_same_node(const std::string &origin_router) const;
 
+    // 7c (D70): register an endpoint's inline type object for its topic
+    // (first-learned-wins) and post TypeResolved on the first registration; warn once
+    // per topic when the type object is not inline.
+    void maybe_learn_type(
+            const std::string &topic_name,
+            const dds::core::optional<dds::core::xtypes::DynamicType> &type,
+            const std::string &endpoint_guid);
+
     rti::core::cond::AsyncWaitSet &aws_;
     RouterController &controller_;
     std::string own_router_tag_;
+    TypeResolver &types_;
 
     // Participant GUID → act.router tag (D30; empty string = not a router participant).
     std::mutex table_mutex_;
@@ -108,6 +130,9 @@ private:
     std::map<std::string, EndpointIdentity> part_handle_guid_;
     std::map<std::string, EndpointIdentity> pub_handle_guid_;
     std::map<std::string, EndpointIdentity> sub_handle_guid_;
+
+    // Topics already warned for a missing inline type object (once-per-topic, D70).
+    std::set<std::string> type_not_inline_warned_;
 
     // Held ReadConditions (type-erased) — keep alive while attached to the AWS.
     std::vector<dds::core::cond::Condition> conditions_;

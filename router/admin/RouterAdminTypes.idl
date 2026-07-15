@@ -36,7 +36,8 @@ enum ControllerJournalEventKind {
     JOURNAL_TOPIC_TEARDOWN_COMPLETE,
     JOURNAL_ROUTE_ENTITY_ERROR,
     JOURNAL_TOPIC_QOS_WARNING,
-    JOURNAL_TOPIC_MATCH_CHANGED   // matched-count change on a live build (D64/D66)
+    JOURNAL_TOPIC_MATCH_CHANGED,  // matched-count change on a live build (D64/D66)
+    JOURNAL_TYPE_RESOLVED         // topic's type learned from the wire (7c, D64/D70)
 };
 
 enum RouterRouteOperationalState {

@@ -3064,3 +3064,63 @@ twice**; `/dev/shm` clean.
 
 **Docs changed.** `RouterAdminTypes.idl` + `command-status.md` (enum + command table);
 `implementation-plan.md` (7b delivered); this entry.
+
+---
+
+## D70 — Slice 7c IMPLEMENTED: per-topic types learned from the wire; `router.type_name` retired; learn-from-any-endpoint refines D64's learn-from-LAN (2026-07-15, accepted; implements D62 as reshaped by D64/D66)
+
+**Context.** The last D66 slice before 7d. The router now carries NO local type objects
+for forwarded payloads: each route topic's `DynamicType` arrives as the inline SEDP
+COMPLETE type object (`data->type()` on the builtin pub/sub readers — the rti_view model,
+spike-proven in `spikes/type_discovery/`, compile-checked in
+`spikes/matched_endpoints/cpp_compile_check.cxx` CHECK-5).
+
+**Decisions (as implemented).**
+
+- **Acquisition point = DiscoveryDispatcher.** Both builtin readers feed
+  `maybe_learn_type(topic, data->type(), guid)`: first registration into the
+  `TypeResolver`'s new mutex-guarded topic→DynamicType map (first-learned-wins per topic
+  per process, D66) posts a `TypeResolved{topic}` controller event
+  (`JOURNAL_TYPE_RESOLVED` in the journal). Placed AFTER the D15 same-node ignore:
+  **an ignored endpoint never teaches a type** — with only a same-node router writer
+  present, the route now stays honestly unbuilt (e2e-asserted).
+- **Learn-from-ANY-endpoint (refines D64's learn-from-LAN wording).** D64 said the
+  source side learns from the LAN app writer and the destination side from the LAN app
+  reader. Implemented rule: the first non-ignored endpoint — writer or reader, either
+  leg's participant — that carries an inline type object teaches the topic. Rationale:
+  inline SEDP type objects arrive with discovery anyway (zero extra traffic — D13's
+  LAN-only posture was about TypeLookup/`request_types_filter` traffic, which remains
+  absent), the common case IS the local app endpoint, and a WAN-learned version is
+  tolerated by DDS assignability per leg exactly as D66's versioning rule already
+  states. The strict-LAN restriction would have required a per-participant LAN/WAN
+  designation the config does not have, to prevent a non-problem.
+- **The creation gate = `type_available`** (per-topic flag on `TopicRouteState`, set by
+  `TypeResolved`, process-lifetime — re-enable/re-arm rebuilds without a new event). An
+  enabled IDLE topic without it waits (`ROUTE_WAITING_FOR_DISCOVERY` is honest again);
+  `apply_type_resolved` opens the gate on every route carrying the topic and reconciles.
+- **`router.type_name` retired** (with the D50 Gap-C guard): the parser ignores a
+  leftover `type_name:` key; `DynamicRouteFactory` drops its bound-type constructor
+  param and resolves per topic (`TypeResolver::topic_type(topic)`); one factory instance
+  serves all DynamicData topics. `types.xml` loading remains a legacy/debug path only —
+  none of the e2e router configs need it anymore (test PEERS still load
+  `example_types.xml` for their own endpoints).
+- **Non-inline fallback unchanged (D66):** an endpoint without an inline type object
+  draws a once-per-topic `type_not_inline` warning; `request_types_filter` (C++-only on
+  this install) stays unwired until a real type needs it.
+
+**Evidence.** New `router/test_e2e/test_platform_events.py` + `config/e2e_platform_events.yaml`
+(E4): ONE route, TWO topics, TWO types from one process — `ExampleCommand` (XML known
+only to the test peers) AND a type built programmatically in Python
+(`dds.StructType("ContactReportType")`) that exists in NO XML anywhere; both learned from
+the wire, both forward, and the second topic provably stays `TOPIC_IDLE` until its
+writer appears (independent per-topic gates). Reshaped: `test_create_and_observe.py`
+(E-M now includes the wait state: empty domains → WAITING; writer teaches type → build →
+output-unmatched zero), `test_auto_qos.py` (item 1 = wait-for-type), 
+`test_router_admin_commands.py` (E2a back to WAITING — no type after ENABLE),
+`test_same_node_ignore.py` (part A strengthened: ignored endpoint teaches no type →
+route unbuilt). Unit suite: `test_enable_then_type_builds` (gate in both orders),
+startup-activate test now exercises wait → TypeResolved → build → duplicate-event
+idempotence. ctest 4/4; full e2e **17/17 twice**; `/dev/shm` clean.
+
+**Docs changed.** `implementation-plan.md` (7c delivered); `RouterAdminTypes.idl`
+(journal enum); config headers (stale `type_name` comments); this entry.

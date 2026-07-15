@@ -1,0 +1,49 @@
+# e2e_platform_events.yaml — single router_main fixture for the 7c multi-type e2e test
+# (router/test_e2e/test_platform_events.py, plan's E4, D70).
+#
+# ONE router process, ONE route (events_r1) carrying TWO topics of DIFFERENT types:
+#   - PlatformCommandAck: ExampleCommand (from router/config/example_types.xml, which
+#     only the TEST PEERS load — the router itself has no types.xml here);
+#   - ContactReport: a type the Python test builds programmatically (dds.StructType) —
+#     it exists NOWHERE in any XML.
+# Both types reach the router exclusively as inline SEDP type objects (D70 wire-type
+# acquisition); one DynamicRouteFactory serves both (router.type_name retired).
+#
+# Explicit "default" QoS both legs so matching is deterministic (app writers must offer
+# RELIABLE+TRANSIENT_LOCAL).
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py.
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 9
+  name: events
+  admin_participant: wan_in
+
+participants:
+  wan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+  lan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+
+routes:
+  - name: events_r1
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformCommandAck
+      - name: ContactReport
+    source_side:
+      input:
+        participant: wan_in
+        reader_qos: default
+      output:
+        participant: lan_out
+        writer_qos: default

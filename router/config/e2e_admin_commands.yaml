@@ -25,7 +25,6 @@ node:
 router:
   id: 6
   name: admincmd
-  type_name: ExampleCommand
   admin_participant: wan_in
 
 types:
