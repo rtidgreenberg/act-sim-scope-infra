@@ -168,8 +168,14 @@ struct RouterStatus {
     sequence<RouterRouteStatus> routes;
 };
 
+// Keyed by (target_node, target_router) like RouterStatus: each router is one instance
+// on ActRouterControllerJournal, so a recorder subscribed to several routers keeps
+// per-router reader caches (one router's record burst cannot evict another's). Within a
+// single router's instance the stream is still bursty — consumers use KEEP_ALL (D67).
 struct ControllerJournalRecord {
+    @key
     string target_node;
+    @key
     string target_router;
     uint32 router_id;
     string status_id;

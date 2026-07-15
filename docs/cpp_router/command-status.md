@@ -228,7 +228,9 @@ struct RouterStatus {
 };
 
 struct ControllerJournalRecord {
+    @key
     string target_node;
+    @key
     string target_router;
     uint32 router_id;
     string status_id;

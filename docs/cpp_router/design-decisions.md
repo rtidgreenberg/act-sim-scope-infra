@@ -2977,3 +2977,35 @@ and green); `/dev/shm` clean.
 **Docs changed.** This entry; `implementation-plan.md` (7m delivered);
 `code-architecture.md` (D66 reconciliation: ownership-boundary demotion, state model,
 event table incl. `TopicMatchChanged`).
+
+---
+
+## D68 — Controller journal keyed by (target_node, target_router) (2026-07-15, accepted; user-directed, amends D67's finding-2 framing and the D46/D49 journal type)
+
+**Context.** D67's finding 2 observed that `ControllerJournalRecord` was keyless — the
+whole topic was ONE instance, so any consumer's per-instance reader cache was shared
+across every router writing to `ActRouterControllerJournal`. That is wrong data modeling
+for the multi-router deployment the journal exists for (a recorder watching a control
+node + N platform routers): one router's record burst could evict another router's
+records from a bounded reader cache.
+
+**Decision.** `ControllerJournalRecord` gains `@key` on `target_node`/`target_router` —
+the same key idiom as `RouterStatus`. Each router is one instance on the journal topic:
+per-router reader caches, per-router instance lifecycle, and Admin Console groups records
+by router. `build_journal_record` already stamps both fields on every record, so no
+writer-side code changes. The writer's D49 QoS (RELIABLE + KEEP_LAST(256) + unlimited
+send window) is per instance, and each router writes only its own instance — unchanged in
+effect.
+
+**What keying does NOT fix (D67 finding 2 stands).** Within a single router's instance
+the stream is still bursty (7m: COMMAND_RECEIVED + TOPIC_ENTITIES_READY in one
+event-drain), so a consumer's KEEP_LAST(1) cache still drops the first record of a burst.
+Journal consumers use **KEEP_ALL** (or deep KEEP_LAST) regardless — keying bounds
+cross-router eviction, KEEP_ALL bounds same-router burst loss.
+
+**Evidence.** ctest 4/4; full e2e 15/15 (`test_controller_journal.py` unchanged in
+behavior — one router, one instance).
+
+**Docs changed.** `RouterAdminTypes.idl` + `command-status.md` IDL sketch (@key);
+`dds_probe.py`/`test_controller_journal.py` comments (keyless → keyed-per-router); this
+entry.

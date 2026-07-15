@@ -122,10 +122,11 @@ def reader_qos(reliability=None, durability=None, deadline_ms=None,
     """Build a DataReaderQos from simple options (only the policies the auto-QoS test
     varies). Kinds are lowercase strings: 'reliable'/'best_effort',
     'volatile'/'transient_local'/'transient', 'shared'/'exclusive'. keep_all=True sets
-    KEEP_ALL history — required for keyless event-stream topics (e.g. the controller
-    journal): the default KEEP_LAST(1) cache holds ONE sample per instance, and a keyless
-    topic is one instance, so a back-to-back burst (7m creates entities in the same
-    event-drain as the command) overwrites earlier samples before a polling take()."""
+    KEEP_ALL history — required for event-stream topics (e.g. the controller journal):
+    the default KEEP_LAST(1) cache holds ONE sample per instance, and one router's
+    journal is one instance (keyed by target_node/target_router), so a back-to-back
+    burst (7m creates entities in the same event-drain as the command) overwrites
+    earlier samples before a polling take()."""
     q = dds.DataReaderQos()
     _apply_common(q, reliability, durability, ownership)
     if keep_all:
@@ -253,7 +254,8 @@ JOURNAL_KIND = {0: "COMMAND_RECEIVED", 1: "PUBLICATION_DISCOVERED",
 
 class JournalCollector:
     """Accumulating reader for ControllerJournalRecord (the debug journal, D55/D56).
-    ControllerJournalRecord has no @key, so take() drains every cached record at once — this
+    ControllerJournalRecord is keyed per router (target_node/target_router), and one
+    test drives one router, so take() drains that instance's records at once — this
     buffers all records into `records` so successive wait_for() queries (e.g. first for a
     COMMAND_RECEIVED, then for discovery records) never lose each other's samples. Scope one
     per test. A matched Python reader IS "debug mode" (D56): the router's journal writer
