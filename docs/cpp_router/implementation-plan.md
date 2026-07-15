@@ -449,14 +449,17 @@ Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
   `ParticipantRegistry`. A named alias fully specifies the endpoint and short-circuits the
   D39/D42 auto-derivation and the D51 readiness gate (`output_uses_auto_qos()` stays
   `.empty()`).
-- **7m — Matching-authority refactor (D64/D66).** StatusCondition-driven
-  `TopicMatchChanged` events from the route entities' own
+- **7m — Matching-authority refactor (D64/D66). DELIVERED (D67, 2026-07-15).**
+  StatusCondition-driven `TopicMatchChanged` events from the route entities' own
   `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED` statuses (the D39/D45 `RouteTopicRuntime`
   callback pattern); `input_matched`/`output_matched` counts + `match_reason` in
   state/status/IDL; creation gate and the regression-teardown edge retired (zero matches is
   an observable status, entities persist); matched-endpoint maps demoted to
   derivation/diagnosis input; Phase 1 unit tests migrated to the new contract. Types still
   come from XML in this slice (create directly on enable); the wire-type wait lands in 7c.
+  Proof: E-M (`test_create_and_observe.py`) + migrated e2e suite 15/15 twice + ctest 4/4;
+  see D67 for two migration findings (a shipped test's dissolved false-green; journal
+  consumers need KEEP_ALL).
 - **7b — Publisher/Subscriber partition application (D61 as refined by D64/D66).** Apply
   `publisher_partition`/`subscriber_partition` (parsed but dropped today) to the per-build
   `Publisher`/`Subscriber` — rides 7m: a partition mismatch is the created entity's

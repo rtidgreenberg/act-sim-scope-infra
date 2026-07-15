@@ -141,9 +141,20 @@ public:
             bool manual_liveliness = derived.derive
                     && derived.liveliness_kind != LivelinessKindPod::Automatic;
 
+            // Matched-count changes from the entities' own statuses are the discovery
+            // truth (D64/D66); stamp-carrying events, same MPSC path as the warnings.
+            std::function<void(bool, std::int32_t)> on_match;
+            if (controller) {
+                on_match = [controller, route, topic_name,
+                            generation](bool input_side, std::int32_t count) {
+                    controller->post(ControllerEvent::topic_match_changed(
+                            route, topic_name, generation, input_side, count));
+                };
+            }
+
             std::unique_ptr<RouteTopicRuntimeBase> runtime(
                     new RouteTopicRuntime<T>(reader, writer, publisher, subscriber, cft,
-                                             on_warning, manual_liveliness));
+                                             on_warning, manual_liveliness, on_match));
 
             // (4) attach the forwarding + status conditions to the AsyncWaitSet.
             dispatcher_.attach(route, topic_name, std::move(runtime));

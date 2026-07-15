@@ -398,6 +398,12 @@ int main(int argc, char **argv) {
         // race the controller state the drain thread mutates.
         ctrl.republish_status();
 
+        // Create-and-observe (D64/D66): build every startup-enabled route's entities
+        // now — creation gates on nothing. After enable_all() (entity ignores/instance
+        // handles need enabled participants) and before the DrainThread (single-threaded
+        // here, so no strand race).
+        ctrl.activate();
+
         DrainThread drain(ctrl);
 
         Log::info("router.start.ok",

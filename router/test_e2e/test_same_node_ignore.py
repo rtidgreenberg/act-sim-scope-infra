@@ -4,18 +4,18 @@ router and routes only genuine application publications.
 Python port of the distinctive coverage of the retired C++ test/test_runtime_spine.cxx,
 now driven through the real router_main + real DynamicRouteFactory (config/
 e2e_same_node_ignore.yaml — one router, node TestNode, route ignore_r1, explicit "default"
-QoS so a discovered input publication alone drives ROUTE_ENABLED, no auto-QoS gate).
+QoS on both legs).
 
-Two behaviors, both D15:
+Two behaviors, both D15, expressed in create-and-observe terms (D64/D66 — the route
+builds immediately at startup, so "never enabled" became "never matched"):
   A. a writer on a participant tagged act.router=TestNode/<other> (SAME node as the router)
      is recognized as a same-node router publication and ignored (dds::pub::ignore) — the
-     router logs endpoint_ignored_same_node and the route never leaves
-     ROUTE_WAITING_FOR_DISCOVERY.
-  B. a genuine, untagged application writer IS routed — the route reaches ROUTE_ENABLED.
+     router logs endpoint_ignored_same_node and the route reader's input_matched count
+     stays 0 (the ignored writer can never associate with the route input).
+  B. a genuine, untagged application writer IS routed — input_matched rises to >= 1.
 
 runtime_spine asserted A via a fake factory's create-count (creates == 0); here it is
-asserted against the real router: the route status never reaches ENABLED for the same-node
-writer, and does once a real app writer appears.
+asserted against the real router via the live build's own matched counts.
 
 Run from the repo root (see router/test_e2e/README.md).
 """
@@ -29,7 +29,7 @@ import rti.connextdds as dds
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import start_router, render_config, _log_contains  # noqa: E402
 from util.dds_probe import (  # noqa: E402
-    Probe, reader_qos, read_route_facts, wait_for_route)
+    Probe, reader_qos, writer_qos, read_route_facts, wait_for_route)
 
 TOPIC = "SameNodeCmd"
 TYPE = "ExampleCommand"
@@ -65,8 +65,15 @@ def test_same_node_publication_ignored_real_publication_routed(
             qos=reader_qos(reliability="reliable", durability="transient_local"),
             dtype=status_type)
 
-        # --- A) same-node router writer: must be ignored, route must NOT enable ---
-        held.append(peer_router.writer(TOPIC, TYPE, dtype=cmd_type))
+        # The route's "default"-alias input reader requests RELIABLE+TRANSIENT_LOCAL, so
+        # both test writers must OFFER at least that — otherwise input_matched == 0 would
+        # be a plain RxO mismatch, not proof of the D15 ignore. (Under the old controller
+        # topic-name matching this test never noticed: a VOLATILE app writer "matched" by
+        # name — exactly the false-green D64 dissolved.)
+        compatible = writer_qos(reliability="reliable", durability="transient_local")
+
+        # --- A) same-node router writer: must be ignored, must never match ---
+        held.append(peer_router.writer(TOPIC, TYPE, qos=compatible, dtype=cmd_type))
 
         ignored = False
         deadline = time.monotonic() + 10.0
@@ -78,24 +85,26 @@ def test_same_node_publication_ignored_real_publication_routed(
             "router never logged endpoint_ignored_same_node for the same-node peer "
             f"writer (D15); log {router.log_path}")
 
-        # Grace: with only the ignored same-node writer present, the route must stay
-        # WAITING_FOR_DISCOVERY (no application input was routed).
+        # Grace: with only the ignored same-node writer present, the live route reader
+        # must never match it — input_matched stays 0 (create-and-observe: the route is
+        # ENABLED with an observable zero, D66; the D15 ignore is what holds the zero).
         time.sleep(2.0)
         facts = read_route_facts(status_reader, ROUTE)
         assert facts is not None, f"route {ROUTE} absent from status; log {router.log_path}"
-        assert facts["state"] != "ROUTE_ENABLED", (
-            f"route enabled off a same-node router publication — D15 ignore failed; "
+        assert facts["input_matched"] == 0, (
+            f"route input matched a same-node router publication — D15 ignore failed; "
             f"facts={facts}; log {router.log_path}")
 
-        # --- B) genuine application traffic: route must reach ROUTE_ENABLED ---
+        # --- B) genuine application traffic: the route input must match it ---
         held.append(app_out.reader(TOPIC, TYPE, dtype=cmd_type))
-        held.append(app_in.writer(TOPIC, TYPE, dtype=cmd_type))
+        held.append(app_in.writer(TOPIC, TYPE, qos=compatible, dtype=cmd_type))
 
-        enabled = wait_for_route(
+        matched = wait_for_route(
             status_reader, ROUTE,
-            lambda f: f["state"] == "ROUTE_ENABLED", check_alive=alive)
-        assert enabled is not None and enabled["state"] == "ROUTE_ENABLED", (
-            f"route never enabled off a genuine application publication; got {enabled}; "
+            lambda f: f["state"] == "ROUTE_ENABLED" and f["input_matched"] >= 1,
+            check_alive=alive)
+        assert matched is not None and matched["input_matched"] >= 1, (
+            f"route input never matched a genuine application publication; got {matched}; "
             f"log {router.log_path}")
     finally:
         for entity in held:

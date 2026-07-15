@@ -94,12 +94,14 @@ RouterInstance
   code path for graceful exit, SIGKILL purge, and single-endpoint deletion (the D16
   app-level fan-out is the fallback if the Phase 2 smoke disproves per-endpoint delivery);
   lease tuning: short LAN lease, WAN lease ordered after the `RouterHealth` presence
-  window (D16). Ownership boundary (D22): endpoint→route-topic matching and the per-topic
-  matched-endpoint sets live in the controller (`TopicRouteState`) — the dispatcher never sees
-  route specs.
-- `RouteRegistry` stores every configured route for the instance, including disabled routes
-  and routes waiting on discovery. Desired-enabled plus discovery readiness determines
-  whether DDS entities exist.
+  window (D16). Ownership boundary (D22, demoted by D64/D66): the controller still keeps
+  per-topic endpoint-record maps fed by the dispatcher, but they are **derivation/diagnosis
+  input only** (writer-QoS derivation, deadline tightening, type-conflict warning) — DDS is
+  the matching authority via the route entities' own matched statuses; the dispatcher never
+  sees route specs.
+- `RouteRegistry` stores every configured route for the instance, including disabled routes.
+  Desired-enabled alone determines whether DDS entities exist (D64/D66 create-and-observe —
+  nothing gates on discovery; 7c adds a wait-for-wire-type).
 - `EntityFactory` creates topics, readers, writers, content-filtered topics, read
   conditions, and serialized-CDR forwarding helpers after discovery supplies type and QoS
   input. Every route output DataWriter is locally ignored at creation
@@ -207,7 +209,9 @@ MutableRouterState
 RouterStatus (generated)
   the status snapshot: built by the controller at each state_revision bump from
   MutableRouterState, immutable once built — no separate snapshot/view classes (D25);
-  internal-only facts (matched sets, generation stamps, command history) stay off it
+  internal-only facts (endpoint-record maps, generation stamps, command history) stay off
+  it; the live matched counts + `match_reason` DO ride it (D66 — they are the
+  created-but-unmatched observability surface)
 
 RouteView
   immutable desired route spec plus resolved local active side
@@ -225,16 +229,18 @@ RouteState
   last_error                 # route-wide errors only; per-topic errors live on the topic
 
 TopicRouteState              # one per configured topic on the route — D11
-  matched_endpoint_sets      # matched input writers (and auto-QoS output readers) for this
-                             # topic; maintained by the CONTROLLER from discovery events
-                             # carrying builtin-data copies — the dispatcher stores no endpoint
-                             # records (D22/D27/D30)
-  discovery_facts            # derived from the sets (D20): input_writer_seen ⇔
-                             # matched-writer set non-empty; ditto output_reader_seen;
-                             # plus type_resolved, qos_resolved
+  endpoint_record_maps       # builtin-data copies upserted from discovery events
+                             # (D22/D27/D30) — DEMOTED by D64/D66 to derivation/diagnosis
+                             # input (writer-QoS derivation, deadline tightening,
+                             # type-conflict warning); they gate nothing
+  input/output_matched_count # the discovery truth for a live build (D64/D66): the route
+                             # reader's matched publications / writer's matched
+                             # subscriptions, updated only by stamp-gated
+                             # TopicMatchChanged events; cleared with the build
   entity_generation          # stamp taken at this topic's last entity build (D23);
                              # stale-stamped operations/completions are discarded
-  discovery_state            # pure rollup of this topic's facts, no memory — D1/D11
+  discovery_state            # pure rollup of the matched counts, no memory (D66):
+                             # both ≥1 READY / one PARTIAL / none NONE
   topic_state                # IDLE / CREATING / FORWARDING / TEARING_DOWN / ERROR (sticky)
   resolved_type_name
   resolved_reader_qos_summary
@@ -276,12 +282,13 @@ The controller should process these event categories on one serialized strand or
 | Event | Source | Controller action |
 |---|---|---|
 | `CommandReceived` | command reader | validate command id (events are post-admission — node/router targeting already happened via the CFT, D24/D47), update desired state, publish ack, reconcile route |
-| `PublicationDiscovered` | discovery dispatcher | upsert per-topic matched sets (D22), warn on unexpected origin for the leg (D29), try to activate matching desired-enabled routes |
-| `SubscriptionDiscovered` | discovery dispatcher | update output readiness for `auto` writer QoS routes |
-| `EndpointLost` | discovery dispatcher or route runtime | mark route degraded/waiting, detach conditions, close or rebuild entities |
+| `PublicationDiscovered` | discovery dispatcher | upsert per-topic endpoint-record maps (derivation/diagnosis input only, D66), warn on unexpected origin for the leg (D29) and on type-name conflict (D20) |
+| `SubscriptionDiscovered` | discovery dispatcher | upsert record maps; tighten a live auto writer's deadline in place when the derivation gets stricter (D39) |
+| `EndpointLost` | discovery dispatcher | record-map hygiene only (D66) — never tears down a live build; the matched counts are the connectivity truth |
+| `TopicMatchChanged` | route runtime StatusConditions (`SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED`) | if the stamp is current: update the leg's matched count (the discovery truth, D64/D66); stale stamp → discard (D23) |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
 | `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
-| `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, drive `DEGRADED → RESOLVING\|WAITING` per D2; stale stamp → discard (D21/D23) |
+| `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, rebuild immediately if the route is (still) enabled (D66); stale stamp → discard (D21/D23) |
 | `RouteEntityError` | entity factory or route runtime | topic-scoped (`topic_name` set): that topic → `TOPIC_ERROR`, siblings unaffected (D11/D21); route-wide (`topic_name` empty): route → `ROUTE_ERROR`; store `last_error`, publish status |
 | `ShutdownRequested` | signal/main thread | quiesce intake, detach waitset conditions, close entities and participants |
 

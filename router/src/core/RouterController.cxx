@@ -40,6 +40,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
         return ControllerJournalEventKind::JOURNAL_ROUTE_ENTITY_ERROR;
     case ControllerEventKind::TopicQosWarning:
         return ControllerJournalEventKind::JOURNAL_TOPIC_QOS_WARNING;
+    case ControllerEventKind::TopicMatchChanged:
+        return ControllerJournalEventKind::JOURNAL_TOPIC_MATCH_CHANGED;
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -80,6 +82,21 @@ RouterController::RouterController(const RouterIdentityInfo &identity,
 
     // Startup snapshot at revision 0 (Phase 1 evidence: disabled routes visible).
     status_->publish(build_snapshot());
+}
+
+void RouterController::activate() {
+    // Create-and-observe (D64/D66): every startup-enabled route builds its entities now
+    // — nothing gates on discovery. Runs through the same fingerprint/publish/journal
+    // path as a drained event so the resulting CREATING states are published normally.
+    std::vector<std::string> pre = fingerprints();
+    current_cause_.clear();
+    for (std::map<std::string, RouteState>::iterator it = state_.routes.begin();
+         it != state_.routes.end(); ++it) {
+        if (it->second.desired.desired_enabled) {
+            reconcile_route(it->second);
+        }
+    }
+    publish_if_changed(pre);
 }
 
 void RouterController::post(const ControllerEvent &event) {
@@ -142,6 +159,9 @@ void RouterController::process(const ControllerEvent &event) {
         break;
     case ControllerEventKind::TopicQosWarning:
         apply_qos_warning(event);
+        break;
+    case ControllerEventKind::TopicMatchChanged:
+        apply_match_changed(event);
         break;
     }
 }
@@ -206,6 +226,14 @@ ControllerJournalRecord RouterController::build_journal_record(
         rec.entity_generation = event.entity_generation;
         rec.decision = "error";
         rec.reason = event.error;
+        break;
+    case ControllerEventKind::TopicMatchChanged:
+        rec.route_name = event.route_name;
+        rec.topic_name = event.topic_name;
+        rec.entity_generation = event.entity_generation;
+        rec.decision = rec.state_changed ? "state_updated" : "no_change";
+        rec.reason = std::string(event.input_side ? "input:" : "output:")
+                + std::to_string(event.matched_count);
         break;
     }
 
@@ -358,7 +386,9 @@ void RouterController::cache_ack(const RouterCommandAck &ack) {
     }
 }
 
-// --- Discovery (raw records; matching is controller logic, D22) ---
+// --- Discovery (raw records — DEMOTED by D64/D66 to derivation/diagnosis input: the
+// maps feed writer-QoS derivation + deadline tightening + the type-conflict warning;
+// they no longer gate creation or drive teardown, so no reconcile here) ---
 
 void RouterController::apply_publication(const EndpointRecord &rec) {
     for (std::map<std::string, RouteState>::iterator r = state_.routes.begin();
@@ -384,7 +414,6 @@ void RouterController::apply_publication(const EndpointRecord &rec) {
                            {"guid", rec.guid}});
             }
         }
-        reconcile_topic(r->second, rec.topic_name);
     }
 }
 
@@ -403,7 +432,6 @@ void RouterController::apply_subscription(const EndpointRecord &rec) {
         entry.liveliness_kind = rec.liveliness_kind;
         entry.lease_nanos = rec.lease_nanos;
         maybe_tighten_deadline(r->second, t->second, rec.topic_name);
-        reconcile_topic(r->second, rec.topic_name);
     }
 }
 
@@ -441,17 +469,41 @@ void RouterController::maybe_tighten_deadline(RouteState &route, TopicRouteState
 }
 
 void RouterController::apply_endpoint_lost(const std::string &guid) {
+    // Record-map hygiene only (D64/D66): losing a builtin record never tears anything
+    // down — the live build's own matched counts (TopicMatchChanged) are the
+    // connectivity truth, and an unmatched entity persists as an observable zero.
     for (std::map<std::string, RouteState>::iterator r = state_.routes.begin();
          r != state_.routes.end(); ++r) {
         for (std::map<std::string, TopicRouteState>::iterator t =
                      r->second.topics.begin();
              t != r->second.topics.end(); ++t) {
-            bool changed = t->second.matched_writers.erase(guid) > 0;
-            changed = (t->second.matched_readers.erase(guid) > 0) || changed;
-            if (changed) {
-                reconcile_topic(r->second, t->first);
-            }
+            t->second.matched_writers.erase(guid);
+            t->second.matched_readers.erase(guid);
         }
+    }
+}
+
+// Matched-count change from a live build's own entity statuses (D64/D66) — the
+// discovery truth. Exact-stamp gated like every completion (D23); a stale event from a
+// torn-down build is discarded.
+void RouterController::apply_match_changed(const ControllerEvent &e) {
+    std::map<std::string, RouteState>::iterator r = state_.routes.find(e.route_name);
+    if (r == state_.routes.end()) {
+        return;
+    }
+    std::map<std::string, TopicRouteState>::iterator t =
+            r->second.topics.find(e.topic_name);
+    if (t == r->second.topics.end()) {
+        return;
+    }
+    TopicRouteState &topic = t->second;
+    if (e.entity_generation != topic.entity_generation) {
+        return; // stale stamp (D23)
+    }
+    if (e.input_side) {
+        topic.input_matched_count = e.matched_count;
+    } else {
+        topic.output_matched_count = e.matched_count;
     }
 }
 
@@ -505,8 +557,8 @@ void RouterController::apply_teardown_complete(const ControllerEvent &e) {
     topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
     topic.entity_generation = 0;
     topic.clear_entity_facts();
-    // Teardown complete: rebuild if discovery is READY again, else quiesce
-    // (DEGRADED -> RESOLVING | WAITING_FOR_DISCOVERY, D2).
+    // Teardown complete: rebuild immediately if the route is (still or again) enabled —
+    // e.g. an ENABLE that landed mid-teardown (D64/D66: creation gates on nothing).
     reconcile_topic(r->second, e.topic_name);
 }
 
@@ -591,44 +643,31 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
         return;
     }
     TopicRouteState &topic = t->second;
-    RouterRouteDiscoveryState d = derive_topic_discovery(topic, route.desired);
 
+    // Create-and-observe (D64/D66): an enabled IDLE topic builds immediately — nothing
+    // gates on discovery (in 7m the type always comes from XML; 7c reintroduces a
+    // wait-for-type when the type is learned from the wire). Live builds are never
+    // reconciled against discovery: an unmatched entity persists as an observable zero
+    // (the D2 regression-abort and regression-teardown edges are retired); teardown is
+    // command/error-driven only.
     switch (topic.topic_state) {
-    case RouterRouteTopicState::TOPIC_IDLE:
-        if (d == RouterRouteDiscoveryState::DISCOVERY_READY) {
-            topic.entity_generation = next_generation(); // D23 stamp at build
-            topic.topic_state = RouterRouteTopicState::TOPIC_CREATING;
-            // Writer-side derivation from the matched readers at issue time (D39/D42);
-            // the offer is remembered so later readers can tighten the deadline in place.
-            DerivedWriterQos derived = derive_writer_qos(topic, route.desired);
-            topic.offered_deadline_nanos = derived.deadline_nanos;
-            factory_->create_topic_entities(*route.view, topic_name,
-                                            topic.entity_generation, derived);
-        }
+    case RouterRouteTopicState::TOPIC_IDLE: {
+        topic.entity_generation = next_generation(); // D23 stamp at build
+        topic.topic_state = RouterRouteTopicState::TOPIC_CREATING;
+        // Writer-side derivation from the readers currently known via builtin discovery
+        // (D39/D42, best-effort input — possibly none, then the strong baseline); the
+        // offer is remembered so later readers can tighten the deadline in place.
+        DerivedWriterQos derived = derive_writer_qos(topic, route.desired);
+        topic.offered_deadline_nanos = derived.deadline_nanos;
+        factory_->create_topic_entities(*route.view, topic_name,
+                                        topic.entity_generation, derived);
         break;
+    }
     case RouterRouteTopicState::TOPIC_CREATING:
-        if (d != RouterRouteDiscoveryState::DISCOVERY_READY) {
-            // Discovery regressed mid-resolve: abort, discard partial entities, back to
-            // waiting — never sticky ERROR for a flap (D8).
-            factory_->abort_topic_creation(route.desired.route_name, topic_name,
-                                           topic.entity_generation);
-            topic.topic_state = RouterRouteTopicState::TOPIC_IDLE;
-            topic.entity_generation = 0; // invalidates any in-flight completion (D23)
-            topic.clear_entity_facts();
-        }
-        break;
     case RouterRouteTopicState::TOPIC_FORWARDING:
-        if (d != RouterRouteDiscoveryState::DISCOVERY_READY) {
-            // Required endpoint lost while forwarding: event-bounded teardown (D2/D11).
-            topic.topic_state = RouterRouteTopicState::TOPIC_TEARING_DOWN;
-            factory_->teardown_topic_entities(route.desired.route_name, topic_name,
-                                              topic.entity_generation);
-        }
+    case RouterRouteTopicState::TOPIC_TEARING_DOWN: // wait for TopicTeardownComplete
+    case RouterRouteTopicState::TOPIC_ERROR:        // sticky until command re-arm (D2/D11)
         break;
-    case RouterRouteTopicState::TOPIC_TEARING_DOWN:
-        break; // wait for TopicTeardownComplete
-    case RouterRouteTopicState::TOPIC_ERROR:
-        break; // sticky until command re-arm (D2/D11)
     }
 }
 
@@ -720,6 +759,13 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
             ts.reader_qos_summary = t->second.reader_qos_summary;
             ts.writer_qos_summary = t->second.writer_qos_summary;
             ts.qos_warning = t->second.qos_warning;
+            ts.input_matched = static_cast<std::uint32_t>(
+                    t->second.input_matched_count > 0 ? t->second.input_matched_count
+                                                      : 0);
+            ts.output_matched = static_cast<std::uint32_t>(
+                    t->second.output_matched_count > 0 ? t->second.output_matched_count
+                                                       : 0);
+            ts.match_reason = derive_match_reason(t->second);
             rs.topic_status.push_back(ts);
             rs.samples_forwarded += ts.samples_forwarded; // aggregates (D11)
             rs.lifecycle_events_forwarded += ts.lifecycle_events_forwarded;

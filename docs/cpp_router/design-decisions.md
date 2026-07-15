@@ -2910,3 +2910,70 @@ flags, clean): `dds::sub::matched_publications(reader)` / `dds::pub::matched_sub
 complete, slice order 7m → 7b → 7c → 7d; 7b/7c bullets reshaped);
 `spikes/matched_endpoints/README.md` (compile check). `code-architecture.md`
 reconciliation lands with 7m itself (its controller/state sections change shape there).
+
+---
+
+## D67 — Slice 7m IMPLEMENTED: DDS is the matching authority in the shipped router; two findings — the dissolved false-green appeared in a real test, and journal consumers need KEEP_ALL (2026-07-15, accepted; implements D66's 7m)
+
+**Context.** Implements D66 exactly: `TopicMatchChanged` events, matched counts as the
+discovery truth, creation gate and regression edges retired, record maps demoted. This
+entry records the implementation shape plus two findings the migration surfaced.
+
+**As implemented.**
+
+- `RouteTopicRuntime`'s existing entity StatusConditions gain
+  `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED`; the handlers read
+  `subscription_matched_status()`/`publication_matched_status()` (read clears the change
+  flag) and post `ControllerEvent::topic_match_changed{route, topic, gen, input_side,
+  current_count}` — same MPSC path and D23 stamp-gating as the QoS warnings.
+- `TopicRouteState` gains `input_matched_count`/`output_matched_count` (entity facts,
+  cleared with the build); `derive_topic_discovery` maps them onto the existing enum
+  (both ≥1 READY / one PARTIAL / none NONE); new `derive_match_reason` names a live
+  build's unmatched leg(s). IDL: `RouterRouteTopicStatus` gains
+  `input_matched`/`output_matched`/`match_reason`; `ControllerJournalEventKind` gains
+  `JOURNAL_TOPIC_MATCH_CHANGED` (D46 1:1 rule). Matched counts are in the route
+  fingerprint — a count change is externally visible D5 state and bumps revision (the
+  sample counters stay excluded).
+- `reconcile_topic`: an enabled IDLE topic builds immediately; the CREATING
+  regression-abort and FORWARDING regression-teardown edges are deleted — teardown is
+  command/error-driven only; `apply_endpoint_lost` is record-map hygiene only. New
+  `RouterController::activate()` builds every startup-enabled route; `router_main` calls
+  it after `enable_all()` (entity ignores/instance handles need enabled participants —
+  D52 ordering) and before the `DrainThread`. Writer-QoS derivation unchanged in shape
+  but now best-effort: derives from the readers currently known (possibly none → the
+  strong baseline `deadline=inf, liveliness=AUTOMATIC:inf`).
+- Phase 1 suite migrated to the D66 contract (17 tests): the create-and-observe walk,
+  count-change revision semantics, DISABLE-aborts-in-flight-create, records-never-teardown;
+  the pre-D64 gate/type-upsert/matched-set-boundary tests retired with their edges.
+
+**Finding 1 — the D61/D64 false-green existed in a shipped test and dissolved on contact.**
+`test_same_node_ignore.py`'s "genuine application writer" was a default VOLATILE writer
+against the route's `default`-alias (RELIABLE+TRANSIENT_LOCAL) input reader — RxO
+incompatible, it NEVER actually matched; the old controller topic-name matching reported
+`ROUTE_ENABLED` anyway. Under 7m the truth surfaced as `input_matched == 0` +
+`route_qos_incompatible reader:DURABILITY`. The test now offers genuinely compatible
+writers and asserts the matched counts, which also makes the D15 part-A zero attributable
+to the ignore rather than to a QoS mismatch.
+
+**Finding 2 — journal consumers must use KEEP_ALL history.** 7m emits journal records in
+bursts (a command's COMMAND_RECEIVED and the enable's TOPIC_ENTITIES_READY land in one
+event-drain, ~2 ms apart). `ControllerJournalRecord` is keyless — one instance — so a
+consumer's default KEEP_LAST(1) reader cache holds exactly one sample and a polling
+`take()` loses the earlier record of a burst (this is how `test_controller_journal.py`
+failed post-migration: reliable delivery, but reader-side history eviction). The probe's
+journal reader now uses KEEP_ALL; any future debug recorder must too. The router-side
+D49 writer QoS is unchanged and correct.
+
+**Also e2e-proven now:** the D66 liveliness residual — the baseline writer (built before
+any reader existed) draws `writer:LIVELINESS` from a later finite-lease reader, warn-only
+(`test_auto_qos.py` 4c); and E-M (`test_create_and_observe.py`): built-unmatched zeros +
+`match_reason`, counts rise when peers appear, sample forwards.
+
+**Evidence.** ctest 4/4 (migrated Phase 1 suite); e2e **15/15 twice** (new
+`test_create_and_observe.py`; migrated `test_auto_qos.py`, `test_same_node_ignore.py`,
+`test_router_admin_commands.py`, `test_controller_journal.py`; all other tests unchanged
+and green); `/dev/shm` clean.
+
+**Docs changed.** This entry; `implementation-plan.md` (7m delivered);
+`code-architecture.md` (D66 reconciliation: ownership-boundary demotion, state model,
+event table incl. `TopicMatchChanged`).

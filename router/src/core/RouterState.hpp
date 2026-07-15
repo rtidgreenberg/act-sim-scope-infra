@@ -35,9 +35,18 @@ struct MatchedEndpoint {
 };
 
 struct TopicRouteState {
-    // Matched-endpoint sets, maintained by the controller from raw records (D20/D22).
+    // Endpoint records from builtin discovery, maintained by the controller from raw
+    // records. DEMOTED by D64/D66 from matching authority to derivation-and-diagnosis
+    // input: matched_readers feeds the D39/D42 writer-QoS derivation + in-place deadline
+    // tightening; neither map gates creation or drives teardown any more.
     std::map<std::string, MatchedEndpoint> matched_writers; // guid -> info
     std::map<std::string, MatchedEndpoint> matched_readers; // auto-QoS output readers
+
+    // Live matched counts from the build's own entities (D64/D66) — the discovery truth.
+    // Updated only by stamp-gated TopicMatchChanged events; part of the entity facts
+    // (cleared with the build).
+    std::int32_t input_matched_count = 0;  // route reader's matched publications
+    std::int32_t output_matched_count = 0; // route writer's matched subscriptions
 
     RouterRouteTopicState topic_state = RouterRouteTopicState::TOPIC_IDLE;
     std::uint64_t entity_generation = 0; // stamp at last entity build; 0 = none (D23)
@@ -60,6 +69,8 @@ struct TopicRouteState {
         writer_qos_summary.clear();
         qos_warning.clear();
         offered_deadline_nanos = kInfiniteNanos;
+        input_matched_count = 0;
+        output_matched_count = 0;
     }
 };
 
@@ -123,9 +134,17 @@ DerivedWriterQos derive_writer_qos(const TopicRouteState &topic,
 const RouterRouteTopicSpec *find_topic_spec(const RouterRouteSpec &spec,
                                             const std::string &topic_name);
 
-// Per-topic discovery rollup — pure function of the current matched sets, no memory (D1).
+// Per-topic discovery rollup — pure function of the live build's matched counts
+// (D64/D66: DDS is the matching authority): both legs >=1 -> READY, one -> PARTIAL,
+// none (or no entities) -> NONE. No memory (D1).
 RouterRouteDiscoveryState derive_topic_discovery(const TopicRouteState &topic,
                                                  const RouterRouteSpec &route_spec);
+
+// Created-but-unmatched status reason (D66): names the unmatched leg(s) of a live
+// FORWARDING build ("input_unmatched" / "output_unmatched" / both comma-joined);
+// empty for any other topic state or when both legs are matched. A status reason,
+// NOT a new operational state — the D2/D11 contract is unchanged.
+std::string derive_match_reason(const TopicRouteState &topic);
 
 // Route-level discovery = best (max) topic rollup (D11).
 RouterRouteDiscoveryState derive_route_discovery(const RouteState &route);

@@ -65,7 +65,8 @@ enum class ControllerEventKind {
     TopicEntitiesReady,     // per-topic entity creation completed (D21)
     TopicTeardownComplete,  // per-topic teardown completed (D21)
     RouteEntityError,       // topic-scoped (topic_name set) or route-wide (empty) (D21)
-    TopicQosWarning         // incompatible-QoS status on a live build's entity (D39/D45)
+    TopicQosWarning,        // incompatible-QoS status on a live build's entity (D39/D45)
+    TopicMatchChanged       // matched-count change on a live build's entity (D64/D66)
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -86,6 +87,11 @@ struct ControllerEvent {
     std::string reader_qos_summary;      // TopicEntitiesReady only (D45)
     std::string writer_qos_summary;      // TopicEntitiesReady only (D45)
     std::string qos_warning;             // TopicQosWarning only, "reader:<POLICY>" form
+
+    // TopicMatchChanged only (D64/D66): which leg's matched count changed, and its
+    // current value read from the entity's own matched status inside the handler.
+    bool input_side = true;              // true: route reader; false: route writer
+    std::int32_t matched_count = 0;
 
     static ControllerEvent command_received(const RouterCommand &cmd) {
         ControllerEvent e;
@@ -147,6 +153,20 @@ struct ControllerEvent {
         e.route_name = route;
         e.topic_name = topic;
         e.entity_generation = gen;
+        return e;
+    }
+    static ControllerEvent topic_match_changed(const std::string &route,
+                                               const std::string &topic,
+                                               std::uint64_t gen,
+                                               bool input_side,
+                                               std::int32_t matched_count) {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::TopicMatchChanged;
+        e.route_name = route;
+        e.topic_name = topic;
+        e.entity_generation = gen;
+        e.input_side = input_side;
+        e.matched_count = matched_count;
         return e;
     }
     static ControllerEvent route_entity_error(const std::string &route,

@@ -39,6 +39,15 @@ public:
                      IStatusPublisher *status_publisher,
                      IControllerJournal *journal = nullptr);
 
+    // Create entities for every startup-enabled route (D64/D66 create-and-observe: the
+    // creation gate is retired — with XML-provided types, creation needs nothing from
+    // discovery). Called once, from the strand-owning thread, AFTER the participants are
+    // enabled (entity creation ignores/instance handles need enabled participants — D52
+    // ordering) and BEFORE the drain thread starts. Tests call it right after
+    // construction; the constructor itself stays creation-free so the revision-0 startup
+    // snapshot still precedes any entity activity.
+    void activate();
+
     // Thread-safe (MPSC producer side, D12).
     void post(const ControllerEvent &event);
 
@@ -81,6 +90,7 @@ private:
     void apply_teardown_complete(const ControllerEvent &e);
     void apply_entity_error(const ControllerEvent &e);
     void apply_qos_warning(const ControllerEvent &e);
+    void apply_match_changed(const ControllerEvent &e);
 
     // Tighten a FORWARDING build's writer deadline in place when the derivation over
     // the current matched readers is stricter than the offer (D39/D45).

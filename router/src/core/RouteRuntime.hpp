@@ -70,8 +70,10 @@ struct RouteTopicRuntimeBase {
 template <typename T>
 class RouteTopicRuntime : public RouteTopicRuntimeBase {
 public:
-    // on_qos_warning receives "reader:<POLICY>" / "writer:<POLICY>" strings; it is
-    // invoked from AsyncWaitSet worker threads and must be thread-safe (it posts to the
+    // on_qos_warning receives "reader:<POLICY>" / "writer:<POLICY>" strings; on_match
+    // receives (input_side, current matched count) on every SUBSCRIPTION_MATCHED /
+    // PUBLICATION_MATCHED transition (D64/D66 — DDS is the matching authority). Both are
+    // invoked from AsyncWaitSet worker threads and must be thread-safe (they post to the
     // controller's MPSC queue). manual_liveliness enables upstream-liveliness
     // propagation (derived MANUAL kind, D42).
     RouteTopicRuntime(dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
@@ -79,7 +81,9 @@ public:
                       dds::topic::ContentFilteredTopic<T> cft = dds::core::null,
                       std::function<void(const std::string &)> on_qos_warning
                               = std::function<void(const std::string &)>(),
-                      bool manual_liveliness = false)
+                      bool manual_liveliness = false,
+                      std::function<void(bool, std::int32_t)> on_match
+                              = std::function<void(bool, std::int32_t)>())
         : reader_(reader),
           writer_(writer),
           publisher_(publisher),
@@ -91,15 +95,18 @@ public:
           reader_status_(reader_),
           writer_status_(writer_),
           on_qos_warning_(on_qos_warning),
-          manual_liveliness_(manual_liveliness) {
+          manual_liveliness_(manual_liveliness),
+          on_match_(on_match) {
         using dds::core::status::StatusMask;
-        StatusMask reader_mask = StatusMask::requested_incompatible_qos();
+        StatusMask reader_mask = StatusMask::requested_incompatible_qos()
+                | StatusMask::subscription_matched();
         if (manual_liveliness_) {
             reader_mask |= StatusMask::liveliness_changed();
         }
         reader_status_.enabled_statuses(reader_mask);
         reader_status_->handler([this]() { on_reader_status(); });
-        writer_status_.enabled_statuses(StatusMask::offered_incompatible_qos());
+        writer_status_.enabled_statuses(StatusMask::offered_incompatible_qos()
+                                        | StatusMask::publication_matched());
         writer_status_->handler([this]() { on_writer_status(); });
     }
 
@@ -169,6 +176,13 @@ private:
                 on_qos_warning_("reader:" + qos_policy_name(st.last_policy_id()));
             }
         }
+        if ((changes & StatusMask::subscription_matched()).any()) {
+            dds::core::status::SubscriptionMatchedStatus st =
+                    reader_.subscription_matched_status(); // read clears the flag
+            if (on_match_) {
+                on_match_(/*input_side=*/true, st.current_count());
+            }
+        }
         if (manual_liveliness_
             && (changes & StatusMask::liveliness_changed()).any()) {
             dds::core::status::LivelinessChangedStatus st =
@@ -184,10 +198,21 @@ private:
     }
 
     void on_writer_status() {
-        dds::core::status::OfferedIncompatibleQosStatus st =
-                writer_.offered_incompatible_qos_status(); // read clears the flag
-        if (on_qos_warning_) {
-            on_qos_warning_("writer:" + qos_policy_name(st.last_policy_id()));
+        using dds::core::status::StatusMask;
+        StatusMask changes = writer_.status_changes();
+        if ((changes & StatusMask::offered_incompatible_qos()).any()) {
+            dds::core::status::OfferedIncompatibleQosStatus st =
+                    writer_.offered_incompatible_qos_status(); // read clears the flag
+            if (on_qos_warning_) {
+                on_qos_warning_("writer:" + qos_policy_name(st.last_policy_id()));
+            }
+        }
+        if ((changes & StatusMask::publication_matched()).any()) {
+            dds::core::status::PublicationMatchedStatus st =
+                    writer_.publication_matched_status(); // read clears the flag
+            if (on_match_) {
+                on_match_(/*input_side=*/false, st.current_count());
+            }
         }
     }
 
@@ -204,6 +229,7 @@ private:
     dds::core::cond::StatusCondition writer_status_;
     std::function<void(const std::string &)> on_qos_warning_;
     bool manual_liveliness_;
+    std::function<void(bool, std::int32_t)> on_match_;
     std::atomic<std::uint64_t> count_{0};
 };
 

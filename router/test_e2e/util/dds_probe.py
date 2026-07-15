@@ -118,12 +118,18 @@ def _apply_common(qos, reliability, durability, ownership):
 
 
 def reader_qos(reliability=None, durability=None, deadline_ms=None,
-               liveliness_automatic_lease_ms=None, ownership=None):
+               liveliness_automatic_lease_ms=None, ownership=None, keep_all=False):
     """Build a DataReaderQos from simple options (only the policies the auto-QoS test
     varies). Kinds are lowercase strings: 'reliable'/'best_effort',
-    'volatile'/'transient_local'/'transient', 'shared'/'exclusive'."""
+    'volatile'/'transient_local'/'transient', 'shared'/'exclusive'. keep_all=True sets
+    KEEP_ALL history — required for keyless event-stream topics (e.g. the controller
+    journal): the default KEEP_LAST(1) cache holds ONE sample per instance, and a keyless
+    topic is one instance, so a back-to-back burst (7m creates entities in the same
+    event-drain as the command) overwrites earlier samples before a polling take()."""
     q = dds.DataReaderQos()
     _apply_common(q, reliability, durability, ownership)
+    if keep_all:
+        q.history = dds.History.keep_all
     if deadline_ms is not None:
         q.deadline = dds.Deadline(period=dds.Duration.from_milliseconds(deadline_ms))
     if liveliness_automatic_lease_ms is not None:
@@ -150,9 +156,10 @@ TOPIC_STATE = {0: "TOPIC_IDLE", 1: "TOPIC_CREATING", 2: "TOPIC_FORWARDING",
 
 def read_route_facts(status_reader, route_name):
     """Read the newest RouterStatus sample and return the named route's observable facts
-    as a dict {state, discovery, reader_summary, writer_summary, qos_warning}, or None if
-    the route isn't present yet. read() (not take) — RouterStatus is TRANSIENT_LOCAL
-    KEEP_LAST state; last matching entry across cached samples wins (most recent)."""
+    as a dict {state, discovery, reader_summary, writer_summary, qos_warning,
+    input_matched, output_matched, match_reason}, or None if the route isn't present
+    yet. read() (not take) — RouterStatus is TRANSIENT_LOCAL KEEP_LAST state; last
+    matching entry across cached samples wins (most recent)."""
     facts = None
     for data, info in status_reader.read():
         if not info.valid:
@@ -167,6 +174,8 @@ def read_route_facts(status_reader, route_name):
                 "topic_count": len(data[f"routes[{i}].topic_status"]),
                 "topic_state": None,
                 "reader_summary": "", "writer_summary": "", "qos_warning": "",
+                # D64/D66 create-and-observe: live matched counts + unmatched reason.
+                "input_matched": 0, "output_matched": 0, "match_reason": "",
             }
             if len(data[f"routes[{i}].topic_status"]) > 0:
                 base = f"routes[{i}].topic_status[0]"
@@ -175,6 +184,9 @@ def read_route_facts(status_reader, route_name):
                 f["reader_summary"] = data.get_string(f"{base}.reader_qos_summary")
                 f["writer_summary"] = data.get_string(f"{base}.writer_qos_summary")
                 f["qos_warning"] = data.get_string(f"{base}.qos_warning")
+                f["input_matched"] = int(data[f"{base}.input_matched"])
+                f["output_matched"] = int(data[f"{base}.output_matched"])
+                f["match_reason"] = data.get_string(f"{base}.match_reason")
             facts = f
     return facts
 

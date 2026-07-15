@@ -30,7 +30,8 @@ enum ControllerJournalEventKind {
     JOURNAL_TOPIC_ENTITIES_READY,
     JOURNAL_TOPIC_TEARDOWN_COMPLETE,
     JOURNAL_ROUTE_ENTITY_ERROR,
-    JOURNAL_TOPIC_QOS_WARNING
+    JOURNAL_TOPIC_QOS_WARNING,
+    JOURNAL_TOPIC_MATCH_CHANGED   // matched-count change on a live build (D64/D66)
 };
 
 enum RouterRouteOperationalState {
@@ -42,10 +43,13 @@ enum RouterRouteOperationalState {
     ROUTE_ERROR
 };
 
+// Under create-and-observe (D64/D66) this reports the live build's matched counts —
+// DDS is the matching authority: READY = both legs matched (>=1 each), PARTIAL = one
+// leg matched, NONE = no entities or nothing matched yet.
 enum RouterRouteDiscoveryState {
-    DISCOVERY_NONE,      // required input writer not yet discovered
-    DISCOVERY_PARTIAL,   // input writer seen; type, QoS, or auto-QoS output reader missing
-    DISCOVERY_READY      // all prerequisites for entity creation available
+    DISCOVERY_NONE,      // no live entities, or neither leg has a matched peer
+    DISCOVERY_PARTIAL,   // exactly one leg has a matched peer
+    DISCOVERY_READY      // both legs matched: input writer(s) and output reader(s)
 };
 
 // Per-topic entity state (design-decisions.md D11). Discovery facts and entity lifecycle
@@ -120,6 +124,15 @@ struct RouterRouteTopicStatus {
     // DDS-native REQUESTED/OFFERED_INCOMPATIBLE_QOS statuses (D39). Warning only — the
     // topic keeps forwarding for whatever DOES match; cleared on rebuild/teardown.
     string qos_warning;
+    // Live matched counts from the build's own entities (D64/D66 create-and-observe):
+    // input = the route reader's matched publications, output = the route writer's
+    // matched subscriptions. 0/0 with TOPIC_FORWARDING = created-but-unmatched.
+    uint32 input_matched;
+    uint32 output_matched;
+    // "input_unmatched" / "output_unmatched" / "input_unmatched,output_unmatched" while
+    // a live build has an unmatched leg; empty otherwise. A status reason, NOT a new
+    // operational state (D66 — the D2/D11 contract is unchanged).
+    string match_reason;
 };
 
 struct RouterRouteStatus {

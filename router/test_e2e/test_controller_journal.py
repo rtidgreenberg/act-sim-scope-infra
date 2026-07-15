@@ -82,9 +82,12 @@ def test_controller_journal_records_and_no_backlog(
     probe = Probe(admin_domain)
     alive = lambda: router.is_alive()  # noqa: E731
     try:
+        # keep_all: the journal is a keyless event stream and 7m emits bursts (a command's
+        # record + the entities-ready record land in one event-drain) — a KEEP_LAST(1)
+        # reader cache would overwrite the first before a polling take() sees it.
         journal_reader = probe.reader(
             JOURNAL_TOPIC, "ControllerJournalRecord",
-            qos=reader_qos(reliability="reliable"), dtype=journal_type)
+            qos=reader_qos(reliability="reliable", keep_all=True), dtype=journal_type)
         journal = JournalCollector(journal_reader)
         status_reader = probe.reader(
             "ActRouterStatus", "RouterStatus",

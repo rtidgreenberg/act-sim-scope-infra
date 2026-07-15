@@ -1,4 +1,4 @@
-"""End-to-end Phase 5 asymmetric auto-QoS + output readiness (D39/D42/D45).
+"""End-to-end Phase 5 asymmetric auto-QoS under create-and-observe (D39/D42/D45; D64/D66).
 
 Python port of the retired C++ test/test_auto_qos.cxx, now driven through the real
 router_main binary (config/e2e_auto_qos.yaml): ONE router, route auto_r1, auto ("") QoS
@@ -6,15 +6,25 @@ on both legs. The observable route facts are read off the router's RouterStatus 
 (RELIABLE+TRANSIENT_LOCAL, D26) as DynamicData, using a RouterStatus type generated from
 the admin IDL at test time (admin_types_xml fixture).
 
-Asserts the five Phase 5 evidence items the C++ test covered:
-  1. output readiness — source writer discovered but no local reader => route waits
-     (DISCOVERY_PARTIAL / ROUTE_WAITING_FOR_DISCOVERY), then activates when a reader appears.
-  2. a BEST_EFFORT+VOLATILE app writer matches the weakest-request auto input reader and
-     forwards (the F5 no-match case).
-  3. the resolved QoS summaries ride the status: weakest-request input, strong-offer output
-     with derived deadline/liveliness from the matched reader.
+Migrated by 7m (D66): the D51 output-readiness gate is retired — the route builds
+immediately at startup with the strong baseline (no readers known yet), and the old
+"route waits for a compatible reader" evidence becomes "route is ENABLED with an
+observable zero" (created-but-unmatched counts + match_reason). Asserts:
+
+  1. create-and-observe zero — the route is ENABLED with input/output matched counts 0
+     and match_reason naming both unmatched legs, before any app endpoint exists.
+  2. a BEST_EFFORT+VOLATILE app writer matches the weakest-request auto input reader
+     (input_matched rises; the F5 no-match case) and a plain RELIABLE+VOLATILE reader
+     matches the strong-offer baseline output writer (output_matched rises; reason
+     clears); a sample forwards end-to-end.
+  3. the resolved QoS summaries ride the status: weakest-request input; the output
+     writer offers the BASELINE (no derived deadline/liveliness — no readers were known
+     at build time, D66 best-effort derivation).
   4. incompatible-QoS warnings: a TRANSIENT-requesting reader => writer:DURABILITY; an
-     EXCLUSIVE-ownership source writer => reader:OWNERSHIP (equality RxO).
+     EXCLUSIVE-ownership source writer => reader:OWNERSHIP (equality RxO); and the D66
+     liveliness residual — a finite-lease liveliness-requesting reader arriving AFTER
+     creation draws writer:LIVELINESS (immutable policy; remedy is a named alias or a
+     DISABLE/ENABLE re-arm).
   5. a later, tighter-deadline reader tightens the writer offer in place (set_qos) — the
      route stays ENABLED, no teardown cycle.
 
@@ -53,7 +63,7 @@ def _drain_seen(reader):
     return n
 
 
-def test_auto_qos_readiness_summaries_warnings_and_tightening(
+def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         router_binary, admin_types_xml, e2e_tmp_dir, unique_domains):
     config_path = render_config("e2e_auto_qos.yaml", unique_domains, e2e_tmp_dir)
     router = start_router(router_binary, config_path, "platform", e2e_tmp_dir,
@@ -76,40 +86,56 @@ def test_auto_qos_readiness_summaries_warnings_and_tightening(
             qos=reader_qos(reliability="reliable", durability="transient_local"),
             dtype=status_type)
 
-        # BEST_EFFORT + VOLATILE source writer (weakest request; the F5 case).
+        # (1) Create-and-observe zero: the route builds immediately (no gate, D66) and
+        # is ENABLED with both legs unmatched — an observable zero, not a wait state.
+        zero = wait_for_route(
+            status_reader, ROUTE,
+            lambda f: f["state"] == "ROUTE_ENABLED", check_alive=alive)
+        assert zero is not None and zero["state"] == "ROUTE_ENABLED", \
+            f"route never reached ROUTE_ENABLED at startup; got {zero}; log {router.log_path}"
+        assert zero["topic_state"] == "TOPIC_FORWARDING", \
+            f"expected a live build, got {zero}; log {router.log_path}"
+        assert zero["input_matched"] == 0 and zero["output_matched"] == 0, \
+            f"expected created-but-unmatched zeros, got {zero}; log {router.log_path}"
+        assert zero["match_reason"] == "input_unmatched,output_unmatched", \
+            f"match_reason {zero['match_reason']!r}; log {router.log_path}"
+
+        # (2a) BEST_EFFORT + VOLATILE source writer matches the weakest-request input
+        # reader (the F5 case): input_matched rises.
         src_writer = in_probe.writer(
             TOPIC, TYPE, qos=writer_qos(reliability="best_effort", durability="volatile"),
             dtype=cmd_type)
-
-        # (1) Output readiness: source discovered, no output-side reader yet -> route waits.
-        waiting = wait_for_route(
+        in_matched = wait_for_route(
             status_reader, ROUTE,
-            lambda f: f["discovery"] == "DISCOVERY_PARTIAL", check_alive=alive)
-        assert waiting is not None and waiting["discovery"] == "DISCOVERY_PARTIAL", \
-            f"route never reached DISCOVERY_PARTIAL; got {waiting}; log {router.log_path}"
-        assert waiting["state"] == "ROUTE_WAITING_FOR_DISCOVERY", \
-            f"expected ROUTE_WAITING_FOR_DISCOVERY, got {waiting}; log {router.log_path}"
+            lambda f: f["input_matched"] >= 1, check_alive=alive)
+        assert in_matched is not None and in_matched["input_matched"] >= 1, \
+            f"BEST_EFFORT writer never matched the input reader; got {in_matched}; " \
+            f"log {router.log_path}"
+        assert in_matched["match_reason"] == "output_unmatched", \
+            f"match_reason {in_matched['match_reason']!r}; log {router.log_path}"
 
-        # (2/3) A RELIABLE+VOLATILE reader with AUTOMATIC liveliness (lease 2s) + deadline
-        # 2s activates the route; the resolved summaries ride the status.
+        # (2b/3) A plain RELIABLE+VOLATILE reader matches the strong-offer BASELINE
+        # output writer (built with no readers known — no derived deadline/liveliness).
         sink = out_probe.reader(
             TOPIC, TYPE,
-            qos=reader_qos(reliability="reliable", durability="volatile",
-                           deadline_ms=2000, liveliness_automatic_lease_ms=2000),
+            qos=reader_qos(reliability="reliable", durability="volatile"),
             dtype=cmd_type)
-
-        enabled = wait_for_route(
+        ready = wait_for_route(
             status_reader, ROUTE,
-            lambda f: f["state"] == "ROUTE_ENABLED", check_alive=alive)
-        assert enabled is not None and enabled["state"] == "ROUTE_ENABLED", \
-            f"route never reached ROUTE_ENABLED; got {enabled}; log {router.log_path}"
-        assert enabled["reader_summary"] == "BEST_EFFORT,VOLATILE", \
-            f"reader summary {enabled['reader_summary']!r}; log {router.log_path}"
-        assert enabled["writer_summary"] == \
-            "RELIABLE,TRANSIENT_LOCAL,deadline=2000ms,liveliness=AUTOMATIC:2000ms", \
-            f"writer summary {enabled['writer_summary']!r}; log {router.log_path}"
+            lambda f: f["output_matched"] >= 1, check_alive=alive)
+        assert ready is not None and ready["output_matched"] >= 1, \
+            f"sink reader never matched the output writer; got {ready}; log {router.log_path}"
+        assert ready["match_reason"] == "", \
+            f"match_reason should clear when both legs match; got {ready}; " \
+            f"log {router.log_path}"
+        assert ready["reader_summary"] == "BEST_EFFORT,VOLATILE", \
+            f"reader summary {ready['reader_summary']!r}; log {router.log_path}"
+        assert ready["writer_summary"] \
+            == "RELIABLE,TRANSIENT_LOCAL,deadline=inf,liveliness=AUTOMATIC:inf", \
+            f"writer summary should be the underived baseline (D66); " \
+            f"got {ready['writer_summary']!r}; log {router.log_path}"
 
-        # (2) forwarding works through the auto route.
+        # (2c) forwarding works through the auto route.
         received = 0
         for i in range(80):
             src_writer.write(_cmd(cmd_type, "Platform_30", i))
@@ -156,6 +182,24 @@ def test_auto_qos_readiness_summaries_warnings_and_tightening(
         assert own_warn is not None and own_warn["qos_warning"] == "reader:OWNERSHIP", \
             f"no reader:OWNERSHIP warning; got {own_warn}; log {router.log_path}"
         assert own_warn["state"] == "ROUTE_ENABLED", "OWNERSHIP should warn only, not disable"
+
+        # (4c) D66 liveliness residual: the writer was built before any reader existed,
+        # so it offers default (AUTOMATIC, infinite-lease) liveliness — immutable. A
+        # finite-lease liveliness-requesting reader arriving now is RxO-incompatible and
+        # draws writer:LIVELINESS (warn-only; the pinned remedy is a named alias or a
+        # DISABLE/ENABLE re-arm, which would re-derive from the now-known readers).
+        liveliness_reader = out_probe.reader(  # noqa: F841 (must stay alive)
+            TOPIC, TYPE,
+            qos=reader_qos(reliability="reliable", durability="volatile",
+                           liveliness_automatic_lease_ms=2000),
+            dtype=cmd_type)
+        liv_warn = wait_for_route(
+            status_reader, ROUTE,
+            lambda f: f["qos_warning"] == "writer:LIVELINESS", check_alive=alive)
+        assert liv_warn is not None and liv_warn["qos_warning"] == "writer:LIVELINESS", \
+            f"no writer:LIVELINESS warning; got {liv_warn}; log {router.log_path}"
+        assert liv_warn["state"] == "ROUTE_ENABLED", \
+            "LIVELINESS should warn only, not disable"
     finally:
         in_probe.close()
         out_probe.close()

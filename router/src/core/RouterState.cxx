@@ -45,32 +45,36 @@ const RouterRouteTopicSpec *find_topic_spec(const RouterRouteSpec &spec,
 
 RouterRouteDiscoveryState derive_topic_discovery(const TopicRouteState &topic,
                                                  const RouterRouteSpec &route_spec) {
-    // input_writer_seen <=> matched-writer set non-empty (D20)
-    if (topic.matched_writers.empty()) {
-        return RouterRouteDiscoveryState::DISCOVERY_NONE;
-    }
-    // type_resolved: any currently matched writer carries a resolved type (strictly
-    // derived from the current set — no memory, D1; late arrival via upsert, D13)
-    bool type_resolved = false;
-    for (std::map<std::string, MatchedEndpoint>::const_iterator it =
-                 topic.matched_writers.begin();
-         it != topic.matched_writers.end(); ++it) {
-        if (it->second.has_type) {
-            type_resolved = true;
-            break;
-        }
-    }
-    // qos_resolved: explicit writer alias => resolved by definition (D19: history/
-    // resource limits are alias-supplied anyway); auto output => needs >=1 discovered
-    // local reader to derive deadline/liveliness from (D1/D39/D45). The input side never
-    // gates: the weakest-request reader profile matches every writer by construction.
-    bool qos_resolved =
-            output_uses_auto_qos(route_spec) ? !topic.matched_readers.empty() : true;
-
-    if (type_resolved && qos_resolved) {
+    // D64/D66: DDS is the matching authority — the rollup reads the live build's own
+    // matched counts, not the builtin-discovery record maps (demoted to derivation/
+    // diagnosis input). A topic with no live entities has both counts 0 -> NONE.
+    (void)route_spec; // counts are leg-symmetric; no alias-dependent gating remains
+    bool input = topic.input_matched_count > 0;
+    bool output = topic.output_matched_count > 0;
+    if (input && output) {
         return RouterRouteDiscoveryState::DISCOVERY_READY;
     }
-    return RouterRouteDiscoveryState::DISCOVERY_PARTIAL;
+    if (input || output) {
+        return RouterRouteDiscoveryState::DISCOVERY_PARTIAL;
+    }
+    return RouterRouteDiscoveryState::DISCOVERY_NONE;
+}
+
+std::string derive_match_reason(const TopicRouteState &topic) {
+    if (topic.topic_state != RouterRouteTopicState::TOPIC_FORWARDING) {
+        return std::string();
+    }
+    std::string reason;
+    if (topic.input_matched_count == 0) {
+        reason = "input_unmatched";
+    }
+    if (topic.output_matched_count == 0) {
+        if (!reason.empty()) {
+            reason += ',';
+        }
+        reason += "output_unmatched";
+    }
+    return reason;
 }
 
 RouterRouteDiscoveryState derive_route_discovery(const RouteState &route) {
@@ -146,7 +150,12 @@ std::string route_fingerprint(const RouteState &route) {
            << t->second.last_error << ':'
            << t->second.qos_warning << ':'
            << t->second.reader_qos_summary << ':'
-           << t->second.writer_qos_summary;
+           << t->second.writer_qos_summary << ':'
+           // Matched counts are externally visible status fields (D66), so a count
+           // change IS a D5 externally-visible change — unlike the sample counters,
+           // which stay excluded.
+           << t->second.input_matched_count << ':'
+           << t->second.output_matched_count;
     }
     return os.str();
 }
