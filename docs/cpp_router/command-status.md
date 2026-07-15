@@ -101,7 +101,8 @@ enum RouterCommandKind {
     ENABLE_ROUTE,
     DISABLE_ROUTE,
     UPDATE_ROUTE,
-    SET_PARTICIPANT_PARTITION
+    SET_PARTICIPANT_PARTITION,
+    SET_ROUTE_PARTITION   // 7b/D69: runtime per-route pub/sub partition change
 };
 
 // Trimmed to exactly today's ControllerEventKind set (D46): no ROUTE_DATA_READY (no such
@@ -298,6 +299,7 @@ the raw endpoint inventory lives in the structured log.
 | `DISABLE_ROUTE` | Stop forwarding an existing route | detach conditions, close per-topic readers/writers, mark disabled |
 | `UPDATE_ROUTE` | Replace or patch one active-side route definition | reconcile runtime to the supplied `RouterRouteSpec`; covers topic list, endpoint QoS aliases, forwarding mode, filters, and lifecycle flags |
 | `SET_PARTICIPANT_PARTITION` | Change the participant-level partition on a named participant role, currently `team_wan` | update participant status and recreate affected readers/writers that inherit the participant partition; this is the generic form of team assignment |
+| `SET_ROUTE_PARTITION` | Change one route's endpoint partitions at runtime (7b, D69): the command's embedded `route.input.subscriber_partition` / `route.output.publisher_partition` become the route's desired values | update the desired spec (visible in status), re-mint the route view for future builds, and apply in place to live builds via pub/sub `set_qos` (D15 — automatic rematch, no rebuild); the rematch is observable as the 7m matched counts moving |
 
 Optional POC-plus commands:
 

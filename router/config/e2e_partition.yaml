@@ -1,0 +1,53 @@
+# e2e_partition.yaml — single router_main fixture for the 7b partition e2e test
+# (router/test_e2e/test_wan_partition.py, plan's E3 + the D69 runtime-change evidence).
+#
+# ONE router process (role: platform) owns both legs of route part_r1. The OUTPUT leg
+# publishes into PARTITION "PLATFORM" (publisher_partition); the input leg stays in the
+# default partition. Explicit "default" QoS on both legs (RELIABLE+TRANSIENT_LOCAL) so
+# matching is QoS-deterministic and the only variable under test is the partition:
+#   - an app reader in the default partition NEVER matches the route writer (held-zero
+#     output_matched + match_reason, no incompatible-QoS event — D61/D66);
+#   - an app reader in "PLATFORM" matches and receives forwarded samples;
+#   - SET_ROUTE_PARTITION retargets the output to "TEAM_B" at runtime — in-place
+#     set_qos, no rebuild (D15/D69): the PLATFORM reader unmatches, a TEAM_B reader
+#     matches, topic_state stays TOPIC_FORWARDING throughout.
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py.
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 8
+  name: partition
+  type_name: ExampleCommand
+  admin_participant: wan_in
+
+types:
+  xml: router/config/example_types.xml
+
+participants:
+  wan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+  lan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+
+routes:
+  - name: part_r1
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PartCmd
+    source_side:
+      input:
+        participant: wan_in
+        reader_qos: default
+      output:
+        participant: lan_out
+        writer_qos: default
+        publisher_partition: PLATFORM

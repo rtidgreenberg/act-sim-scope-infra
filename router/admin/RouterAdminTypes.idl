@@ -16,7 +16,12 @@ enum RouterCommandKind {
     ENABLE_ROUTE,
     DISABLE_ROUTE,
     UPDATE_ROUTE,
-    SET_PARTICIPANT_PARTITION
+    SET_PARTICIPANT_PARTITION,
+    // Runtime per-route partition change (7b, D69): applies the command's embedded
+    // route.input.subscriber_partition / route.output.publisher_partition to the named
+    // route — desired spec updated, live builds adjusted in place via set_qos (D15:
+    // pub/sub partition is runtime-mutable with automatic rematching; no rebuild).
+    SET_ROUTE_PARTITION
 };
 
 // Trimmed to exactly today's ControllerEventKind set (D46): no ROUTE_DATA_READY (no such

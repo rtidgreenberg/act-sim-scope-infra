@@ -82,8 +82,17 @@ public:
 
             // (1) output writer first — strong baseline plus the controller-derived
             //     deadline/liveliness when the output endpoint is auto (D39/D42).
+            //     The endpoint's publisher_partition applies to the per-build Publisher
+            //     (7b/D61/D69); empty = default partition. A partition mismatch is a
+            //     non-match — an observable zero matched count (D66), never an
+            //     incompatible-QoS event.
             dds::topic::Topic<T> out_topic = find_or_create_topic(out_dp, topic_name);
-            dds::pub::Publisher publisher(out_dp);
+            dds::pub::qos::PublisherQos pub_qos = out_dp.default_publisher_qos();
+            if (!view.spec.output.publisher_partition.empty()) {
+                pub_qos << dds::core::policy::Partition(
+                        view.spec.output.publisher_partition);
+            }
+            dds::pub::Publisher publisher(out_dp, pub_qos);
             dds::pub::qos::DataWriterQos wqos =
                     qos_.writer_qos(view.spec.output.writer_qos, derived);
             dds::pub::DataWriter<T> writer(publisher, out_topic, wqos);
@@ -100,10 +109,17 @@ public:
             }
 
             // (3) input reader; a filter on the input endpoint => ContentFilteredTopic.
+            //     The endpoint's subscriber_partition applies to the per-build
+            //     Subscriber (7b/D61/D69); empty = default partition.
             dds::topic::Topic<T> in_topic = find_or_create_topic(in_dp, topic_name);
             dds::sub::qos::DataReaderQos rqos =
                     qos_.reader_qos(view.spec.input.reader_qos);
-            dds::sub::Subscriber subscriber(in_dp);
+            dds::sub::qos::SubscriberQos sub_qos = in_dp.default_subscriber_qos();
+            if (!view.spec.input.subscriber_partition.empty()) {
+                sub_qos << dds::core::policy::Partition(
+                        view.spec.input.subscriber_partition);
+            }
+            dds::sub::Subscriber subscriber(in_dp, sub_qos);
             dds::sub::DataReader<T> reader(dds::core::null);
             dds::topic::ContentFilteredTopic<T> cft = dds::core::null;
             if (!view.spec.input.filter_expression.empty()) {
@@ -203,6 +219,14 @@ public:
                                        const std::string &topic_name,
                                        std::int64_t deadline_nanos) override {
         return dispatcher_.set_writer_deadline(route, topic_name, deadline_nanos);
+    }
+
+    bool update_route_partitions(const std::string &route,
+                                 const std::string &topic_name,
+                                 const std::string &subscriber_partition,
+                                 const std::string &publisher_partition) override {
+        return dispatcher_.set_partitions(route, topic_name, subscriber_partition,
+                                          publisher_partition);
     }
 
 protected:

@@ -16,6 +16,7 @@ std::string kind_name(RouterCommandKind kind) {
     case RouterCommandKind::DISABLE_ROUTE:             return "DISABLE_ROUTE";
     case RouterCommandKind::UPDATE_ROUTE:              return "UPDATE_ROUTE";
     case RouterCommandKind::SET_PARTICIPANT_PARTITION: return "SET_PARTICIPANT_PARTITION";
+    case RouterCommandKind::SET_ROUTE_PARTITION:       return "SET_ROUTE_PARTITION";
     }
     return "?";
 }
@@ -273,6 +274,7 @@ void RouterController::handle_command(const RouterCommand &cmd) {
         return;
     case RouterCommandKind::ENABLE_ROUTE:
     case RouterCommandKind::DISABLE_ROUTE:
+    case RouterCommandKind::SET_ROUTE_PARTITION:
         break;
     }
 
@@ -287,8 +289,10 @@ void RouterController::handle_command(const RouterCommand &cmd) {
 
     if (cmd.kind == RouterCommandKind::ENABLE_ROUTE) {
         handle_enable(cmd, ack);
-    } else {
+    } else if (cmd.kind == RouterCommandKind::DISABLE_ROUTE) {
         handle_disable(cmd, ack);
+    } else {
+        handle_set_route_partition(cmd, ack);
     }
     cache_ack(ack);
     status_->publish_ack(ack);
@@ -374,6 +378,58 @@ void RouterController::handle_disable(const RouterCommand &cmd, RouterCommandAck
     }
     ack.accepted = true;
     ack.message = "disabled";
+    current_cause_ = cmd.command_id;
+}
+
+// Runtime per-route partition change (7b/D69). The command's embedded
+// route.input.subscriber_partition / route.output.publisher_partition become the
+// route's desired values (empty = default partition — callers read the current values
+// off the status desired spec). Live builds are adjusted IN PLACE via pub/sub set_qos
+// (D15: runtime-mutable, automatic rematch — no rebuild, no teardown); the rematch is
+// observable as the D66/D67 matched counts moving. The RouteView is re-minted so any
+// FUTURE build (re-enable, re-arm) uses the new spec.
+void RouterController::handle_set_route_partition(const RouterCommand &cmd,
+                                                  RouterCommandAck &ack) {
+    RouteState &route = state_.routes[cmd.route_name];
+    const std::string &new_sub = cmd.route.input.subscriber_partition;
+    const std::string &new_pub = cmd.route.output.publisher_partition;
+
+    if (route.desired.input.subscriber_partition == new_sub
+        && route.desired.output.publisher_partition == new_pub) {
+        // Redundant command, new command_id: idempotent accept, no state change (D8).
+        ack.accepted = true;
+        ack.message = "partition unchanged";
+        return;
+    }
+
+    route.desired.input.subscriber_partition = new_sub;
+    route.desired.output.publisher_partition = new_pub;
+
+    // Re-mint the immutable view with a fresh stamp (D23) so future builds read the
+    // updated spec. Live builds keep their generation — they are adjusted, not rebuilt.
+    std::shared_ptr<RouteView> view(new RouteView());
+    view->spec = route.desired;
+    view->entity_generation = next_generation();
+    route.view = view;
+
+    for (std::map<std::string, TopicRouteState>::iterator t = route.topics.begin();
+         t != route.topics.end(); ++t) {
+        RouterRouteTopicState st = t->second.topic_state;
+        if (st != RouterRouteTopicState::TOPIC_CREATING
+            && st != RouterRouteTopicState::TOPIC_FORWARDING) {
+            continue; // no live entities; the next build uses the new view
+        }
+        if (!factory_->update_route_partitions(cmd.route_name, t->first, new_sub,
+                                               new_pub)) {
+            // Log-only: a racing teardown means the next build applies the new spec
+            // from the re-minted view anyway.
+            Log::warn("route_partition_update_failed",
+                      {{"route", cmd.route_name}, {"topic", t->first}});
+        }
+    }
+
+    ack.accepted = true;
+    ack.message = "partition updated";
     current_cause_ = cmd.command_id;
 }
 

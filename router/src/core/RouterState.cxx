@@ -136,7 +136,11 @@ std::string route_fingerprint(const RouteState &route) {
     os << static_cast<int>(derive_operational(route)) << '|'
        << static_cast<int>(derive_route_discovery(route)) << '|'
        << (route.desired.desired_enabled ? 1 : 0) << '|'
-       << (route.route_error ? 1 : 0) << '|' << route.last_error;
+       << (route.route_error ? 1 : 0) << '|' << route.last_error << '|'
+       // Endpoint partitions ride the status desired spec and are runtime-mutable via
+       // SET_ROUTE_PARTITION (7b/D69) — a change is externally visible D5 state.
+       << route.desired.input.subscriber_partition << '|'
+       << route.desired.output.publisher_partition;
     for (size_t i = 0; i < route.desired.topics.size(); ++i) {
         const RouterRouteTopicSpec &spec = route.desired.topics.at(i);
         std::map<std::string, TopicRouteState>::const_iterator t =

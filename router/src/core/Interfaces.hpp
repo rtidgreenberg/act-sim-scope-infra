@@ -43,6 +43,14 @@ struct IEntityFactory {
     virtual std::string update_writer_deadline(const std::string &route_name,
                                                const std::string &topic_name,
                                                std::int64_t deadline_nanos) = 0;
+    // Change a live build's Subscriber/Publisher partitions in place (7b/D69, D15:
+    // runtime-mutable via set_qos, automatic rematch — no rebuild). Synchronous on the
+    // controller strand; returns false if no such runtime exists / the update failed
+    // (the caller logs; a future rebuild uses the re-minted view's new spec anyway).
+    virtual bool update_route_partitions(const std::string &route_name,
+                                         const std::string &topic_name,
+                                         const std::string &subscriber_partition,
+                                         const std::string &publisher_partition) = 0;
 };
 
 // Publishes the controller's outward report. The snapshot IS the generated RouterStatus

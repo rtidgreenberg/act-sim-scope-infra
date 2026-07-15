@@ -3009,3 +3009,58 @@ behavior — one router, one instance).
 **Docs changed.** `RouterAdminTypes.idl` + `command-status.md` IDL sketch (@key);
 `dds_probe.py`/`test_controller_journal.py` comments (keyless → keyed-per-router); this
 entry.
+
+---
+
+## D69 — Slice 7b IMPLEMENTED: endpoint Publisher/Subscriber partitions applied at build, plus runtime per-route partition change via SET_ROUTE_PARTITION (2026-07-15, accepted; implements D61 as refined by D64/D66, extends the command surface per user direction)
+
+**Context.** D61's core (apply the parsed-but-dropped
+`publisher_partition`/`subscriber_partition` to the per-build `Publisher`/`Subscriber`)
+rides 7m as designed. The user additionally required **runtime per-route partition
+modification** — distinct from Phase 8's participant-level `SET_PARTICIPANT_PARTITION`
+(which stays parsed-and-rejected). The D15 side-finding already validated the mechanism:
+pub/sub PARTITION is runtime-mutable via `set_qos` with automatic rematching, no entity
+recreation.
+
+**Decision.**
+
+- **Build-time application (D61):** `RouteEntityFactory` sets `Partition` on the
+  per-build `Publisher` from `output.publisher_partition` and on the `Subscriber` from
+  `input.subscriber_partition`; empty ⇒ default partition. One scalar name per endpoint
+  (wildcard/multi deferred); the `inherit_participant` sentinel in `platform-team.yaml`
+  is NOT a 7b keyword — it is decided in Phase 8's readiness pass with
+  `participant_partition` itself.
+- **New command kind `SET_ROUTE_PARTITION`** (appended to `RouterCommandKind`; existing
+  ordinals unchanged). Payload rides the command's embedded route spec:
+  `route.input.subscriber_partition` / `route.output.publisher_partition` become the
+  named route's desired values — both legs, every command; empty = default partition
+  (callers read current values off the status desired spec). Unknown route ⇒ the D24
+  cached reject; unchanged values ⇒ D8-style idempotent accept ("partition unchanged",
+  no revision bump, no factory call).
+- **Controller semantics:** update `desired`, **re-mint the RouteView** with a fresh D23
+  stamp (future builds — re-enable/re-arm — read the new spec; live builds keep their
+  generation because they are adjusted, not rebuilt), then for each live topic
+  (CREATING or FORWARDING — creation is synchronous on the strand, so a CREATING
+  topic's entities already exist) call the new
+  `IEntityFactory::update_route_partitions` →
+  `AsyncWaitSetDispatcher::set_partitions` →
+  `RouteTopicRuntime::set_partitions` (Subscriber + Publisher `set_qos`). A failed
+  lookup (racing teardown) is log-only — the next build applies the new view.
+- **Observability:** the desired-spec partitions join the route fingerprint (a change is
+  externally visible D5 state → revision bump + publish; the values ride
+  `RouterRouteStatus.desired`). The rematch itself is visible for free through the
+  7m matched counts — the retargeted-away reader's count drops to zero, the new
+  partition's reader rises, `topic_state` never leaves `TOPIC_FORWARDING`.
+
+**Evidence.** `router/test_e2e/test_wan_partition.py` + `config/e2e_partition.yaml`
+(E3 + RT): default-partition reader held at zero with `match_reason` and **no**
+incompatible-QoS event (D61's load-bearing caveat); PLATFORM reader matches and receives
+forwarded samples; `SET_ROUTE_PARTITION` retargets PLATFORM→TEAM_B in place — PLATFORM
+unmatches, TEAM_B matches and receives, QoS summaries byte-identical across the change
+(same build, no rebuild), revision bumps, idempotent repeat acks "partition unchanged"
+with no bump. Unit: `test_set_route_partition` (accept/idempotent/view-re-mint — the
+rebuild after disable/enable carries the new partitions). ctest 4/4; full e2e **16/16
+twice**; `/dev/shm` clean.
+
+**Docs changed.** `RouterAdminTypes.idl` + `command-status.md` (enum + command table);
+`implementation-plan.md` (7b delivered); this entry.

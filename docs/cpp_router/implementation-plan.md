@@ -460,11 +460,15 @@ Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
   Proof: E-M (`test_create_and_observe.py`) + migrated e2e suite 15/15 twice + ctest 4/4;
   see D67 for two migration findings (a shipped test's dissolved false-green; journal
   consumers need KEEP_ALL).
-- **7b — Publisher/Subscriber partition application (D61 as refined by D64/D66).** Apply
-  `publisher_partition`/`subscriber_partition` (parsed but dropped today) to the per-build
-  `Publisher`/`Subscriber` — rides 7m: a partition mismatch is the created entity's
-  held-zero matched count + `match_reason`, **not** an incompatible-QoS event; the
-  discovery-time log records each endpoint's partition so the near-miss stays diagnosable.
+- **7b — Publisher/Subscriber partition application (D61 as refined by D64/D66).
+  DELIVERED (D69, 2026-07-15).** Applied `publisher_partition`/`subscriber_partition` to
+  the per-build `Publisher`/`Subscriber` — rides 7m: a partition mismatch is the created
+  entity's held-zero matched count + `match_reason`, **not** an incompatible-QoS event.
+  Plus (user-directed) **runtime per-route partition change**: new `SET_ROUTE_PARTITION`
+  command applies the embedded spec's endpoint partitions in place via pub/sub `set_qos`
+  (D15 — automatic rematch, no rebuild) and re-mints the RouteView for future builds.
+  Proof: `test_wan_partition.py` + `config/e2e_partition.yaml` (E3 + runtime retarget,
+  QoS summaries byte-identical across the change); e2e 16/16 twice, ctest 4/4. See D69.
 - **7c — Per-topic wire-type acquisition (D62 as reshaped by D64/D66).** Retire
   process-global `router.type_name`; `DiscoveryDispatcher` reads each local LAN endpoint's
   inline COMPLETE type object (`data->type()`, spike-proven) and posts `TypeResolved`;

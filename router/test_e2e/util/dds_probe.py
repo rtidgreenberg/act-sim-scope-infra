@@ -45,19 +45,37 @@ class Probe:
             self._topics[topic_name] = topic
         return topic
 
-    def writer(self, topic_name, type_name, qos=None, dtype=None):
-        dtype = dtype if dtype is not None else _types().type(type_name)
-        topic = self._topic(topic_name, dtype)
-        if qos is None:
-            return dds.DynamicData.DataWriter(self._publisher, topic)
-        return dds.DynamicData.DataWriter(self._publisher, topic, qos)
+    def _partitioned_publisher(self, partition):
+        q = self.participant.default_publisher_qos
+        q.partition = dds.Partition([partition])
+        return dds.Publisher(self.participant, q)
 
-    def reader(self, topic_name, type_name, qos=None, dtype=None):
+    def _partitioned_subscriber(self, partition):
+        q = self.participant.default_subscriber_qos
+        q.partition = dds.Partition([partition])
+        return dds.Subscriber(self.participant, q)
+
+    def writer(self, topic_name, type_name, qos=None, dtype=None, partition=None):
+        """partition: publish into this PARTITION name (7b tests) — a dedicated
+        Publisher is created for it; None = the probe's default-partition Publisher."""
         dtype = dtype if dtype is not None else _types().type(type_name)
         topic = self._topic(topic_name, dtype)
+        pub = (self._publisher if partition is None
+               else self._partitioned_publisher(partition))
         if qos is None:
-            return dds.DynamicData.DataReader(self._subscriber, topic)
-        return dds.DynamicData.DataReader(self._subscriber, topic, qos)
+            return dds.DynamicData.DataWriter(pub, topic)
+        return dds.DynamicData.DataWriter(pub, topic, qos)
+
+    def reader(self, topic_name, type_name, qos=None, dtype=None, partition=None):
+        """partition: subscribe in this PARTITION name (7b tests) — a dedicated
+        Subscriber is created for it; None = the probe's default-partition Subscriber."""
+        dtype = dtype if dtype is not None else _types().type(type_name)
+        topic = self._topic(topic_name, dtype)
+        sub = (self._subscriber if partition is None
+               else self._partitioned_subscriber(partition))
+        if qos is None:
+            return dds.DynamicData.DataReader(sub, topic)
+        return dds.DynamicData.DataReader(sub, topic, qos)
 
     def sample(self, type_name, **fields):
         """A DynamicData instance of `type_name` with dotted-path fields set, e.g.

@@ -45,8 +45,9 @@ struct FakeEntityFactory : IEntityFactory {
         std::uint64_t gen;
         DerivedWriterQos derived; // creates only (D39/D45)
         std::int64_t deadline_nanos = 0; // deadline updates only
+        std::string sub_partition, pub_partition; // partition updates + creates (7b/D69)
     };
-    std::vector<Op> creates, teardowns, aborts, deadline_updates;
+    std::vector<Op> creates, teardowns, aborts, deadline_updates, partition_updates;
     bool fail_deadline_update = false;
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
@@ -57,6 +58,8 @@ struct FakeEntityFactory : IEntityFactory {
         op.topic = topic;
         op.gen = gen;
         op.derived = derived;
+        op.sub_partition = view.spec.input.subscriber_partition;
+        op.pub_partition = view.spec.output.publisher_partition;
         creates.push_back(op);
     }
     void teardown_topic_entities(const std::string &route, const std::string &topic,
@@ -85,6 +88,18 @@ struct FakeEntityFactory : IEntityFactory {
         op.deadline_nanos = deadline_nanos;
         deadline_updates.push_back(op);
         return fail_deadline_update ? std::string() : "RELIABLE,TRANSIENT_LOCAL,updated";
+    }
+    bool update_route_partitions(const std::string &route, const std::string &topic,
+                                 const std::string &subscriber_partition,
+                                 const std::string &publisher_partition) override {
+        Op op;
+        op.route = route;
+        op.topic = topic;
+        op.gen = 0;
+        op.sub_partition = subscriber_partition;
+        op.pub_partition = publisher_partition;
+        partition_updates.push_back(op);
+        return true;
     }
 };
 
@@ -686,6 +701,55 @@ static void test_disable_tears_down() {
     CHECK(f.factory.creates.size() == 1);
 }
 
+// Runtime per-route partition change (7b/D69): SET_ROUTE_PARTITION updates the desired
+// spec (revision bump — it rides status), adjusts live builds IN PLACE (no teardown, no
+// rebuild), re-mints the view so future builds use the new spec, and is idempotent for
+// unchanged values (D8).
+static void test_set_route_partition() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+    Fixture f(specs);
+    drive_to_forwarding(f, "r", "T");
+    std::uint64_t rev = f.revision();
+
+    RouterCommand cmd = command(RouterCommandKind::SET_ROUTE_PARTITION, "p1", "r");
+    cmd.route.input.subscriber_partition = "APPS";
+    cmd.route.output.publisher_partition = "PLATFORM";
+    f.post(ControllerEvent::command_received(cmd));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "partition updated");
+    CHECK(f.revision() == rev + 1); // desired-spec partitions are D5-visible state
+    CHECK(f.factory.partition_updates.size() == 1);
+    CHECK(f.factory.partition_updates.back().sub_partition == "APPS");
+    CHECK(f.factory.partition_updates.back().pub_partition == "PLATFORM");
+    CHECK(f.factory.teardowns.empty()); // in place, never a rebuild cycle
+    CHECK(f.factory.creates.size() == 1);
+    CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_ENABLED);
+    CHECK(f.route("r").desired.output.publisher_partition == "PLATFORM");
+
+    // Same values, new command_id: idempotent accept, no state change, no factory call.
+    RouterCommand dup = command(RouterCommandKind::SET_ROUTE_PARTITION, "p2", "r");
+    dup.route.input.subscriber_partition = "APPS";
+    dup.route.output.publisher_partition = "PLATFORM";
+    f.post(ControllerEvent::command_received(dup));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "partition unchanged");
+    CHECK(f.revision() == rev + 1);
+    CHECK(f.factory.partition_updates.size() == 1);
+
+    // Future builds use the re-minted view's spec: disable/enable rebuilds with the new
+    // partitions on the RouteView the factory receives.
+    f.post(ControllerEvent::command_received(
+            command(RouterCommandKind::DISABLE_ROUTE, "d1", "r")));
+    f.post(ControllerEvent::topic_teardown_complete("r", "T",
+                                                    f.factory.teardowns.back().gen));
+    f.post(ControllerEvent::command_received(
+            command(RouterCommandKind::ENABLE_ROUTE, "e2", "r")));
+    CHECK(f.factory.creates.size() == 2);
+    CHECK(f.factory.creates.back().sub_partition == "APPS");
+    CHECK(f.factory.creates.back().pub_partition == "PLATFORM");
+}
+
 // Command history bound (D4): FIFO 256, evicted ids are treated as new commands.
 static void test_history_fifo_eviction() {
     std::vector<RouterRouteSpec> specs(
@@ -728,6 +792,7 @@ int main() {
     RUN(test_writer_qos_derivation);
     RUN(test_deadline_tightening_and_warning);
     RUN(test_disable_tears_down);
+    RUN(test_set_route_partition);
     RUN(test_history_fifo_eviction);
 
     if (g_failures == 0) {

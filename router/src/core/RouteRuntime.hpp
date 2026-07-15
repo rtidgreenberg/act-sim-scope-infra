@@ -65,6 +65,14 @@ struct RouteTopicRuntimeBase {
     // In-place mutable deadline update on the output writer (D39). Returns the writer's
     // new QoS summary, or "" on failure.
     virtual std::string set_writer_deadline(std::int64_t deadline_nanos) = 0;
+
+    // In-place partition change on this build's Subscriber (input leg) and Publisher
+    // (output leg) — 7b/D69. Pub/sub PARTITION is runtime-mutable via set_qos with
+    // automatic rematching (D15), so no entity recreation; the rematch surfaces through
+    // the matched-count StatusConditions (D66/D67). Empty string = the default
+    // partition. Returns false on failure.
+    virtual bool set_partitions(const std::string &subscriber_partition,
+                                const std::string &publisher_partition) = 0;
 };
 
 template <typename T>
@@ -144,6 +152,25 @@ public:
             return QosResolver::summarize(q);
         } catch (const std::exception &) {
             return std::string();
+        }
+    }
+
+    bool set_partitions(const std::string &subscriber_partition,
+                        const std::string &publisher_partition) override {
+        try {
+            dds::sub::qos::SubscriberQos sq = subscriber_.qos();
+            sq << (subscriber_partition.empty()
+                           ? dds::core::policy::Partition()
+                           : dds::core::policy::Partition(subscriber_partition));
+            subscriber_.qos(sq);
+            dds::pub::qos::PublisherQos pq = publisher_.qos();
+            pq << (publisher_partition.empty()
+                           ? dds::core::policy::Partition()
+                           : dds::core::policy::Partition(publisher_partition));
+            publisher_.qos(pq);
+            return true;
+        } catch (const std::exception &) {
+            return false;
         }
     }
 

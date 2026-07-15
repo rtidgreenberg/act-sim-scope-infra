@@ -81,6 +81,7 @@ private:
     void handle_command(const RouterCommand &cmd);
     void handle_enable(const RouterCommand &cmd, RouterCommandAck &ack);
     void handle_disable(const RouterCommand &cmd, RouterCommandAck &ack);
+    void handle_set_route_partition(const RouterCommand &cmd, RouterCommandAck &ack);
     void cache_ack(const RouterCommandAck &ack);
 
     void apply_publication(const EndpointRecord &rec);
