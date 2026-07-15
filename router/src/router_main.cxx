@@ -8,9 +8,8 @@
 // file instead of hardcoding them. Runs until SIGINT/SIGTERM, then shuts down in the
 // same order those tests use.
 //
-// Two scope boundaries carried over from the library (not addressed here — see
+// One scope boundary carried over from the library (not addressed here — see
 // docs/cpp_router/design-decisions.md D50):
-//   - QoS aliases other than ""/"default" are unresolvable until Phase 7 (D45).
 //   - DynamicRouteFactory binds ONE DynamicData type for the whole process (D34/D35);
 //     a config whose active routes span more than one type cannot run yet (checked
 //     below, fails fast rather than mis-typing a route).
@@ -46,11 +45,14 @@
 
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <rti/core/policy/CorePolicy.hpp>
+#include <rti/core/QosProviderParams.hpp>
+#include <dds/core/QosProvider.hpp>
 #include <dds/dds.hpp>
 
 #include <csignal>
 #include <chrono>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -223,6 +225,31 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Phase 7a (D60): one QosProvider over every qos_libraries: file, shared by
+        // QosResolver (endpoint aliases) and ParticipantRegistry (participant aliases)
+        // below. The production QoS libs are templated with env vars (WAN_TIMEOUT_SEC,
+        // peer locators, ...) that the deployment must supply before launch — a missing
+        // one makes Connext's XML loader throw naming it; caught here (not left to
+        // surface as an unlabeled router.fatal) with the file list attached for context.
+        std::shared_ptr<dds::core::QosProvider> qos_provider;
+        if (!cfg.qos_library_paths.empty()) {
+            try {
+                rti::core::QosProviderParams params;
+                params.url_profile(dds::core::StringSeq(cfg.qos_library_paths.begin(),
+                                                        cfg.qos_library_paths.end()));
+                qos_provider = std::make_shared<dds::core::QosProvider>(
+                        rti::core::create_qos_provider_ex(params));
+            } catch (const std::exception &e) {
+                std::string paths;
+                for (const auto &p : cfg.qos_library_paths) {
+                    paths += (paths.empty() ? "" : ",") + p;
+                }
+                Log::error("router.config.qos_provider_load_failed",
+                          {{"config", config_path}, {"paths", paths}, {"error", e.what()}});
+                return 2;
+            }
+        }
+
         TypeResolver types;
         if (!cfg.types_xml_path.empty()) {
             types.load_types(cfg.types_xml_path);
@@ -244,6 +271,12 @@ int main(int argc, char **argv) {
             pc.name = p.name;
             pc.domain = p.domain;
             pc.user_data_tag = router_tag;
+            if (!p.qos_profile_alias.empty()) {
+                auto it = cfg.qos_profiles.find(p.qos_profile_alias);
+                if (it != cfg.qos_profiles.end()) {
+                    pc.qos_provider_profile = it->second;
+                }
+            }
             participant_configs.push_back(pc);
             filtered_participants.push_back(p);
         }
@@ -268,17 +301,63 @@ int main(int argc, char **argv) {
             }
         }
 
+        // QosResolver built before ParticipantRegistry so its preflight (below) runs
+        // before any DDS entity exists (D60/D65).
+        QosResolver qos(qos_provider, cfg.qos_profiles);
+
+        // Preflight: eagerly resolve every route's declared reader_qos/writer_qos alias
+        // against the loaded QosProvider. is_resolvable_qos_alias/validate_qos_aliases
+        // already confirmed each alias is *declared*; this confirms the profile it names
+        // actually *exists* in the loaded XML — the class of bug the historical
+        // lan_status_1hz -> status_1hz_qos typo was (D60) — at startup instead of only
+        // when that route's topic later happens to build entities.
+        for (const auto &route : cfg.routes) {
+            try {
+                qos.reader_qos(route.input.reader_qos);
+                qos.writer_qos(route.output.writer_qos);
+            } catch (const std::exception &e) {
+                Log::error("router.config.qos_profile_unresolvable",
+                          {{"config", config_path},
+                           {"route", route.route_name},
+                           {"error", e.what()}});
+                return 2;
+            }
+        }
+
+        // Same preflight for the participant leg: a declared participant qos: alias whose
+        // LIB::Profile doesn't exist in the loaded XML would otherwise only throw inside
+        // ParticipantRegistry's constructor as an unlabeled fatal.
+        for (const auto &pc : participant_configs) {
+            if (pc.qos_provider_profile.empty()) {
+                continue;
+            }
+            try {
+                if (!qos_provider) {
+                    throw std::runtime_error(
+                            "participant qos alias is declared but no QosProvider is "
+                            "loaded (qos_libraries: missing?)");
+                }
+                qos_provider->participant_qos(pc.qos_provider_profile);
+            } catch (const std::exception &e) {
+                Log::error("router.config.qos_profile_unresolvable",
+                          {{"config", config_path},
+                           {"participant", pc.name},
+                           {"profile", pc.qos_provider_profile},
+                           {"error", e.what()}});
+                return 2;
+            }
+        }
+
         // Disabled startup (D52): create participants DISABLED so no discovery traffic
         // flows until the builtin-reader conditions are attached and the AsyncWaitSet is
         // running. registry.enable_all() below (after aws.start()) turns discovery on.
-        ParticipantRegistry registry(participant_configs, /*autoenable=*/false);
+        ParticipantRegistry registry(participant_configs, /*autoenable=*/false, qos_provider);
 
         dds::domain::DomainParticipant admin_dp = registry.get(admin_participant_name);
         DdsStatusPublisher status_pub(admin_dp, "ActRouterStatus");
 
         rti::core::cond::AsyncWaitSet aws;
         AsyncWaitSetDispatcher route_disp(aws);
-        QosResolver qos;
         DynamicRouteFactory factory(registry, types, qos, route_disp, cfg.type_name);
 
         // Phase 6 slice 6b: controller journal (debug analysis). Its backlog StatusCondition

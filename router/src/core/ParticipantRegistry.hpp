@@ -20,8 +20,10 @@
 #pragma once
 
 #include <dds/dds.hpp>
+#include <dds/core/QosProvider.hpp>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,12 +35,20 @@ public:
         std::string name;
         int domain = 0;
         std::string user_data_tag; // "act.router=<node>/<router>" (D15); may be empty
+        // Already-resolved "LIB::Profile" path for this participant's qos: alias (Phase
+        // 7a, D60); empty = no named participant QoS (default_participant_qos()). Alias
+        // resolution happens in router_main — this class only applies an already-resolved
+        // profile path, so it stays alias-agnostic.
+        std::string qos_provider_profile;
     };
 
     // autoenable=false creates participants disabled for the D52 disabled-startup
-    // ordering — the caller MUST call enable_all() after aws.start().
+    // ordering — the caller MUST call enable_all() after aws.start(). provider may be
+    // null (no qos_libraries: configured); then every Config's qos_provider_profile must
+    // be empty (D60).
     explicit ParticipantRegistry(const std::vector<Config> &configs,
-                                 bool autoenable = true);
+                                 bool autoenable = true,
+                                 std::shared_ptr<dds::core::QosProvider> provider = nullptr);
     ~ParticipantRegistry();
 
     // Returns the participant handle by name (handle copy, shared ownership).

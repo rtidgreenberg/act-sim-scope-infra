@@ -2732,3 +2732,70 @@ contract), and confirm the C++ `matched_publications`/StatusCondition call surfa
 `implementation-plan.md` (Phase 7 banner: create-and-observe pivot + the readiness-pass
 prerequisite). `code-architecture.md` reconciliation deferred to the matching-authority
 readiness pass.
+
+---
+
+## D65 — Phase 7a implemented: QosResolver/ParticipantRegistry gain real XML-alias resolution; router_main owns the QosProvider (2026-07-14, accepted; implements D60)
+
+**Context.** D60 designed 7a; the `spikes/qos_alias/` spike then validated the mechanism against
+the real production QoS libraries. This entry records the actual implementation in the shipped
+router (`router/src/...`, not the spike) and the one correction it required to D60's own text.
+
+**C++ `QosProvider` construction path corrected (build-verified, closes D60/D64's "not
+build-verified" flag).** D60's literal snippet — `dds::core::QosProvider(params)` — **does not
+compile**: `dds::core::TQosProvider` (`$NDDSHOME/include/ndds/hpp/dds/core/TQosProvider.hpp`)
+has no constructor taking `rti::core::QosProviderParams`, only `(uri)`/`(uri, profile)` strings.
+The real multi-file-load path is
+`rti::core::create_qos_provider_ex(const rti::core::QosProviderParams&)`
+(`dds/core/detail/QosProvider.hpp:52`), which returns a `dds::core::QosProvider`. D60's three
+named getters — `datareader_qos(profile)` / `datawriter_qos(profile)` / `participant_qos(profile)`
+— **do** exist exactly as written (`TQosProvider.hpp:334,398,249`) and compile unchanged. Logged
+in `docs/connext-ai-issues/connext-ai-issues.md`.
+
+**Decision (as implemented).**
+
+- `router_main` builds ONE `std::shared_ptr<dds::core::QosProvider>` from
+  `cfg.qos_library_paths` (via `create_qos_provider_ex`) and passes it to both `QosResolver`
+  and `ParticipantRegistry` — "applied... from the same provider" (D60) is literal, not two
+  independently-constructed providers re-parsing the same env-var-templated XML.
+- `QosAliasPolicy.hpp`/`RouteConfigParser` stay DDS-free per their existing layering rule:
+  `is_resolvable_qos_alias` widens to take the `qos_profiles` map (declared-alias check only).
+  `validate_qos_aliases` also now checks participant `qos:` aliases (D60 only mentioned
+  endpoint aliases; extended for D44 no-drift symmetry).
+- Whether a *declared* alias's profile actually **exists** in the loaded XML (the class of bug
+  the historical `lan_status_1hz -> status_1hz_qos` typo was) can only be checked once a real
+  `QosProvider` exists, so it is NOT inside the DDS-free config layer as D60's phrasing implied.
+  Instead, `router_main` runs a startup preflight right after constructing `QosResolver` (before
+  any DDS entity exists): eagerly resolve every route's declared `reader_qos`/`writer_qos` alias
+  **and every participant's resolved `qos:` profile** (the same bug class on the participant leg
+  — without this it would only throw inside `ParticipantRegistry`'s constructor as an unlabeled
+  fatal), failing fast + loudly (naming the route/participant) on the first one that doesn't
+  resolve.
+- `QosResolver::reader_qos`/`writer_qos`: a named alias (not `""`/`"default"`) returns
+  `provider->datareader_qos(...)`/`datawriter_qos(...)` directly — fully replacing the D39/D42
+  auto-derivation path, no baseline-then-derive, exactly D60's short-circuit.
+- `ParticipantRegistry::Config` gains an already-resolved `qos_provider_profile` (alias
+  resolution stays in `router_main`, keeping this class alias-agnostic); `make_participant_qos`
+  uses `provider->participant_qos(profile)` when set, else `default_participant_qos()` as
+  before; D52 disabled-startup ordering unchanged.
+- The 14 QoS-lib env vars and the `WAN_TIMEOUT_SEC > 30` liveliness constraint (spike findings
+  1/2) are **not** re-implemented in `router_main` — both are inherent to Connext's own XML
+  loading / `Inconsistent QoS` participant-creation checks, which already propagate to
+  `router.fatal` with a message naming the problem. Hardcoding the 14 ACT-harness-specific var
+  names into the generic router was deliberately rejected (leaks harness-specific knowledge into
+  code meant to work with any `qos_libraries:` list).
+- The `control-platform.yaml` `lan_status_1hz` fix (spike finding 3) was already committed;
+  `test/test_route_config.cxx`'s pinned "known gap" assertion (expected `validate_qos_aliases`
+  to fail on this file) now flips to expect success, plus direct assertions on the parsed
+  `qos_profiles` map.
+
+**Evidence.** `router/test_e2e/test_qos_alias_route.py` (`config/e2e_qos_alias.yaml`, plan's
+E1/E2) — real production QoS libs, real alias names (`wan_status`/`wan_event`/
+`control_wan_udpv4_qos`/`platform_wan_udpv4_qos`), one router process: route reaches
+`ROUTE_ENABLED`, forwards a sample end-to-end, and the RouterStatus QoS summaries show the
+named profiles' actual policies (BEST_EFFORT reader / RELIABLE writer), not the D39 baseline.
+Full existing `router/test_e2e/` suite (14 tests) and `ctest` (`test_route_config` et al.)
+re-ran clean — no regression to the `""`/`"default"`-only configs.
+
+**Docs changed.** This entry; `implementation-plan.md` (Phase 7a marked delivered);
+`docs/connext-ai-issues/connext-ai-issues.md` (construction-path correction).

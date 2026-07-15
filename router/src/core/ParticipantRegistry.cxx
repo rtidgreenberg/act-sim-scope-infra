@@ -11,9 +11,12 @@ namespace router {
 namespace {
 
 dds::domain::qos::DomainParticipantQos make_participant_qos(
-    const ParticipantRegistry::Config &cfg) {
+    const ParticipantRegistry::Config &cfg,
+    const std::shared_ptr<dds::core::QosProvider> &provider) {
     dds::domain::qos::DomainParticipantQos qos =
-        dds::domain::DomainParticipant::default_participant_qos();
+        (provider && !cfg.qos_provider_profile.empty())
+            ? provider->participant_qos(cfg.qos_provider_profile) // named alias (D60)
+            : dds::domain::DomainParticipant::default_participant_qos();
     // UDPv4 only — no shared memory segments on /dev/shm per vboxsf safety rules.
     qos << rti::core::policy::TransportBuiltin::UDPv4();
     if (!cfg.user_data_tag.empty()) {
@@ -26,7 +29,8 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
 } // namespace
 
 ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
-                                         bool autoenable) {
+                                         bool autoenable,
+                                         std::shared_ptr<dds::core::QosProvider> provider) {
     // For disabled startup (D52), flip the process-global DomainParticipantFactory
     // EntityFactory policy to ManuallyEnable for the duration of this construction loop
     // so each participant is created DISABLED, then restore it. The factory QoS is a
@@ -42,7 +46,7 @@ ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
 
     try {
         for (const Config &cfg : configs) {
-            dds::domain::DomainParticipant dp(cfg.domain, make_participant_qos(cfg));
+            dds::domain::DomainParticipant dp(cfg.domain, make_participant_qos(cfg, provider));
             participants_.emplace(cfg.name, dp);
             names_.push_back(cfg.name);
             Log::info("participant_created",

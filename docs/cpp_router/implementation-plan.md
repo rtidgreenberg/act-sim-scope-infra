@@ -421,13 +421,19 @@ Evidence (6b, D56):
 > controller** (superseding D12/D20/D22, retiring the D39/D51 gate) — still needs its own
 > implementation-readiness pass; do not implement straight from D59–D63.
 >
-> **7a spike-validated (`spikes/qos_alias/`, D60).** The alias mechanism works against the real
-> production QoS libs, but 7a must also: (a) require/propagate the QoS-lib **env vars** (14 of
-> them, incl. `WAN_TIMEOUT_SEC > 30` or the WAN participant QoS is inconsistent); (b) make
-> `validate_qos_aliases` check profile **existence** in the loaded provider; (c) `control-platform.yaml`'s
-> broken `lan_status_1hz` alias is **fixed** (→ `status_1sec_qos`). C++ `QosProvider`
-> API is a compile-check. With these, **7a is high-confidence and pivot-independent — the
-> recommended next slice to implement.**
+> **7a delivered (D60/D65, 2026-07-14).** Implemented in the shipped router (not just the
+> spike): `router_main` builds one `QosProvider` over `qos_libraries:` (via
+> `rti::core::create_qos_provider_ex` — the real C++ construction path; D60's own snippet
+> didn't compile, see D65), shared by `QosResolver` (endpoint `reader_qos:`/`writer_qos:`
+> aliases) and `ParticipantRegistry` (participant `qos:`). A named alias fully specifies the
+> endpoint and short-circuits D39/D42 auto-derivation and the D51 gate, as designed. A startup
+> preflight resolves every declared alias — route `reader_qos`/`writer_qos` **and** participant
+> `qos:` profiles — against the loaded XML before any DDS entity exists,
+> failing fast on a bad profile name (the `lan_status_1hz` class of bug — already fixed in
+> `control-platform.yaml`). Proof: `router/test_e2e/test_qos_alias_route.py` +
+> `config/e2e_qos_alias.yaml` (E1/E2), real production QoS libs/aliases, one router process,
+> route forwards end-to-end with the named profiles' actual resolved QoS on status. Full
+> existing e2e suite + `ctest` re-ran clean. See D65 for the implementation decision.
 
 Deliver (slice order, riskiest primitive isolated in 7c):
 

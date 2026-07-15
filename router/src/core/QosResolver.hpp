@@ -1,4 +1,5 @@
-// QosResolver.hpp — asymmetric route-entity QoS (Phase 5, D39/D42/D45; D19).
+// QosResolver.hpp — asymmetric route-entity QoS (Phase 5, D39/D42/D45; D19) plus named
+// XML-alias resolution (Phase 7a, D60).
 //
 // The auto ("" alias) contract is asymmetric and static:
 //   - INPUT reader: one fixed weakest-request profile — BEST_EFFORT + VOLATILE +
@@ -15,11 +16,14 @@
 // on both auto profiles (the same depth the "default" alias uses; on the writer it is
 // also the TRANSIENT_LOCAL late-joiner cache depth).
 //
-// The only named alias resolvable today is "default" (RELIABLE + TRANSIENT_LOCAL +
-// KEEP_LAST(16)). Real XML-alias resolution (QosProvider profiles for wan_event etc.)
-// lands with Phase 7, whose routes are its first consumers (D45); until then any other
-// alias throws — a RouteEntityError the operator can see (D41). The resolvability rule
-// lives in QosAliasPolicy.hpp (D44), shared with RouteConfigParser::validate_qos_aliases.
+// "default" resolves to a built-in profile (RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(16)).
+// Any other named alias is looked up in the qos_profiles: map (alias -> "LIB::Profile")
+// and resolved against a real dds::core::QosProvider built over qos_libraries: (D60); a
+// named alias fully specifies the endpoint QoS and short-circuits the D39/D42
+// auto-derivation above. With no provider (the default constructor — existing test mains
+// and e2e configs that only use ""/"default"), any other alias still throws — a
+// RouteEntityError the operator can see (D41). The resolvability rule lives in
+// QosAliasPolicy.hpp (D44), shared with RouteConfigParser::validate_qos_aliases.
 
 #pragma once
 
@@ -28,8 +32,11 @@
 
 #include <dds/dds.hpp>
 #include <dds/core/policy/CorePolicy.hpp>
+#include <dds/core/QosProvider.hpp>
 
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -93,8 +100,21 @@ inline const char *liveliness_kind_name(LivelinessKindPod kind) {
 
 class QosResolver {
 public:
+    QosResolver() = default;
+
+    // provider may be null (no qos_libraries: configured) — then only ""/"default" resolve,
+    // same as the default constructor. qos_profiles is the alias -> "LIB::Profile" map
+    // (D60); required non-empty only for aliases actually used by this config.
+    QosResolver(std::shared_ptr<dds::core::QosProvider> provider,
+               std::map<std::string, std::string> qos_profiles)
+        : provider_(std::move(provider)), qos_profiles_(std::move(qos_profiles)) {}
+
     dds::sub::qos::DataReaderQos reader_qos(const std::string &alias) const {
         ensure_resolvable(alias);
+        if (!alias.empty() && alias != "default") {
+            // Named XML profile fully specifies the endpoint QoS (D60).
+            return provider_->datareader_qos(qos_profiles_.at(alias));
+        }
         dds::sub::qos::DataReaderQos qos;
         if (alias.empty()) {
             // Weakest-request input profile (D39).
@@ -114,6 +134,11 @@ public:
                                             const DerivedWriterQos &derived
                                                     = DerivedWriterQos()) const {
         ensure_resolvable(alias);
+        if (!alias.empty() && alias != "default") {
+            // Named XML profile fully specifies the endpoint QoS: short-circuits the
+            // D39/D42 auto-derivation entirely, no baseline-then-derive (D60).
+            return provider_->datawriter_qos(qos_profiles_.at(alias));
+        }
         dds::pub::qos::DataWriterQos qos;
         apply_default_profile(qos); // strong baseline == "default" alias (D39/D42)
         if (alias.empty() && derived.derive) {
@@ -161,13 +186,24 @@ public:
     }
 
 private:
-    static void ensure_resolvable(const std::string &alias) {
-        if (!is_resolvable_qos_alias(alias)) {
+    void ensure_resolvable(const std::string &alias) const {
+        if (!is_resolvable_qos_alias(alias, qos_profiles_)) {
             throw std::runtime_error(
                     "unresolvable QoS alias '" + alias
-                    + "' (XML alias lookup in loaded QoS libraries is Phase 7)");
+                    + "' (not \"\", \"default\", or a declared qos_profiles: key)");
+        }
+        if (!alias.empty() && alias != "default" && !provider_) {
+            // qos_profiles_ has the alias but no QosProvider was built (no qos_libraries:
+            // configured) — should not happen via router_main (D65), but fail clearly
+            // rather than dereference a null provider_ below.
+            throw std::runtime_error(
+                    "QoS alias '" + alias + "' is declared but no QosProvider is loaded "
+                    "(qos_libraries: missing?)");
         }
     }
+
+    std::shared_ptr<dds::core::QosProvider> provider_;
+    std::map<std::string, std::string> qos_profiles_;
 
     template <typename QosT>
     static void apply_default_profile(QosT &qos) {

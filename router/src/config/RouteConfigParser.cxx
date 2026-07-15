@@ -135,6 +135,12 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         for (std::size_t i = 0; i < root["qos_libraries"].size(); ++i) {
             out.qos_library_paths.push_back(root["qos_libraries"][i].as<std::string>());
         }
+        if (root["qos_profiles"]) {
+            for (auto it = root["qos_profiles"].begin(); it != root["qos_profiles"].end();
+                 ++it) {
+                out.qos_profiles[it->first.as<std::string>()] = it->second.as<std::string>();
+            }
+        }
 
         for (auto it = root["participants"].begin(); it != root["participants"].end(); ++it) {
             ParticipantState ps;
@@ -204,18 +210,24 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
 bool validate_qos_aliases(const RouteConfig &cfg, std::string &error) {
     for (std::size_t r = 0; r < cfg.routes.size(); ++r) {
         const RouterRouteSpec &spec = cfg.routes[r];
-        if (!is_resolvable_qos_alias(spec.input.reader_qos)) {
+        if (!is_resolvable_qos_alias(spec.input.reader_qos, cfg.qos_profiles)) {
             error = "route '" + spec.route_name + "' input.reader_qos '"
                     + spec.input.reader_qos
-                    + "' is unresolvable until Phase 7 QoS-library lookup lands (D45) "
-                      "(only \"\"/\"default\" supported)";
+                    + "' is not \"\", \"default\", or a declared qos_profiles: key";
             return false;
         }
-        if (!is_resolvable_qos_alias(spec.output.writer_qos)) {
+        if (!is_resolvable_qos_alias(spec.output.writer_qos, cfg.qos_profiles)) {
             error = "route '" + spec.route_name + "' output.writer_qos '"
                     + spec.output.writer_qos
-                    + "' is unresolvable until Phase 7 QoS-library lookup lands (D45) "
-                      "(only \"\"/\"default\" supported)";
+                    + "' is not \"\", \"default\", or a declared qos_profiles: key";
+            return false;
+        }
+    }
+    for (std::size_t p = 0; p < cfg.participants.size(); ++p) {
+        const ParticipantState &ps = cfg.participants[p];
+        if (!is_resolvable_qos_alias(ps.qos_profile_alias, cfg.qos_profiles)) {
+            error = "participant '" + ps.name + "' qos '" + ps.qos_profile_alias
+                    + "' is not \"\", \"default\", or a declared qos_profiles: key";
             return false;
         }
     }

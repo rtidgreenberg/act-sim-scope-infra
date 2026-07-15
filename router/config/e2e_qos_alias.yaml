@@ -1,0 +1,70 @@
+# e2e_qos_alias.yaml — single router_main fixture for the Phase 7a QoS-alias e2e test
+# (router/test_e2e/test_qos_alias_route.py, plan's E1/E2, D60).
+#
+# ONE router process (role: platform) owns both legs of route qos_alias_r1, using the REAL
+# production QoS libraries and alias names (not a synthetic stand-in) so this is a genuine
+# proof that control-platform.yaml's aliases resolve: reader_qos: wan_status and
+# writer_qos: wan_event, plus both wan_*_udpv4_qos participant profiles applied to wan_in/
+# wan_out. Same single-process topology as e2e_auto_qos.yaml (this test's Python port
+# fixture for Phase 5) — the app writer/reader the test creates are the matched peers.
+#
+# The three qos_libraries: files are templated with 14 env vars (peer locators + WAN
+# tuning, incl. WAN_TIMEOUT_SEC — must be > 30, the hardcoded participant_liveliness_
+# assert_period in wan_qos_lib.xml); test_qos_alias_route.py sets loopback/test values for
+# all of them before launching router_main (same values spikes/qos_alias/qos_alias_spike.py
+# validated).
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py
+# (control_lan -> wan_in's domain, platform_lan -> wan_out's domain; wan unused here).
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  id: 7
+  name: qosalias
+  type_name: ExampleCommand
+  admin_participant: wan_in
+
+types:
+  xml: router/config/example_types.xml
+
+qos_libraries:
+  - harness/act/config/qos/lan_qos_lib.xml
+  - harness/act/config/qos/wan_qos_lib.xml
+  - relay/qos_isc.xml
+
+qos_profiles:
+  wan_status: WAN_QOS_LIB::status_qos
+  wan_event: WAN_QOS_LIB::event_qos
+  control_wan_udpv4_qos: WAN_QOS_LIB::control_participant_udpv4_qos
+  platform_wan_udpv4_qos: WAN_QOS_LIB::platform_participant_udpv4_qos
+
+participants:
+  wan_in:
+    role: platform
+    domain: __DOMAIN_CONTROL_LAN__
+    qos: control_wan_udpv4_qos
+  wan_out:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+    qos: platform_wan_udpv4_qos
+
+routes:
+  - name: qos_alias_r1
+    enabled: true
+    forwarding_mode: dynamic_data
+    # source == destination == this node's role: the single platform process materializes
+    # source_side (RouteConfigParser picks source_side when node_role == source).
+    source: platform
+    destination: control
+    topics:
+      - name: QosAliasCmd
+    source_side:
+      input:
+        participant: wan_in
+        reader_qos: wan_status
+      output:
+        participant: wan_out
+        writer_qos: wan_event

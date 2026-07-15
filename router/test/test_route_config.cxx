@@ -94,20 +94,29 @@ int main() {
         }
     }
 
-    // --- QoS alias validation catches the known Phase-5-interim gap (D44) ---
-    // control-platform.yaml uses named QoS-library aliases (wan_event, wan_status,
-    // lan_status_1hz) that QosResolver cannot yet resolve; validate_qos_aliases must reject
-    // the config with one clear message naming the offending route/alias, rather than
-    // leaving it to surface as N per-topic sticky errors once this config is wired to the
-    // real pipeline.
+    // --- QoS alias resolution (Phase 7a, D60) ---
+    // control-platform.yaml declares every alias it uses (wan_event, wan_status,
+    // lan_status_1hz, control_wan_udpv4_qos, platform_wan_udpv4_qos) in its own
+    // qos_profiles: map, so validate_qos_aliases now passes (it once rejected this file
+    // during the Phase-5-interim gap, before qos_profiles: parsing existed).
     {
         RouteConfig cfg;
         std::string err;
         CHECK(parse_route_config(path, cfg, err));
         std::string qos_err;
-        CHECK(!validate_qos_aliases(cfg, qos_err));
-        CHECK(!qos_err.empty());
-        CHECK(qos_err.find("unresolvable until Phase 7") != std::string::npos);
+        CHECK(validate_qos_aliases(cfg, qos_err));
+        CHECK(qos_err.empty());
+
+        CHECK(cfg.qos_profiles.size() == 5);
+        CHECK(cfg.qos_profiles.at("wan_event") == "WAN_QOS_LIB::event_qos");
+        CHECK(cfg.qos_profiles.at("wan_status") == "WAN_QOS_LIB::status_qos");
+        // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md
+        // finding 3): must point at the profile the lib actually defines.
+        CHECK(cfg.qos_profiles.at("lan_status_1hz") == "LAN_QOS_LIB::status_1sec_qos");
+        CHECK(cfg.qos_profiles.at("control_wan_udpv4_qos")
+              == "WAN_QOS_LIB::control_participant_udpv4_qos");
+        CHECK(cfg.qos_profiles.at("platform_wan_udpv4_qos")
+              == "WAN_QOS_LIB::platform_participant_udpv4_qos");
     }
 
     // --- Numeric-looking node name: quoted YAML scalar must still be quoted (D43) ---
