@@ -92,9 +92,11 @@ aggregate NACK spike can't say which link is sick. 7.7 provides matched-endpoint
 The locator form groups naturally by peer address. The collector correlates
 `InstanceHandle`/locator → participant GUID (builtin topic data via `DiscoveryDispatcher`) →
 `router_id` — two join sources, either sufficient: the `PresenceMonitor` roster
-(`router_id → participant GUID`) and the D15 participant `user_data` tag
-(`act.router=<node>/<router>`), which identifies router participants even before a presence
-heartbeat. **Rollup key: peer `router_id`**, summed across this router's WAN endpoints.
+(`router_id → participant GUID`) and the router-identity participant field — per **D74**
+this is `participant_name` (`name = "<node>/<router>"`, `role_name = "act.router"`),
+replacing the original D15 `user_data` tag — which identifies router participants even
+before a presence heartbeat. **Rollup key: peer `router_id`**, summed across this router's
+WAN endpoints.
 
 ### Multi-network peers (decided — D18)
 

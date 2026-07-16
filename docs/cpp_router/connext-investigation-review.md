@@ -5,6 +5,9 @@
 > For the current design read [Thesis & Tenets](thesis-and-tenets.md) (authoritative),
 > [isc-findings.md](isc-findings.md) (why ISC is out of scope), and
 > [presence-and-health.md](presence-and-health.md). Where this doc conflicts, those win.
+> Phase numbers here are **pre-D72 (old numbering)**: this doc's Phases 8/9/10/11 are today's
+> Phases 10/11/12/13 — see the renumber mapping in
+> [implementation-plan.md](implementation-plan.md).
 
 ## Purpose
 

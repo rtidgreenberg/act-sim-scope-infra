@@ -1,0 +1,198 @@
+= C++ Dynamic DDS Router — Progress Review
+David Greenberg (review generated with Claude Code)
+2026-07-15
+:toc:
+:toclevels: 2
+:sectnums:
+
+== Scope and method
+
+This review covers the `router/` implementation, the `docs/cpp_router/` planning set
+(`implementation-plan.md`, `design-decisions.md` D1–D65, `thesis-and-tenets.md`), the
+Phase 7 spikes, and the *uncommitted* Phase 7a working-tree changes on branch
+`docs/planning-buildout`. All test claims were **independently re-verified during this
+review** (2026-07-15), not taken from the docs: full rebuild clean, `ctest` 4/4 passed,
+Python e2e suite 14/14 passed in ~50 s against the current working tree.
+
+== Executive summary
+
+The project is in strong shape. In roughly one week of work (2026-07-07 → 07-14, 25
+commits) the router has gone from planning documents to a working, config-driven DDS relay
+with Phases 0–6 complete and test-verified, and Phase 7a (QoS-alias XML resolution)
+implemented and verified in the working tree. Milestone 1 (through Phase 3) is done;
+Milestone 2 (Phases 4–7) is more than half delivered — 7b/7c/7d remain.
+
+The engineering process is unusually disciplined: every phase gets an
+implementation-readiness pass before code, every decision is pinned as a numbered entry
+(D1–D65) in `design-decisions.md`, risky Connext assumptions are burned down with runnable
+spikes before implementation, and evidence bullets map 1:1 onto named tests. This process
+has repeatedly caught real problems early (the `lan_status_1hz` alias typo, the D51
+auto-QoS WAN deadlock, the D60 `QosProvider` construction snippet that did not compile).
+
+The main strategic risk is not any individual defect but the **D64 create-and-observe
+pivot**: an accepted-direction decision that supersedes the controller's discovery-matching
+machinery (D12/D20/D22) and the D39/D51 readiness gate, reshaping Phases 7b/7c. It is
+spike-proven but the code refactor into the shipped controller has not had its readiness
+pass. Until that lands, the shipped controller and the accepted design point in different
+directions.
+
+The immediate housekeeping item: **Phase 7a is fully implemented and verified but sits
+uncommitted** in the working tree (10 modified files + 2 untracked), on a branch named
+`docs/planning-buildout` that no longer describes its content.
+
+== Phase status
+
+.Phase status as verified 2026-07-15
+[cols="1,4,2,4",options="header"]
+|===
+|Phase |Slice |Status |Evidence
+
+|0 |Build skeleton, admin IDL, config identity |Done |`test_config_identity`, `test_admin_types` (ctest, re-verified)
+|1 |Controller-owned state machine, no DDS data routes |Done (D1–D11, D21–D26) |`test_controller_phase1` (ctest, re-verified)
+|2/2.5 |Discovery smoke + thin real runtime spine |Done (D12–D20, D27–D30) |`test_discovery_smoke.py`, `test_discovery_startup.py`
+|3 |One discovered route forwards end-to-end |Done (D31–D34) |`test_control_command_route.py` lineage
+|4 |Role-aware DynamicData route + content filter |Done (D35–D38) |`test_route_config`, role-selection e2e tests
+|5 |Asymmetric auto QoS, output readiness |Done (D39–D45) |`test_auto_qos.py`
+|6 |Command/ack/status loop (6a) + controller journal (6b) |Done (D46–D49, D54–D58) |`test_router_admin_commands.py`, `test_controller_journal.py`
+|7a |QoS-alias XML resolution |*Implemented, uncommitted* (D60/D65) |`test_qos_alias_route.py` — re-verified passing
+|7b |Publisher/Subscriber partitions |Not started (D61; reshaped by D64) |—
+|7c |Per-topic multi-type resolution |Not started (D62; reshaped by D64 — needs readiness pass) |—
+|7d |Full `control-platform.yaml` end-to-end |Not started (D63) |—
+|8–11 |Team partitions, serialized CDR, lifecycle mirroring, harness replacement |Not started (medium / medium-high confidence) |—
+|===
+
+Independent verification run for this review:
+
+* Full rebuild of `router/build`: clean, no warnings surfaced in the tail.
+* `ctest`: 4/4 passed (`config_identity`, `controller_phase1`, `admin_types`, `route_config`).
+* `python3 -m pytest router/test_e2e -q`: **14 passed in 49.96 s** — including the new
+  Phase 7a `test_qos_alias_route.py` against the real production QoS libraries
+  (`harness/act/config/qos/{lan,wan}_qos_lib.xml`) and real alias names.
+
+== What is working well
+
+Process strengths worth preserving:
+
+. *Decision log as the single source of truth.* D1–D65 with explicit
+  supersedes/amends/refines links. Reviewers (and future maintainers) can reconstruct why
+  every mechanism exists. The Phase 7a entry (D65) even records the correction to its own
+  design entry (D60's non-compiling snippet) rather than silently fixing it.
+. *Spike-before-implement on every Connext-hard assumption.* `spikes/qos_alias/`,
+  `spikes/type_discovery/`, `spikes/matched_endpoints/`, `spikes/isc_recovery/` each
+  de-risked a specific phase primitive before shipped code depended on it. The qos_alias
+  spike caught the broken `lan_status_1hz -> status_1hz_qos` production alias.
+. *MCP distrust loop.* Connext MCP answers are treated as hints; contradictions found by
+  the build are appended to the shared `docs/connext-ai-issues/` submodule (e.g. the
+  `QosProvider` construction-path entry) so other repos benefit.
+. *Evidence→test 1:1 mapping* (D56/D59 pattern): each plan evidence bullet names the
+  Python e2e test that proves it, so "done" is checkable, not asserted.
+. *Layering discipline in 7a.* `QosAliasPolicy`/`RouteConfigParser` stay DDS-free
+  (declared-alias check), the DDS-dependent existence check is a `router_main` startup
+  preflight, and one shared `QosProvider` is passed to both consumers — the config-time and
+  route-build-time checks share one predicate so they cannot drift.
+
+== Findings
+
+Findings are ordered by importance. None are release blockers; F1 and F2 are the
+actionable near-term items.
+
+=== F1 — Phase 7a is complete but uncommitted, on a misnamed branch
+
+10 modified files (parser, `QosResolver`, `ParticipantRegistry`, `router_main`, tests,
+docs incl. the 64-line D65 entry) plus 2 untracked files
+(`router/config/e2e_qos_alias.yaml`, `router/test_e2e/test_qos_alias_route.py`) implement
+Phase 7a and pass all tests, but are not committed. The branch is `docs/planning-buildout`
+— it has carried the entire implementation since Phase 1 and the name no longer signals
+that. *Recommendation:* commit 7a now (the working tree is verified green), and consider
+whether the branch should be merged/renamed before 7b starts — a reviewer looking at
+branch names would not find the router implementation here.
+
+=== F2 — D64 pivot leaves the shipped controller and the accepted design divergent
+
+D64 (accepted direction, 2026-07-14) retires controller-side topic-name matching and the
+D39/D51 readiness gate in favor of create-and-observe with DDS as the matching authority
+(`matched_publications()`). It is spike-proven (`spikes/type_discovery/`,
+`spikes/matched_endpoints/` 4/4) but explicitly *not* readiness-passed for the shipped
+controller, and the plan warns "do not implement straight from D59–D63." Until that
+refactor lands, D61/D62 as written describe mechanisms that D64 partly supersedes, and any
+interim work on the controller risks building on machinery slated for removal.
+*Recommendation:* run the D64 implementation-readiness pass as the very next planning
+step, before 7b — 7b is "nearly free" under D64 (partition mismatch = zero matched count),
+so sequencing the readiness pass first avoids implementing 7b twice.
+
+=== F3 — Startup preflight does not cover participant QoS profiles
+
+The 7a preflight (`router_main.cxx`, after `QosResolver` construction) eagerly resolves
+every route's `reader_qos`/`writer_qos` alias and fails fast with a labeled
+`router.config.qos_profile_unresolvable` error naming the route. Participant `qos:`
+aliases get the declared-alias check (`validate_qos_aliases` now covers them — good), but
+whether the *profile they point to exists in the loaded XML* is only discovered when
+`ParticipantRegistry`'s constructor calls `provider->participant_qos(profile)` — surfacing
+as a generic fatal rather than a labeled preflight error naming the participant. This is
+exactly the `lan_status_1hz` class of bug the preflight exists for, applied to the
+participant leg. *Recommendation:* extend the preflight loop to also resolve each
+participant's `qos_provider_profile` before `ParticipantRegistry` construction (a
+three-line addition next to the existing route loop).
+
+=== F4 — Hardcoded UDPv4-only transport override silently trumps named participant profiles
+
+`ParticipantRegistry::make_participant_qos` applies
+`qos << rti::core::policy::TransportBuiltin::UDPv4()` *after* loading the named XML
+participant profile. This is deliberate and correct for this VM (vboxsf `/dev/shm`
+safety, per repo guardrails), but it means a production participant profile's transport
+configuration is silently overridden — the `wan_*_udpv4_qos` profiles happen to agree
+today, so nothing breaks, and nothing warns if a future profile disagrees. This becomes a
+real deployment question at Phase 11 (harness replacement on real nodes).
+*Recommendation:* pin a decision entry before Phase 11 — either make the override
+config-gated (dev-VM safety flag) or log loudly when the loaded profile's transport mask
+differs from what is imposed.
+
+=== F5 — Deployment env-var coupling is documented but unchecked
+
+The production QoS libraries are templated with 14 environment variables (peer locators,
+`WAN_TIMEOUT_SEC > 30`, etc.). D65 deliberately rejected hardcoding the list into the
+generic router (correct — it is harness-specific knowledge), so a missing variable
+surfaces via Connext's XML-loader exception, caught and labeled with the file list in
+`router.config.qos_provider_load_failed`. That is acceptable, but the operational
+knowledge currently lives only in test-file comments and D60/D65. *Recommendation:* when
+Phase 7d wires the real `control-platform.yaml` end-to-end, the deployment/runner script
+(not the router) should own and validate the env-var set, with the list documented in one
+deployment-facing place.
+
+=== F6 — Minor test brittleness in `test_route_config`
+
+The new assertions pin `cfg.qos_profiles.size() == 5` plus the five exact mappings against
+the production `control-platform.yaml`. The exact-mapping checks (especially the
+`lan_status_1hz` regression guard) are valuable; the size equality will break on any
+legitimate future addition to the production config's alias map without catching a real
+bug. Low priority — consider `>= 5` or dropping the size check while keeping the named
+lookups.
+
+=== F7 — Known scope limits still in force (tracked, not defects)
+
+For completeness, current limitations that are already tracked in the plan:
+
+* One DynamicData type per process (`router.type_name`, D34/D35) — falls with 7c; blocks
+  running the full four-type production config until then.
+* Journal backpressure (`journal_falling_behind`) is wired but never force-produced;
+  real backpressure verification deferred to a stress/soak phase (D56 E5 honesty note).
+* The D53 `participant_name` router-identifier question remains proposed-not-decided.
+* Phases 9–10 (serialized CDR, keyed lifecycle mirroring) stay medium confidence by
+  design and off the critical path (Tenet consequences).
+
+== Recommended next steps
+
+. Commit the verified Phase 7a work (F1).
+. Add participant profiles to the startup preflight (F3) — small, fits the 7a commit.
+. Run the D64 create-and-observe implementation-readiness pass *before* implementing 7b/7c (F2).
+. Then 7b → 7c → 7d per the D59 slice order, landing Milestone 2 with the full
+  `control-platform.yaml` pair.
+. Pin the transport-override decision (F4) any time before Phase 11.
+
+== Bottom line
+
+Phases 0–6 plus 7a are done and independently re-verified green (build, 4/4 unit, 14/14
+e2e). The plan-decide-spike-implement-test loop is functioning exactly as designed and has
+repeatedly caught real defects before they shipped. The one structural risk is sequencing:
+land the D64 readiness pass before more Phase 7 code, and commit the currently floating
+7a work so the verified state is durable.

@@ -544,6 +544,11 @@ topic-table rows).
 
 ## D15 — Loop safety via `ignore_publication`: self-ignore route output writers at creation; ignore same-node router publications at discovery (2026-07-08, accepted)
 
+> **Amended by D74 (2026-07-16):** the identifier *field* changes — the `user_data`
+> `act.router=<node>/<router>` tag is replaced by `participant_name` (`EntityName`) with
+> `role_name = "act.router"` as the detection sentinel, flipping in Phase 8. The ignore
+> *mechanism* (self-ignore at creation, same-node ignore at discovery) is unchanged.
+
 **Context.** Builtin readers hide a participant's own endpoints from *discovery*, but they
 do not prevent *matching*: a route output DataWriter and a route input DataReader on the
 same participant/topic/partition **do** match. The `platform-team` instance will hold both
@@ -2086,6 +2091,12 @@ handling + comment); `router/test_e2e/test_discovery_startup.py` (new).
 
 ## D53 — Action item (proposed, not yet implemented): replace the D15 `user_data` router tag with `participant_name` (ENTITY_NAME) as the router identifier (2026-07-13, proposed — scoping only)
 
+> **Decided by D74 (2026-07-16): full replacement.** Field mapping
+> `name = "<node>/<router>"` / `role_name = "act.router"` (sub-question 1); detection keys
+> on `role_name`, collapsing sub-question 2 to a documented impersonation-only residual;
+> spike verification folded into the Phase 8 presence spike (sub-question 3). The flip
+> ships with Phase 8.
+
 **Context.** D15 gives every router participant `user_data = act.router=<node>/<router>`,
 which is programmatically load-bearing, not just descriptive: `DiscoveryDispatcher`
 (`extract_router_tag`/`is_same_node`) parses it to (a) ignore same-node sibling
@@ -3203,3 +3214,188 @@ blocker list collapses to the Phase 8 items only (flat platform-team route parsi
 note); `command-status.md` (status cadence: revision change OR counter refresh — the
 missing D63 note); `router/test_e2e/README.md` (two new tests; the production-config
 coverage statement); this entry.
+
+## D72 — Roadmap renumber and plan-drift reconciliation: banner phases slotted as Phases 8 (Presence & Health) and 9 (Link-Metrics Capture); old Phases 8–11 become 10–13; stale confidence/criteria fixed; per-phase readiness checklists written into the plan (2026-07-16, accepted; executes the sequencing recommendations of `plan-review-remaining-2026-07-15.adoc` after Milestone 2 closed at D71)
+
+**Context.** With Phase 7 complete (D71) the remaining plan had four documented drift/gap
+classes (review findings R3–R5 of `plan-review-remaining-2026-07-15.adoc`): the two
+banner phases (Presence/Health, Link-Metrics) had no slot in the numbered sequence
+("slots after the core route mechanics" is not an ordering an implementer can execute);
+the old Phase 10 confidence row still said Medium against the reframe banner's own
+"now high confidence (proven by `spikes/isc_recovery/`)"; the investigation-order
+paragraph was stale (its top items all delivered) and still prioritized the
+tenets-demoted serialized-CDR API; and the acceptance criteria still required
+serialized-CDR forwarding, contradicting Tenet 7's opt-in demotion. The user directive
+for this pass: increase confidence in the remaining slices and make the roadmap
+executable with high confidence by an implementing model/session.
+
+**Decisions.**
+
+- **Numbered slots.** Presence & Health = **Phase 8**, Link-Metrics Capture = **Phase 9**,
+  then the old tail shifts: team partition 8→**10**, serialized CDR 9→**11**, keyed
+  lifecycle 10→**12**, harness replacement 11→**13**. A mapping table sits above the
+  phase table in `implementation-plan.md`; **D1–D71 always use the OLD numbers** and are
+  not rewritten (the log is history, not a living doc). Rationale for 8-before-10:
+  Phase 10's partition-change evidence benefits from the roster existing, and
+  presence-driven reset is on the acceptance-criteria path (POC test table).
+- **Presence scope split.** Phase 8 delivers presence *awareness* (heartbeat, roster,
+  LAN `ActRouterMeshStatus`); the presence-driven *reset action* (peer DEAD →
+  `unregister_instance`) lands in **Phase 12** with the keyed fixture and the mirror's
+  per-peer instance bookkeeping — unkeyed demo topics would make a Phase-8 reset a no-op
+  proof. Phase 12 is retitled "Keyed lifecycle mirroring + presence-driven reset".
+- **Readiness checklists in the plan, decisions still pinned per phase.** Each unbuilt
+  phase's section now opens with an explicit "readiness pass — pin these as D-entries
+  before code" checklist with recommended defaults (Phase 8: decide D53 [additive
+  `participant_name` fallback recommended if the app-collision sub-question stays open],
+  run the presence spike, pin the timing numbers under the D16 ordering, pick the
+  moderate-lease regime for the POC; Phase 10: flat-route form semantics [flat =
+  materialize unconditionally; neither-form = parse error, not silent skip],
+  `participant_partition` parse/apply/set_qos path, `inherit_participant` semantics
+  [user decision — recommend track-the-participant + reject `SET_ROUTE_PARTITION` on
+  inherited endpoints], `SET_PARTICIPANT_PARTITION` accept path with **ack-on-apply**
+  [never ack-on-rematch: rematch is async and observable via D66 matched counts]).
+  These checklists are *inputs to* the phase readiness passes, not decisions themselves —
+  each item still gets its own accepted D-entry before code, per the execution protocol
+  now written at the top of the plan.
+- **Drift fixes (doc-only, no design change):** Phase 12 confidence corrected to High in
+  the table and confidence notes; serialized-CDR removed from the acceptance criteria
+  (moved to an explicit "stretch" list) and its POC-test row marked optional/stretch;
+  the investigation-order paragraph rewritten to the actual remaining order (presence
+  spike → D53 prototype → netem correlation → opt-in Phase 11/12 items); the resolved
+  TypeLookup open question struck (D64/D70 shipped wire-learned types); phase table
+  statuses updated to Done with D-references for Phases 0–7; POC test table gained a
+  Phase/status column claiming the delivered rows against their tests; milestones marked
+  (M1/M2 done, M3 = Phases 8–13); the dangling "P0→P4" banner pointer retired (the
+  numbered sequence is the single ordering); Phase 13 checklist now carries the four
+  items that land there (F4 transport override, F5 env-var ownership, D52 startup
+  sequencing under orchestration, the stop-criterion re-evaluation due since M2 closed).
+- **Verified-current gap list recorded in Phase 10's section** (re-checked against the
+  working tree 2026-07-16, not carried from the review): `parse_route_config` silently
+  `continue`s past flat `input:`/`output:` routes; `participant_partition` exists on
+  `ParticipantState` and is surfaced in status but never parsed from YAML nor applied;
+  `inherit_participant` undesigned (deferred by D69); `SET_PARTICIPANT_PARTITION`
+  parsed-and-rejected since D7. What D64/D66/D69 already give the phase for free is
+  stated alongside (endpoint partitions applied + runtime-mutable, in-place participant
+  `set_qos` validated, matched-count observability replacing rebuild-and-infer).
+
+**Evidence.** Doc-only change — no code touched, no tests run or invalidated. The
+verification performed was source-of-truth checking: gap claims re-verified against
+`router/src/config/RouteConfigParser.cxx`, `router/src/core/RouterState.hpp`,
+`router/src/core/RouterController.cxx`, and `router/config/platform-team.yaml`; the
+"P0→P4" pointer confirmed dangling by reading `thesis-and-tenets.md` end to end.
+
+**Docs changed.** `implementation-plan.md` (reframe banner, renumber mapping + phase
+table, new "Execution protocol for implementing sessions" section, new Phase 8/9
+sections, rewritten Phase 10–13 sections, investigation table + order, milestones,
+confidence notes, POC test table, acceptance criteria, open questions, roadmap-relation
+clarification); this entry. `presence-and-health.md`, `link-health.md`,
+`thesis-and-tenets.md`, `command-status.md`, `code-architecture.md` intentionally
+unchanged — they were already consistent; the plan now points at them with numbered
+slots.
+
+## D73 — Team scope is the participant partition alone; the `inherit_participant` endpoint sentinel is retired (2026-07-16, accepted; resolves the Phase 10 readiness-pass fork flagged by D69/D72)
+
+**Context.** `platform-team.yaml` expressed team scope at two partition levels at once:
+`team_wan.participant_partition` (node-unique at boot, retargeted by
+`SET_PARTICIPANT_PARTITION`) plus `publisher_partition`/`subscriber_partition:
+`inherit_participant` on the WAN endpoints. D69 deliberately deferred the sentinel's
+semantics; D72 listed the fork with options. The naive reading (copy the participant value
+at entity build) is broken for the phase's own scenario: after both routers retarget to
+`TEAM_A`, the participants would match while the already-built endpoints still hold
+`PLATFORM_30`/`PLATFORM_31` — the endpoint gate keeps blocking until a rebuild. Validated
+against 7.7 before deciding (`ask_connext_question` 2026-07-16, cross-checked against
+`docs/connext-ai-issues/` — no contradicting entry; cited Users Manual §56.6/§56.6.1/
+§56.6.8): endpoint matching requires BOTH participant partitions AND pub/sub partitions to
+overlap; non-overlapping participant partitions make the participants mutually invisible
+and **skip SEDP endpoint discovery entirely**; a runtime participant-partition `set_qos`
+propagates via participant announcements (unmatch immediate locally, match-from-unmatch
+announcement-paced — RTI explicitly contrasts this as slower than pub/sub partition
+changes, which ride the reliable SEDP channels).
+
+**Decision (user choice, options A/C/D discussed).**
+
+- **Option C: the participant partition is the single team-scope mechanism.**
+  `participant_partition` is parsed, applied to the WAN participant's QoS at creation, and
+  retargeted in place by `SET_PARTICIPANT_PARTITION` via participant `set_qos` (D15
+  side-finding). Route endpoints on that participant use the **default partition** — the
+  participant gate alone produces every phase observable (invisible participants → no
+  match, no data, and no endpoint-discovery exchange across the WAN between out-of-team
+  platforms).
+- **The `inherit_participant` sentinel is retired.** It added no matching power the
+  participant gate doesn't already have, at the price of a second propagation wave and
+  permanent synchronization bookkeeping (rejected option A), and pure endpoint-level
+  fan-out (rejected option D) forfeits the WAN discovery suppression that is the
+  participant feature's point. `platform-team.yaml` and the configuration doc drop the
+  sentinel when Phase 10 lands; the Phase 10 parser work hard-errors on unknown partition
+  sentinels instead of ignoring them (D72's neither-form-is-an-error posture).
+- **Pinned fallback:** if the phase e2e shows announcement-paced team joining is too slow
+  or unpredictable for the demo, fall back to option D (endpoint-only fan-out through the
+  shipped D69 `set_partitions` path, `participant_partition` demoted to stored state) —
+  the evidence tests are written against observables (matched-count transitions, D66) that
+  are identical under both options, so the fallback swaps mechanism, not tests.
+- **Moot by construction:** the `SET_ROUTE_PARTITION`-vs-inheritance precedence question
+  (D72 Phase 10 checklist item 3's tail) — no inherited endpoints exist.
+
+**Consequences for Phase 10's remaining readiness items:** the accept path for
+`SET_PARTICIPANT_PARTITION` (ack-on-apply, never on rematch) and flat-route parsing are
+unchanged; the phase's e2e must additionally observe that out-of-team peers exchange no
+endpoint discovery (the suppression claim is MCP+docs-sourced and must be confirmed
+empirically — e.g. the out-of-team router's discovery log shows no endpoint records from
+the peer).
+
+**Docs changed.** `implementation-plan.md` (Phase 10 readiness checklist item 3 resolved,
+deliverables/gap list updated; investigation-table row updated); `configuration.md`
+(inherit_participant paragraphs annotated as retired by D73, config example updates with
+Phase 10); this entry. `router/config/platform-team.yaml` intentionally unchanged until
+Phase 10 implements the parse path.
+
+## D74 — D53 decided: full replacement — `participant_name` (EntityName) IS the router identifier; detection keys on `role_name == "act.router"`; the D15 `user_data` tag retires (2026-07-16, accepted; decides D53, supersedes the identifier half of D15 — the ignore MECHANISM is unchanged)
+
+**Context.** D53 scoped the replacement but left three sub-questions and was deliberately
+not decided. Phase 8 (Presence & Health) is about to build the roster join
+(`router_id → current participant GUID`) on the identifier, and Phase 9's link-stats
+rollup reads the same join — deciding after Phase 8 would mean touching the roster twice
+(plan-review R4). The user chose **full replacement now** over the staged/additive
+alternatives, accepting the residual namespace risk in exchange for a single identity
+mechanism with native RTI Admin Console visibility.
+
+**Decision.**
+
+- **Field mapping (resolves D53 sub-question 1):** `name = "<node>/<router>"` (what Admin
+  Console displays), `role_name = "act.router"` (the reserved detection sentinel). Both
+  derive from the same config identity that feeds today's tag; ≤255-char bounds are far
+  above real values.
+- **Detection keys on `role_name` alone (resolves sub-question 2 by design):** a router
+  participant is one whose `participant_name().role_name()` equals `act.router`; `name` is
+  then parsed as `<node>/<router>`. An ACT app's arbitrary display *name* can never
+  collide; a false positive on the irreversible same-node `ignore()` path now requires an
+  app to deliberately claim `role_name = "act.router"` — impersonation, not accident.
+  **Accepted residual (documented operational constraint):** whether ACT apps or their
+  tooling conventions ever set that exact `role_name` is unverified and outside this
+  repo's reach; if one does, its publications are ignored by same-node routers. No
+  uniqueness enforcement exists (same as `user_data` today).
+- **All four consumers flip together** behind `DiscoveryDispatcher`'s tag-extraction
+  functions (`extract_router_tag`/`is_same_node` reshaped to read
+  `ParticipantBuiltinTopicData::participant_name()`): (1) same-node loop-safety ignore,
+  (2) `origin_router` discovery join, (3) the Phase 8 roster join, (4) the Phase 9
+  link-stats rollup key. `user_data` is no longer set or read by the router.
+- **Spike-verify before the flip (resolves sub-question 3; D15/D52-grade because the
+  ignore path is data-loss-on-false-positive):** fold into the Phase 8 presence spike —
+  set `EntityName` on the spike participants, confirm `participant_name()` is readable off
+  the builtin sample at discovery time (pre- and post-enable timing like the tag today),
+  confirm the roster GUID join across a kill/restart (new GUID, same name), and manually
+  confirm Admin Console displays the name. The same-node-ignore half is then re-proven in
+  the shipped code by the existing `test_same_node_ignore.py` (its probe gains a
+  participant_name= to pose as a router, replacing the user_data= pose) — the e2e asserts
+  the exact D15 contract off the new field.
+- **Sequencing:** the flip is a Phase 8 deliverable (the roster is built directly on the
+  new field, never on the tag). Until Phase 8 lands, shipped code keeps reading
+  `user_data`; there is no dual-field interim in main-line code.
+
+**Docs changed.** `implementation-plan.md` (Phase 8 readiness checklist item 1 resolved
+into the spike item; Phase 2 evidence note annotated; investigation-table identifier row
+now "decided (D74), verify in presence spike"; open-questions D53 item resolved);
+`link-health.md` (join source: participant_name, not user_data tag);
+`code-architecture.md` (ParticipantRegistry tag bullet → EntityName);
+`presence-and-health.md` (no change needed — it references the roster join generically);
+amend pointers added to D15 and D53; this entry.

@@ -61,9 +61,11 @@ RouterInstance
 - `ParticipantRegistry` creates the DomainParticipants needed by the selected route sides
   and admin topics. Participants are created **disabled**, builtin discovery readers and
   conditions installed, then enabled — builtin readers are lazily created in 7.7, so this is
-  the no-loss discovery startup order (D12). Every router participant sets
-  `user_data = act.router=<node>/<router>` so router-originated endpoints are identifiable
-  in discovery (D15). WAN participants are **never multi-homed** — with multiple physical
+  the no-loss discovery startup order (D12). Every router participant carries the router
+  identity so router-originated endpoints are identifiable in discovery (D15): today via
+  `user_data = act.router=<node>/<router>`; from Phase 8 via `participant_name`
+  (`name = "<node>/<router>"`, detection sentinel `role_name = "act.router"`) with the
+  `user_data` tag retired (D74). WAN participants are **never multi-homed** — with multiple physical
   networks it creates one WAN participant per network, interface-pinned via
   `allow_interfaces_list` (D18; today's single network is the `N = 1` case).
 - `DiscoveryDispatcher` watches discovered publications and subscriptions on those

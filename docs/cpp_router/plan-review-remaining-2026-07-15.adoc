@@ -1,0 +1,262 @@
+= C++ Dynamic DDS Router — Review of the Remaining Implementation Plan
+David Greenberg (review generated with Claude Code)
+2026-07-15
+:toc:
+:toclevels: 2
+:sectnums:
+
+== Scope and method
+
+Companion to `progress-review-2026-07-15.adoc` (which covers delivered work, Phases 0–7a).
+This document reviews everything *not yet implemented*: Phase 7 slices 7b/7c/7d, the two
+banner phases (Presence/Health, Link-Metrics Capture), Phases 8–11, the cross-cutting
+items (D53 identifier, open questions), and the milestone/acceptance framing. Sources:
+`implementation-plan.md`, `design-decisions.md` D59–D65 in full, `thesis-and-tenets.md`,
+`presence-and-health.md`, `link-health.md`, `command-status.md`, the Phase 7 spikes
+(`type_discovery/`, `matched_endpoints/`, `qos_alias/`), and the current code
+(`RouteConfigParser`, `RouterState`, `platform-team.yaml`).
+
+== Executive summary
+
+The remaining plan is in good intellectual shape — every near-term slice has either a
+pinned contract or a spike-proven mechanism — but it has one structural dependency and a
+handful of drift/gap items:
+
+* **Everything in Phase 7 now routes through the D64 create-and-observe refactor.** D64 is
+  accepted direction and spike-proven on both halves (type-from-wire, DDS matching
+  authority), but it rewrites shipped, tested Phase 1–5 controller code and explicitly
+  lacks its readiness pass. 7b and 7c as written in D61/D62 are *already reshaped* by D64;
+  implementing them from their original entries would build on machinery slated for
+  removal. The readiness pass is the critical-path item for the whole remainder.
+* **Phase 8 is the least-prepared numbered phase**: its config surface
+  (`platform-team.yaml` flat routes, `participant_partition`, the
+  `inherit_participant` sentinel) is partly unparsed and partly undesigned, and
+  `SET_PARTICIPANT_PARTITION` has been parsed-and-rejected since Phase 1. It needs a
+  D54/D59-style readiness pass; its one Connext-hard question (in-place partition
+  `set_qos`) is already validated.
+* **The two banner phases have no slot in the numbered sequence.** Presence/Health and
+  Link-Metrics are well-designed (arguably the best-specified unbuilt work in the repo)
+  but "slots after the core route mechanics" is not an ordering an implementer can
+  execute. They also carry the D53 identifier question as an undeclared prerequisite.
+* **Several plan-document sections have drifted** behind the tenets reframe and the
+  delivered phases: the Phase 10 confidence rating, the investigation-order paragraph,
+  and two acceptance criteria contradict decisions the tenets doc already made.
+
+Nothing here argues for re-planning. The recommendation is sequencing: run the D64
+readiness pass next, fold 7b into the matching refactor, then 7c → 7d to close
+Milestone 2, and give Phase 8 and Presence/Health their readiness passes before code.
+
+== Phase 7 remainder (7b / 7c / 7d)
+
+=== 7b — Partition application: nearly free, but only after D64
+
+D61's original design (apply `Partition` on the per-build `Publisher`/`Subscriber`;
+mismatch surfaces as controller-side `DISCOVERY_PARTIAL` plus a discovery-log entry) is
+already refined by D64: under create-and-observe the mismatch is an *observable zero* in
+the created entity's `matched_publications()`, surfaced as a status reason. The
+`spikes/matched_endpoints/` spike proved exactly this (4/4: cross-partition writer never
+enters the matched set; false-green dissolved).
+
+*Assessment:* high confidence, small diff — **provided it is implemented after the D64
+matching refactor**. Implemented before it, 7b would need the D61 `DISCOVERY_PARTIAL`
+plumbing that D64 then deletes. Two scoping notes carried forward correctly: one scalar
+partition string per endpoint (wildcard/multi deferred), and the discovery-time endpoint
+log keeps mismatches diagnosable. One unhandled item: `platform-team.yaml` uses
+`publisher_partition: inherit_participant` — a sentinel value no D-entry defines and the
+parser does not special-case. It is Phase 8 config, but 7b is where partition semantics
+get pinned; decide there whether `inherit_participant` is a 7b keyword or a Phase 8
+addition, so 7b's partition contract doesn't need reopening.
+
+=== 7c — Multi-type via type-from-wire: spike-proven mechanism, unpassed refactor
+
+D62's original shape (resolve per-topic `DynamicType` from discovery `type_name()` via the
+loaded XML catalog) is superseded: under D64 there is *no local catalog* — the router
+reads the COMPLETE type object inline from SEDP (`data.type`, the rti_view model),
+learn-from-LAN rule, builds both legs from that one object. `spikes/type_discovery/`
+proved this decisively (3/3, Part C with TypeLookup disabled).
+
+*Assessment:* the Connext-hard half is done; the remaining risk is all in the controller
+refactor. Items the readiness pass must pin (from D64's own "still to do" plus this
+review):
+
+. Poll vs. `SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED` StatusCondition mechanism (the
+  Phase 5 StatusCondition/AsyncWaitSet pattern is the natural reuse).
+. The created-but-unmatched *status reason* without adding an operational state (keep the
+  D2/D11 contract) — this is a public-contract change to `RouterStatus` consumers.
+. What replaces the D20 first-resolved-wins type-conflict policy when the type now arrives
+  as a wire object per local endpoint: if source-side and destination-side routers each
+  learn from their own LAN endpoint, two *different but assignable* type versions can
+  drive the two legs of one logical route. Probably fine (each leg is its own DDS
+  relationship, Tenet 2) — but it should be stated, not discovered.
+. Ordering: what happens when a route is enabled before any local LAN endpoint exists to
+  learn from (the "creation gate = type resolved" wait state and its status surface).
+. The inline-SEDP size threshold: fine for ACT's small types, but the fallback
+  (`request_types_filter`) is C++-only on this install and should stay a documented
+  fallback with a loud log when a type object does *not* arrive inline.
+. C++ `matched_publications()`/StatusCondition call surface confirmed by compile, not MCP
+  (D64 says this explicitly; the D60→D65 construction-path episode shows why).
+
+=== 7d — Full production config: integration slice, three loose threads
+
+7d (control+platform `router_main` pair on the real `control-platform.yaml`; E5–E7) is
+pure integration once 7b/7c land. Three threads from elsewhere terminate here and should
+be claimed by 7d's checklist explicitly:
+
+* **D63 counter refresh tick** is self-contained (controller-strand `RefreshCounters`
+  event, republish without revision bump) and has no D64 dependency — it could land any
+  time, and doing it *before* the matching refactor would keep 7d's diff small.
+* **Env-var ownership** (progress-review F5): the 14 QoS-lib env vars are set by test
+  files today; 7d introduces the first non-test consumer of the production config, so the
+  runner/deployment script authored for 7d should own and validate the set.
+* **Participant-profile preflight** (progress-review F3): 7d is the first config where
+  participant aliases (`control_wan_udpv4_qos`) are load-bearing in a two-process
+  topology; the preflight gap becomes user-visible there if not closed in 7a's commit.
+
+== Banner phases: Presence/Health and Link-Metrics Capture
+
+These two are the best-specified unbuilt work in the repo — `presence-and-health.md` and
+`link-health.md` read like post-readiness-pass contracts (mechanisms validated against
+7.7, IDL sketches, resolved open-choice lists, D14/D18 pinned). Three gaps:
+
+. **No slot in the numbered sequence.** The plan banner says Presence/Health "slots after
+  the core route mechanics" and Link-Metrics "immediately after" it. After 7d? Before or
+  after Phase 8? The thesis doc's P0–P4 ordering and the plan's phase table are two
+  numbering schemes an implementer must reconcile by hand. When Milestone 2 closes,
+  renumber: the natural slot is between Phase 7 and Phase 8 (Phase 8's
+  partition-change/rediscovery evidence would benefit from the roster existing, and
+  presence-driven reset is on the acceptance-criteria path via the POC test table).
+. **The recommended presence spike has not been run.** `presence-and-health.md` itself
+  recommends proving the mechanism (N `RouterHealth` publishers on the WAN participant,
+  kill one, DEAD delta + LAN `ActRouterMeshStatus` aggregate + participant-purge
+  `NO_WRITERS` on a co-tested data topic) in a `spikes/` entry before wiring — the only
+  banner-phase item matching the repo's spike-before-implement convention that is still
+  outstanding. It also has no row in the plan's confidence-investigation table (the
+  Link-Metrics netem experiment does). Add the row; run the spike before the phase.
+. **D53 is an undeclared prerequisite.** The roster join uses the D15 `user_data`
+  GUID→router tag; D53 (replace/augment with `participant_name`) is proposed-not-decided.
+  Deciding D53 *after* the presence phase ships means touching the roster join twice.
+  Decide it (either way) in the presence phase's readiness pass.
+
+Link-Metrics itself is capture-only and low-risk; its correlation experiment
+(netem/EMANE sweep, own spike) gates only *inference*, which is correctly out of scope.
+
+== Phase 8 — Team partition route: needs its readiness pass most
+
+The one numbered phase whose gap between plan text and code is still wide:
+
+* **Flat-route parsing.** `platform-team.yaml` writes routes as flat `input:`/`output:`
+  (no `source_side`/`destination_side`); `parse_route_config` only handles the role-pair
+  form. Known (D50 blocker list) but unscoped.
+* **`participant_partition` is a struct field, not a feature.** It exists on
+  `ParticipantState` (`RouterState.hpp:83`) but is neither parsed from YAML nor applied at
+  participant creation.
+* **`inherit_participant` sentinel** — see 7b above; undesigned.
+* **`SET_PARTICIPANT_PARTITION`** has been parsed-and-rejected since D7. The full accept
+  path (validate → apply in-place `set_qos` → status/ack → rediscovery settle) is new
+  controller surface, and the *ack-before-or-after-rematch* semantics need a decision —
+  the command's effect is asynchronous in a way `ENABLE_ROUTE`'s is not.
+* **What D64 gives Phase 8 for free:** the phase's hardest evidence ("moving one platform
+  out of the team stops delivery after rediscovery") becomes directly observable as
+  matched-count transitions on live entities — no rebuild-and-infer. The validated
+  in-place participant `set_qos` (D15 side-finding) plus D64 observation is a much
+  smaller phase than the "recreate/reconcile" wording in the plan suggests. The
+  readiness pass should decide whether recreate-on-change survives even as a fallback.
+
+Confidence medium-high is fair *after* a readiness pass; today the phase is a stub in the
+D59 sense ("silently embeds never-wired mechanisms").
+
+== Phases 9–11
+
+*Phase 9 (serialized CDR).* Correctly demoted by Tenet 7 to a late, opt-in,
+eligibility-gated optimization. Two notes: (a) the plan's *investigation order* paragraph
+still says "Phase 9 serialized CDR API" second — stale against the tenets demotion and
+against the fact that the top-priority investigations are done; (b) the *acceptance
+criteria* still list "Pass-through routes can use the Connext 7.7 C++ serialized-CDR
+forwarding mode" as a success condition — the POC should not be judged on an optimization
+the tenets made optional. Both are doc fixes, not plan changes. One genuine open
+question stands (also in the plan's open list): eligibility interaction with keyed
+lifecycle routes.
+
+*Phase 10 (keyed lifecycle mirroring).* The plan's own reframe banner says old Phase 10
+is meta-sample mirroring plus presence-driven reset and is "now **high confidence**
+(proven by `spikes/isc_recovery/`), not medium" — but the phase table row and the
+confidence-notes section still say Medium. That is the largest internal contradiction in
+the plan document; a reader of the table alone would deprioritize a phase the banner says
+is proven. Also note Tenet 8's caveat: ACT payload types are unkeyed *for demo only*;
+Phase 10's evidence needs at least one genuinely keyed route fixture, which the
+reference-only data model (D35) must supply deliberately.
+
+*Phase 11 (harness replacement).* Reasonably scoped, medium-high, and inherently
+last. Items that land here from elsewhere and should be on its checklist: the
+UDPv4-transport-override decision (progress-review F4 — real nodes may legitimately want
+the profile's transport), env-var ownership in container start scripts (from 7d), and
+startup sequencing vs. the D52 disabled-startup ordering under container orchestration.
+The stop-criterion ("stop if replacing RS requires reimplementing broad RS features")
+remains healthy and should be re-evaluated explicitly after Milestone 2.
+
+== Cross-cutting findings
+
+[cols="1,5,2",options="header"]
+|===
+|# |Finding |Where it bites
+
+|R1 |The D64 matching-authority refactor is the critical path for all remaining Phase 7
+work and has no readiness pass yet; D61/D62 as originally written are partly superseded
+and must not be implemented from their own entries. |7b, 7c, 7d
+
+|R2 |Phase 8's config surface is partly unparsed (`flat routes`,
+`participant_partition`) and partly undesigned (`inherit_participant`);
+`SET_PARTICIPANT_PARTITION` accept-path semantics (ack timing vs. async rematch) are
+undecided. Needs a D54/D59-style readiness pass. |Phase 8
+
+|R3 |Banner phases (Presence/Health, Link-Metrics) have no numbered slot, and the
+presence-mechanism spike recommended by their own design doc is not yet run and absent
+from the investigation table. |Sequencing after M2
+
+|R4 |D53 (`participant_name` vs `user_data` identifier) is an undeclared prerequisite of
+the Presence/Health roster; deciding it later forces rework of the roster join. |Presence phase
+
+|R5 |Plan-document drift: Phase 10 table row/confidence notes still "Medium" vs. the
+banner's "now high confidence"; investigation-order paragraph stale (top items done,
+Phase 9 priority contradicts tenets); acceptance criteria still require serialized-CDR
+and read as pre-reframe. |Plan doc accuracy
+
+|R6 |D63 counter tick is dependency-free and could land before the D64 refactor,
+shrinking 7d; conversely the participant-profile preflight and env-var ownership items
+from the progress review become user-visible at 7d if left open. |7d
+
+|R7 |Type-versioning semantics under learn-from-LAN (two legs learning different but
+assignable type objects) are unstated; cheap to pin in the D64 readiness pass, expensive
+to debug later. |7c
+|===
+
+== Recommended sequencing
+
+. **D64 implementation-readiness pass** (the D54/D59 treatment): mechanism choice
+  (StatusCondition vs. poll), status-reason surface, type-conflict/versioning statement
+  (R7), wait-state for enable-before-type-learned, compile-check of the `matched_*` C++
+  surface. Output: new D-entries + reshaped 7b/7c contracts.
+. **Land D63's counter tick** independently (small, no D64 coupling) — optionally with
+  the 7a commit batch.
+. **Matching refactor + 7b together** (7b is a near-trivial rider on the refactor), then
+  **7c**, then **7d** → Milestone 2 complete. Re-evaluate the RS-replacement stop
+  criterion here.
+. **Renumber the tail**: slot Presence/Health then Link-Metrics between 7 and 8; fix the
+  R5 doc drift in the same pass (cheap while renumbering anyway).
+. **Presence spike** (per `presence-and-health.md`'s own recommendation) with D53 decided
+  in its readiness pass; then the phase.
+. **Phase 8 readiness pass** (R2), then Phase 8 — smaller than the plan text suggests
+  under D64 + validated in-place `set_qos`.
+. Phases 9–10 stay off the critical path per the tenets; Phase 11 last, carrying the
+  transport-override and env-var-ownership decisions.
+
+== Bottom line
+
+The remaining plan needs no strategic rework — the thesis, tenets, and slice discipline
+are sound, and the hardest unproven assumptions have already been burned down by spikes.
+What it needs is *ordering hygiene*: one readiness pass (D64) unblocks all of Phase 7's
+remainder; a second (Phase 8) closes the widest plan-vs-code gap; slotting the banner
+phases and fixing the table/criteria drift makes the document executable top-to-bottom
+again. The pattern that got Phases 0–7a here — readiness pass, spike, slice, evidence
+test — is exactly the right tool for everything that remains; the only failure mode
+worth guarding against is implementing 7b/7c from their pre-D64 entries.

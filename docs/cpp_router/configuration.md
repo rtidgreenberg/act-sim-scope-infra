@@ -53,9 +53,14 @@ For the POC, keep the rule simple:
 - Platform/control WAN routes set publisher and subscriber partitions independently. For
   example, platform command readers subscribe on `CONTROL`, while platform status writers
   publish on `PLATFORM`.
-- `team_wan` owns a participant-level partition for discovery and group-level scoping.
-  Team route endpoints use `inherit_participant` so `SET_PARTICIPANT_PARTITION` updates the
-  group in one place.
+- `team_wan` owns a participant-level partition for discovery and group-level scoping —
+  and per **D73 (2026-07-16)** it is the **only** team-scope mechanism: team route
+  endpoints use the default partition, and the `inherit_participant` sentinel is
+  **retired** (non-overlapping participant partitions already make the participants
+  mutually invisible and suppress WAN endpoint discovery; a second endpoint-level gate
+  added nothing). `SET_PARTICIPANT_PARTITION` updates the group in one place via
+  participant `set_qos`. The example below predates D73 and its `inherit_participant`
+  lines drop out when Phase 10 lands.
 - **WAN participants are never multi-homed (D18).** When a node has multiple physical
   networks (e.g. mesh radio + SATCOM), the config defines **one WAN participant per unique
   network**, each pinned to its interface via the UDPv4 builtin transport
@@ -343,8 +348,11 @@ routes:
 For `input` endpoints, `subscriber_partition` configures the route reader's Subscriber
 Partition QoS. For `output` endpoints, `publisher_partition` configures the route writer's
 Publisher Partition QoS. Omitted LAN endpoint QoS means `auto`, and omitted LAN endpoint
-partition means `*`. Team routes use `inherit_participant` to resolve both endpoint
-partitions from the current `team_wan.participant_partition` value.
+partition means `*`. ~~Team routes use `inherit_participant` to resolve both endpoint
+partitions from the current `team_wan.participant_partition` value.~~ **Retired (D73):**
+team scope is carried by `team_wan.participant_partition` alone; team route endpoints use
+the default partition, and unknown partition sentinels are a parse error once Phase 10
+lands.
 
 ## Config Validation Rules
 
