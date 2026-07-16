@@ -278,6 +278,26 @@ class AckCollector:
         return None
 
 
+class AdminChannel:
+    """Status reader + command writer + ack collector on one router's admin domain — the
+    trio every admin-command e2e test needs (test_router_admin_commands.py,
+    test_detail_status_toggle.py), promoted here so a third test doesn't reinvent it."""
+
+    def __init__(self, probe, provider):
+        self.status = probe.reader(
+            "ActRouterStatus", "RouterStatus",
+            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            dtype=provider.type("RouterStatus"))
+        self.cmd_writer = probe.writer(
+            "ActRouterCommand", "RouterCommand",
+            qos=writer_qos(reliability="reliable", durability="volatile"),
+            dtype=provider.type("RouterCommand"))
+        self.acks = AckCollector(probe.reader(
+            "ActRouterCommandAck", "RouterCommandAck",
+            qos=reader_qos(reliability="reliable", durability="volatile"),
+            dtype=provider.type("RouterCommandAck")))
+
+
 # ControllerJournalEventKind ordinals (RouterAdminTypes.idl declaration order, D46).
 JOURNAL_KIND = {0: "COMMAND_RECEIVED", 1: "PUBLICATION_DISCOVERED",
                 2: "SUBSCRIPTION_DISCOVERED", 3: "ENDPOINT_LOST",

@@ -27,8 +27,7 @@ set_wan_qos_env()
 
 import rti.connextdds as dds  # noqa: E402
 
-from util.dds_probe import (  # noqa: E402
-    AckCollector, Probe, reader_qos, writer_qos, wait_for_route)
+from util.dds_probe import AdminChannel, Probe, wait_for_route  # noqa: E402
 
 CONFIG = "control-platform.yaml"
 CONTROL_LAN_DOMAIN = 20    # the production config's literal domains
@@ -57,24 +56,6 @@ def _enable(cmd_type, command_id, target_node, target_router):
     return c
 
 
-class _AdminChannel:
-    """Command writer + ack collector + status reader on one router's admin domain."""
-
-    def __init__(self, probe, provider):
-        self.status = probe.reader(
-            "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
-            dtype=provider.type("RouterStatus"))
-        self.cmd_writer = probe.writer(
-            "ActRouterCommand", "RouterCommand",
-            qos=writer_qos(reliability="reliable", durability="volatile"),
-            dtype=provider.type("RouterCommand"))
-        self.acks = AckCollector(probe.reader(
-            "ActRouterCommandAck", "RouterCommandAck",
-            qos=reader_qos(reliability="reliable", durability="volatile"),
-            dtype=provider.type("RouterCommandAck")))
-
-
 def _assert_no_flow(writer, reader, sample, alive, window_s, why):
     """Write for window_s and assert nothing valid arrives at the reader."""
     deadline = time.monotonic() + window_s
@@ -98,8 +79,8 @@ def test_detail_status_flow_starts_from_the_target_only(
     control_app = Probe(CONTROL_LAN_DOMAIN)
     platform_app = Probe(PLATFORM_LAN_DOMAIN)
     try:
-        control_admin = _AdminChannel(control_app, provider)
-        platform_admin = _AdminChannel(platform_app, provider)
+        control_admin = AdminChannel(control_app, provider)
+        platform_admin = AdminChannel(platform_app, provider)
 
         # The detail-status app endpoints exist from the start — their inline types
         # teach both routers the topic (7c/D70) whether or not the route is enabled.

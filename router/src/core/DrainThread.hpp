@@ -31,7 +31,14 @@ public:
                 if (refresh_period.count() > 0
                     && std::chrono::steady_clock::now() >= next_refresh) {
                     ctrl_.post(ControllerEvent::refresh_counters());
-                    next_refresh += refresh_period;
+                    // Resync to real time in one step rather than drifting forward by a
+                    // single period per iteration — a stall longer than one period (a slow
+                    // event batch, scheduling delay) would otherwise leave next_refresh
+                    // trailing now() by multiple periods, firing a tight burst of posts on
+                    // successive loop iterations until it caught back up.
+                    do {
+                        next_refresh += refresh_period;
+                    } while (next_refresh <= std::chrono::steady_clock::now());
                 }
                 ctrl_.wait_and_drain(std::chrono::milliseconds(100));
             }

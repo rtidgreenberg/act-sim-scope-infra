@@ -127,6 +127,16 @@ void RouterController::wait_and_drain(std::chrono::milliseconds timeout) {
 }
 
 void RouterController::process_one(const ControllerEvent &event) {
+    // The RefreshCounters tick (D63/D71) only ever touches fields the D5 fingerprint
+    // deliberately excludes, so the fingerprint/publish-if-changed/journal machinery below
+    // is guaranteed to be a no-op for it every single time — skip straight to the handler,
+    // which owns its own (revision-less) publish decision. This also means it's never
+    // journaled: at 1 Hz it would evict the journal's bounded KEEP_LAST history (~4 min at
+    // depth 256) with pure no-op records.
+    if (event.kind == ControllerEventKind::RefreshCounters) {
+        apply_refresh_counters();
+        return;
+    }
     std::vector<std::string> pre = fingerprints();
     std::uint64_t pre_revision = state_.state_revision;
     current_cause_.clear();
@@ -134,10 +144,7 @@ void RouterController::process_one(const ControllerEvent &event) {
     publish_if_changed(pre);
     // Debug journal (D55): one record per processed event, after the status publish so the
     // post-revision reflects any bump. Skipped entirely when no journal is attached.
-    // The RefreshCounters tick is the one event that is never journaled (D63/D71): it can
-    // never change externally-visible state, and at its 1 Hz cadence it would evict the
-    // journal's bounded KEEP_LAST history (~4 min at depth 256) with pure no-op records.
-    if (journal_ != nullptr && event.kind != ControllerEventKind::RefreshCounters) {
+    if (journal_ != nullptr) {
         journal_->record(build_journal_record(event, pre_revision));
     }
 }
@@ -175,8 +182,7 @@ void RouterController::process(const ControllerEvent &event) {
         apply_type_resolved(event);
         break;
     case ControllerEventKind::RefreshCounters:
-        apply_refresh_counters();
-        break;
+        break; // handled directly by process_one() before it ever reaches here (D63/D71)
     }
 }
 
@@ -613,8 +619,13 @@ void RouterController::apply_refresh_counters() {
                      r->second.topics.begin();
              t != r->second.topics.end(); ++t) {
             TopicRouteState &topic = t->second;
-            if (topic.entity_generation == 0) {
-                continue; // no live build — counters were cleared with the entities
+            // FORWARDING is the only state with a live runtime behind forwarded_count():
+            // entity_generation alone isn't a safe guard here, since it stays non-zero
+            // through TEARING_DOWN even though handle_disable() already tore the runtime
+            // down synchronously — pulling on generation alone would read a stale zero
+            // from the gone runtime before TopicTeardownComplete resets the count for real.
+            if (topic.topic_state != RouterRouteTopicState::TOPIC_FORWARDING) {
+                continue;
             }
             std::uint64_t count =
                     factory_->forwarded_count(r->first, t->first);
@@ -625,7 +636,7 @@ void RouterController::apply_refresh_counters() {
         }
     }
     if (any_changed) {
-        status_->publish(build_snapshot()); // same state_revision, fresh counters
+        republish_status(); // same state_revision, fresh counters
     }
 }
 

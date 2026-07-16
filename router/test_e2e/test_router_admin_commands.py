@@ -35,8 +35,7 @@ import rti.connextdds as dds
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import start_router, render_config  # noqa: E402
 from util.dds_probe import (  # noqa: E402
-    AckCollector, Probe, reader_qos, writer_qos, read_route_facts,
-    read_status_revision, wait_for_route)
+    AdminChannel, Probe, read_route_facts, read_status_revision, wait_for_route)
 
 ROUTE = "admin_r1"
 NODE = "Platform_30"      # config node.name
@@ -69,26 +68,13 @@ def test_admin_command_control_loop(
 
     provider = dds.QosProvider(str(admin_types_xml))
     cmd_type = provider.type("RouterCommand")
-    ack_type = provider.type("RouterCommandAck")
-    status_type = provider.type("RouterStatus")
     ex_type = dds.QosProvider(EXAMPLE_TYPES_XML).type(EX_TYPE)
 
     probe = Probe(admin_domain)
     alive = lambda: router.is_alive()  # noqa: E731
     try:
-        status_reader = probe.reader(
-            "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
-            dtype=status_type)
-        cmd_writer = probe.writer(
-            "ActRouterCommand", "RouterCommand",
-            qos=writer_qos(reliability="reliable", durability="volatile"),
-            dtype=cmd_type)
-        ack_reader = probe.reader(
-            "ActRouterCommandAck", "RouterCommandAck",
-            qos=reader_qos(reliability="reliable", durability="volatile"),
-            dtype=ack_type)
-        acks = AckCollector(ack_reader)
+        admin = AdminChannel(probe, provider)
+        status_reader, cmd_writer, acks = admin.status, admin.cmd_writer, admin.acks
 
         # (E1) disabled route present in startup status with no entities.
         facts = wait_for_route(status_reader, ROUTE, lambda f: True, check_alive=alive)
