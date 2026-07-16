@@ -32,7 +32,9 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
   (`ROUTER_OK` / `ROUTER_DEGRADED` / `ROUTER_ERROR`). It carries **summary** status, **not** the
   full route table — full per-route detail stays on the LAN plane. This resolves the old "echo
   status in the health payload?" open choice: **yes, but summary-only**, so the sample stays
-  small and scales safely with mesh size across a lossy/constrained WAN.
+  small and scales safely with mesh size across a lossy/constrained WAN. **Plus (D77)** the
+  roster as a compact edge list — `peers_seen`: one `{router_id, presence}` pair per tracked
+  peer — so a single WAN observer can build the who-sees-who node map from this topic alone.
 - **QoS:** `RELIABLE`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (late joiners get last state),
   `DEADLINE ≈ 1.5–2×` heartbeat period, `LIVELINESS = AUTOMATIC` with a finite lease
   (≈ 2–3× period). Periodic heartbeat write (e.g. 1 s).
@@ -91,6 +93,11 @@ state ∈ { ALIVE, STALE, DEAD }
 
 Each peer entry keeps the last **compact summary** heard on `RouterHealth` (identity + presence
 + the rollup) — not the peer's full route table.
+
+The roster is also echoed outward as **edges on the router's own heartbeat** (`peers_seen`,
+D77): who-sees-who is observable from any single point on the WAN — C2 draws the mesh node
+map from `RouterHealth` alone, and an asymmetric link (A hears B, B lost A) shows up as an
+asymmetric edge pair.
 
 - `on_liveliness_changed` / instance `NOT_ALIVE_NO_WRITERS` → mark `DEAD`.
 - `on_requested_deadline_missed` / `now - last_heartbeat_ts > threshold` → mark `STALE`.
@@ -252,6 +259,13 @@ deviation from the sketch below: `state_revision` is `uint64`, not `string` —
 enum RouterOverallState { ROUTER_OK, ROUTER_DEGRADED, ROUTER_ERROR };
 enum RouterPresenceState { PRESENCE_ALIVE, PRESENCE_STALE, PRESENCE_DEAD };
 
+// D77: one adjacency edge of the who-sees-who map. Identity + presence only — never
+// the peer's own summary (a WAN observer already gets each router's RouterHealth).
+struct RouterPeerRef {
+    uint32 router_id;
+    RouterPresenceState presence;
+};
+
 // WAN: one compact, liveliness-bearing summary per router. Small on purpose.
 struct RouterHealth {
     @key
@@ -265,6 +279,7 @@ struct RouterHealth {
     uint32 n_degraded;
     uint32 n_error;
     RouterOverallState overall_state;
+    sequence<RouterPeerRef> peers_seen;  // this router's roster edges (D77)
 };
 
 // LAN: this router's aggregated view of every connected peer (the "connected router list").
@@ -291,8 +306,14 @@ struct RouterMeshStatus {
 - ~~Whether the roster is echoed in the `RouterHealth` payload in addition to `RouterStatus`.~~
   **Resolved:** `RouterHealth` carries a **compact summary** (not full status); each router
   aggregates peers' summaries and republishes the connected-router list on the LAN
-  `ActRouterMeshStatus` topic. Residual: whether a router's *aggregate mesh view* should also be
-  echoed over the WAN (so peers see each other's views), or stay LAN-local — currently LAN-local.
+  `ActRouterMeshStatus` topic. ~~Residual: whether a router's *aggregate mesh view* should also be
+  echoed over the WAN (so peers see each other's views), or stay LAN-local — currently LAN-local.~~
+  **Resolved (D77):** the *full* aggregate stays LAN-local, but the heartbeat carries the roster
+  as a **compact edge list** (`peers_seen`: `{router_id, presence}` per tracked peer, ~8 bytes
+  each) — so who-sees-who is observable from any single point on the WAN (e.g. C2 builds the
+  node map from `RouterHealth` alone: nodes = heartbeats, edges = `peers_seen`, and asymmetric
+  one-way visibility shows as an asymmetric edge). Full nested summaries over the WAN were
+  rejected as redundant O(N²) — a WAN consumer already receives every router's own summary.
 
 ## Where it fits the build
 

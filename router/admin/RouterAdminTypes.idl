@@ -200,6 +200,17 @@ enum RouterPresenceState {
     PRESENCE_DEAD     // liveliness lost / NOT_ALIVE_NO_WRITERS / participant purged
 };
 
+// D77: one adjacency edge in the who-sees-who map — which peers this router's roster
+// currently tracks, and in what presence state. Compact by design (WAN-frugal, the
+// summary-only rule): identity + presence, never the peer's own summary (a WAN
+// consumer, e.g. C2, already receives every router's own RouterHealth directly —
+// nodes come from the heartbeats, edges from peers_seen; a DEAD edge means "lost this
+// peer", no edge means "never saw it").
+struct RouterPeerRef {
+    uint32 router_id;
+    RouterPresenceState presence;
+};
+
 struct RouterHealth {
     @key
     uint32 router_id;
@@ -212,6 +223,7 @@ struct RouterHealth {
     uint32 n_degraded;
     uint32 n_error;
     RouterOverallState overall_state;
+    sequence<RouterPeerRef> peers_seen;  // this router's roster edges (D77)
 };
 
 struct RouterMeshPeer {

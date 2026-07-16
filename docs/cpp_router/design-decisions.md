@@ -3561,3 +3561,45 @@ past-tense, `PresenceTick` event-table row); `presence-and-health.md` (IDL-sketc
 note + uint64 deviation, "Where it fits" → done pointers); `configuration.md`
 (`presence_participant` key in the router: block); `command-status.md` (no change — its
 mesh-topic entry from the D14 reconciliation already matches); this entry.
+
+## D77 — Heartbeat carries the roster as a compact `peers_seen` edge list: who-sees-who observable from one WAN point (C2 node map) (2026-07-16, accepted; amends D76's `RouterHealth` payload; resolves presence-and-health.md's residual "echo the mesh view over the WAN?" open choice)
+
+**Context.** C2 (on the WAN) wants a node map of the mesh: which routers exist and who
+currently sees who — including asymmetric one-way visibility. D76 shipped each router's
+roster view LAN-locally only (`ActRouterMeshStatus`), so a WAN observer had nodes (each
+router's own heartbeat) but no edges. presence-and-health.md carried exactly this as its
+one residual open choice.
+
+**Decision.** Embed a **compact adjacency list** in the existing `RouterHealth`
+heartbeat: new `struct RouterPeerRef { uint32 router_id; RouterPresenceState presence; }`
+and `sequence<RouterPeerRef> peers_seen` on `RouterHealth` (~8 bytes per tracked peer at
+the 1 Hz heartbeat). `PresenceMonitor::publish_heartbeat` fills it from its roster under
+the roster mutex — the controller keeps building the summary without knowing the roster
+exists. The node map from `RouterHealth` alone: nodes = heartbeats by key, edges = each
+sample's `peers_seen`; an asymmetric WAN path shows as an asymmetric edge pair.
+**DEAD entries are included deliberately** — the roster is additive (D76 note 3), and a
+DEAD edge ("lost this peer") is information a missing edge ("never saw it") is not.
+
+**Rejected alternatives.** (a) Nesting the full mesh view (peer list with complete
+`RouterHealth` summaries) in the heartbeat — O(N²) redundant summaries/sec on the
+constrained WAN; a WAN consumer already receives every router's own summary directly.
+(b) Echoing `RouterMeshStatus` on the WAN participant as a second topic — change-driven
+and zero-IDL, but a second subscription and more bytes per change for no additional map
+information over the edge list. The WAN-frugal "summary-only" rule survives: identity +
+presence per edge, never the peer's summary.
+
+**Notes.** (1) The unbounded IDL sequence takes the repo-default codegen cap (100) —
+far above any real mesh. (2) Side effect: `RouterMeshPeer.health` embeds `RouterHealth`,
+so LAN `ActRouterMeshStatus` per-peer entries now carry each peer's `peers_seen` too —
+second-hand adjacency for LAN consumers; LAN is unconstrained by design, accepted.
+
+**Evidence.** `test_presence_roster.py` extensions ride the existing flow: E-P1 — a
+single WAN reader sees the bidirectional control↔platform edge
+(`edges[20][30] == ALIVE and edges[30][20] == ALIVE`); E-P2 — after the SIGKILL the
+survivor's edge FLIPS to DEAD rather than disappearing. ctest 4/4; full e2e 20/20 twice;
+`/dev/shm` clean, no strays.
+
+**Docs changed.** `presence-and-health.md` (residual open choice resolved; payload
+bullet + roster section + IDL sketch gained `peers_seen`/`RouterPeerRef`);
+`code-architecture.md` (PresenceMonitor bullet); `router/admin/RouterAdminTypes.idl`;
+this entry.

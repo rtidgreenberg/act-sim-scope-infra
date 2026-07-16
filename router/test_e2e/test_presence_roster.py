@@ -19,6 +19,11 @@ evidence items (implementation-plan.md, mapped 1:1):
   E-P4  the killed router restarted under the same identity (new process, new GUID)
         re-enters the roster ALIVE under the same router_id.
 
+D77 extensions ride E-P1/E-P2: each router's RouterHealth heartbeat carries the roster
+as a compact peers_seen edge list, so a single WAN observer (C2) can build the
+who-sees-who node map — the bidirectional edge is asserted from one reader, and after
+the SIGKILL the survivor's edge FLIPS to DEAD rather than disappearing.
+
 The D74 identity flip itself (participant_name detection, same-node ignore off the new
 field) is asserted by test_discovery_smoke.py and test_same_node_ignore.py.
 
@@ -56,6 +61,33 @@ def mesh_reader(probe, provider):
         MESH_TOPIC, "RouterMeshStatus",
         qos=reader_qos(reliability="reliable", durability="transient_local"),
         dtype=provider.type("RouterMeshStatus"))
+
+
+def latest_health(reader):
+    """{router_id: {peer_router_id: presence}} from the newest RouterHealth sample per
+    router (TL KEEP_LAST(1) keyed by router_id) — the C2 node map's edges (D77):
+    nodes are the heartbeats themselves, edges each sample's peers_seen."""
+    edges = {}
+    for sample in reader.read():
+        if not sample.info.valid:
+            continue
+        edges[int(sample.data["router_id"])] = {
+            int(ref["router_id"]): int(ref["presence"])
+            for ref in sample.data["peers_seen"]}
+    return edges
+
+
+def wait_edges(reader, predicate, timeout_s, alive=None, poll_s=0.2):
+    deadline = time.monotonic() + timeout_s
+    edges = {}
+    while time.monotonic() < deadline:
+        if alive is not None:
+            assert alive(), "a router process exited early"
+        edges = latest_health(reader)
+        if predicate(edges):
+            return edges
+        time.sleep(poll_s)
+    return edges
 
 
 def latest_mesh(reader):
@@ -102,6 +134,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
 
     control_mesh_probe = Probe(control_lan)
     platform_mesh_probe = Probe(unique_domains["platform_lan"])
+    wan_probe = None
     stale_probe = None
     restarted = None
     try:
@@ -126,6 +159,24 @@ def test_presence_roster_mesh_dead_and_rejoin(
         assert peers_p and peers_p.get(CONTROL_ID, {}).get("presence") == ALIVE, (
             f"platform mesh never showed control ({CONTROL_ID}) ALIVE: {peers_p}; "
             f"log {platform.log_path}")
+
+        # --- E-P1 extension (D77): the heartbeats themselves carry the who-sees-who
+        # edges, so a single WAN observer (C2) can draw the node map — both directions
+        # of the control<->platform edge visible from one topic.
+        wan_probe = Probe(wan)
+        health_view = wan_probe.reader(
+            HEALTH_TOPIC, "RouterHealth",
+            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            dtype=provider.type("RouterHealth"))
+        edges = wait_edges(
+            health_view,
+            lambda e: (e.get(CONTROL_ID, {}).get(PLATFORM_ID) == ALIVE
+                       and e.get(PLATFORM_ID, {}).get(CONTROL_ID) == ALIVE),
+            timeout_s=15.0, alive=both_alive)
+        assert edges.get(CONTROL_ID, {}).get(PLATFORM_ID) == ALIVE \
+            and edges.get(PLATFORM_ID, {}).get(CONTROL_ID) == ALIVE, (
+            f"heartbeat peers_seen never showed the bidirectional edge (D77): {edges}; "
+            f"logs {control.log_path} {platform.log_path}")
 
         # --- E-P3 first (needs the platform router still alive as a bystander): a
         # heartbeat-withholding probe goes STALE, never DEAD, nothing torn down ---
@@ -181,6 +232,15 @@ def test_presence_roster_mesh_dead_and_rejoin(
         # observed within seconds is liveliness-driven — the participant is still in the
         # discovery DB (D16 ordering; purge trailing was measured in spikes/presence/).
         assert t_dead < HEALTH_LEASE_S + 7, f"DEAD took {t_dead:.1f}s"
+        # E-P2 extension (D77): the edge FLIPS to DEAD on the survivor's heartbeat
+        # rather than disappearing — C2 can tell "lost this peer" from "never saw it".
+        edges = wait_edges(
+            health_view,
+            lambda e: e.get(CONTROL_ID, {}).get(PLATFORM_ID) == DEAD,
+            timeout_s=10.0, alive=lambda: control.is_alive())
+        assert edges.get(CONTROL_ID, {}).get(PLATFORM_ID) == DEAD, (
+            f"control heartbeat peers_seen never flipped the platform edge to DEAD "
+            f"(D77): {edges}; log {control.log_path}")
 
         # --- E-P4: restart under the same identity -> rejoins ALIVE, same router_id ---
         restarted = start_router(router_binary, config_path, "platform", e2e_tmp_dir,
@@ -200,5 +260,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
             stale_probe.close()
         if restarted is not None:
             restarted.stop()
+        if wan_probe is not None:
+            wan_probe.close()
         control_mesh_probe.close()
         platform_mesh_probe.close()

@@ -146,7 +146,9 @@ RouterInstance
   the `router_id → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary}` roster off the
   designed signals (valid sample → ALIVE; `REQUESTED_DEADLINE_MISSED` → STALE; instance
   `NOT_ALIVE_NO_WRITERS` → DEAD). It republishes the aggregated connected-router list over
-  the LAN (admin participant) on `ActRouterMeshStatus` on every roster change. The
+  the LAN (admin participant) on `ActRouterMeshStatus` on every roster change. The heartbeat
+  also carries the roster as a compact `peers_seen` edge list (D77) — who-sees-who is
+  observable from any single WAN point (the C2 node map). The
   presence-reset action (peer `DEAD` → unregister that peer's forwarded instances) is
   deferred to Phase 12 with the keyed-lifecycle machinery (D72 scope split). Only the
   compact summary crosses the WAN — never liveliness on data topics, never the full route

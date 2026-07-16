@@ -118,8 +118,23 @@ void PresenceMonitor::shutdown() {
 }
 
 void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
+    // D77: the heartbeat carries this router's roster as a compact edge list, so
+    // who-sees-who is observable from any single point on the WAN (C2 node map). The
+    // controller builds the summary without knowing the roster; the edges are filled
+    // here, where the roster lives. DEAD entries are included deliberately — a DEAD
+    // edge ("lost this peer") is information a missing edge ("never saw it") is not.
+    RouterHealth out = hb;
+    {
+        std::lock_guard<std::mutex> lk(roster_mutex_);
+        for (const auto &entry : roster_) {
+            RouterPeerRef ref;
+            ref.router_id = entry.first;
+            ref.presence = entry.second.presence;
+            out.peers_seen.push_back(ref);
+        }
+    }
     try {
-        health_writer_.write(hb);
+        health_writer_.write(out);
     } catch (const dds::core::NotEnabledError &) {
         // Defensive symmetry with DdsStatusPublisher (D52): ticks only start after
         // enable_all(), so this should not happen in practice.
