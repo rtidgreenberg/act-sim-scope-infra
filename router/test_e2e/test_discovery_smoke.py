@@ -24,7 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import render_config, start_router  # noqa: E402
 from util.dds_probe import Probe  # noqa: E402
 
-EXPECTED_TAG_PREFIX = "act.router=Platform_30/"
+# D74 identity: EntityName name="<node>/<router>", role_name="act.router" — the router
+# participant is detected by the role sentinel and named by the node/router pair.
+EXPECTED_NAME_PREFIX = "Platform_30/"
+ROUTER_ROLE = "act.router"
 STATUS_TOPIC = "ActRouterStatus"
 STATUS_TYPE = "RouterStatus"
 TIMEOUT_S = 15.0
@@ -51,8 +54,8 @@ def test_observer_discovers_router_participant_and_status_writer(
                 f"router exited early (rc={router.returncode}); log: {router.log_path}")
 
             if tagged_key is None:
-                for key, tag in observer.discovered_participant_tags().items():
-                    if tag.startswith(EXPECTED_TAG_PREFIX):
+                for key, (name, role) in observer.discovered_participant_names().items():
+                    if role == ROUTER_ROLE and name.startswith(EXPECTED_NAME_PREFIX):
                         tagged_key = key
                         break
 
@@ -66,8 +69,8 @@ def test_observer_discovers_router_participant_and_status_writer(
             time.sleep(POLL_S)
 
         assert tagged_key is not None, (
-            f"observer never discovered a participant tagged {EXPECTED_TAG_PREFIX!r}; "
-            f"router log: {router.log_path}")
+            f"observer never discovered a role={ROUTER_ROLE!r} participant named "
+            f"{EXPECTED_NAME_PREFIX!r}*; router log: {router.log_path}")
         assert status_writer is not None, (
             f"observer never discovered the {STATUS_TOPIC}/{STATUS_TYPE} writer; "
             f"router log: {router.log_path}")

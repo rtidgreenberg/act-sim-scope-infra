@@ -44,6 +44,11 @@ by role exactly as deployed:
 - **`test_detail_status_toggle.py`** — Phase 7d (D71, plan E7): `platform_detail_status`
   ships disabled on both routers; `ENABLE_ROUTE` at the platform router alone forwards
   to the WAN but not end-to-end; enabling the control router too completes the flow.
+- **`test_presence_roster.py`** — Phase 8 (D75/D76, plan E-P1–E-P4): both routers'
+  `ActRouterMeshStatus` aggregates name each other ALIVE; a heartbeat-withholding probe
+  goes STALE (never DEAD, nothing torn down); SIGKILL → the survivor marks the peer DEAD
+  inside the `RouterHealth` liveliness window (liveliness-driven, not participant purge);
+  a restart under the same identity rejoins ALIVE under the same `router_id`.
 - **`test_control_command_route.py`** — control app publishes `ControlCommand`; asserts
   it's forwarded to the addressed platform and filtered out for every other destination
   (the `msg.destination` ContentFilteredTopic).

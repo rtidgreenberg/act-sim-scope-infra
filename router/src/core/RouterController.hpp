@@ -24,6 +24,7 @@ struct RouterIdentityInfo {
     std::string router_name;
     std::uint32_t router_id = 0;
     std::string status_id;
+    std::string node_role; // control/platform — echoed in the RouterHealth heartbeat (D75)
 };
 
 class RouterController {
@@ -32,12 +33,14 @@ public:
     // config for status completeness (D7). Publishes the startup snapshot (revision 0).
     // journal is optional (D55): nullptr (the default, e.g. Phase 1 tests) disables the
     // debug journal entirely — additive, no behavior change.
+    // presence is optional like journal (D75): nullptr disables the heartbeat path.
     RouterController(const RouterIdentityInfo &identity,
                      const std::vector<RouterRouteSpec> &route_specs,
                      const std::vector<ParticipantState> &participants,
                      IEntityFactory *entity_factory,
                      IStatusPublisher *status_publisher,
-                     IControllerJournal *journal = nullptr);
+                     IControllerJournal *journal = nullptr,
+                     IPresencePublisher *presence = nullptr);
 
     // Create entities for every startup-enabled route (D64/D66 create-and-observe: the
     // creation gate is retired — with XML-provided types, creation needs nothing from
@@ -94,6 +97,7 @@ private:
     void apply_match_changed(const ControllerEvent &e);
     void apply_type_resolved(const ControllerEvent &e);
     void apply_refresh_counters();
+    void apply_presence_tick();
 
     // Tighten a FORWARDING build's writer deadline in place when the derivation over
     // the current matched readers is stricter than the offer (D39/D45).
@@ -116,6 +120,9 @@ private:
     IStatusPublisher *status_;
     IControllerJournal *journal_;    // optional debug journal (D55); nullptr = disabled
     std::uint64_t journal_sequence_; // monotonic per-record sequence (D55)
+    IPresencePublisher *presence_;   // optional heartbeat publisher (D75); nullptr = off
+    std::string node_role_;          // echoed in the heartbeat (D75)
+    std::uint64_t heartbeat_sequence_ = 0; // monotonic per-process heartbeat_seq (D75)
     std::string current_cause_; // accepted command id during this event, else empty (D8)
 };
 

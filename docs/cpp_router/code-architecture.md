@@ -62,10 +62,10 @@ RouterInstance
   and admin topics. Participants are created **disabled**, builtin discovery readers and
   conditions installed, then enabled — builtin readers are lazily created in 7.7, so this is
   the no-loss discovery startup order (D12). Every router participant carries the router
-  identity so router-originated endpoints are identifiable in discovery (D15): today via
-  `user_data = act.router=<node>/<router>`; from Phase 8 via `participant_name`
-  (`name = "<node>/<router>"`, detection sentinel `role_name = "act.router"`) with the
-  `user_data` tag retired (D74). WAN participants are **never multi-homed** — with multiple physical
+  identity so router-originated endpoints are identifiable in discovery (D15): via
+  `participant_name` (`name = "<node>/<router>"`, detection sentinel
+  `role_name = "act.router"`) — the `user_data` tag was retired with the Phase 8 flip
+  (D74/D76; natively visible in RTI Admin Console). WAN participants are **never multi-homed** — with multiple physical
   networks it creates one WAN participant per network, interface-pinned via
   `allow_interfaces_list` (D18; today's single network is the `N = 1` case).
 - `DiscoveryDispatcher` watches discovered publications and subscriptions on those
@@ -140,12 +140,17 @@ RouterInstance
   (`PUBLICATION_MATCHED_STATUS` only reports attach/detach, not keeping-up), logged as
   `journal_falling_behind`; this is observability-only and never feeds back into route
   control.
-- `PresenceMonitor` publishes this router's compact `RouterHealth` summary over the WAN and
-  subscribes to peers', maintaining the `router_id → {state, last-seen, participant GUID, summary}`
-  roster. It republishes the aggregated connected-router list over the LAN on `ActRouterMeshStatus`.
-  On a peer declared `DEAD` it posts a presence-reset event to `RouterController` (unregister that
-  peer's forwarded instances). Only the compact summary crosses the WAN — never liveliness, never
-  the full route table. See [Presence & Health](presence-and-health.md).
+- `PresenceMonitor` (shipped, Phase 8/D76) publishes this router's compact `RouterHealth`
+  summary over the WAN (the controller's `PresenceTick` handler builds it from state on
+  the strand — the writer QoS is the D75 pinned set) and subscribes to peers', maintaining
+  the `router_id → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary}` roster off the
+  designed signals (valid sample → ALIVE; `REQUESTED_DEADLINE_MISSED` → STALE; instance
+  `NOT_ALIVE_NO_WRITERS` → DEAD). It republishes the aggregated connected-router list over
+  the LAN (admin participant) on `ActRouterMeshStatus` on every roster change. The
+  presence-reset action (peer `DEAD` → unregister that peer's forwarded instances) is
+  deferred to Phase 12 with the keyed-lifecycle machinery (D72 scope split). Only the
+  compact summary crosses the WAN — never liveliness on data topics, never the full route
+  table. See [Presence & Health](presence-and-health.md).
 - `LinkStatsCollector` captures per-peer WAN link metrics (D14,
   [link-health.md](link-health.md)): on a config-fixed tick (~1 s) it is the **sole reader**
   of the WAN endpoints' matched-endpoint protocol statuses (reads reset `_change`
@@ -295,6 +300,7 @@ The controller should process these event categories on one serialized strand or
 | `TopicMatchChanged` | route runtime StatusConditions (`SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED`) | if the stamp is current: update the leg's matched count (the discovery truth, D64/D66); stale stamp → discard (D23) |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
 | `RefreshCounters` | `DrainThread` 1 s tick (7d/D63) | pull each live build's `forwarded()` into state; if any moved, republish status WITHOUT a revision bump; never journaled (D71) |
+| `PresenceTick` | `DrainThread` 1 s heartbeat tick (Phase 8/D75, separate knob from the refresh tick) | build the compact `RouterHealth` summary (identity + `state_revision` + route rollup) from controller state on the strand and hand it to `PresenceMonitor::publish_heartbeat`; telemetry only — no revision bump, never journaled (D76) |
 | `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
 | `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, rebuild immediately if the route is (still) enabled (D66); stale stamp → discard (D21/D23) |
 | `RouteEntityError` | entity factory or route runtime | topic-scoped (`topic_name` set): that topic → `TOPIC_ERROR`, siblings unaffected (D11/D21); route-wide (`topic_name` empty): route → `ROUTE_ERROR`; store `last_error`, publish status |

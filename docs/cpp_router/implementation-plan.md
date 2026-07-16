@@ -57,7 +57,7 @@ route engine one behavior at a time.
 | 5 | LAN `auto` QoS and output readiness | **Done (D45)** | static asymmetric QoS matches by RxO construction; writer derives deadline/liveliness from matched readers | residual RxO mismatches (ownership/durability/liveliness) turn out to be common on the target LAN |
 | 6 | Command/status control loop | **Done (D57/D58)** | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | **Done (D65/D67/D69/D70/D71)** | the verbatim production `control-platform.yaml` runs as a two-process pair without Routing Service; DDS is the matching authority (D64/D66) | ACT topic/type mapping diverges from the planned route model |
-| 8 | Presence & Health | High **after** its readiness pass + spike (design pinned in [presence-and-health.md](presence-and-health.md), D14/D16; spike and D53 outstanding) | `RouterHealth` heartbeat, per-router roster with ALIVE/STALE/DEAD, LAN `ActRouterMeshStatus` aggregate | liveliness/lease mechanics don't produce a stable DEAD signal ahead of participant purge |
+| 8 | Presence & Health | **Done (D75/D76)** | `RouterHealth` heartbeat, per-router roster with ALIVE/STALE/DEAD, LAN `ActRouterMeshStatus` aggregate, the D74 identity flip | ~~liveliness/lease mechanics don't produce a stable DEAD signal ahead of participant purge~~ disproven by `spikes/presence/` (DEAD 2.6–5.3 s, purge trailing 11–16 s) |
 | 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
 | 10 | Team partition route | Medium-high — **needs its readiness pass first** (the least-prepared numbered phase; see the section's gap list) | `SET_PARTICIPANT_PARTITION` applies in place and `PlatformData` crosses/stops crossing team scope, observable as matched-count transitions | participant/partition changes cannot be made predictable enough |
 | 11 | Serialized-CDR fast path | Medium — **opt-in, off the critical path** (Tenet 7) | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` and drop the optimization |
@@ -194,8 +194,9 @@ Deliver:
 - endpoint records **are the builtin topic data values** (`PublicationBuiltinTopicData` /
   `SubscriptionBuiltinTopicData`) plus an `origin_router`/`ignored` sidecar — no
   hand-rolled record struct (D27); the D19 captured subset is the rule for what
-  matching/auto-QoS may read; `origin_router` comes from the participant `user_data` tag
-  join (the identifier field moves to `participant_name` in Phase 8 — D74); same-node
+  matching/auto-QoS may read; `origin_router` comes from the participant identity join
+  (`participant_name`/`role_name` since the Phase 8 flip — D74/D76; originally the
+  `user_data` tag); same-node
   router publications are ignored at discovery (D15); per-topic
   matched-endpoint **sets**, not booleans (D20).
 
@@ -560,15 +561,19 @@ Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
 
 ### Phase 8: Presence & Health
 
-> **Design pinned, implementation not started.** The full design —
-> [presence-and-health.md](presence-and-health.md) — reads like a post-readiness-pass
-> contract: mechanisms validated against 7.7, `RouterHealth`/`RouterMeshStatus` IDL sketched,
-> QoS chosen, the D16 lease-ordering constraint pinned, reset mechanics resolved. What is
-> genuinely outstanding is small and listed below. **Scope split (D72):** this phase delivers
-> presence *awareness* (heartbeat, roster, mesh aggregate). The presence-driven *reset
-> action* (peer DEAD → `unregister_instance` downstream) lands in Phase 12, which owns the
-> keyed fixture and per-peer instance bookkeeping the reset needs — unkeyed demo topics make
-> the reset a no-op, so proving it here would be theater.
+> **PHASE 8 COMPLETE (D76, 2026-07-16).** Readiness pass D75 (presence spike PASSED, all
+> checklist items pinned), implementation delivered per the lists below: `PresenceMonitor`
+> shipped (heartbeat via the controller's 1 s `PresenceTick`, roster off the designed
+> signals, LAN `ActRouterMeshStatus` aggregate), the D74 identifier flip landed
+> (`participant_name`/`role_name`; `user_data` no longer set or read), IDL in
+> `RouterAdminTypes.idl`, `presence_participant` config key (scalar or per-role map).
+> Evidence: `test_presence_roster.py` (E-P1–E-P4 in one flow) + re-proofs in
+> `test_discovery_smoke.py`/`test_same_node_ignore.py`; ctest 4/4, e2e 20/20 twice.
+> **Scope split (D72):** this phase delivered presence *awareness* (heartbeat, roster,
+> mesh aggregate). The presence-driven *reset action* (peer DEAD → `unregister_instance`
+> downstream) lands in Phase 12, which owns the keyed fixture and per-peer instance
+> bookkeeping the reset needs — unkeyed demo topics make the reset a no-op, so proving it
+> here would be theater.
 
 **Readiness pass — pin these as D-entries before code:**
 
@@ -601,40 +606,45 @@ Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
    GUID-supersede `ignore()` path stays deferred until rediscovery-churn suppression is a
    demonstrated need.
 
-Deliver:
+Deliver (all DELIVERED, D76):
 
-- `PresenceMonitor` module in the `RouterInstance` composition: publishes this router's
+- ✅ `PresenceMonitor` module in the `RouterInstance` composition: publishes this router's
   compact `RouterHealth` heartbeat on the WAN participant (QoS per the design doc:
   `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`, finite `AUTOMATIC` liveliness, DEADLINE);
   subscribes to peers'; maintains the roster (`ALIVE`/`STALE`/`DEAD` off liveliness-lost,
   deadline-missed, `NOT_ALIVE_NO_WRITERS`).
-- the heartbeat tick posted through the controller's event machinery (the D71
-  `DrainThread` `refresh_period` pattern is the precedent; heartbeat writes never bump
-  `state_revision` — they are telemetry, D5).
-- LAN `ActRouterMeshStatus` writer: the aggregated connected-router list, republished on
+- ✅ the heartbeat tick posted through the controller's event machinery (`PresenceTick`
+  from `DrainThread` — a separate 1 s knob beside the D71 `refresh_period`; heartbeat
+  writes never bump `state_revision` and are never journaled — telemetry, D5).
+- ✅ LAN `ActRouterMeshStatus` writer: the aggregated connected-router list, republished on
   roster change (peer appears/disappears, presence transition, or a peer's `state_revision`
   advances).
-- the D74 identifier flip: participants set `EntityName`
+- ✅ the D74 identifier flip: participants set `EntityName`
   (`name = "<node>/<router>"`, `role_name = "act.router"`); `DiscoveryDispatcher` detection
   keys on `role_name`; `user_data` is no longer set or read.
-- roster correlation `router_id → current participant GUID` (off `participant_name`, D74),
-  exposed to future consumers (Phase 9's rollup join, Phase 12's reset).
+- ✅ roster correlation `router_id → current participant GUID` (off the heartbeat writer's
+  publication data), exposed via `PresenceMonitor::participant_guid_of` for future
+  consumers (Phase 9's rollup join, Phase 12's reset).
 
-Evidence (map 1:1 to named tests in the readiness pass):
+Evidence (all in `test_presence_roster.py` unless noted; ran green twice with the full
+suite, 20/20):
 
-- two `router_main` processes see each other on `RouterHealth`; each publishes an
-  `ActRouterMeshStatus` naming the other ALIVE with a fresh `last_seen_delta`
-  (→ `test_presence_roster.py`).
-- SIGKILL one router: the survivor marks it DEAD within the liveliness window and
-  republishes the mesh aggregate; the DEAD signal demonstrably precedes participant purge
-  (D16 ordering); `/dev/shm` stays clean (UDPv4-only rule).
-- a probe asserting liveliness but withholding heartbeats past the deadline is marked STALE,
-  not DEAD, and no teardown of anything occurs (STALE is a policy flag, not an action).
-- the returning router (restart, new GUID) re-enters the roster as ALIVE under the same
-  `router_id`.
-- `test_same_node_ignore.py` passes against the D74 field: a probe posing as a same-node
-  router via `participant_name` (`role_name = "act.router"`) is ignored; a plain app writer
-  (any display name, no sentinel `role_name`) still routes.
+- **E-P1** two `router_main` processes see each other on `RouterHealth`; each publishes an
+  `ActRouterMeshStatus` naming the other ALIVE with a fresh `last_seen_delta`.
+- **E-P2** SIGKILL one router: the survivor marks it DEAD within the liveliness window and
+  republishes the mesh aggregate; the WAN participants run the default 100 s participant
+  lease, so a DEAD within seconds is liveliness-driven, demonstrably preceding purge (D16
+  ordering; the purge backstop itself was measured in `spikes/presence/`); `/dev/shm`
+  stays clean (UDPv4-only rule).
+- **E-P3** a probe asserting liveliness but withholding heartbeats past the deadline is
+  marked STALE, not DEAD, and no teardown of anything occurs (STALE is a policy flag, not
+  an action).
+- **E-P4** the returning router (restart, new GUID) re-enters the roster as ALIVE under the
+  same `router_id` (fresh `heartbeat_seq` proves it is the new incarnation).
+- **E-P5** `test_same_node_ignore.py` passes against the D74 field: a probe posing as a
+  same-node router via `participant_name` (`role_name = "act.router"`) is ignored; a plain
+  app writer (any display name, no sentinel `role_name`) still routes.
+  `test_discovery_smoke.py` likewise detects the router by `role_name` + name prefix.
 
 ### Phase 9: Link-Metrics Capture
 
@@ -887,13 +897,13 @@ existing, and the presence-driven reset (via 12) is on the acceptance-criteria p
 
 ## Confidence Notes
 
-- Delivered and test-verified (Phases 0–7): controller state, discovery, explicit- and
+- Delivered and test-verified (Phases 0–8): controller state, discovery, explicit- and
   alias-QoS forwarding, DynamicData + wire-learned types, create-and-observe matching,
-  command/status/journal loop, the full production `control-platform.yaml` pair.
-- High confidence, not yet built: Presence/Health (Phase 8 — design pinned, spike PASSED,
-  readiness complete per D75 — ready to implement)
-  and keyed lifecycle mirroring (Phase 12 — mechanism proven by `spikes/isc_recovery/`;
-  the old "Medium" rating predates that spike and the tenets reframe).
+  command/status/journal loop, the full production `control-platform.yaml` pair, and
+  presence/health (Phase 8, D76 — heartbeat/roster/mesh + the D74 identity flip).
+- High confidence, not yet built: keyed lifecycle mirroring (Phase 12 — mechanism proven
+  by `spikes/isc_recovery/`; the old "Medium" rating predates that spike and the tenets
+  reframe).
 - Medium-high confidence: team partition route (Phase 10 — mechanics validated, but the
   config surface needs its readiness pass), link-metrics capture (Phase 9 — API surface
   validated, unspiked in the shipped process), ACT harness replacement (Phase 13).
@@ -967,8 +977,9 @@ Routing Service.
 - ~~Should the D15 `user_data` router-tag mechanism be replaced by `participant_name`
   (ENTITY_NAME) as the router identifier?~~ **Resolved (D74, 2026-07-16): full
   replacement.** `name = "<node>/<router>"`, detection keyed on
-  `role_name == "act.router"`; ships with Phase 8 (spike verification rode the presence
-  spike and PASSED — D75). See D53 for the original scoping and D74 for the decision.
+  `role_name == "act.router"`; SHIPPED with Phase 8 (spike verification rode the presence
+  spike and PASSED — D75; flip delivered in D76). See D53 for the original scoping and
+  D74 for the decision.
 
 ## Relationship To Current Roadmap
 

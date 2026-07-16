@@ -1,10 +1,10 @@
-// ParticipantRegistry.cxx — DDS participant creation with UDPv4 + user-data tag.
+// ParticipantRegistry.cxx — DDS participant creation with UDPv4 + EntityName identity.
 
 #include "ParticipantRegistry.hpp"
 #include "Log.hpp"
 
-#include <rti/core/policy/CorePolicy.hpp>   // rti::core::policy::TransportBuiltin
-#include <dds/core/policy/CorePolicy.hpp>   // dds::core::policy::UserData, EntityFactory
+#include <rti/core/policy/CorePolicy.hpp>   // TransportBuiltin, EntityName
+#include <dds/core/policy/CorePolicy.hpp>   // dds::core::policy::EntityFactory
 
 namespace router {
 
@@ -19,9 +19,12 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
             : dds::domain::DomainParticipant::default_participant_qos();
     // UDPv4 only — no shared memory segments on /dev/shm per vboxsf safety rules.
     qos << rti::core::policy::TransportBuiltin::UDPv4();
-    if (!cfg.user_data_tag.empty()) {
-        dds::core::ByteSeq ud(cfg.user_data_tag.begin(), cfg.user_data_tag.end());
-        qos << dds::core::policy::UserData(ud);
+    if (!cfg.participant_name.empty()) {
+        // D74 identity: name = "<node>/<router>" (Admin Console display), role_name =
+        // the act.router detection sentinel. Replaces the D15 user_data tag.
+        rti::core::policy::EntityName entity_name(cfg.participant_name);
+        entity_name.role_name(std::string(kActRouterRoleName));
+        qos << entity_name;
     }
     return qos;
 }
@@ -52,7 +55,7 @@ ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
             Log::info("participant_created",
                       {{"name", cfg.name},
                        {"domain", std::to_string(cfg.domain)},
-                       {"tag", cfg.user_data_tag},
+                       {"participant_name", cfg.participant_name},
                        {"enabled", autoenable ? "true" : "false"}});
         }
     } catch (...) {

@@ -45,9 +45,9 @@ struct DiscoveryDispatcher::PendingPublication {
 DiscoveryDispatcher::DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
                                          RouterController &controller,
                                          ParticipantRegistry &registry,
-                                         const std::string &own_router_tag,
+                                         const std::string &own_router_identity,
                                          TypeResolver &types)
-    : aws_(aws), controller_(controller), own_router_tag_(own_router_tag),
+    : aws_(aws), controller_(controller), own_router_identity_(own_router_identity),
       types_(types), shut_down_(false) {
     for (const std::string &name : registry.names()) {
         attach_participant(registry.get(name));
@@ -153,7 +153,7 @@ void DiscoveryDispatcher::on_participant(
         }
 
         std::string guid = format_key(it->data().key());
-        std::string tag = extract_router_tag(it->data().user_data());
+        std::string tag = extract_router_identity(it->data());
         std::string handle_key = handle_str(it->info().instance_handle());
         EndpointIdentity id;
         id.guid = guid; // participant_guid left unset: a participant has no "owner" (D44)
@@ -447,23 +447,31 @@ std::string DiscoveryDispatcher::format_key(const dds::topic::BuiltinTopicKey &k
     return os.str();
 }
 
-std::string DiscoveryDispatcher::extract_router_tag(const dds::core::policy::UserData &ud) {
-    const auto &v = ud.value();
-    std::string text(v.begin(), v.end());
-    return (text.find("act.router=") == 0) ? text : std::string();
+std::string DiscoveryDispatcher::extract_router_identity(
+        const dds::topic::ParticipantBuiltinTopicData &data) {
+    // D74: a router participant is one whose participant_name.role_name is EXACTLY the
+    // act.router sentinel — detection keys on role_name alone; name is then the router
+    // identity "<node>/<router>". Any other participant (unset EntityName, or an app's
+    // arbitrary display name without the sentinel role) is not a router.
+    // participant_name is an RTI extension on the builtin data — reached through
+    // operator-> like the D70 inline type object (data->type()).
+    const rti::core::policy::EntityName &en = data->participant_name();
+    if (!en.role_name().has_value() || en.role_name().value() != kActRouterRoleName) {
+        return std::string();
+    }
+    return en.name().has_value() ? en.name().value() : std::string();
 }
 
 bool DiscoveryDispatcher::is_same_node(const std::string &origin_router) const {
-    if (origin_router.empty() || own_router_tag_.empty()) return false;
-    // Both tags: "act.router=<node>/<router>" — compare the node component.
-    auto node_of = [](const std::string &tag) {
-        auto eq = tag.find('=');
-        auto sl = tag.find('/', eq);
-        if (eq == std::string::npos || sl == std::string::npos) return std::string();
-        return tag.substr(eq + 1, sl - eq - 1);
+    if (origin_router.empty() || own_router_identity_.empty()) return false;
+    // Both identities: "<node>/<router>" (D74) — compare the node component.
+    auto node_of = [](const std::string &identity) {
+        auto sl = identity.find('/');
+        if (sl == std::string::npos) return std::string();
+        return identity.substr(0, sl);
     };
     return !node_of(origin_router).empty() &&
-           node_of(origin_router) == node_of(own_router_tag_);
+           node_of(origin_router) == node_of(own_router_identity_);
 }
 
 } // namespace router

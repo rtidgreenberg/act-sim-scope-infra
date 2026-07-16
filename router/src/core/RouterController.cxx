@@ -46,7 +46,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
     case ControllerEventKind::TypeResolved:
         return ControllerJournalEventKind::JOURNAL_TYPE_RESOLVED;
     case ControllerEventKind::RefreshCounters:
-        break; // never journaled (D63/D71 — process_one skips the tick); fall through
+    case ControllerEventKind::PresenceTick:
+        break; // never journaled (D63/D71/D75 — process_one skips the ticks); fall through
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -58,11 +59,14 @@ RouterController::RouterController(const RouterIdentityInfo &identity,
                                    const std::vector<ParticipantState> &participants,
                                    IEntityFactory *entity_factory,
                                    IStatusPublisher *status_publisher,
-                                   IControllerJournal *journal)
+                                   IControllerJournal *journal,
+                                   IPresencePublisher *presence)
         : factory_(entity_factory),
           status_(status_publisher),
           journal_(journal),
-          journal_sequence_(0) {
+          journal_sequence_(0),
+          presence_(presence),
+          node_role_(identity.node_role) {
     state_.node_name = identity.node_name;
     state_.router_name = identity.router_name;
     state_.router_id = identity.router_id;
@@ -137,6 +141,12 @@ void RouterController::process_one(const ControllerEvent &event) {
         apply_refresh_counters();
         return;
     }
+    // The PresenceTick (Phase 8, D75) is the same shape: pure telemetry off controller
+    // state, never a revision bump, never journaled.
+    if (event.kind == ControllerEventKind::PresenceTick) {
+        apply_presence_tick();
+        return;
+    }
     std::vector<std::string> pre = fingerprints();
     std::uint64_t pre_revision = state_.state_revision;
     current_cause_.clear();
@@ -182,7 +192,8 @@ void RouterController::process(const ControllerEvent &event) {
         apply_type_resolved(event);
         break;
     case ControllerEventKind::RefreshCounters:
-        break; // handled directly by process_one() before it ever reaches here (D63/D71)
+    case ControllerEventKind::PresenceTick:
+        break; // handled directly by process_one() before ever reaching here (D63/D71/D75)
     }
 }
 
@@ -638,6 +649,42 @@ void RouterController::apply_refresh_counters() {
     if (any_changed) {
         republish_status(); // same state_revision, fresh counters
     }
+}
+
+void RouterController::apply_presence_tick() {
+    // Phase 8 (D75): build the compact RouterHealth summary from controller state on
+    // the strand and hand it to the presence publisher. Pure telemetry — reads state_,
+    // never mutates it (heartbeat_sequence_ is presence-local, outside the D5
+    // fingerprint by construction).
+    if (presence_ == nullptr) {
+        return;
+    }
+    RouterHealth hb;
+    hb.router_id = state_.router_id;
+    hb.node_name = state_.node_name;
+    hb.role = node_role_;
+    hb.heartbeat_seq = ++heartbeat_sequence_;
+    hb.send_timestamp = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+    hb.state_revision = state_.state_revision;
+    std::uint32_t degraded = 0;
+    std::uint32_t error = 0;
+    for (std::map<std::string, RouteState>::const_iterator r = state_.routes.begin();
+         r != state_.routes.end(); ++r) {
+        switch (derive_operational(r->second)) {
+        case RouterRouteOperationalState::ROUTE_DEGRADED: ++degraded; break;
+        case RouterRouteOperationalState::ROUTE_ERROR:    ++error;    break;
+        default: break;
+        }
+    }
+    hb.n_routes = static_cast<std::uint32_t>(state_.routes.size());
+    hb.n_degraded = degraded;
+    hb.n_error = error;
+    hb.overall_state = (error > 0) ? RouterOverallState::ROUTER_ERROR
+                     : (degraded > 0) ? RouterOverallState::ROUTER_DEGRADED
+                                      : RouterOverallState::ROUTER_OK;
+    presence_->publish_heartbeat(hb);
 }
 
 // --- Entity operation completions (D21), stale-stamp discard (D23) ---

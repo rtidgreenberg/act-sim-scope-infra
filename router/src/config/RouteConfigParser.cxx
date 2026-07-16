@@ -132,6 +132,23 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         // type_name: key in a config is silently ignored.
         out.admin_participant = get_str(router, "admin_participant");
 
+        // router.presence_participant (Phase 8, D75): which participant carries the
+        // RouterHealth heartbeat pair — normally this role's WAN participant. Two forms:
+        //   presence_participant: platform_wan            # scalar (single-role config)
+        //   presence_participant: {control: control_wan,  # per-role map (one shared
+        //                          platform: platform_wan} # config file, two roles)
+        // Absent (or no entry for this role) = presence disabled for this process.
+        if (router && router["presence_participant"]) {
+            const YAML::Node &pp = router["presence_participant"];
+            if (pp.IsMap()) {
+                if (pp[out.node_role]) {
+                    out.presence_participant = pp[out.node_role].as<std::string>();
+                }
+            } else {
+                out.presence_participant = pp.as<std::string>();
+            }
+        }
+
         out.types_xml_path = get_str(root["types"], "xml");
         for (std::size_t i = 0; i < root["qos_libraries"].size(); ++i) {
             out.qos_library_paths.push_back(root["qos_libraries"][i].as<std::string>());

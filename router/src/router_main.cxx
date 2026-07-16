@@ -31,6 +31,7 @@
 #include "core/DynamicRouteFactory.hpp"
 #include "core/Log.hpp"
 #include "core/ParticipantRegistry.hpp"
+#include "core/PresenceMonitor.hpp"
 #include "core/QosResolver.hpp"
 #include "core/RouterController.hpp"
 #include "core/TypeResolver.hpp"
@@ -60,7 +61,8 @@ void print_usage() {
               {{"invocation",
                 "router_main --config <path> [--name <router-instance-name>] "
                 "[--role <node-role>] [--node-name <node-name>] "
-                "[--admin-participant <name>]"}});
+                "[--admin-participant <name>] [--presence-participant <name>] "
+                "[--router-id <n>]"}});
 }
 
 // SIGINT/SIGTERM flip this; the run loop wakes every 200ms to re-check it (mirrors
@@ -89,6 +91,8 @@ int main(int argc, char **argv) {
     std::string role_override;
     std::string node_name_override;
     std::string admin_participant_override;
+    std::string presence_participant_override;
+    std::string router_id_override;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -102,6 +106,12 @@ int main(int argc, char **argv) {
             node_name_override = argv[++i];
         } else if (arg == "--admin-participant" && i + 1 < argc) {
             admin_participant_override = argv[++i];
+        } else if (arg == "--presence-participant" && i + 1 < argc) {
+            presence_participant_override = argv[++i];
+        } else if (arg == "--router-id" && i + 1 < argc) {
+            // Test/deployment override: two processes launched from one shared config
+            // file (e2e router_pair) must not share the RouterHealth key (Phase 8).
+            router_id_override = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
@@ -130,6 +140,12 @@ int main(int argc, char **argv) {
         }
         if (!admin_participant_override.empty()) {
             cfg.admin_participant = admin_participant_override;
+        }
+        if (!presence_participant_override.empty()) {
+            cfg.presence_participant = presence_participant_override;
+        }
+        if (!router_id_override.empty()) {
+            cfg.router_id = std::stoi(router_id_override);
         }
         if (!validate_qos_aliases(cfg, error)) {
             Log::error("router.config.qos_alias", {{"config", config_path}, {"error", error}});
@@ -244,7 +260,33 @@ int main(int argc, char **argv) {
             types.load_types(cfg.types_xml_path);
         }
 
-        const std::string router_tag = "act.router=" + cfg.node_name + "/" + cfg.router_name;
+        // D74 identity: participant_name = "<node>/<router>" with the act.router
+        // role_name sentinel (set by ParticipantRegistry); the same string is what
+        // DiscoveryDispatcher reads off peers' builtin data. user_data is retired.
+        const std::string router_identity = cfg.node_name + "/" + cfg.router_name;
+
+        // Presence participant (Phase 8, D75): optional; when named it must exist and,
+        // like the admin participant, a role tag inconsistent with this node's role is a
+        // config bug (it would be filtered out below and PresenceMonitor would fail on a
+        // missing participant deep in wiring).
+        if (!cfg.presence_participant.empty()) {
+            if (!has_participant(cfg.participants, cfg.presence_participant)) {
+                Log::error("router.config.presence_participant_unknown",
+                          {{"config", config_path}, {"name", cfg.presence_participant}});
+                return 2;
+            }
+            for (const auto &p : cfg.participants) {
+                if (p.name == cfg.presence_participant && !p.role.empty()
+                    && p.role != cfg.node_role) {
+                    Log::error("router.config.presence_participant_role_mismatch",
+                              {{"config", config_path},
+                               {"presence_participant", cfg.presence_participant},
+                               {"participant_role", p.role},
+                               {"node_role", cfg.node_role}});
+                    return 2;
+                }
+            }
+        }
 
         // Only build participants this node's role actually needs (plus the admin
         // participant, always) — previously every participant in the file was built
@@ -259,7 +301,7 @@ int main(int argc, char **argv) {
             ParticipantRegistry::Config pc;
             pc.name = p.name;
             pc.domain = p.domain;
-            pc.user_data_tag = router_tag;
+            pc.participant_name = router_identity;
             if (!p.qos_profile_alias.empty()) {
                 auto it = cfg.qos_profiles.find(p.qos_profile_alias);
                 if (it != cfg.qos_profiles.end()) {
@@ -355,17 +397,30 @@ int main(int argc, char **argv) {
         // before ctrl so ctrl can hold the IControllerJournal seam (D55).
         ControllerJournalPublisher journal_pub(admin_dp, aws);
 
+        // Phase 8 (D75): presence monitor — RouterHealth heartbeat pair on the presence
+        // (WAN) participant, ActRouterMeshStatus aggregate on the admin (LAN)
+        // participant. Optional: no presence_participant in the config = no presence.
+        // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
+        std::unique_ptr<PresenceMonitor> presence;
+        if (!cfg.presence_participant.empty()) {
+            presence.reset(new PresenceMonitor(
+                    aws, registry.get(cfg.presence_participant), admin_dp,
+                    cfg.node_name, cfg.router_name,
+                    static_cast<std::uint32_t>(cfg.router_id)));
+        }
+
         RouterIdentityInfo identity;
         identity.node_name = cfg.node_name;
         identity.router_name = cfg.router_name;
         identity.router_id = static_cast<std::uint32_t>(cfg.router_id);
         identity.status_id = cfg.router_name + "-" + std::to_string(::getpid());
+        identity.node_role = cfg.node_role;
 
         RouterController ctrl(identity, cfg.routes, filtered_participants, &factory,
-                              &status_pub, &journal_pub);
+                              &status_pub, &journal_pub, presence.get());
         factory.set_controller(&ctrl);
 
-        DiscoveryDispatcher discovery(aws, ctrl, registry, router_tag, types);
+        DiscoveryDispatcher discovery(aws, ctrl, registry, router_identity, types);
 
         // Phase 6 slice 6a: LAN admin command channel. Attached to the AWS BEFORE
         // aws.start()/enable_all() (same D52 reason as discovery — an edge-triggered
@@ -396,8 +451,12 @@ int main(int argc, char **argv) {
         // 7d (D63): the drain loop doubles as the status-refresh tick — every second it
         // posts RefreshCounters, so per-route samples_forwarded is observable in steady
         // state (republish without a state_revision bump). Config-fixed cadence, D14
-        // precedent.
-        DrainThread drain(ctrl, std::chrono::milliseconds(1000));
+        // precedent. Phase 8 (D75): with presence configured it also carries the 1 s
+        // PresenceTick — the RouterHealth heartbeat (separate knob: the heartbeat must
+        // stay inside its 2 s DEADLINE offer regardless of refresh retuning).
+        DrainThread drain(ctrl, std::chrono::milliseconds(1000),
+                          std::chrono::milliseconds(
+                                  presence ? kHeartbeatPeriodMs : 0));
 
         Log::info("router.start.ok",
                   {{"admin_participant", admin_participant_name},
@@ -414,7 +473,10 @@ int main(int argc, char **argv) {
         route_disp.shutdown();
         discovery.shutdown();
         command_reader.shutdown();
-        drain.stop();
+        drain.stop(); // stop the ticks before detaching the presence conditions
+        if (presence) {
+            presence->shutdown();
+        }
         journal_pub.shutdown();
         aws.stop();
         Log::info("router.stop.ok", {});

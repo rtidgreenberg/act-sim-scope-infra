@@ -20,6 +20,11 @@ router:
   # Default admin participant for this file's own (platform) role; a control-node
   # deployment of this same file overrides this with --admin-participant control_lan.
   admin_participant: platform_lan
+  # Phase 8 (D75): the RouterHealth heartbeat pair rides this role's WAN participant;
+  # the ActRouterMeshStatus aggregate rides the admin (LAN) participant.
+  presence_participant:
+    control: control_wan
+    platform: platform_wan
 
 control:
   domain: 100

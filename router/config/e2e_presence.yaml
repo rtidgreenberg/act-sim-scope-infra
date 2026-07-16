@@ -1,0 +1,62 @@
+# e2e_presence.yaml — router_main-runnable fixture for the Phase 8 presence e2e tests
+# (router/test_e2e/test_presence_roster.py, D75/D76).
+#
+# Same two-role shape as e2e_platform_status.yaml, plus router.presence_participant as a
+# per-role map: each process's RouterHealth heartbeat pair rides its own role's WAN
+# participant (both on the shared __DOMAIN_WAN__), and each process publishes its
+# ActRouterMeshStatus aggregate on its admin (LAN) participant. One ordinary route keeps
+# the config realistic (n_routes = 1 in the heartbeat rollup); the presence tests never
+# drive traffic through it.
+#
+# Loaded twice by the test harness against the SAME file: once with --role platform, once
+# with --role control (which also overrides --router-id so the two processes don't share
+# the RouterHealth key). Domain placeholders substituted per test run — see conftest.py.
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role
+
+router:
+  id: 30
+  name: e2e-presence
+  admin_participant: platform_lan   # control-role process overrides via CLI
+  presence_participant:
+    platform: platform_wan
+    control: control_wan
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: __DOMAIN_CONTROL_LAN__
+  control_wan:
+    role: control
+    domain: __DOMAIN_WAN__
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  platform_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+
+routes:
+  - name: presence_route
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformPrimaryStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: default
+    destination_side:
+      input:
+        participant: control_wan
+      output:
+        participant: control_lan

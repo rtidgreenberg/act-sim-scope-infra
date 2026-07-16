@@ -68,8 +68,13 @@ enum class ControllerEventKind {
     TopicQosWarning,        // incompatible-QoS status on a live build's entity (D39/D45)
     TopicMatchChanged,      // matched-count change on a live build's entity (D64/D66)
     TypeResolved,           // topic's type learned from the wire (7c, D64/D70)
-    RefreshCounters         // periodic status-refresh tick (7d, D63): pull forwarded()
+    RefreshCounters,        // periodic status-refresh tick (7d, D63): pull forwarded()
                             // counters; republish WITHOUT bumping state_revision
+    PresenceTick            // periodic heartbeat tick (Phase 8, D75): build the compact
+                            // RouterHealth summary from controller state and hand it to
+                            // the presence publisher; telemetry only, never bumps
+                            // state_revision and is never journaled (same skip-path as
+                            // RefreshCounters, D71)
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -168,6 +173,11 @@ struct ControllerEvent {
         ControllerEvent e;
         e.kind = ControllerEventKind::RefreshCounters;
         return e; // no payload: the handler pulls counters for every live build (D63)
+    }
+    static ControllerEvent presence_tick() {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::PresenceTick;
+        return e; // no payload: the handler snapshots the rollup from controller state
     }
     static ControllerEvent topic_match_changed(const std::string &route,
                                                const std::string &topic,

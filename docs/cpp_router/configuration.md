@@ -158,6 +158,12 @@ router:
   name: platform-30-control-platform
   config_set: control-platform
   default_forwarding_mode: dynamic_data
+  # Phase 8 (D75/D76): which participant carries the RouterHealth heartbeat pair —
+  # normally this role's WAN participant. Scalar, or a per-role map when one shared
+  # config file serves both roles (as here). Absent = presence disabled.
+  presence_participant:
+    control: control_wan
+    platform: platform_wan
 
 control:
   domain: 100

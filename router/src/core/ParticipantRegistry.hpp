@@ -1,6 +1,9 @@
 // ParticipantRegistry.hpp — creates DDS participants from config (Phase 2.5).
 //
-// Creates UDPv4-only participants with the act.router user_data tag (D15).
+// Creates UDPv4-only participants carrying the router identity as EntityName (D74):
+// participant_name.name = "<node>/<router>", role_name = the act.router sentinel. This
+// replaced the D15 user_data tag in Phase 8 — same ignore/join mechanisms, new field —
+// and is what RTI Admin Console displays natively.
 //
 // Startup ordering (D52). A participant enabled at construction begins discovery
 // immediately. If the builtin-reader ReadConditions and the AsyncWaitSet that dispatches
@@ -29,12 +32,17 @@
 
 namespace router {
 
+// The reserved participant_name.role_name sentinel identifying router participants in
+// discovery (D74). Detection keys on this ALONE — an app's arbitrary display name can
+// never collide; claiming this exact role_name is impersonation (accepted residual).
+constexpr const char *kActRouterRoleName = "act.router";
+
 class ParticipantRegistry {
 public:
     struct Config {
         std::string name;
         int domain = 0;
-        std::string user_data_tag; // "act.router=<node>/<router>" (D15); may be empty
+        std::string participant_name; // "<node>/<router>" EntityName (D74); may be empty
         // Already-resolved "LIB::Profile" path for this participant's qos: alias (Phase
         // 7a, D60); empty = no named participant QoS (default_participant_qos()). Alias
         // resolution happens in router_main — this class only applies an already-resolved

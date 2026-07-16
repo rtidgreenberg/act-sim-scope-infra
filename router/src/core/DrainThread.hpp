@@ -21,12 +21,20 @@ namespace router {
 
 class DrainThread {
 public:
+    // heartbeat_period (Phase 8, D75): same tick pattern, posting PresenceTick — a
+    // SEPARATE knob from refresh_period so retuning the counter refresh can never
+    // silently stretch the heartbeat past its 2s DEADLINE offer. Default 0 = no tick.
     explicit DrainThread(RouterController &ctrl,
                          std::chrono::milliseconds refresh_period
+                                 = std::chrono::milliseconds(0),
+                         std::chrono::milliseconds heartbeat_period
                                  = std::chrono::milliseconds(0))
             : ctrl_(ctrl), running_(true) {
-        thread_ = std::thread([this, refresh_period]() {
+        thread_ = std::thread([this, refresh_period, heartbeat_period]() {
             auto next_refresh = std::chrono::steady_clock::now() + refresh_period;
+            auto next_heartbeat = std::chrono::steady_clock::now(); // first beat now:
+            // the roster side (PresenceMonitor) marks a peer ALIVE only on a heartbeat,
+            // so the first one should not wait a full period after startup.
             while (running_.load(std::memory_order_relaxed)) {
                 if (refresh_period.count() > 0
                     && std::chrono::steady_clock::now() >= next_refresh) {
@@ -39,6 +47,13 @@ public:
                     do {
                         next_refresh += refresh_period;
                     } while (next_refresh <= std::chrono::steady_clock::now());
+                }
+                if (heartbeat_period.count() > 0
+                    && std::chrono::steady_clock::now() >= next_heartbeat) {
+                    ctrl_.post(ControllerEvent::presence_tick());
+                    do { // same catch-up resync as the refresh tick above
+                        next_heartbeat += heartbeat_period;
+                    } while (next_heartbeat <= std::chrono::steady_clock::now());
                 }
                 ctrl_.wait_and_drain(std::chrono::milliseconds(100));
             }

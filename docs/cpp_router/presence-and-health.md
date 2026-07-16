@@ -242,8 +242,11 @@ Either way it is a local diagnostic only; cross-link presence remains the `Route
 
 ## Health/mesh IDL sketch
 
-Generated alongside `RouterAdminTypes.idl` (see [command-status.md](command-status.md)); wired
-in during the presence phase, after the P0–P3 core exists.
+Generated alongside `RouterAdminTypes.idl` (see [command-status.md](command-status.md));
+**shipped in Phase 8 (D75/D76) inside `router/admin/RouterAdminTypes.idl`** with one
+deviation from the sketch below: `state_revision` is `uint64`, not `string` —
+`RouterStatus.state_revision` is `uint64` and the mesh republish trigger ("a peer's
+`state_revision` advances") compares it numerically.
 
 ```idl
 enum RouterOverallState { ROUTER_OK, ROUTER_DEGRADED, ROUTER_ERROR };
@@ -297,9 +300,10 @@ New health/mesh types (`RouterHealth`, `RouterMeshStatus`) generated alongside
 `RouterAdminTypes.idl`. The `PresenceMonitor` module (see
 [code-architecture.md](code-architecture.md)) publishes this router's compact `RouterHealth`
 over the WAN, subscribes to peers', maintains the roster, and publishes the aggregated
-`ActRouterMeshStatus` over the LAN; the roster also feeds presence-driven reset (Tenet 5).
-Recommend proving it in a spike (N `RouterHealth` publishers on the WAN participant; kill one;
-confirm peers mark it DEAD with the right delta, that the LAN `ActRouterMeshStatus` aggregate
-updates, and that participant purge drives `NO_WRITERS` on a co-tested data topic) before wiring
-into the router — after the P0–P3 core exists. Per project convention, that spike's driver and
-kill/verify tooling are Python.
+`ActRouterMeshStatus` over the LAN; the roster also feeds presence-driven reset (Tenet 5 —
+the reset *action* itself is Phase 12, D72 scope split). ~~Recommend proving it in a spike~~
+**Spike run and PASSED (`spikes/presence/`, D75 — DEAD-before-purge ordering, STALE
+semantics, mesh aggregate, D74 identity checks all observed), and the module is shipped
+(Phase 8, D76)**: `presence_participant` in the YAML selects the WAN participant; the
+heartbeat rides the controller's 1 s `PresenceTick`; e2e evidence is
+`router/test_e2e/test_presence_roster.py`.

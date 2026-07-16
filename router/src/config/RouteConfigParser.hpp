@@ -44,6 +44,11 @@ struct RouteConfig {
     // name-suffix heuristic (D50 follow-up). Empty is allowed only when participants
     // has exactly one entry.
     std::string admin_participant;
+    // router.presence_participant (Phase 8, D75): the participant carrying the
+    // RouterHealth heartbeat pair (this role's WAN participant), already resolved for
+    // this node's role (the YAML accepts a scalar or a per-role map). Empty = presence
+    // disabled for this process — configs without it are unaffected.
+    std::string presence_participant;
 };
 
 // True if some participant in the list has this exact name. Shared by parse_route_config's

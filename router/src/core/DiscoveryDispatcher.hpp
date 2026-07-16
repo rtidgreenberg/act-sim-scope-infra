@@ -6,11 +6,14 @@
 // samples into PublicationDiscovered / SubscriptionDiscovered / EndpointLost events
 // posted to the RouterController.
 //
-// Participant table (GUID → act.router tag) is maintained from the participant
+// Participant table (GUID → router identity) is maintained from the participant
 // builtin reader and is used for:
 //   - D15 same-node ignore: publications from same-node routers are ignored via
 //     dds::pub::ignore() and not forwarded to the controller.
-//   - EndpointRecord.origin_router: the tag (or empty) is stamped on every event.
+//   - EndpointRecord.origin_router: the identity (or empty) is stamped on every event.
+// The identity is read from the builtin data's participant_name (EntityName) per D74:
+// role_name == "act.router" is the detection sentinel, name is "<node>/<router>".
+// user_data is no longer set or read (the Phase 8 flip; spike-verified, D75).
 //
 // has_type is set to !type_name.empty() — the generated-type fast path (D31):
 // a non-empty type_name from the builtin data is sufficient for construction
@@ -51,8 +54,8 @@ public:
     DiscoveryDispatcher(rti::core::cond::AsyncWaitSet &aws,
                         RouterController &controller,
                         ParticipantRegistry &registry,
-                        const std::string &own_router_tag, // "act.router=<n>/<r>"
-                        TypeResolver &types);              // wire-type registry (D70)
+                        const std::string &own_router_identity, // "<node>/<router>" (D74)
+                        TypeResolver &types);                   // wire-type registry (D70)
 
     // Detach all conditions from the AsyncWaitSet. Call before aws.stop() to
     // ensure the AWS drains safely before conditions and readers are torn down.
@@ -99,7 +102,8 @@ private:
     void drop_pending_publication(const dds::core::InstanceHandle &handle);
     std::vector<std::string> purge_participant_endpoints_locked(
             const std::string &participant_guid);
-    static std::string extract_router_tag(const dds::core::policy::UserData &ud);
+    static std::string extract_router_identity(
+            const dds::topic::ParticipantBuiltinTopicData &data);
     bool is_same_node(const std::string &origin_router) const;
 
     // 7c (D70): register an endpoint's inline type object for its topic
@@ -112,10 +116,10 @@ private:
 
     rti::core::cond::AsyncWaitSet &aws_;
     RouterController &controller_;
-    std::string own_router_tag_;
+    std::string own_router_identity_;
     TypeResolver &types_;
 
-    // Participant GUID → act.router tag (D30; empty string = not a router participant).
+    // Participant GUID → router identity (D30/D74; empty = not a router participant).
     std::mutex table_mutex_;
     std::map<std::string, std::string> participant_table_;
     std::map<std::string, std::vector<PendingPublication>> pending_publications_;

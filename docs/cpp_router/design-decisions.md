@@ -3467,3 +3467,97 @@ identifier row → verified-in-spike, manual Admin Console residual); this entry
 `presence-and-health.md` needed no change (numbers land in code/config with Phase 8; its
 "Open choices" heartbeat item stays open for *production* numbers — the pin here is the
 demo set).
+
+## D76 — Phase 8 IMPLEMENTED: PresenceMonitor (heartbeat/roster/mesh) + the D74 identifier flip shipped; Phase 8 COMPLETE (2026-07-16, accepted; implements the Phase 8 Deliver list per D75's readiness pass; executes D74's flip)
+
+**What shipped.**
+
+- **IDL** (`router/admin/RouterAdminTypes.idl`, the D75 landing spot):
+  `RouterOverallState`, `RouterPresenceState`, `RouterHealth` (`@key router_id`),
+  `RouterMeshPeer`, `RouterMeshStatus` (`@key observer_node/observer_router`). **One
+  deviation from the presence-and-health.md sketch:** `state_revision` is `uint64`, not
+  `string` — `RouterStatus.state_revision` is `uint64` and the mesh republish trigger
+  ("a peer's `state_revision` advances") compares numerically. Sketch annotated.
+- **`PresenceMonitor`** (`router/src/core/PresenceMonitor.{hpp,cxx}`), implementing a new
+  optional `IPresencePublisher` seam on `RouterController` (nullable, symmetric with
+  `IStatusPublisher`/`IControllerJournal` — D55 precedent; every pre-Phase-8 test passes
+  nullptr unchanged): `RouterHealth` writer+reader on the presence (WAN) participant with
+  the D75 QoS (RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1), DEADLINE 2 s, AUTOMATIC
+  liveliness 3 s — constants in `PresenceMonitor.hpp`); roster off the designed signals
+  (valid sample → ALIVE; reader `REQUESTED_DEADLINE_MISSED` StatusCondition → STALE, only
+  from ALIVE so a policy flag can never mask death; instance `NOT_ALIVE_NO_WRITERS` →
+  DEAD), all on the shared AsyncWaitSet (ReadCondition + StatusCondition, D32 detach
+  barriers in `shutdown()`); `ActRouterMeshStatus` writer on the admin (LAN) participant,
+  republished only on roster change (peer appears, presence transition, peer revision
+  advance). Roster correlation `router_id → participant GUID` read from the heartbeat
+  writer's `matched_publication_data(...).participant_key()`, exposed via
+  `participant_guid_of()` (Phase 9 rollup / Phase 12 reset consumers); cleared on DEAD.
+- **Heartbeat tick:** new `ControllerEventKind::PresenceTick` posted by `DrainThread` on
+  a **separate** 1 s knob beside D71's `refresh_period` — deliberately NOT folded into
+  `RefreshCounters`, so retuning the counter refresh can never silently stretch the
+  heartbeat past its own 2 s DEADLINE offer. Same skip-path as RefreshCounters in
+  `process_one` (D71 rule): touches no fingerprinted state, never bumps
+  `state_revision`, never journaled. The controller's `apply_presence_tick` builds the
+  compact summary on the strand (identity, `heartbeat_seq`, `state_revision`, route
+  rollup n_routes/n_degraded/n_error via `derive_operational`, `overall_state`) and hands
+  it to the seam. First beat fires immediately at DrainThread start (a peer's ALIVE
+  shouldn't wait a full period after startup). `RouterIdentityInfo` gained `node_role`
+  (echoed in the heartbeat's `role` field).
+- **The D74 flip, all consumers at once (no dual-field interim):**
+  `ParticipantRegistry::Config.user_data_tag` → `participant_name`; the registry sets
+  `rti::core::policy::EntityName(name).role_name("act.router")`
+  (`kActRouterRoleName` constant in ParticipantRegistry.hpp);
+  `DiscoveryDispatcher::extract_router_tag(user_data)` →
+  `extract_router_identity(ParticipantBuiltinTopicData)` reading
+  `data->participant_name()` (an RTI **extension reached through `operator->`** like the
+  D70 inline type object — `data.participant_name()` does NOT compile; the
+  `EntityName::name()/role_name()` getters return `rti::core::optional_value<std::string>`);
+  detection keys on `role_name` alone; the participant table and
+  `EndpointRecord.origin_router` now carry the plain `"<node>/<router>"` identity (no
+  `act.router=` prefix); `is_same_node` compares node halves of the plain form.
+  `user_data` is no longer set or read anywhere in the router.
+- **Config:** `router.presence_participant` — scalar or **per-role map** (one shared
+  config file serves both roles: `{control: control_wan, platform: platform_wan}`),
+  resolved to a single name at parse time; absent = presence disabled (all pre-Phase-8
+  configs unaffected). Validated in router_main like the admin participant (must exist,
+  role-compatible). New CLI overrides: `--presence-participant`, and `--router-id` —
+  needed because the e2e `router_pair` launches BOTH processes from one file and
+  `RouterHealth` is keyed by `router_id` (sharing the file's id would merge the two
+  routers into one presence instance; conftest now gives the control role id 20).
+  `control-platform.yaml` and the new `e2e_presence.yaml` carry the presence map — the
+  production config pair now heartbeats on domain 200 in `test_control_platform_full.py`
+  as a matter of course.
+- **Python:** probe poses via `participant_name=`/`role_name=` (the `user_data=` kwarg is
+  REMOVED — D74's no-dual-field applies to the test surface too);
+  `discovered_participant_tags()` → `discovered_participant_names()` returning
+  `{guid: (name, role)}`; `RouterProcess.kill()` (SIGKILL) added for the DEAD test.
+
+**Evidence (all green; e2e 20/20 TWICE from repo root, ctest 4/4, `/dev/shm` clean, no
+strays):** new `test_presence_roster.py` runs E-P1→E-P4 in one flow — both meshes show the
+peer ALIVE with fresh delta and `n_routes = 1`; a heartbeat-withholding probe (liveliness
+kept by its live participant) goes STALE within the deadline window and holds STALE past
+the liveliness lease with nothing torn down; SIGKILL → survivor's mesh shows DEAD inside
+the liveliness window (default 100 s participant lease makes any seconds-scale DEAD
+liveliness-driven by construction — the purge backstop itself was measured in
+`spikes/presence/`); restart under the same identity rejoins ALIVE under the same
+`router_id` with a fresh `heartbeat_seq`. `test_same_node_ignore.py` re-proves the D15
+ignore contract off the new field (E-P5); `test_discovery_smoke.py` detects the router by
+`role_name` + name prefix.
+
+**Notes for later phases.** (1) A sporadic, benign Connext-internal
+`ERROR PRESPsService_cleanup:!start pres psWriter` line can appear in a test process'
+stderr when a peer was SIGKILLed mid-session (seen once across four full-suite runs;
+Connext's own cleanup of a dead peer's proxy — no test impact, no leak). (2) The
+STALE→DEAD cascade on a real crash is normal (deadline < lease) — consumers of
+`ActRouterMeshStatus` should treat STALE as "maybe on its way down", per the design.
+(3) The mesh keeps a DEAD/graceful-close peer's last entry (roster is additive for now);
+eviction policy is a Phase 12 concern alongside the reset action.
+
+**Docs changed.** `implementation-plan.md` (Phase 8 banner → COMPLETE, Deliver/Evidence
+checked off with the E-P map, phase-table row Done + risk struck, confidence notes
+0–8, origin_router wording, D74 open-question "SHIPPED"); `code-architecture.md`
+(PresenceMonitor bullet → shipped semantics + reset deferral, ParticipantRegistry bullet
+past-tense, `PresenceTick` event-table row); `presence-and-health.md` (IDL-sketch shipped
+note + uint64 deviation, "Where it fits" → done pointers); `configuration.md`
+(`presence_participant` key in the router: block); `command-status.md` (no change — its
+mesh-topic entry from the D14 reconciliation already matches); this entry.

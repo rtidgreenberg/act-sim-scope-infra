@@ -67,6 +67,18 @@ struct IStatusPublisher {
     virtual void publish_ack(const RouterCommandAck &ack) = 0;
 };
 
+// Presence heartbeat seam (Phase 8, D75). The controller's PresenceTick handler builds
+// the compact RouterHealth summary from its own state on the strand and hands it here;
+// the real implementation (PresenceMonitor) writes it on the WAN RouterHealth topic.
+// OPTIONAL like the journal: nullptr (the default) disables presence entirely — configs
+// without a presence participant, and every pre-Phase-8 test, are unaffected.
+// Telemetry only: publish_heartbeat() must never block route control and never touches
+// controller state (D5 — heartbeats do not bump state_revision).
+struct IPresencePublisher {
+    virtual ~IPresencePublisher() {}
+    virtual void publish_heartbeat(const RouterHealth &hb) = 0;
+};
+
 // Debug-analysis journal seam (Phase 6 slice 6b, D55). The controller invokes record()
 // exactly once per processed ControllerEvent, carrying the input event, decision/outcome,
 // and pre/post state_revision. It is OPTIONAL: the controller holds an IControllerJournal*

@@ -24,13 +24,20 @@ def _types():
 class Probe:
     """One UDPv4-only DomainParticipant on `domain`, for app-side pub/sub in a test."""
 
-    def __init__(self, domain, user_data=None):
+    def __init__(self, domain, participant_name=None, role_name=None):
         qos = dds.DomainParticipant.default_participant_qos
         qos.transport_builtin = dds.TransportBuiltin.udpv4
-        # user_data (e.g. an "act.router=<node>/<router>" tag, D15) lets a probe pose as a
-        # same-node router so the D15 same-node-ignore path can be exercised.
-        if user_data is not None:
-            qos.user_data = dds.UserData(list(user_data.encode("utf-8")))
+        # participant_name/role_name (EntityName, D74) let a probe pose as a router
+        # (name="<node>/<router>", role_name="act.router") so the D15 same-node-ignore
+        # path can be exercised off the new identity field. The old user_data tag is
+        # retired (D74 — the router no longer sets or reads it).
+        if participant_name is not None or role_name is not None:
+            entity_name = qos.participant_name
+            if participant_name is not None:
+                entity_name.name = participant_name
+            if role_name is not None:
+                entity_name.role_name = role_name
+            qos.participant_name = entity_name
         self.participant = dds.DomainParticipant(domain, qos)
         self._publisher = dds.Publisher(self.participant)
         self._subscriber = dds.Subscriber(self.participant)
@@ -86,16 +93,21 @@ class Probe:
             data[path] = value
         return data
 
-    def discovered_participant_tags(self):
-        """Return {participant_key_str: user_data_text} for every participant this probe
-        has discovered (builtin DCPSParticipant data). Used to observe a router's
-        act.router=<node>/<router> user-data tag without any application type."""
-        tags = {}
+    def discovered_participant_names(self):
+        """Return {participant_key_str: (name, role_name)} for every participant this
+        probe has discovered (builtin DCPSParticipant data). Used to observe a router's
+        D74 EntityName identity (name="<node>/<router>", role_name="act.router") without
+        any application type."""
+        names = {}
         for handle in self.participant.discovered_participants():
-            data = self.participant.discovered_participant_data(handle)
-            text = bytes(data.user_data.value).decode("utf-8", errors="replace")
-            tags[str(data.key.value)] = text
-        return tags
+            try:
+                data = self.participant.discovered_participant_data(handle)
+            except Exception:
+                continue  # participant vanished between enumerate and fetch
+            entity_name = data.participant_name
+            names[str(data.key.value)] = (entity_name.name or "",
+                                          entity_name.role_name or "")
+        return names
 
     def discovered_publications(self):
         """Return a list of {topic, type, participant_key} for every DataWriter this probe

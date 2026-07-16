@@ -6,8 +6,11 @@ now driven through the real router_main + real DynamicRouteFactory (config/
 e2e_same_node_ignore.yaml — one router, node TestNode, route ignore_r1, explicit "default"
 QoS on both legs).
 
-Two behaviors, both D15, expressed in create-and-observe + wire-type terms (D64/D66/D70):
-  A. a writer on a participant tagged act.router=TestNode/<other> (SAME node as the router)
+Two behaviors, both D15, expressed in create-and-observe + wire-type terms (D64/D66/D70),
+asserted off the D74 identity field (participant_name/role_name — the user_data tag is
+retired; this test re-proves the D15 ignore contract on the new field, per D74/D75):
+  A. a writer on a participant named TestNode/<other> with role_name act.router (SAME
+     node as the router)
      is recognized as a same-node router publication and ignored (dds::pub::ignore) — the
      router logs endpoint_ignored_same_node, the ignored endpoint NEVER TEACHES the
      topic's type (D70: ignored endpoints are excluded from type acquisition too), so
@@ -53,8 +56,11 @@ def test_same_node_publication_ignored_real_publication_routed(
     alive = lambda: router.is_alive()  # noqa: E731
 
     status_probe = Probe(in_domain)
-    # A probe posing as a SAME-NODE peer router (same node "TestNode" as the router).
-    peer_router = Probe(in_domain, user_data=f"act.router={NODE}/peer-router")
+    # A probe posing as a SAME-NODE peer router (same node "TestNode" as the router) via
+    # the D74 EntityName identity — participant_name "<node>/<router>" with the
+    # act.router role sentinel (the retired user_data tag is no longer read).
+    peer_router = Probe(in_domain, participant_name=f"{NODE}/peer-router",
+                        role_name="act.router")
     app_in = Probe(in_domain)     # genuine application publisher (untagged)
     app_out = Probe(out_domain)   # genuine application subscriber (untagged)
     held = []

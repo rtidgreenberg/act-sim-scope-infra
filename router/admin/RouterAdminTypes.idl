@@ -174,6 +174,61 @@ struct RouterStatus {
     sequence<RouterRouteStatus> routes;
 };
 
+// ---- Presence & Health (Phase 8, D75; sketch: docs/cpp_router/presence-and-health.md) ----
+//
+// RouterHealth is the ONE liveliness-bearing WAN topic ("RouterHealth"): a compact
+// per-router summary, keyed by router_id, heartbeat-written at 1 s with DEADLINE 2 s and
+// AUTOMATIC liveliness lease 3 s (the D75-pinned demo numbers; D16 ordering requires the
+// WAN participant lease to stay longer than the 3 s liveliness window).
+// RouterMeshStatus is the LAN aggregate ("ActRouterMeshStatus"): each router's roster of
+// every peer's last summary + presence, republished on roster change.
+//
+// Deviation from the design-doc sketch (pinned in D76): state_revision is uint64, not
+// string — RouterStatus.state_revision is uint64 and the mesh republish trigger ("a
+// peer's state_revision advances") compares it numerically.
+
+enum RouterOverallState {
+    ROUTER_OK,
+    ROUTER_DEGRADED,
+    ROUTER_ERROR
+};
+
+enum RouterPresenceState {
+    PRESENCE_ALIVE,
+    PRESENCE_STALE,   // liveliness ok but heartbeats withheld past DEADLINE — policy
+                      // flag, never a teardown (D75)
+    PRESENCE_DEAD     // liveliness lost / NOT_ALIVE_NO_WRITERS / participant purged
+};
+
+struct RouterHealth {
+    @key
+    uint32 router_id;
+    string node_name;      // "<node>" (the D74 identity's node half)
+    string role;           // node role (control/platform)
+    uint64 heartbeat_seq;
+    int64 send_timestamp;  // ns since epoch
+    uint64 state_revision; // this router's RouterStatus revision at send time
+    uint32 n_routes;
+    uint32 n_degraded;
+    uint32 n_error;
+    RouterOverallState overall_state;
+};
+
+struct RouterMeshPeer {
+    RouterHealth health;        // last compact summary heard from the peer
+    RouterPresenceState presence;
+    int64 last_seen_delta_ms;   // now - last heartbeat receipt, at publish time
+};
+
+struct RouterMeshStatus {
+    @key
+    string observer_node;       // the router publishing this aggregate
+    @key
+    string observer_router;
+    uint64 state_revision;      // bumps when the roster changes
+    sequence<RouterMeshPeer> peers;
+};
+
 // Keyed by (target_node, target_router) like RouterStatus: each router is one instance
 // on ActRouterControllerJournal, so a recorder subscribed to several routers keeps
 // per-router reader caches (one router's record burst cannot evict another's). Within a
