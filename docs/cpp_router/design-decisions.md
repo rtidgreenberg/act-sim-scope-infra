@@ -3399,3 +3399,71 @@ now "decided (D74), verify in presence spike"; open-questions D53 item resolved)
 `code-architecture.md` (ParticipantRegistry tag bullet → EntityName);
 `presence-and-health.md` (no change needed — it references the roster join generically);
 amend pointers added to D15 and D53; this entry.
+
+## D75 — Phase 8 readiness pass complete: presence spike RUN and PASSED (D16 ordering observed, D74 identity verified); demo numbers, moderate-lease regime, and IDL landing spot pinned (2026-07-16, accepted; completes the D72 Phase 8 readiness checklist — Phase 8 is ready to implement)
+
+**Context.** D72's Phase 8 checklist had five items: D53 (decided by D74), the presence
+spike, the demo numbers, the IDL landing spot, and the lease regime. This entry closes the
+remaining four. The spike (`spikes/presence/`, Python driver + SIGKILL-able peer
+subprocesses per convention) ran 2026-07-16 — **PASS, stable 4/4** across four base
+domains, `/dev/shm` clean, no strays. Full results: `spikes/presence/README.md`.
+
+**Spike findings (observed, not assumed).**
+
+- **D16 ordering held with 6–12 s margin in every run:** after SIGKILL, the survivor marked
+  the peer DEAD via `RouterHealth` liveliness loss at **2.6–5.3 s** (3 s lease + up to one
+  automatic assert interval + jitter), while the dead peer's data writer was **still
+  matched** — participant purge trailed at **11.1–15.8 s** and only then drove
+  `NOT_ALIVE_NO_WRITERS` on the co-tested data topic (the backstop). The presence topic is
+  authoritatively first.
+- **Purge latency is lease-ORDER, not lease-exact:** 11.1–15.8 s against a 10 s lease —
+  expiry counts from the last SPDP announce *before* the kill (assert period 3 s) plus
+  purge-check granularity. Treat the participant lease as an order-of-magnitude backstop
+  knob; never build a timing contract on it.
+- **STALE→DEAD cascade on a real crash is expected:** the 2 s DEADLINE fires before the 3 s
+  liveliness lease, so the roster passes through STALE (~1.3–2.0 s) on the way to DEAD.
+  `PresenceMonitor` should treat this as normal, not an anomaly.
+- **STALE is cleanly separable from DEAD:** a peer withholding heartbeats while its process
+  lives stayed STALE (deadline-missed at ~2 s after the last heartbeat) through a hold well
+  past the liveliness lease — liveliness never lost, data writer never unmatched, nothing
+  torn down. Note: `AUTOMATIC` liveliness alone keeps a live process ALIVE-by-liveliness;
+  the explicit `assert_liveliness()` is redundant for `AUTOMATIC` (exercised anyway).
+  "ALIVE-by-liveliness, silent-by-deadline" is exactly the designed STALE semantics.
+- **D74 identity verified (resolves the spike half of D74's sub-question 3):**
+  `participant_name.name`/`role_name` readable off the builtin `DCPSParticipant` sample at
+  discovery (`discovered_participants()`/`discovered_participant_data()`, no new
+  machinery); detection on `role_name == "act.router"` alone correctly excludes an app
+  participant with an arbitrary display name; the roster join survives kill/restart — same
+  `router_id` rejoins ALIVE under a **new** participant GUID (join by name, not GUID).
+  **Manual residual:** Admin Console displaying the name was NOT checked (needs the GUI);
+  it is a display nicety, not load-bearing — flagged for an opportunistic manual check, not
+  a blocker.
+
+**Pinned (checklist items 3–5).**
+
+- **Demo numbers (item 3):** heartbeat period **1 s**; `RouterHealth` DEADLINE **2 s** (2×
+  period); `RouterHealth` liveliness lease **3 s** (`AUTOMATIC`, 3× period); WAN participant
+  lease **10 s** / assert **3 s**. D16 ordering: any retune MUST keep
+  `participant lease > liveliness lease`; record both next to each other in config/code.
+- **Lease regime (item 5):** **moderate lease** for the POC (built-in stale eviction, zero
+  hygiene machinery), per the presence-and-health.md "tradeoff, not a fork" recommendation.
+  The long-lease + GUID-supersede `ignore()` + ignore-table sizing path stays deferred until
+  rediscovery-churn suppression is a demonstrated need.
+- **IDL landing spot (item 4):** `RouterOverallState`, `RouterPresenceState`,
+  `RouterHealth`, `RouterMeshPeer`, `RouterMeshStatus` from the presence-and-health.md
+  sketch land in **`router/admin/RouterAdminTypes.idl`** (the existing file, existing
+  rtiddsgen codegen path — a separate IDL file would need a second
+  `connextdds_rtiddsgen_run` for one topic family with no consumer outside the router).
+  Topic names: `RouterHealth` (WAN), `ActRouterMeshStatus` (LAN), per the design doc's
+  topic table.
+
+**Consequence.** Every Phase 8 readiness item is closed; Phase 8 (PresenceMonitor,
+heartbeat tick via the D71 `DrainThread` pattern, roster, LAN mesh aggregate, and the D74
+identifier flip) is ready to implement per its Deliver/Evidence lists.
+
+**Docs changed.** `implementation-plan.md` (Phase 8 readiness checklist items 2–5 marked
+resolved with the spike results; investigation-table presence-spike row → done/PASS;
+identifier row → verified-in-spike, manual Admin Console residual); this entry.
+`presence-and-health.md` needed no change (numbers land in code/config with Phase 8; its
+"Open choices" heartbeat item stays open for *production* numbers — the pin here is the
+demo set).

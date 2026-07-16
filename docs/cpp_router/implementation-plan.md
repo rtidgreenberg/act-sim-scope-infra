@@ -579,29 +579,27 @@ Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
    `participant_name()`, and the roster is built directly on the new field (no dual-field
    interim). The existing `test_same_node_ignore.py` re-proves the D15 ignore contract off
    the new field (probe poses via `participant_name` instead of `user_data`).
-2. **Run the presence spike** (`spikes/presence/`, Python driver per convention — the one
-   banner-phase item still outside the repo's spike-before-implement pattern). Prove: N
-   `RouterHealth` publishers on WAN participants; SIGKILL one; surviving peers mark it DEAD
-   inside the liveliness window (before participant purge — the D16 ordering `WAN lease >
-   RouterHealth liveliness window` observed, not assumed); the LAN `ActRouterMeshStatus`
-   aggregate updates; participant purge then drives `NO_WRITERS` on a co-tested data topic
-   as the trailing backstop. Also force STALE: a probe that keeps liveliness asserted
-   (`assert_liveliness`) while withholding heartbeats past the deadline. **Plus the D74
-   identity checks**: spike participants set `EntityName`; `participant_name()` is readable
-   off the builtin sample at discovery time; the roster GUID join survives a kill/restart
-   (new GUID, same name); Admin Console displays the name (manual check).
-3. **Pin the demo numbers**: heartbeat period (default 1 s), `RouterHealth` liveliness lease
-   (2–3× period), DEADLINE (1.5–2× period), WAN participant lease (must stay > liveliness
-   window per D16 — record the chosen values so a retune can't silently violate the
-   ordering).
-4. **Pin the IDL landing spot**: `RouterHealth`/`RouterMeshPeer`/`RouterMeshStatus` from the
-   sketch in [presence-and-health.md](presence-and-health.md), generated alongside
-   `RouterAdminTypes.idl` through the existing rtiddsgen path.
-5. **Pick the lease regime** ([presence-and-health.md](presence-and-health.md) "tradeoff, not
-   a fork"): *recommended for the POC* — moderate WAN participant lease (built-in stale
-   eviction, zero hygiene machinery); the long-lease + GUID-supersede `ignore()` +
-   ignore-table sizing path is deferred until rediscovery-churn suppression is a demonstrated
-   need.
+2. ~~Run the presence spike~~ **Run and PASSED (D75, 2026-07-16; `spikes/presence/`,
+   stable 4/4).** DEAD via `RouterHealth` liveliness at 2.6–5.3 s, participant purge
+   trailing at 11.1–15.8 s — the D16 ordering observed with 6–12 s margin (the dead peer's
+   data writer was still matched at the moment of DEAD); purge then drove `NO_WRITERS` on
+   the co-tested data topic; the LAN `ActRouterMeshStatus` aggregate tracked
+   ALIVE→DEAD; STALE (deadline-missed, ~2 s) never escalated to DEAD over a hold past the
+   liveliness lease. **All D74 identity checks green** (name/role readable at discovery,
+   detection on `role_name` alone, roster join across kill/restart GUID change); the only
+   residual is the manual Admin Console display check. Findings for the implementation:
+   purge latency is lease-*order* not lease-exact (never a timing contract), and a real
+   crash cascades STALE→DEAD (deadline fires before the lease) — normal, not an anomaly.
+3. ~~Pin the demo numbers~~ **Pinned (D75):** heartbeat **1 s**, DEADLINE **2 s**,
+   `RouterHealth` liveliness lease **3 s** (`AUTOMATIC`), WAN participant lease **10 s** /
+   assert **3 s**. Any retune MUST keep `participant lease > liveliness lease` (D16);
+   record both knobs next to each other.
+4. ~~Pin the IDL landing spot~~ **Pinned (D75):** the presence types land in the existing
+   `router/admin/RouterAdminTypes.idl` through the existing rtiddsgen path (no second IDL
+   file/codegen run for one topic family).
+5. ~~Pick the lease regime~~ **Pinned (D75):** moderate lease for the POC; the long-lease +
+   GUID-supersede `ignore()` path stays deferred until rediscovery-churn suppression is a
+   demonstrated need.
 
 Deliver:
 
@@ -852,19 +850,19 @@ or narrows the fallback path.
 | Phase 2: discovery dispatcher | High — **resolved (D12/D13)** | ~~Compare built-in publication/subscription readers vs Connext discovery listeners~~ Decided: builtin readers + `ReadCondition`s on the `AsyncWaitSet`; endpoint fields validated against 7.7; LAN `request_types_filter` required for type learning | topic name, registered type name/type id, partition, and QoS summaries are available without fragile internal assumptions | use the API with the most stable metadata even if it is less elegant |
 | Phase 3: dynamic entity lifecycle | High — **resolved (D31/D32)** | ~~Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly~~ Decided: `detach_condition()` is a documented **blocking barrier** (in-flight handler has returned on success); per-condition dispatch is serialized (never call `unlock_condition`); pinned close order detach→close-cond→close-reader→close-writer on the controller strand | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
 | Phase 5: LAN `auto` QoS | High — **resolved (D39), shipped (D45)** | ~~Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set~~ Decided: no reader-side derivation at all — weakest-request input readers match every writer by RxO construction; writer derives deadline (mutable in place) and, per D42, liveliness kind+lease at creation (fixed TL offer is already the durability auto-match); immutability table, ownership-equality RxO, liveliness RxO/assert mechanics, and incompatible-QoS status detection validated against 7.7 (the data model is reference-only per D35, so "actual ACT endpoints" was stale — the phase tests against router-authored endpoints with deliberately heterogeneous QoS) | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
-| **Phase 8: presence mechanism** | Design pinned ([presence-and-health.md](presence-and-health.md), D14/D16); **spike not yet run** | `spikes/presence/` (Python driver): N `RouterHealth` publishers on WAN participants; SIGKILL one → peers mark DEAD inside the liveliness window and **before** participant purge (D16 ordering observed); LAN `ActRouterMeshStatus` aggregate updates; purge then drives `NO_WRITERS` on a co-tested data topic; force STALE via `assert_liveliness` + withheld heartbeats | DEAD/STALE/purge arrive in the designed order with the designed latencies | shorten the WAN participant lease and let purge be the primary signal for the demo; roster becomes purge-driven |
+| **Phase 8: presence mechanism** | High — **spike RUN and PASSED (D75, 2026-07-16), stable 4/4** | ~~`spikes/presence/` (Python driver): N `RouterHealth` publishers on WAN participants; SIGKILL one → peers mark DEAD inside the liveliness window and **before** participant purge (D16 ordering observed); LAN `ActRouterMeshStatus` aggregate updates; purge then drives `NO_WRITERS` on a co-tested data topic; force STALE via `assert_liveliness` + withheld heartbeats~~ Observed: DEAD 2.6–5.3 s (3 s lease), purge trailing 11.1–15.8 s (10 s lease, lease-*order* not lease-exact), STALE ~2 s never escalating, mesh aggregate tracking — see `spikes/presence/README.md` | ~~DEAD/STALE/purge arrive in the designed order with the designed latencies~~ **They did, every run, with 6–12 s of D16 margin** | (not needed) |
 | Phase 10: team partition changes | Medium-high — mechanism decided (D73: participant partition only; sentinel retired); in-place `set_qos` validated (D15) | No separate spike needed: remaining readiness items are flat-route parsing + the accept path; the phase e2e must empirically confirm the D73 SEDP-suppression claim and observe rematch as matched-count transitions (D66/D67) | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back — including announcement-paced join latency acceptable for the demo | pinned fallback (D73): endpoint-only fan-out via the shipped D69 `set_partitions` path; same evidence tests, different mechanism |
 | Phase 11: serialized-CDR fast path | Medium — **investigate only if the phase goes active** (opt-in per Tenet 7) | Build a standalone Connext 7.7 C++ pass-through for one generated type using DynamicData serialized-buffer APIs | the reader can access the CDR buffer and the writer can publish it without field materialization | keep `dynamic_data` (the default) and drop the optimization |
 | Phase 12: keyed lifecycle mirroring | **High** — dispose/no-writers propagation and `key_value()` recovery proven by `spikes/isc_recovery/` | Residual check only: `key_value()` recovery on a **DynamicData** route in the shipped relay (the spike used its own harness), against the deliberately keyed fixture the readiness pass authors (Tenet 8) | downstream reader observes matching instance states and keys recover reliably in the shipped runtime | require generated-type route runtimes for lifecycle-sensitive topics |
 | Phase 13: harness replacement | Medium-high | Replace Routing Service for one non-critical ACT route in container startup while leaving the rest unchanged | startup ordering, peer discovery, logs, and cleanup are understandable in compose/scripts | run the router sidecar in observe-only/status-only mode before removing Routing Service |
 | Phase 9 → health *inference* (not capture) | Capture design pinned (D14/D18); metric *meaning* unproven | netem correlation-experiment spike (own `spikes/` entry, Python driver): sweep delay/jitter/loss/rate/blackout one axis at a time against recorded `ActRouterLinkStats` + the ground-truth schedule; also empirically verify per-locator counter attribution and app-ack RTT probe behavior ([link-health.md](link-health.md)) | specific metrics demonstrably track specific impairments with usable lag and noise floor → a follow-up decision pins thresholds/classification feeding the `RouterHealth` rollup | metrics stay raw telemetry; no health inference ships; presence remains the only health authority |
-| Cross-cutting: router identifier scheme — **decided (D74), verify in the Phase 8 presence spike** | Decided: full replacement — `name = "<node>/<router>"`, detection on `role_name == "act.router"`; `user_data` retires with the Phase 8 flip | Verification rides the presence spike (identity checks: `participant_name()` readable off the builtin sample at discovery, roster GUID join across kill/restart, Admin Console display) + `test_same_node_ignore.py` re-proving the D15 ignore contract off the new field post-flip | loop-safety and rollup joins work identically off the new field in the shipped router | documented-and-accepted residual only: an app deliberately claiming `role_name = "act.router"` is impersonation and gets ignored by same-node routers |
+| Cross-cutting: router identifier scheme — **decided (D74), spike-verified (D75)** | Decided and verified: full replacement — `name = "<node>/<router>"`, detection on `role_name == "act.router"`; `user_data` retires with the Phase 8 flip | ~~Verification rides the presence spike~~ Done (D75): `participant_name()` readable off the builtin sample at discovery, detection on `role_name` alone excludes a display-named app, roster GUID join across kill/restart — all green; **residuals:** the manual Admin Console display check, and `test_same_node_ignore.py` re-proving the D15 ignore contract off the new field post-flip (a Phase 8 evidence item) | loop-safety and rollup joins work identically off the new field in the shipped router | documented-and-accepted residual only: an app deliberately claiming `role_name = "act.router"` is impersonation and gets ignored by same-node routers |
 
 Investigation order (updated at D72 — the original hardest-first list is done: attach/detach
-D31/D32, auto QoS D39/D45, partition mutability D15, plus the Phase 7 spikes): **(1) the
-presence spike** — it gates Phase 8, the next phase to build; **(2) the D53 prototype**
-inside Phase 8's readiness pass; **(3) the netem correlation experiment** any time after
-Phase 9 ships capture (it gates only inference); **(4) the Phase 11/12 investigations only
+D31/D32, auto QoS D39/D45, partition mutability D15, plus the Phase 7 spikes): ~~(1) the
+presence spike~~ **done (D75)**; ~~(2) the D53 prototype~~ **done — the identity checks rode
+the presence spike (D74/D75)**; next: **the netem correlation experiment** any time after
+Phase 9 ships capture (it gates only inference); then **the Phase 11/12 investigations only
 when those phases go active** — Phase 11 is opt-in, and Phase 12's residual check rides the
 phase itself. Phase 10 needs decisions, not a spike.
 
@@ -892,7 +890,8 @@ existing, and the presence-driven reset (via 12) is on the acceptance-criteria p
 - Delivered and test-verified (Phases 0–7): controller state, discovery, explicit- and
   alias-QoS forwarding, DynamicData + wire-learned types, create-and-observe matching,
   command/status/journal loop, the full production `control-platform.yaml` pair.
-- High confidence, not yet built: Presence/Health (Phase 8 — design pinned, spike pending)
+- High confidence, not yet built: Presence/Health (Phase 8 — design pinned, spike PASSED,
+  readiness complete per D75 — ready to implement)
   and keyed lifecycle mirroring (Phase 12 — mechanism proven by `spikes/isc_recovery/`;
   the old "Medium" rating predates that spike and the tenets reframe).
 - Medium-high confidence: team partition route (Phase 10 — mechanics validated, but the
@@ -968,8 +967,8 @@ Routing Service.
 - ~~Should the D15 `user_data` router-tag mechanism be replaced by `participant_name`
   (ENTITY_NAME) as the router identifier?~~ **Resolved (D74, 2026-07-16): full
   replacement.** `name = "<node>/<router>"`, detection keyed on
-  `role_name == "act.router"`; ships with Phase 8 (spike verification folded into the
-  presence spike). See D53 for the original scoping and D74 for the decision.
+  `role_name == "act.router"`; ships with Phase 8 (spike verification rode the presence
+  spike and PASSED — D75). See D53 for the original scoping and D74 for the decision.
 
 ## Relationship To Current Roadmap
 
