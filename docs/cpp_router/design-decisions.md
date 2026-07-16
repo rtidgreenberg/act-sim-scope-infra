@@ -3124,3 +3124,82 @@ idempotence. ctest 4/4; full e2e **17/17 twice**; `/dev/shm` clean.
 
 **Docs changed.** `implementation-plan.md` (7c delivered); `RouterAdminTypes.idl`
 (journal enum); config headers (stale `type_name` comments); this entry.
+
+---
+
+## D71 — Slice 7d IMPLEMENTED: full `control-platform.yaml` two-process e2e + the D63 counter path; Phase 7 COMPLETE (2026-07-15, accepted; implements D63 and D59's E5–E7; refines D55's journal rule for the tick)
+
+**Context.** The last Phase 7 slice: run the REAL production config end to end (Milestone
+2) and make the sample counters observable. `RouteTopicRuntime::forwarded()` counted on
+the AsyncWaitSet worker threads since Phase 3, but nothing ever copied it into
+`TopicRouteState.samples_forwarded`, and D5 (correctly) excludes counters from the
+revision predicate — so status reported 0 forever. D63 pinned the fix shape; this entry
+records how it landed and the three implementation decisions D63 left open.
+
+**Decisions (as implemented).**
+
+- **Counter pull seam = `IEntityFactory::forwarded_count(route, topic)`** (→
+  `AsyncWaitSetDispatcher::forwarded()`, which already existed unused since Phase 3).
+  Synchronous on the controller strand like `update_writer_deadline` (D39) — the tick
+  handler never crosses a thread to read the runtime's relaxed atomic.
+- **Tick source = `DrainThread`** (new optional `refresh_period` ctor param; `router_main`
+  passes the config-fixed 1 s, D63/D14 precedent; default 0 = no tick, so unit tests and
+  any bare controller are unaffected). The strand loop it already owns posts
+  `ControllerEvent::refresh_counters()` at the cadence; `apply_refresh_counters` pulls
+  every live build's count (`entity_generation != 0`) and, only if something moved,
+  republishes the snapshot at the SAME `state_revision` — the one sanctioned D5
+  exception. An unchanged tick publishes nothing (steady-state silence preserved).
+- **The tick is never journaled (refines D55's "one record per processed event").** A
+  `RefreshCounters` event cannot change externally-visible state by construction, and at
+  1 Hz it would evict the journal's bounded `KEEP_LAST(256)` history in ~4 minutes with
+  pure no-op records — exactly the diagnostic records the journal exists to keep. D46's
+  1:1 enum stays intact (no `JOURNAL_REFRESH_COUNTERS`); `process_one` skips the journal
+  for this kind only.
+- **Sample counters are entity facts** (D63 left this open): `clear_entity_facts()` now
+  zeroes them, so `samples_forwarded` always describes the CURRENT build — the runtime's
+  atomic starts at 0 per build, and without the clear a rebuild's first tick would
+  "decrease" a stale count asynchronously (and a disabled route would advertise a dead
+  build's total). `lifecycle_events_forwarded` stays 0 until Phase 10 mirrors
+  meta-samples.
+- **NOT implemented (deliberate):** D66's optional "tick may re-sample matched counts as
+  a backstop" — the StatusCondition path is proven (D67) and the tick stays minimal; and
+  no YAML knob for the cadence (config-fixed means fixed; a knob waits for a real need).
+
+**Doc-drift fix folded in:** D63's own "Docs changed" list claimed `code-architecture.md`
+and `command-status.md` notes that were never actually written (only
+`implementation-plan.md` was). Both landed now, with this entry's reconciliation.
+
+**Evidence.** New `router/test_e2e/test_control_platform_full.py` (E5+E6): the verbatim
+production `control-platform.yaml` (literal domains 20/30/200 — the suite's
+`unique_domains` spreading starts at 40, no collision) loaded twice by role via the
+standard `router_pair` fixture; all three enabled routes cross the WAN
+(`control_command` through the destination CFT, `platform_primary_status` with the
+app writer on the REAL `LAN_QOS_LIB::status_1sec_qos` profile, `platform_events`
+carrying BOTH wire-learned types through one route); `platform_detail_status` rides
+along DISABLED; then E6 — `samples_forwarded` ≥1 appears via the tick, advances during
+a write window while `state_revision` provably does NOT move (counter/revision pairs
+read from the SAME status sample), and the control router's WAN-crossing leg counts
+too. New `router/test_e2e/test_detail_status_toggle.py` (E7): detail flow gated
+per-router — DISABLED both sides = no flow; `ENABLE_ROUTE` at the platform router only
+= source leg forwards but still no end-to-end flow (control leg still disabled, and the
+platform-addressed command provably never touches the control router's route); enabling
+the control router too completes the chain. Unit:
+`test_refresh_counters_republish_no_bump` (publish-no-bump / silent-when-unchanged /
+cleared-with-teardown, via a `forwarded_counts` map on the fake factory). Probe:
+`read_route_facts` gained per-topic `samples_forwarded` + top-level `state_revision`;
+the 14 templated QoS env vars moved to a shared `conftest.set_wan_qos_env()`
+(`test_qos_alias_route.py` deduplicated onto it). ctest **4/4** (incl. the new unit
+test); full e2e **19/19 twice**; no stray `router_main`, `/dev/shm` clean.
+*(Verification note, 2026-07-16: the implementing session was interrupted before its
+evidence runs could be recorded as trustworthy; the full evidence set above was re-run
+and confirmed green the next day, before commit.)*
+
+**After this entry:** Phase 7 is COMPLETE (7a/7m/7b/7c/7d all delivered) and D50's
+blocker list collapses to the Phase 8 items only (flat platform-team route parsing,
+`participant_partition`/`SET_PARTICIPANT_PARTITION`, `inherit_participant`).
+
+**Docs changed.** `implementation-plan.md` (7d delivered; Phase 7 banner);
+`code-architecture.md` (RouterController refresh tick + D5 exception — the missing D63
+note); `command-status.md` (status cadence: revision change OR counter refresh — the
+missing D63 note); `router/test_e2e/README.md` (two new tests; the production-config
+coverage statement); this entry.

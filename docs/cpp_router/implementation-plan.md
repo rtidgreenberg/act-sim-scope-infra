@@ -407,6 +407,9 @@ Evidence (6b, D56):
 > feeding `QosProvider::extensions().type()`. Confidence **high** with the slice order below.
 > Delivering all four slices runs the real production `control-platform.yaml` (Milestone 2);
 > afterward D50's blocker list collapses to only the Phase 8 items.
+> **PHASE 7 COMPLETE (D71, 2026-07-15):** 7a ✓ 7m ✓ 7b ✓ 7c ✓ 7d ✓ — the production
+> config runs end to end as a two-process pair (`test_control_platform_full.py` /
+> `test_detail_status_toggle.py`), and D50's blocker list is now Phase-8-only.
 >
 > **Pivot (D64, 2026-07-14) — read before implementing 7b/7c.** The design later shifted to
 > **create-and-observe**: the router has no local type objects, learns each topic's type
@@ -477,13 +480,17 @@ Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
   One `DynamicRouteFactory` serves all types. Proof: `test_platform_events.py` (E4) — two
   types from one process, one of them built programmatically in Python and present in NO
   XML; ignored same-node endpoints teach no types; e2e 17/17 twice, ctest 4/4. See D70.
-- **7d — Full `control-platform.yaml` end-to-end.** Control-node + platform-node `router_main`
-  pair on the real production config; `control_command`, `platform_primary_status`, and
-  `platform_events` all cross the WAN; `platform_detail_status` toggled via the Phase 6
-  `ENABLE_ROUTE` loop. Includes the D63 counter path: wire `RouteTopicRuntime::forwarded()` →
-  `TopicRouteState.samples_forwarded` and publish it via a periodic refresh tick that
-  republishes `RouterStatus` **without** bumping `state_revision` (the one sanctioned
-  exception to D5, so counters are observable in steady state).
+- **7d — Full `control-platform.yaml` end-to-end. DELIVERED (D71, 2026-07-15; Phase 7
+  COMPLETE).** Control-node + platform-node `router_main` pair on the verbatim production
+  config; `control_command`, `platform_primary_status`, and `platform_events` all cross
+  the WAN; `platform_detail_status` toggled via the Phase 6 `ENABLE_ROUTE` loop. Includes
+  the D63 counter path: `RouteTopicRuntime::forwarded()` →
+  `TopicRouteState.samples_forwarded` via a 1 s `RefreshCounters` tick (posted by
+  `DrainThread`, pulled through `IEntityFactory::forwarded_count`) that republishes
+  `RouterStatus` **without** bumping `state_revision` (the one sanctioned exception to
+  D5, so counters are observable in steady state; never journaled; counters are entity
+  facts cleared with the build). Proof: `test_control_platform_full.py` (E5/E6) +
+  `test_detail_status_toggle.py` (E7); e2e 19/19 twice, ctest 4/4. See D71.
 
 Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
 

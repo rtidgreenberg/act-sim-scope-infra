@@ -16,31 +16,19 @@ Asserts the plan's E1/E2 evidence:
 Run from the repo root (see router/test_e2e/README.md).
 """
 
-import os
 import sys
 import time
 from pathlib import Path
 
 # The three qos_libraries: files this config loads are templated with 14 env vars (peer
-# locators + WAN tuning). Loopback/test values, same as spikes/qos_alias/qos_alias_spike.py
-# validated (WAN_TIMEOUT_SEC=100, > the hardcoded 30s participant_liveliness_assert_period
-# in wan_qos_lib.xml — see docs/cpp_router/design-decisions.md D60). Set before importing
-# rti.connextdds / launching the router subprocess (which inherits this process's env).
-_QOS_ENV_DEFAULTS = {
-    "CONTROL_LAN_PEER1": "127.0.0.1", "CONTROL_LAN_PEER2": "127.0.0.1",
-    "CONTROL_LAN_PEER3": "127.0.0.1", "CONTROL_WAN_PEER1": "127.0.0.1",
-    "PLATFORM_LAN_PEER1": "127.0.0.1", "PLATFORM_LAN_PEER2": "127.0.0.1",
-    "PLATFORM_LAN_PEER3": "127.0.0.1", "PLATFORM_WAN_PEER1": "127.0.0.1",
-    "WAN_HB_PERIOD_SEC": "1", "WAN_HB_RETRIES": "10", "WAN_MAX_BLOCKING_SEC": "1",
-    "WAN_TIMEOUT_SEC": "100", "WAN_TTL": "1", "WAN_RECEIVE_MULTICAST": "0",
-}
-for _k, _v in _QOS_ENV_DEFAULTS.items():
-    os.environ.setdefault(_k, _v)
+# locators + WAN tuning) — set before importing rti.connextdds / launching the router
+# subprocess (which inherits this process's env). Shared defaults live in conftest
+# (WAN_QOS_ENV_DEFAULTS); see docs/cpp_router/design-decisions.md D60/D65.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conftest import set_wan_qos_env, start_router, render_config, REPO_ROOT  # noqa: E402
+set_wan_qos_env()
 
 import rti.connextdds as dds  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from conftest import start_router, render_config, REPO_ROOT  # noqa: E402
 from util.dds_probe import Probe, reader_qos, wait_for_route  # noqa: E402
 
 TOPIC = "QosAliasCmd"

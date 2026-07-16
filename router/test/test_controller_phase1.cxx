@@ -14,6 +14,7 @@
 #include "core/RouterController.hpp"
 
 #include <cstdio>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -50,6 +51,8 @@ struct FakeEntityFactory : IEntityFactory {
     };
     std::vector<Op> creates, teardowns, aborts, deadline_updates, partition_updates;
     bool fail_deadline_update = false;
+    // Counter the D63 RefreshCounters pull samples, keyed "route|topic" (7d).
+    std::map<std::string, std::uint64_t> forwarded_counts;
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
                                std::uint64_t gen,
@@ -101,6 +104,12 @@ struct FakeEntityFactory : IEntityFactory {
         op.pub_partition = publisher_partition;
         partition_updates.push_back(op);
         return true;
+    }
+    std::uint64_t forwarded_count(const std::string &route,
+                                  const std::string &topic) const override {
+        std::map<std::string, std::uint64_t>::const_iterator it =
+                forwarded_counts.find(route + "|" + topic);
+        return it == forwarded_counts.end() ? 0 : it->second;
     }
 };
 
@@ -794,6 +803,51 @@ static void test_set_route_partition() {
     CHECK(f.factory.creates.back().pub_partition == "PLATFORM");
 }
 
+// The D63 counter path (7d): RefreshCounters pulls forwarded() into status and
+// republishes WITHOUT bumping state_revision (the one sanctioned D5 exception); an
+// unchanged pull publishes nothing; counters are entity facts cleared with the build.
+static void test_refresh_counters_republish_no_bump() {
+    std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+    Fixture f(specs);
+    drive_to_forwarding(f, "r", "T");
+    std::uint64_t rev = f.revision();
+    size_t snapshots = f.status.snapshots.size();
+
+    // Counter moved: republish with fresh counters, SAME revision.
+    f.factory.forwarded_counts["r|T"] = 5;
+    f.post(ControllerEvent::refresh_counters());
+    CHECK(f.status.snapshots.size() == snapshots + 1);
+    CHECK(f.revision() == rev);
+    CHECK(f.route("r").topic_status.at(0).samples_forwarded == 5);
+    CHECK(f.route("r").samples_forwarded == 5); // route aggregate (D11)
+
+    // Counter unchanged at the next tick: nothing to say, no publish.
+    f.post(ControllerEvent::refresh_counters());
+    CHECK(f.status.snapshots.size() == snapshots + 1);
+    CHECK(f.revision() == rev);
+
+    // Counter advanced again: republish, still no bump.
+    f.factory.forwarded_counts["r|T"] = 9;
+    f.post(ControllerEvent::refresh_counters());
+    CHECK(f.status.snapshots.size() == snapshots + 2);
+    CHECK(f.route("r").topic_status.at(0).samples_forwarded == 9);
+    CHECK(f.revision() == rev);
+
+    // Teardown clears the counter with the rest of the entity facts (the runtime's
+    // counter is per-build); with no live build a tick pulls nothing and stays quiet
+    // even though the fake still reports 9.
+    f.post(ControllerEvent::command_received(
+            command(RouterCommandKind::DISABLE_ROUTE, "d1", "r")));
+    f.post(ControllerEvent::topic_teardown_complete("r", "T",
+                                                    f.factory.teardowns.back().gen));
+    CHECK(f.route("r").topic_status.at(0).samples_forwarded == 0);
+    size_t after_disable = f.status.snapshots.size();
+    f.post(ControllerEvent::refresh_counters());
+    CHECK(f.status.snapshots.size() == after_disable);
+    CHECK(f.route("r").topic_status.at(0).samples_forwarded == 0);
+}
+
 // Command history bound (D4): FIFO 256, evicted ids are treated as new commands.
 static void test_history_fifo_eviction() {
     std::vector<RouterRouteSpec> specs(
@@ -838,6 +892,7 @@ int main() {
     RUN(test_deadline_tightening_and_warning);
     RUN(test_disable_tears_down);
     RUN(test_set_route_partition);
+    RUN(test_refresh_counters_republish_no_bump);
     RUN(test_history_fifo_eviction);
 
     if (g_failures == 0) {

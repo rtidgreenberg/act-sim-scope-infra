@@ -229,6 +229,11 @@ public:
                                           publisher_partition);
     }
 
+    std::uint64_t forwarded_count(const std::string &route,
+                                  const std::string &topic_name) const override {
+        return dispatcher_.forwarded(route, topic_name);
+    }
+
 protected:
     // --- Type-lane hooks (D41; per-topic since 7c/D70) ---
 

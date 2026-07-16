@@ -31,10 +31,19 @@ pytest router/test_e2e -v
 
 ## What this covers today
 
-Both tests use dedicated fixtures (`router/config/e2e_control_command.yaml`,
-`router/config/e2e_platform_status.yaml`), not the production `control-platform.yaml`/
-`platform-team.yaml` — see `docs/cpp_router/design-decisions.md` D50 for why:
+Most tests use dedicated trimmed fixtures (`router/config/e2e_*.yaml` — see
+`docs/cpp_router/design-decisions.md` D50 for the original rationale). Since Phase 7d
+(D71) the **verbatim production `control-platform.yaml`** is ALSO covered, loaded twice
+by role exactly as deployed:
 
+- **`test_control_platform_full.py`** — Phase 7d (D71, plan E5/E6): the full production
+  config as a control+platform pair; all three enabled routes cross the WAN (CFT'd
+  `control_command`, `platform_primary_status` on the real `LAN_QOS_LIB` profile, and
+  the two-type `platform_events`); per-route `samples_forwarded` advances via the D63
+  1 s refresh tick while `state_revision` provably does not move.
+- **`test_detail_status_toggle.py`** — Phase 7d (D71, plan E7): `platform_detail_status`
+  ships disabled on both routers; `ENABLE_ROUTE` at the platform router alone forwards
+  to the WAN but not end-to-end; enabling the control router too completes the flow.
 - **`test_control_command_route.py`** — control app publishes `ControlCommand`; asserts
   it's forwarded to the addressed platform and filtered out for every other destination
   (the `msg.destination` ContentFilteredTopic).
@@ -63,12 +72,12 @@ Both tests use dedicated fixtures (`router/config/e2e_control_command.yaml`,
   6b (D58): `test_controller_journal.py` asserts the controller journal
   (`ActRouterControllerJournal`) records, `event_sequence` ordering, unchanged route
   behavior with the journal attached, and `journal_falling_behind` absent under normal load.
-- **Phase 7** (QoS-library/XML alias lookup, D45) — named QoS aliases (`wan_event`,
-  `wan_status`, ...) are unresolvable; the e2e fixtures use `qos: ""` (the real Phase 5
-  auto-QoS), not the production aliases.
-- **D34/D35 multi-type dispatch** — `DynamicRouteFactory` binds one type per process, so
-  the production `control-platform.yaml`'s multi-topic `platform_events` route
-  (`PlatformCommandAck` + `ContactReport`, two types) can't run as a single process yet.
+- ~~Phase 7~~ — **complete (D65/D67/D69/D70/D71)**: QoS aliases
+  (`test_qos_alias_route.py`), create-and-observe matching (`test_create_and_observe.py`),
+  partitions incl. runtime `SET_ROUTE_PARTITION` (`test_wan_partition.py`), wire-learned
+  multi-type routes (`test_platform_events.py`), and the full production
+  `control-platform.yaml` (`test_control_platform_full.py`,
+  `test_detail_status_toggle.py`).
 - **Phase 8** (team partitions) — `platform-team.yaml`'s flat route shape isn't parsed by
   `RouteConfigParser` yet.
 - Phase 9/10 (serialized-CDR fast path, keyed lifecycle mirroring).

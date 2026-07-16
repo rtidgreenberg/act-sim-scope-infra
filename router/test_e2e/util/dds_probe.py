@@ -187,6 +187,10 @@ def read_route_facts(status_reader, route_name):
             if data.get_string(f"routes[{i}].route_name") != route_name:
                 continue
             f = {
+                # Top-level revision from the SAME sample as the route facts, so a
+                # counter/revision pair is coherent (E6: counters advance, revision
+                # doesn't — the D63 republish-without-bump).
+                "state_revision": int(data["state_revision"]),
                 "state": ROUTE_STATE.get(int(data[f"routes[{i}].state"]), "?"),
                 "discovery": DISCOVERY_STATE.get(
                     int(data[f"routes[{i}].discovery_state"]), "?"),
@@ -195,6 +199,7 @@ def read_route_facts(status_reader, route_name):
                 "reader_summary": "", "writer_summary": "", "qos_warning": "",
                 # D64/D66 create-and-observe: live matched counts + unmatched reason.
                 "input_matched": 0, "output_matched": 0, "match_reason": "",
+                "samples_forwarded": 0,
             }
             # Per-topic rows (multi-topic routes, 7c/E4); flat fields mirror row 0.
             f["topics"] = {}
@@ -209,6 +214,9 @@ def read_route_facts(status_reader, route_name):
                     "input_matched": int(data[f"{base}.input_matched"]),
                     "output_matched": int(data[f"{base}.output_matched"]),
                     "match_reason": data.get_string(f"{base}.match_reason"),
+                    # 7d/D63: pulled from the live build by the router's 1s refresh
+                    # tick; advances in status WITHOUT a state_revision bump.
+                    "samples_forwarded": int(data[f"{base}.samples_forwarded"]),
                 }
                 f["topics"][data.get_string(f"{base}.name")] = row
                 if t == 0:

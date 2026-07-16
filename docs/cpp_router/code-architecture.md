@@ -252,18 +252,23 @@ TopicRouteState              # one per configured topic on the route — D11
 The rule of thumb is: **routes read state, the controller writes state**. A route runtime may
 own fast-path DDS entities and route-local counters, but it does not decide global route
 state. When it observes something meaningful, it posts an event such as
-`SampleForwarded`, `WriteFailed`, `EndpointLost`, `LifecycleMirrored`, or
-`RouteEntityError`.
+`TopicMatchChanged`, `TopicQosWarning`, or `RouteEntityError` (sample counts are the
+exception — they are sampled by the controller, not posted; see below).
 The controller folds that event into `MutableRouterState`, increments `state_revision` when
 the externally visible state changes, builds a new `RouterStatus` snapshot (D25), and asks
 `StatusPublisher` to publish it.
 
-For sample counters, use one of two POC-safe options:
-
-- simple path: route runtimes post sampled counter deltas to the controller after each
-  dispatch batch;
-- faster path: route runtimes keep atomics for hot counters, and the controller samples
-  them when building a status snapshot.
+Sample counters take the atomic-sampling path (7d/D63/D71): each route runtime keeps a
+relaxed atomic (`forwarded()`), and the controller samples it on its own strand — a 1 s
+`RefreshCounters` tick (posted by `DrainThread`, config-fixed cadence per D14's
+precedent) pulls every live build's count through
+`IEntityFactory::forwarded_count(route, topic)`. If any counter moved, the controller
+republishes `RouterStatus` at the **same `state_revision`** — the one sanctioned
+exception to "publish only on revision change" (D5 still decides what bumps revision;
+counters are excluded from the fingerprint). An unchanged tick publishes nothing, and
+the tick is never journaled (D71 — a 1 Hz no-op record stream would evict the journal's
+bounded history). Counters are entity facts: cleared with the build, so
+`samples_forwarded` always describes the current build.
 
 Do not let the status topic read arbitrary mutable route objects. Status is always derived
 from the controller's snapshot, which prevents half-applied command/discovery transitions
@@ -287,6 +292,7 @@ The controller should process these event categories on one serialized strand or
 | `EndpointLost` | discovery dispatcher | record-map hygiene only (D66) — never tears down a live build; the matched counts are the connectivity truth |
 | `TopicMatchChanged` | route runtime StatusConditions (`SUBSCRIPTION_MATCHED`/`PUBLICATION_MATCHED`) | if the stamp is current: update the leg's matched count (the discovery truth, D64/D66); stale stamp → discard (D23) |
 | `RouteDataReady` | `AsyncWaitSetDispatcher` | dispatch to route runtime, then fold counter/error deltas into state |
+| `RefreshCounters` | `DrainThread` 1 s tick (7d/D63) | pull each live build's `forwarded()` into state; if any moved, republish status WITHOUT a revision bump; never journaled (D71) |
 | `TopicEntitiesReady` | entity factory (fake in Phase 1) | if the generation stamp is current: topic → `TOPIC_FORWARDING`, derive route state (D11); stale stamp → discard (D21/D23) |
 | `TopicTeardownComplete` | entity factory (fake in Phase 1) | if the stamp is current: topic → `TOPIC_IDLE`, rebuild immediately if the route is (still) enabled (D66); stale stamp → discard (D21/D23) |
 | `RouteEntityError` | entity factory or route runtime | topic-scoped (`topic_name` set): that topic → `TOPIC_ERROR`, siblings unaffected (D11/D21); route-wide (`topic_name` empty): route → `ROUTE_ERROR`; store `last_error`, publish status |

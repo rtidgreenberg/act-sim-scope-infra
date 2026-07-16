@@ -47,9 +47,13 @@ participant.)
 
 Status writer QoS (LAN, D26): `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)` — late-joining LAN
 observers receive the current snapshot on match from durability, so there is no
-"request current status" command and no periodic republish; publication is change-driven
-only (startup + every `state_revision` bump, D17). Observer-side aliveness rides the status
-writer's liveliness, not sample cadence; nothing durable crosses the WAN.
+"request current status" command; publication is change-driven (startup + every
+`state_revision` bump, D17) **plus the D63 counter refresh (7d/D71)**: a config-fixed 1 s
+tick republishes the snapshot with fresh per-route `samples_forwarded` when a counter
+moved, **without bumping `state_revision`** — the one sanctioned exception to
+change-driven-only, so counters are observable in steady state while revision watchers
+see nothing. Observer-side aliveness rides the status writer's liveliness, not sample
+cadence; nothing durable crosses the WAN.
 
 Command reader / ack writer QoS (LAN, D48): `RELIABLE + VOLATILE + KEEP_LAST(16)` on both
 `ActRouterCommand` and `ActRouterCommandAck`. No durability: duplicate `command_id` replay

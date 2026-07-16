@@ -393,7 +393,11 @@ int main(int argc, char **argv) {
         // here, so no strand race).
         ctrl.activate();
 
-        DrainThread drain(ctrl);
+        // 7d (D63): the drain loop doubles as the status-refresh tick — every second it
+        // posts RefreshCounters, so per-route samples_forwarded is observable in steady
+        // state (republish without a state_revision bump). Config-fixed cadence, D14
+        // precedent.
+        DrainThread drain(ctrl, std::chrono::milliseconds(1000));
 
         Log::info("router.start.ok",
                   {{"admin_participant", admin_participant_name},

@@ -51,6 +51,11 @@ struct IEntityFactory {
                                          const std::string &topic_name,
                                          const std::string &subscriber_partition,
                                          const std::string &publisher_partition) = 0;
+    // Cumulative samples forwarded by a live build's runtime (0 if none exists) — the
+    // D63 counter pull, sampled by the controller's RefreshCounters handler on the
+    // strand. The runtime side is a relaxed atomic; exact-at-tick is sufficient.
+    virtual std::uint64_t forwarded_count(const std::string &route_name,
+                                          const std::string &topic_name) const = 0;
 };
 
 // Publishes the controller's outward report. The snapshot IS the generated RouterStatus

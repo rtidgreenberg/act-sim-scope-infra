@@ -57,8 +57,14 @@ struct TopicRouteState {
     // NOT cleared with the build, so re-enable/re-arm rebuilds without a new event.
     bool type_available = false;
     std::string last_error;
+
+    // Sample counters (7d/D63): pulled from the live build's runtime by the periodic
+    // RefreshCounters tick; deliberately excluded from the D5 fingerprint (the tick
+    // republishes status without a revision bump). Entity facts — they describe the
+    // CURRENT build (the runtime's counter starts at 0 per build), so they clear with
+    // it; leaving them would let a rebuild's first tick "decrease" a stale count.
     std::uint64_t samples_forwarded = 0;
-    std::uint64_t lifecycle_events_forwarded = 0;
+    std::uint64_t lifecycle_events_forwarded = 0; // always 0 until Phase 10 mirrors
 
     // Entity facts of the live build (D45): resolved QoS summaries from
     // TopicEntitiesReady, the writer deadline currently offered (for in-place
@@ -76,6 +82,8 @@ struct TopicRouteState {
         offered_deadline_nanos = kInfiniteNanos;
         input_matched_count = 0;
         output_matched_count = 0;
+        samples_forwarded = 0;
+        lifecycle_events_forwarded = 0;
     }
 };
 

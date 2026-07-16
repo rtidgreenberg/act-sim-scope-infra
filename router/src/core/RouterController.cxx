@@ -45,6 +45,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
         return ControllerJournalEventKind::JOURNAL_TOPIC_MATCH_CHANGED;
     case ControllerEventKind::TypeResolved:
         return ControllerJournalEventKind::JOURNAL_TYPE_RESOLVED;
+    case ControllerEventKind::RefreshCounters:
+        break; // never journaled (D63/D71 — process_one skips the tick); fall through
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -132,7 +134,10 @@ void RouterController::process_one(const ControllerEvent &event) {
     publish_if_changed(pre);
     // Debug journal (D55): one record per processed event, after the status publish so the
     // post-revision reflects any bump. Skipped entirely when no journal is attached.
-    if (journal_ != nullptr) {
+    // The RefreshCounters tick is the one event that is never journaled (D63/D71): it can
+    // never change externally-visible state, and at its 1 Hz cadence it would evict the
+    // journal's bounded KEEP_LAST history (~4 min at depth 256) with pure no-op records.
+    if (journal_ != nullptr && event.kind != ControllerEventKind::RefreshCounters) {
         journal_->record(build_journal_record(event, pre_revision));
     }
 }
@@ -168,6 +173,9 @@ void RouterController::process(const ControllerEvent &event) {
         break;
     case ControllerEventKind::TypeResolved:
         apply_type_resolved(event);
+        break;
+    case ControllerEventKind::RefreshCounters:
+        apply_refresh_counters();
         break;
     }
 }
@@ -245,6 +253,8 @@ ControllerJournalRecord RouterController::build_journal_record(
         rec.topic_name = event.topic_name;
         rec.decision = rec.state_changed ? "state_updated" : "no_change";
         break;
+    case ControllerEventKind::RefreshCounters:
+        break; // unreachable — process_one never journals the tick (D63/D71)
     }
 
     // Status is published iff externally-visible state changed (publish_if_changed) — so
@@ -585,6 +595,37 @@ void RouterController::apply_match_changed(const ControllerEvent &e) {
         topic.input_matched_count = e.matched_count;
     } else {
         topic.output_matched_count = e.matched_count;
+    }
+}
+
+// The D63 counter path (7d): pull every live build's forwarded() count into
+// TopicRouteState, and if any counter moved, republish RouterStatus WITHOUT bumping
+// state_revision — the one sanctioned exception to "status publishes only on revision
+// change" (D5 stays authoritative for what changes revision; the fingerprint excludes
+// counters, so publish_if_changed in process_one stays a no-op for this event). The
+// pull is strand-confined: forwarded_count is synchronous on the controller strand,
+// reading the runtime's relaxed atomic — exact-at-tick sampling is sufficient.
+void RouterController::apply_refresh_counters() {
+    bool any_changed = false;
+    for (std::map<std::string, RouteState>::iterator r = state_.routes.begin();
+         r != state_.routes.end(); ++r) {
+        for (std::map<std::string, TopicRouteState>::iterator t =
+                     r->second.topics.begin();
+             t != r->second.topics.end(); ++t) {
+            TopicRouteState &topic = t->second;
+            if (topic.entity_generation == 0) {
+                continue; // no live build — counters were cleared with the entities
+            }
+            std::uint64_t count =
+                    factory_->forwarded_count(r->first, t->first);
+            if (count != topic.samples_forwarded) {
+                topic.samples_forwarded = count;
+                any_changed = true;
+            }
+        }
+    }
+    if (any_changed) {
+        status_->publish(build_snapshot()); // same state_revision, fresh counters
     }
 }
 
