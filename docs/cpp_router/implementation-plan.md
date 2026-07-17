@@ -58,7 +58,7 @@ route engine one behavior at a time.
 | 6 | Command/status control loop | **Done (D57/D58)** | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | **Done (D65/D67/D69/D70/D71)** | the verbatim production `control-platform.yaml` runs as a two-process pair without Routing Service; DDS is the matching authority (D64/D66) | ACT topic/type mapping diverges from the planned route model |
 | 8 | Presence & Health | **Done (D75/D76)** | `RouterHealth` heartbeat, per-router roster with ALIVE/STALE/DEAD, LAN `ActRouterMeshStatus` aggregate, the D74 identity flip | ~~liveliness/lease mechanics don't produce a stable DEAD signal ahead of participant purge~~ disproven by `spikes/presence/` (DEAD 2.6–5.3 s, purge trailing 11–16 s) |
-| 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
+| 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; readiness pinned D81, gated on `spikes/link_probe/` + the D79/D80 wire rework; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
 | 10 | Team partition route | Medium-high — **needs its readiness pass first** (the least-prepared numbered phase; see the section's gap list) | `SET_PARTICIPANT_PARTITION` applies in place and `PlatformData` crosses/stops crossing team scope, observable as matched-count transitions | participant/partition changes cannot be made predictable enough |
 | 11 | Serialized-CDR fast path | Medium — **opt-in, off the critical path** (Tenet 7) | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` and drop the optimization |
 | 12 | Keyed lifecycle mirroring + presence-driven reset | **High** (mechanism proven by `spikes/isc_recovery/`; needs a deliberately keyed fixture, Tenet 8) | one keyed route mirrors dispose/unregister with recovered keys; peer-DEAD unregisters that peer's instances downstream | key recovery in generic mode is not reliable; require generated-type lifecycle routes |
@@ -624,7 +624,12 @@ Deliver (all DELIVERED, D76):
   keys on `role_name`; `user_data` is no longer set or read.
 - ✅ roster correlation `router_id → current participant GUID` (off the heartbeat writer's
   publication data), exposed via `PresenceMonitor::participant_guid_of` for future
-  consumers (Phase 9's rollup join, Phase 12's reset).
+  consumers (Phase 9's rollup join, Phase 12's reset). **Superseded (D79/D81):** `router_id`
+  retires (name-only identity, one router per node — the presence types re-key by name and
+  gain `config_hash` per D80, an IDL/code rework committed before Phase 9), and peer
+  attribution goes through the middleware discovery DB
+  (`matched_*_participant_data`) rather than any roster join — `participant_guid_of` is
+  dropped; the roster is purely the presence authority.
 
 Evidence (all in `test_presence_roster.py` unless noted; ran green twice with the full
 suite, 20/20):
@@ -648,37 +653,56 @@ suite, 20/20):
 
 ### Phase 9: Link-Metrics Capture
 
-> **Design pinned (D14/D18), capture-only by charter.** [link-health.md](link-health.md) is
-> the contract: per-peer reliable-protocol counters + app-ack RTT, published raw on the LAN;
-> **no thresholds, no classification, no health inference** — that stays gated on the netem
-> correlation experiment (its own `spikes/` entry, and it gates only *inference*, never this
-> phase). Field names and per-matched-endpoint status getters were validated against 7.7 in
-> the design doc; re-verify the call surface by compile, not MCP, per the execution protocol.
+> **Design pinned (D14/D18), capture-only by charter; readiness pass pinned (D81,
+> 2026-07-17).** [link-health.md](link-health.md) is the contract: per-peer
+> reliable-protocol counters + app-ack RTT, published raw on the LAN; **no thresholds, no
+> classification, no health inference** — that stays gated on the netem correlation
+> experiment (its own `spikes/` entry, and it gates only *inference*, never this phase).
+> The full call surface was header-verified in the D81 pass (statuses, probe QoS knobs,
+> app-ack listener). **Implementation is gated on:** (a) D79/D80 landing first (name-keyed
+> presence types + `config_hash` — one wire change), and (b) the `spikes/link_probe/`
+> app-ack spike (the probe's `KEEP_LAST(1)` × `APPLICATION_AUTO` retention interaction is
+> the one unvalidated runtime assumption; fallback if disproven: probe/echo topic pair on
+> `ReadCondition`s, D81).
 
 Deliver:
 
-- `LinkStatsCollector` beside `PresenceMonitor`: config-fixed 1 s poll (YAML, constant per
-  run), reads matched-endpoint protocol statuses on every WAN writer/reader × peer, computes
-  its own interval deltas from totals (never trusts `_change` fields; sole reader of these
-  statuses), rolls up per peer `router_id` via the Phase 8 roster join (D15 tag as the
-  pre-heartbeat fallback).
+- `LinkStatsCollector` beside `PresenceMonitor`: config-fixed 1 s poll (`link_stats_period`
+  in YAML beside `heartbeat_period`, constant per run), reads matched-endpoint protocol
+  statuses on every registered WAN writer/reader × peer, computes its own interval deltas
+  from totals (never trusts `_change` fields; sole reader of these statuses; a negative
+  delta = counter reset on rematch → re-baseline + `rediscovery_in_interval`, D81), rolls
+  up per peer **name** resolved from the middleware discovery DB
+  (`matched_*_participant_data(handle)` → `participant_name`, D81 — no roster join, no
+  pre-heartbeat gap). Endpoints reach the collector by registration: a
+  `collect_wan_stats` virtual on `RouteTopicRuntimeBase` (typed-only status getters) +
+  `PresenceMonitor`'s `RouterHealth` pair (the mandatory idle-mesh bellwether); register
+  at build / unregister at close on the controller strand. Collector active only when
+  presence is active.
 - `RouterLinkProbe` WAN topic pair (app-ack RTT): `VOLATILE`, no liveliness, fixed send
   window with per-sample piggyback HB, zero probe-reader ACK delay, ~1 Hz — the QoS shape in
-  [link-health.md](link-health.md), never enabled on data routes.
-- per-peer `ActRouterLinkStats` on the LAN (IDL sketch in the design doc) plus one
-  structured log line per interval (`event=link_stats`), `rediscovery_in_interval` stamped
-  from discovery events.
+  [link-health.md](link-health.md), never enabled on data routes. App-ack delivery is
+  **listener-only** (D81): a minimal listener on the probe writer alone
+  (`datawriter_application_acknowledgment` mask) pushes into a mutex-guarded accumulator
+  the collector drains on its tick; listener reset before writer close (D31/D32
+  discipline). The codebase's first — and only — listener.
+- per-peer `ActRouterLinkStats` on the LAN (IDL sketch in the design doc; keys = name pair
+  per D79, types land in `RouterAdminTypes.idl` per D75/D81) plus one structured log line
+  per interval (`event=link_stats`), `rediscovery_in_interval` stamped from discovery
+  events and from delta resets.
 - no `state_revision` interaction (D5): link stats are a telemetry stream.
 
 Evidence:
 
 - under steady route traffic between two routers, `ActRouterLinkStats` samples advance
   (`pushed_samples`, `heartbeats_sent`, reader-side `samples_received`) with the peer
-  correctly attributed by `router_id` (→ `test_link_stats.py`).
+  correctly attributed by router **name** (→ `test_link_stats.py`).
 - an interval containing a peer (re)match is stamped `rediscovery_in_interval` (the
   `TRANSIENT_LOCAL` replay burst is flagged, not misread as repair traffic).
 - `rtt_count`/`rtt_*_us` populate from the probe at ~1 Hz; the probe pair is the only new
-  WAN traffic the phase adds.
+  WAN traffic the phase adds (checked with the `spikes/partition_retarget/`
+  dumpcap/GuidPrefix attribution pattern; the D81 call surface also extends
+  `spikes/matched_endpoints/cpp_compile_check.cxx`).
 - polling the collector never disturbs other consumers (statuses read only by the
   collector; deltas self-computed) and never bumps `state_revision`.
 
@@ -690,7 +714,10 @@ Evidence:
 > - **flat routes are silently dropped**: `platform-team.yaml` writes routes as top-level
 >   `input:`/`output:` with no `source`/`destination` role pair; `parse_route_config` only
 >   handles the role-pair form and `continue`s past anything else
->   (`router/src/config/RouteConfigParser.cxx`).
+>   (`router/src/config/RouteConfigParser.cxx`). **Resolution flipped by D80:** the flat
+>   form is *retired*, not legitimized — `platform-team.yaml`'s routes get rewritten in the
+>   role-pair form inside the single system-wide config; the parser keeps one route shape
+>   and upgrades the silent `continue` to a hard parse error.
 > - **`participant_partition` is a struct field, not a feature**: it exists on
 >   `ParticipantState` and is copied into status, but is neither parsed from YAML nor applied
 >   at participant creation.
@@ -709,11 +736,12 @@ Evidence:
 
 **Readiness pass — pin these as D-entries before code:**
 
-1. **Flat-route form semantics.** *Recommended:* a route with top-level `input:`/`output:`
-   and no `source`/`destination` keys materializes unconditionally on any node that loads
-   the config (the `platform-team` config is already per-node; there is no opposite side to
-   select). Parser accepts both forms; a route with neither form is a parse error, not a
-   silent skip.
+1. ~~Flat-route form semantics~~ **Decided (D80): the flat form is retired.** The old
+   recommendation ("materialize unconditionally on any node that loads the config") was
+   justified by the per-node `platform-team` config; under D80's single system-wide config
+   a flat route would materialize on C2 too. Team routes are rewritten in the role-pair
+   form (platform↔platform); the parser keeps exactly ONE route shape, and a route without
+   a role pair becomes a hard parse error instead of a silent skip.
 2. **`participant_partition` — decided as THE team-scope mechanism (D73):** parse it on
    `participants:` entries; apply at participant creation (participant QoS partition);
    mutate in place on `SET_PARTICIPANT_PARTITION` via participant `set_qos` (D15 —
@@ -743,15 +771,18 @@ Evidence:
    an ack that waits on discovery would hang on the empty-team case that is this phase's
    own first evidence bullet. Idempotent same-value command follows D8.
 5. **Evidence→test map** (D56 pattern): the bullets below land in
-   `router/test_e2e/test_team_partition.py` + a new `config` fixture pair (or the verbatim
-   `platform-team.yaml` once flat parsing exists), claiming the POC rows "Team disabled by
-   default" and "Team assignment"; unit coverage for the parser's flat-form/sentinel-error
-   rules extends `test_route_config`. Confirm or adjust these names when pinning.
+   `router/test_e2e/test_team_partition.py` against the single system-wide config (D80 —
+   the team routes rewritten in role-pair form, `team_wan.participant_partition` defaulting
+   to `"${node.name}"`), claiming the POC rows "Team disabled by default" and "Team
+   assignment"; unit coverage for the parser's no-role-pair-is-an-error and
+   sentinel-error rules extends `test_route_config`. Confirm or adjust these names when
+   pinning.
 
 Deliver:
 
-- `platform_team_to_wan` and `wan_team_to_platform` concrete routes parsed from the real
-  `platform-team.yaml` (flat form).
+- `platform_team_to_wan` and `wan_team_to_platform` concrete routes parsed from the
+  system-wide config's role-pair form (D80 — the old flat `platform-team.yaml` shape is
+  retired).
 - `team_wan.participant_partition` parsed, applied at creation, runtime-mutable via the
   `SET_PARTICIPANT_PARTITION` accept path (replacing the D7 reject) — the single team-scope
   mechanism (D73). `team_wan` (and other WAN participants) built with
@@ -815,7 +846,8 @@ Deliver:
   been reserved-zero since D71).
 - unrecoverable keys logged and counted, never silently dropped.
 - **presence-driven reset** (Tenet 5, deferred from Phase 8): per-peer
-  `peer_id → {instance keys}` bookkeeping in the mirror; on roster DEAD (never STALE),
+  `peer name → {instance keys}` bookkeeping in the mirror (name-only identity, D79); on
+  roster DEAD (never STALE),
   `unregister_instance()` that peer's instances on the output writer → downstream
   `NOT_ALIVE_NO_WRITERS`; reversible on peer return (re-write → `ALIVE`).
 
@@ -847,11 +879,15 @@ Evidence:
 >    orchestration.
 > 4. **Re-evaluate the stop criterion** ("stop if replacing RS requires reimplementing broad
 >    RS features") — explicitly, now that Milestone 2 is closed.
+> 5. **Config distribution** (D80): how the single system-wide config reaches every node is
+>    deployment's job and lands here — the router only reports what it loaded
+>    (`config_hash` in the heartbeat); drift detection is C2's view of mismatched hashes.
 
 Deliver:
 
-- container/start scripts for one platform running both router instances.
-- control node using the `control-platform` router instance.
+- container/start scripts for one platform running its single router instance (one router
+  per node, D79; one system-wide config, D80).
+- control node using the same system-wide config, materializing the control side.
 - Routing Service removed from the POC node stack for the tested routes.
 
 Evidence:
@@ -871,7 +907,7 @@ or narrows the fallback path.
 | Phase 3: dynamic entity lifecycle | High — **resolved (D31/D32)** | ~~Write a tiny program that creates a reader/writer after discovery, attaches a `ReadCondition` to an `AsyncWaitSet`, then detaches and closes repeatedly~~ Decided: `detach_condition()` is a documented **blocking barrier** (in-flight handler has returned on success); per-condition dispatch is serialized (never call `unlock_condition`); pinned close order detach→close-cond→close-reader→close-writer on the controller strand | repeated attach/detach/close cycles do not race, leak, or callback after close | serialize all attach/detach/close on the controller strand and avoid aggressive rebuilds |
 | Phase 5: LAN `auto` QoS | High — **resolved (D39), shipped (D45)** | ~~Capture QoS from actual ACT LAN endpoints and reduce it to the minimum compatible policy set~~ Decided: no reader-side derivation at all — weakest-request input readers match every writer by RxO construction; writer derives deadline (mutable in place) and, per D42, liveliness kind+lease at creation (fixed TL offer is already the durability auto-match); immutability table, ownership-equality RxO, liveliness RxO/assert mechanics, and incompatible-QoS status detection validated against 7.7 (the data model is reference-only per D35, so "actual ACT endpoints" was stale — the phase tests against router-authored endpoints with deliberately heterogeneous QoS) | a small deterministic subset of policies is enough for `ControlCommand`, `PlatformStatus`, and `PlatformData` | require explicit LAN QoS aliases for first POC routes and keep `auto` as POC-plus |
 | **Phase 8: presence mechanism** | High — **spike RUN and PASSED (D75, 2026-07-16), stable 4/4** | ~~`spikes/presence/` (Python driver): N `RouterHealth` publishers on WAN participants; SIGKILL one → peers mark DEAD inside the liveliness window and **before** participant purge (D16 ordering observed); LAN `ActRouterMeshStatus` aggregate updates; purge then drives `NO_WRITERS` on a co-tested data topic; force STALE via `assert_liveliness` + withheld heartbeats~~ Observed: DEAD 2.6–5.3 s (3 s lease), purge trailing 11.1–15.8 s (10 s lease, lease-*order* not lease-exact), STALE ~2 s never escalating, mesh aggregate tracking — see `spikes/presence/README.md` | ~~DEAD/STALE/purge arrive in the designed order with the designed latencies~~ **They did, every run, with 6–12 s of D16 margin** | (not needed) |
-| Phase 10: team partition changes | Medium-high — mechanism decided (D73: participant partition only; sentinel retired); in-place `set_qos` validated (D15) | No separate spike needed: remaining readiness items are flat-route parsing + the accept path; the phase e2e must empirically confirm the D73 SEDP-suppression claim and observe rematch as matched-count transitions (D66/D67) | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back — including announcement-paced join latency acceptable for the demo | pinned fallback (D73): endpoint-only fan-out via the shipped D69 `set_partitions` path; same evidence tests, different mechanism |
+| Phase 10: team partition changes | Medium-high — mechanism decided (D73: participant partition only; sentinel retired); in-place `set_qos` validated (D15) | No separate spike needed: remaining readiness items are the role-pair rewrite of the team routes in the system-wide config (D80 — flat form retired) + the accept path; the phase e2e must empirically confirm the D73 SEDP-suppression claim and observe rematch as matched-count transitions (D66/D67) | rediscovery and delivery are predictable after node-specific partition to `TEAM_A` and back — including announcement-paced join latency acceptable for the demo | pinned fallback (D73): endpoint-only fan-out via the shipped D69 `set_partitions` path; same evidence tests, different mechanism |
 | Phase 11: serialized-CDR fast path | Medium — **investigate only if the phase goes active** (opt-in per Tenet 7) | Build a standalone Connext 7.7 C++ pass-through for one generated type using DynamicData serialized-buffer APIs | the reader can access the CDR buffer and the writer can publish it without field materialization | keep `dynamic_data` (the default) and drop the optimization |
 | Phase 12: keyed lifecycle mirroring | **High** — dispose/no-writers propagation and `key_value()` recovery proven by `spikes/isc_recovery/` | Residual check only: `key_value()` recovery on a **DynamicData** route in the shipped relay (the spike used its own harness), against the deliberately keyed fixture the readiness pass authors (Tenet 8) | downstream reader observes matching instance states and keys recover reliably in the shipped runtime | require generated-type route runtimes for lifecycle-sensitive topics |
 | Phase 13: harness replacement | Medium-high | Replace Routing Service for one non-critical ACT route in container startup while leaving the rest unchanged | startup ordering, peer discovery, logs, and cleanup are understandable in compose/scripts | run the router sidecar in observe-only/status-only mode before removing Routing Service |
@@ -881,10 +917,12 @@ or narrows the fallback path.
 Investigation order (updated at D72 — the original hardest-first list is done: attach/detach
 D31/D32, auto QoS D39/D45, partition mutability D15, plus the Phase 7 spikes): ~~(1) the
 presence spike~~ **done (D75)**; ~~(2) the D53 prototype~~ **done — the identity checks rode
-the presence spike (D74/D75)**; next: **the netem correlation experiment** any time after
-Phase 9 ships capture (it gates only inference); then **the Phase 11/12 investigations only
-when those phases go active** — Phase 11 is opt-in, and Phase 12's residual check rides the
-phase itself. Phase 10 needs decisions, not a spike.
+the presence spike (D74/D75)**; next: **`spikes/link_probe/`** (app-ack probe under the full
+probe QoS — gates Phase 9 implementation, D81, after the D79/D80 wire-type rework lands);
+then **the netem correlation experiment** any time after Phase 9 ships capture (it gates
+only inference); then **the Phase 11/12 investigations only when those phases go active** —
+Phase 11 is opt-in, and Phase 12's residual check rides the phase itself. Phase 10 needs
+decisions, not a spike (its remaining items are D80's config rewrite + the accept path).
 
 ## Recommended First Milestone
 
@@ -927,7 +965,7 @@ forwarding mode everywhere (Tenet 7).
 
 | Test | Phase / status | Setup | Pass condition |
 |---|---|---|---|
-| Config smoke | control-platform **done** (7d); platform-team → Phase 10 | Load both platform YAML files for one platform node | both router instances select their routes; disabled routes appear in status and stay closed |
+| Config smoke | control-platform **done** (7d); team routes → Phase 10 | Load the single system-wide config (D80) on one platform node — one router process per node (D79) | the router instance materializes exactly its role's routes; disabled routes appear in status and stay closed |
 | Control command path | **Done** (7d, `test_control_platform_full.py`) | Control sim publishes `ControlCommand` to Platform_30 | Platform_30 receives only commands addressed to it |
 | Platform status path | **Done** (7d, `test_control_platform_full.py`) | Platform_30 publishes `PlatformStatus` | Control receives status through router |
 | Events path | **Done** (7c/7d, `test_platform_events.py` + E5) | Platform publishes `PlatformCommandAck` and `ContactReport` | Control receives both topics |

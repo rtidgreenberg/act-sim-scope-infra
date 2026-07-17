@@ -22,9 +22,10 @@ connected router (the "connected router list"), built from the WAN `RouterHealth
 
 Link-stats topic (LAN): `ActRouterLinkStats` — one sample per connected peer per poll
 interval carrying raw reliable-protocol link metrics (NACKs, repair traffic, send-window
-backpressure, probe RTT). **Capture only** — telemetry, not health classification, and not
-part of the command/ack/revision machinery (metric deltas never bump `state_revision`). See
-[Link Metrics](link-health.md) (D14).
+backpressure, probe RTT), keyed by the observer/peer **name pair** (D79 name-only identity;
+peer resolved from the middleware discovery DB, D81). **Capture only** — telemetry, not
+health classification, and not part of the command/ack/revision machinery (metric deltas
+never bump `state_revision`). See [Link Metrics](link-health.md) (D14/D81).
 
 Controller journal topic (LAN/debug recorder): `ActRouterControllerJournal` — one sample per
 processed controller event containing the input event, controller decision/outcome,
@@ -224,7 +225,7 @@ struct RouterParticipantStatus {
 struct RouterStatus {
     @key string target_node;
     @key string target_router;
-    uint32 router_id;
+    // (router_id retired by D79 — the name pair above IS the identity)
     string status_id;
     string caused_by_command_id;
     uint64 state_revision;
@@ -237,7 +238,7 @@ struct ControllerJournalRecord {
     string target_node;
     @key
     string target_router;
-    uint32 router_id;
+    // (router_id retired by D79)
     string status_id;
     uint64 event_sequence;
     int64 timestamp_unix_nanos;
@@ -284,8 +285,9 @@ state-changing command naming an unknown `route_name` is rejected (`accepted=fal
 `target_router`. Publish one full `RouterStatus` sample after accepted route changes so every
 subscriber sees a coherent route table in one message. The `routes` sequence includes every
 route defined for this router instance after local-side selection, including disabled routes,
-routes waiting on discovery, and routes that could not start. `router_id` is a numeric
-identifier for compact correlation with harness logs or generated node IDs. `participants`
+routes waiting on discovery, and routes that could not start. (`router_id`, a numeric
+correlation field, was retired by D79 — the `target_node`/`target_router` name pair is the
+only identity.) `participants`
 reports the router's current participant names, domains, participant-level partitions, and
 QoS aliases. `RouterRouteStatus` is the per-route entry inside the `routes` sequence.
 

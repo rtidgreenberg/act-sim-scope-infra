@@ -25,16 +25,21 @@ Validated against Connext 7.7.0 (see the reasoning in
 The single liveliness-bearing WAN topic. It lives on the **WAN participant** (mesh presence
 needs cross-WAN visibility) — distinct from the LAN-local admin command/status plane.
 
-- **Key:** `router_id`.
-- **Payload (compact summary — deliberately WAN-frugal):** `router_id`, `node_name`, `role`,
+- **Key:** the router **name** (`"<node>/<router>"` — the D74/D79 name-only identity;
+  `router_id` is retired, D79).
+- **Payload (compact summary — deliberately WAN-frugal):** the name key (its node half
+  replaces the old `node_name` field), `role`,
+  `config_hash` (digest of the loaded system-wide config, D80 — C2 sees config drift
+  mesh-wide on the topic it already watches),
   `heartbeat_seq`, `send_timestamp`, `state_revision` (matches the router's own `RouterStatus`
   revision), and a rollup: `n_routes`, `n_degraded`, `n_error`, `overall_state`
   (`ROUTER_OK` / `ROUTER_DEGRADED` / `ROUTER_ERROR`). It carries **summary** status, **not** the
   full route table — full per-route detail stays on the LAN plane. This resolves the old "echo
   status in the health payload?" open choice: **yes, but summary-only**, so the sample stays
   small and scales safely with mesh size across a lossy/constrained WAN. **Plus (D77)** the
-  roster as a compact edge list — `peers_seen`: one `{router_id, presence}` pair per tracked
-  peer — so a single WAN observer can build the who-sees-who node map from this topic alone.
+  roster as a compact edge list — `peers_seen`: one `{router (name), presence}` pair per
+  tracked peer (D79) — so a single WAN observer can build the who-sees-who node map from
+  this topic alone.
 - **QoS:** `RELIABLE`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (late joiners get last state),
   `DEADLINE ≈ 1.5–2×` heartbeat period, `LIVELINESS = AUTOMATIC` with a finite lease
   (≈ 2–3× period). Periodic heartbeat write (e.g. 1 s).
@@ -45,7 +50,7 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
   the dedicated `RouterLinkProbe` topic, never here. See [Link Metrics](link-health.md).
 - **Multi-network (D18):** WAN participants are never multi-homed — one WAN participant per
   unique network (`allow_interfaces_list`). Each network participant carries its own
-  `RouterHealth` pair, so presence becomes per-path (`router_id, network`) when a second
+  `RouterHealth` pair, so presence becomes per-path (`router name, network`) when a second
   network exists; today's single-network rig is the `N = 1` case.
 
 Two signals, deliberately kept separate:
@@ -83,7 +88,7 @@ Each router **publishes** its own `RouterHealth` heartbeat and **subscribes** to
 build a mesh view:
 
 ```
-peer[router_id] = { node, role, last_seq, last_heartbeat_ts, state,
+peer[router_name] = { node, role, last_seq, last_heartbeat_ts, state,
                     state_revision, n_routes, n_degraded, n_error, overall_state }
 state ∈ { ALIVE, STALE, DEAD }
   ALIVE  heartbeats fresh, liveliness ok
@@ -201,10 +206,10 @@ mechanics (Connext 7.7):
 ### Chosen approach
 
 1. **Long lease** → tolerate transient absence, no rediscovery churn.
-2. **Correlate `router_id → current participant GUID`** from `RouterHealth` (stable key vs.
-   churning GUID). When a `router_id`'s GUID changes (restart observed), the **old GUID is
-   dead-and-superseded** → `dds::domain::ignore(old_handle)` prunes it now. `ignore()`'s
-   irreversibility is a non-issue — that GUID never returns.
+2. **Correlate `router name → current participant GUID`** from `RouterHealth` (stable name
+   key, D79, vs. churning GUID). When a name's GUID changes (restart observed), the **old
+   GUID is dead-and-superseded** → `dds::domain::ignore(old_handle)` prunes it now.
+   `ignore()`'s irreversibility is a non-issue — that GUID never returns.
 3. **Bound the ignore table** — size `ignored_entity_allocation` and set
    `ignored_entity_replacement_kind` so pruned GUIDs self-evict; this keeps the system bounded
    over arbitrarily long missions.
@@ -262,16 +267,16 @@ enum RouterPresenceState { PRESENCE_ALIVE, PRESENCE_STALE, PRESENCE_DEAD };
 // D77: one adjacency edge of the who-sees-who map. Identity + presence only — never
 // the peer's own summary (a WAN observer already gets each router's RouterHealth).
 struct RouterPeerRef {
-    uint32 router_id;
+    string router;              // "<node>/<router>" (name-only identity, D79)
     RouterPresenceState presence;
 };
 
 // WAN: one compact, liveliness-bearing summary per router. Small on purpose.
 struct RouterHealth {
     @key
-    uint32 router_id;
-    string node_name;
+    string router;              // "<node>/<router>" — the D74/D79 identity (router_id retired)
     string role;
+    string config_hash;         // digest of the loaded system-wide config (D80 drift detection)
     uint64 heartbeat_seq;
     int64  send_timestamp;      // ns since epoch
     string state_revision;      // matches this router's RouterStatus revision
@@ -309,8 +314,9 @@ struct RouterMeshStatus {
   `ActRouterMeshStatus` topic. ~~Residual: whether a router's *aggregate mesh view* should also be
   echoed over the WAN (so peers see each other's views), or stay LAN-local — currently LAN-local.~~
   **Resolved (D77):** the *full* aggregate stays LAN-local, but the heartbeat carries the roster
-  as a **compact edge list** (`peers_seen`: `{router_id, presence}` per tracked peer, ~8 bytes
-  each) — so who-sees-who is observable from any single point on the WAN (e.g. C2 builds the
+  as a **compact edge list** (`peers_seen`: `{router (name), presence}` per tracked peer —
+  ~name-length + 4 bytes each since D79 re-keyed by name; cost accepted in D79)
+  — so who-sees-who is observable from any single point on the WAN (e.g. C2 builds the
   node map from `RouterHealth` alone: nodes = heartbeats, edges = `peers_seen`, and asymmetric
   one-way visibility shows as an asymmetric edge). Full nested summaries over the WAN were
   rejected as redundant O(N²) — a WAN consumer already receives every router's own summary.

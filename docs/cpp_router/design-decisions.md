@@ -3690,3 +3690,179 @@ MCP — the MCP under-specified the settle-window's duration, which only the spi
 **Docs changed.** `implementation-plan.md` (Phase 10 readiness item 2 and the Deliver list
 note the SPDP2/LAN-plain-SPDP split; evidence section notes the settle-window tolerance);
 this entry.
+
+## D79 — Router identity is the D74 name alone: `router_id` is retired; one router process per node (2026-07-17, accepted; supersedes the `router_id` aspect of D75/D76/D77's wire types; reworks shipped Phase 8 types BEFORE Phase 9 code)
+
+**Context.** The system carried two identifiers for the same entity: the D74 discovery-plane
+`participant_name` (`"<node>/<router>"`, authority = the middleware's discovery database) and
+`router_id`, a config-assigned `uint32` introduced by the Phase 8 presence design as the
+`RouterHealth` instance key and the D77 `peers_seen` edge unit, justified by WAN frugality.
+The name↔id association exists only in each router's config and its heartbeat payload — the
+middleware never learns it — so every cross-plane consumer needs an application-level join:
+the Phase 9 readiness review produced, in sequence, a reverse-map design, a pre-heartbeat
+attribution gap, restart/duplicate edge cases, and a GUID-normalization pitfall, all symptoms
+of maintaining a second identity the discovery plane cannot resolve. User direction: one
+identity ("only use router name, no router id").
+
+**Decision.**
+
+- **`router_id` is removed everywhere.** `RouterHealth` re-keys to the name; `RouterPeerRef`
+  (`peers_seen` edges) carries names; any future per-peer type (Phase 9 `RouterLinkStats`)
+  keys by name pair. `RouterMeshStatus` already keys by `observer_node`/`observer_router`
+  strings — shipped precedent for string keys.
+- **Code ripple:** `--router-id` CLI flag and config parsing removed; `PresenceMonitor`
+  roster (`roster_`, `handle_to_id_`, duplicate-offender logic) re-keys by name;
+  `participant_guid_of` is dropped — consumers resolve identity through the discovery DB
+  (D81), and the roster is purely the presence authority.
+- **WAN cost accepted:** ~20 extra bytes per key and per roster edge (~200 B/s per router at
+  a 10-router mesh) — noise next to discovery/heartbeat traffic; if it ever matters,
+  compression belongs at the serialization layer, not in a parallel identity.
+- **Deployment shape: ONE router process per node.** Multi-WAN needs (team WAN plus e.g. two
+  C2 links) are met by multiple WAN participants inside that one process per D18
+  (one participant per network) — never by multiple router processes. Presence/stats
+  generalize to `(peer name, network)` where "network" is the local WAN participant that
+  observed the peer; nothing extra crosses the wire.
+- **Name format kept:** D74's `"<node>/<router>"` stays (unique either way under
+  one-per-node; the node half serves same-node detection; format survives if the
+  one-per-node assumption ever relaxes). The router half becomes a defaulted value, not
+  required configuration — the effective identity a human deals with is the node name
+  (e.g. `VEH_123`).
+
+**Sequencing.** This rewrites shipped Phase 8 wire types and `PresenceMonitor`; it lands as
+its own commit BEFORE any Phase 9 code, while nothing external consumes these topics.
+
+**Docs to reconcile (pending this entry):** `presence-and-health.md` (key, roster sketch,
+edge list), `RouterAdminTypes.idl` (types + comments), `implementation-plan.md` (Phase 8
+delivered text gains a supersede note; Phase 12 reset wording; POC table),
+`link-health.md` rollup-key text (jointly with D81), `code-architecture.md` if it names
+`router_id`. Tests: `test_presence_roster.py` and any fixture passing `--router-id`.
+
+---
+
+## D80 — One system-wide config: a single YAML shared by C2 and all platforms; flat-route form retired; config hash in the heartbeat for drift detection (2026-07-17, accepted; amends Phase 10 readiness item 1; extends D36/D38's role model to the whole system)
+
+**Context.** Today the harness carries two per-pair files (`control-platform.yaml`,
+`platform-team.yaml`) and the POC config-smoke row loads both on a platform node as two
+router instances — in tension with D79's one-router-per-node. User direction: there will be
+only one config, ideally system-wide, so C2 and platforms stay in sync. The role-aware
+machinery already points here: routes declare role pairs and each node materializes its side
+(D36/D38), participants are role-filtered at creation, `presence_participant` accepts a
+per-role map, and `${node.name}` substitution exists for per-node values.
+
+**Decision.**
+
+- **One YAML describes the whole system** — every route (control↔platform, platform↔platform
+  team), every participant, all QoS libs. Every node (C2 and platforms) loads the same file.
+- **Node identity is injected per node**: the existing `name_override`/`role_override` path
+  (previously "for testing both sides from one file") becomes the production mechanism
+  (CLI/env). Per-node state shrinks to "who am I".
+- **The flat-route form is retired before it ever shipped.** Phase 10 readiness item 1 had
+  recommended top-level `input:`/`output:` routes that "materialize unconditionally on any
+  node that loads the config", justified by "the platform-team config is already per-node".
+  That justification is void under a system-wide config (a flat route would materialize on
+  C2 too). `platform-team.yaml`'s routes are rewritten in the role-pair form
+  (platform↔platform); the parser keeps exactly ONE route shape and a route without a role
+  pair stays a hard parse error. Net: less parser work than the original recommendation and
+  no second config dialect.
+- **Per-node values via substitution**: e.g. `team_wan.participant_partition` defaults to
+  `"${node.name}"` — every platform gets a unique partition from one shared line ("team
+  disabled by default" falls out of the shared config itself).
+- **Config hash in the heartbeat (drift/conflict identification).** At load, the router
+  stamps a digest of the config file (hex string of a standard hash over the raw bytes) into
+  its `RouterHealth` samples. C2 observes configuration drift mesh-wide on the topic it
+  already watches: a node running a stale/divergent file shows a mismatched hash. Fold the
+  field into D79's IDL rework so Phase 8's wire types change once.
+- **Distribution stays deployment's job** (Phase 13 territory) — the router verifies nothing
+  and fetches nothing; it just reports what it loaded.
+
+**Docs to reconcile (pending this entry):** `implementation-plan.md` (Phase 10 readiness
+item 1 rewritten; POC config-smoke row becomes one process + one config; Phase 13 checklist
+notes distribution), `configuration.md` (single-file model, identity injection, partition
+default, hash), `presence-and-health.md` (+`config_hash` field), the example YAMLs
+(merge/rewrite in role-pair form).
+
+---
+
+## D81 — Phase 9 readiness pass: discovery-DB peer attribution (amends D14's rollup key), registration-based endpoint enumeration, app-ack listener contained to the probe writer, gated on a `spikes/link_probe/` spike (2026-07-17, accepted; implementation gated on the spike and on D79/D80 landing first)
+
+**Context.** Phase 9 (Link-Metrics Capture) design was pinned by D14/D18 with no open design
+forks, but the execution protocol requires a readiness pass before code. This pass
+header-verified the entire 7.7 call surface directly (not via MCP; `connext-ai-issues`
+submodule current, no contradicting entries): matched-endpoint protocol statuses
+(`DataWriterImpl.hpp:331-395`), `heartbeats_per_max_samples` (`CorePolicy.hpp:4658`),
+`acknowledgment_kind` (`CorePolicy.hpp:880`), `min/max_heartbeat_response_delay`
+(`PolicySettings.hpp:657-669`), `on_application_acknowledgment` + `AcknowledgmentInfo`
+(`subscription_handle()`, `sample_identity()`), and
+`rti::pub::matched_subscription_participant_data` /
+`rti::sub::matched_publication_participant_data` (`discoveryImpl.hpp`).
+
+**Decision.**
+
+1. **Peer attribution goes through the middleware discovery DB, not the roster.**
+   `matched_*_participant_data(endpoint, handle)` resolves a matched-endpoint handle
+   directly to `ParticipantBuiltinTopicData` → `participant_name()` = the D74/D79 identity.
+   **Amends D14: the rollup key is the peer name** (generalizing to `(peer name, network)`
+   per D18/D79), not `peer router_id`. `PresenceMonitor` plays no role in stats attribution.
+   This dissolves the pre-heartbeat gap by construction (an endpoint match implies the
+   participant was already discovered — SEDP rides SPDP) and removes restart/duplicate edge
+   cases. The collector may cache name-per-handle for the life of a match (optimization,
+   not semantics). The same call attributes probe app-acks via
+   `AcknowledgmentInfo.subscription_handle()`.
+2. **Endpoint enumeration is registration, not discovery.** The protocol-status getters are
+   typed-only (verified: `AnyDataWriter`/`AnyDataReader` expose none of them), so polling
+   happens where the payload type is known: a new virtual on `RouteTopicRuntimeBase`
+   (working name `collect_wan_stats(sink)`) implemented in `RouteTopicRuntime<T>` — the
+   established pattern of `forwarded()`/`set_partitions()`. Runtimes with a WAN-side leg
+   register with the collector at build and unregister at close, on the controller strand
+   (no locks; delta baselines dropped at unregister). `PresenceMonitor` registers its
+   `RouterHealth` pair — mandatory, it is the passive bellwether (idle routes produce zero
+   protocol stats). The collector owns and polls its own probe pair. Enumeration via
+   participant-level `find()` is rejected: un-pollable type-erased handles, no ownership
+   context, and teardown races the D31/D32 discipline exists to prevent.
+3. **The RTT probe's app-ack is the codebase's first listener — contained to the probe
+   writer.** Delivery is listener-only (users manual §34.6.1; a
+   `datawriter_application_acknowledgment()` mask bit exists but there is no
+   getter/condition path to `AcknowledgmentInfo`, so a waitset wake would carry no payload).
+   The listener is installed on the probe writer only, with exactly that mask; the callback
+   (middleware thread) does the minimum — clock read, push
+   `(subscription_handle, sample_identity, recv_time)` into a mutex-guarded accumulator —
+   and the collector drains it on its own tick on the controller strand. No
+   `ControllerEvent`s (telemetry, not state — D5's spirit). Teardown pin: reset the listener
+   before closing the writer (D31/D32 discipline extended to listeners). **Fallback if the
+   spike disproves app-ack:** a probe/echo topic pair measured entirely with
+   `ReadCondition`s (waitset-pure; costs a responder in every router and a second topic).
+4. **Gate: `spikes/link_probe/` runs before implementation.** It must show app-acks firing
+   per-peer at ~1 Hz under the full probe QoS (`RELIABLE`, `VOLATILE`, `KEEP_LAST(1)`,
+   `APPLICATION_AUTO`, piggyback HB per sample, zero reader ack delay), plausible RTTs on
+   `lo`, and sane `KEEP_LAST(1)`×app-ack retention — the one interaction link-health.md
+   itself flagged as unvalidated when rejecting `RouterHealth` reuse. Python driver if
+   `rti.connextdds` exposes the app-ack listener; otherwise a small C++ pair under a Python
+   runner.
+5. **Delta semantics:** the collector self-computes deltas from totals (D14); a negative
+   delta means the peer's matched-endpoint status restarted (rematch) → re-baseline, count
+   from zero, and that interval is stamped `rediscovery_in_interval` (the flag marks
+   "baselines untrustworthy", not only `TRANSIENT_LOCAL` replay).
+6. **IDL and config:** `RouterLinkStats` + `RouterLinkProbe` land in
+   `router/admin/RouterAdminTypes.idl` (extends D75's single-codegen-path rationale); keys
+   per D79 (name pair) with a network/participant field ready for D18's N>1.
+   `link_stats_period` (YAML, default 1 s, constant per run per D14) sits beside
+   `heartbeat_period`; the probe rides the WAN/presence participant. **The collector is
+   active only when presence is active** — no `presence_participant` means no designated
+   WAN participant, no bellwether, and no reason to collect; no degraded half-mode.
+7. **Evidence→test map (D56 pattern):** `router/test_e2e/test_link_stats.py` covers counters
+   advancing under steady route traffic with correct peer attribution, the rediscovery
+   stamp on a (re)match interval, `rtt_*` populating at ~1 Hz, and no `state_revision`
+   interaction; the "probe pair is the only new WAN traffic" bullet is checked with the
+   `spikes/partition_retarget/` dumpcap/GuidPrefix attribution pattern; the Phase 9 call
+   surface is added to `spikes/matched_endpoints/cpp_compile_check.cxx` (D66 pattern —
+   expected to pass first try given the header verification above).
+8. **Stale-text fix:** `implementation-plan.md` Phase 9 Deliver bullet still says "D15 tag
+   as the pre-heartbeat fallback" — superseded twice over (D74 retired the tag; this entry
+   retires the fallback). Reconcile to discovery-DB attribution.
+
+**Docs to reconcile (pending this entry):** `link-health.md` (attribution/rollup-key
+section, IDL sketch keys, probe-listener note), `implementation-plan.md` (Phase 9 banner
+gains the readiness-complete note; Deliver/Evidence bullets re-worded for name keys and
+discovery-DB attribution; investigation-order note for the spike), `code-architecture.md`
+(collector registration seam sentence), `command-status.md` (`ActRouterLinkStats` key
+shape).

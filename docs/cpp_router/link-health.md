@@ -12,7 +12,13 @@
 
 All API facts below validated against **Connext 7.7.0, Modern C++** via
 `ask_connext_question` (2026-07-08), per the repo rule "validate Connext specifics — don't
-guess."
+guess." **Header-verified 2026-07-17 (D81, stronger than the MCP sourcing):** the
+matched-endpoint status getters (`DataWriterImpl.hpp:331-395`), probe QoS knobs
+(`heartbeats_per_max_samples` `CorePolicy.hpp:4658`, `acknowledgment_kind`
+`CorePolicy.hpp:880`, `min/max_heartbeat_response_delay` `PolicySettings.hpp:657-669`),
+the app-ack listener + `AcknowledgmentInfo`, and
+`matched_subscription/publication_participant_data` (`discoveryImpl.hpp`) all exist as
+described; `docs/connext-ai-issues/` has no contradicting entry.
 
 ## What a reliable router-to-router pair exposes
 
@@ -89,14 +95,17 @@ aggregate NACK spike can't say which link is sick. 7.7 provides matched-endpoint
 - `writer.extensions().matched_subscription_datawriter_protocol_status(handle | rti::core::Locator)`
 - `reader.extensions().matched_publication_datareader_protocol_status(handle)`
 
-The locator form groups naturally by peer address. The collector correlates
-`InstanceHandle`/locator → participant GUID (builtin topic data via `DiscoveryDispatcher`) →
-`router_id` — two join sources, either sufficient: the `PresenceMonitor` roster
-(`router_id → participant GUID`) and the router-identity participant field — per **D74**
-this is `participant_name` (`name = "<node>/<router>"`, `role_name = "act.router"`),
-replacing the original D15 `user_data` tag — which identifies router participants even
-before a presence heartbeat. **Rollup key: peer `router_id`**, summed across this router's
-WAN endpoints.
+**Attribution is one middleware call (D81, header-verified):**
+`rti::pub::matched_subscription_participant_data(writer, handle)` /
+`rti::sub::matched_publication_participant_data(reader, handle)` resolve a matched-endpoint
+handle straight to the peer's `ParticipantBuiltinTopicData`, whose `participant_name()` is
+the router identity (D74/D79: `name = "<node>/<router>"`, `role_name = "act.router"`; per
+D79 the name IS the only identity — `router_id` is retired). The discovery DB is the
+association authority; no roster join, and no pre-heartbeat gap by construction (an
+endpoint match implies the participant was already discovered — SEDP rides SPDP). The
+`PresenceMonitor` roster plays **no role** in stats attribution. The collector may cache
+name-per-handle for the life of a match (optimization only). **Rollup key: peer name**,
+summed across this router's WAN endpoints.
 
 ### Multi-network peers (decided — D18)
 
@@ -129,7 +138,8 @@ behavior (`ask_connext_question`, 2026-07-08):
 `allow_interfaces_list` — a WAN participant is never multi-homed. Each network participant
 carries its own `RouterHealth` and `RouterLinkProbe` pair, so per-path presence, RTT, and
 both-side stats fall out by construction; the rollup key generalizes to
-`(peer router_id, network)` with no per-locator machinery. The locator-aware-rollup
+`(peer name, network)` (D79) with no per-locator machinery — "network" is simply which
+local WAN participant observed the peer. The locator-aware-rollup
 alternative was rejected (redundant-DATA cost stands, writer-only attribution, wasted once
 participant-per-network arrives). Today's single-network rig is the degenerate `N = 1` case;
 config/registry changes activate when a second network reaches the rig.
@@ -143,7 +153,10 @@ Two consequences for the design:
 1. **Exactly one component reads these statuses** (the collector). No ad-hoc reads elsewhere,
    no mixing polled reads with listener consumption on the same status.
 2. The collector **polls totals and computes its own interval deltas** — never trusts
-   `_change` fields, so a stray read elsewhere degrades nothing.
+   `_change` fields, so a stray read elsewhere degrades nothing. A **negative delta** means
+   the peer's matched-endpoint status restarted (rematch): re-baseline, count from zero,
+   and stamp that interval `rediscovery_in_interval` (D81 — the flag marks "baselines
+   untrustworthy this interval", not only `TRANSIENT_LOCAL` replay).
 
 ## RTT probe (the one thing counters can't give)
 
@@ -194,8 +207,8 @@ DBs under the long-lease hygiene regime and counting against `remote_*_allocatio
 Judged worth it for isolation from the presence authority; the probe endpoints are included
 when sizing those allocations ([presence-and-health.md](presence-and-health.md)).
 
-`RouterLinkProbe` sketch: WAN participant, keyed by `router_id`, payload
-`{router_id, probe_seq, send_timestamp}` — tiny. `RELIABLE`, `VOLATILE`, `KEEP_LAST(1)`,
+`RouterLinkProbe` sketch: WAN participant, keyed by the router name (D79), payload
+`{router, probe_seq, send_timestamp}` — tiny. `RELIABLE`, `VOLATILE`, `KEEP_LAST(1)`,
 **no liveliness** (presence stays `RouterHealth`'s job), fixed send window with
 `heartbeats_per_max_samples == send_window_size`, probe readers set zero
 `heartbeat_response_delay`, `APPLICATION_AUTO` acknowledgment, ~1 Hz.
@@ -215,13 +228,24 @@ LinkStatsCollector     # polls WAN endpoint protocol statuses; per-peer rollup;
                        # publishes ActRouterLinkStats on the LAN (D14)
 ```
 
-- **Poll loop, one owner.** A periodic tick (**config-fixed** in YAML, default 1 s, aligned
-  with the `RouterHealth` heartbeat; constant per run so experiment sweeps stay comparable —
-  no runtime command, no adaptive cadence) posted through the controller's event machinery
-  like everything else. Each tick,
-  for each WAN writer/reader × matched peer endpoint: read the matched-endpoint statuses,
-  compute deltas from the previous totals snapshot, fold into the per-peer accumulator.
-  Status getters are in-process reads — cheap at router endpoint counts.
+- **Poll loop, one owner.** A periodic tick (**config-fixed** in YAML —
+  `link_stats_period`, default 1 s, aligned with the `RouterHealth` heartbeat; constant per
+  run so experiment sweeps stay comparable — no runtime command, no adaptive cadence)
+  posted through the controller's event machinery like everything else. Each tick, for each
+  **registered** WAN writer/reader × matched peer endpoint: read the matched-endpoint
+  statuses, compute deltas from the previous totals snapshot, fold into the per-peer
+  accumulator. Status getters are in-process reads — cheap at router endpoint counts.
+- **Endpoints reach the collector by registration, not discovery (D81).** The protocol
+  statuses are typed-only getters (`AnyDataWriter` exposes none of them), so polling lives
+  where the payload type is known: a `collect_wan_stats` virtual on
+  `RouteTopicRuntimeBase` (the `forwarded()`/`set_partitions()` pattern), implemented in
+  `RouteTopicRuntime<T>`; runtimes with a WAN-side leg register at build and unregister at
+  close on the controller strand (no locks; delta baselines dropped with the endpoint).
+  `PresenceMonitor` registers its `RouterHealth` pair — mandatory, it is the idle-mesh
+  bellwether. The collector owns its own probe pair. The collector is **active only when
+  presence is active** (no `presence_participant` → no designated WAN participant, no
+  bellwether, no collection). Participant-level `find()` enumeration was rejected:
+  un-pollable type-erased handles, no ownership context, teardown races.
 - **Gauges vs. deltas.** Deltas for event counters (NACKs, pushed/pulled, full-window
   events, lost-by-writer…); point-in-time gauges for occupancy (`unacknowledged_sample_count`,
   `send_window_size`, `uncommitted_sample_count`, inactive-reader count).
@@ -230,7 +254,19 @@ LinkStatsCollector     # polls WAN endpoint protocol statuses; per-peer rollup;
   from `DiscoveryDispatcher` (a `rediscovery_in_interval` flag) so analysis can exclude or
   down-weight those intervals — raw counters still published unmodified.
 - **RTT probe.** `on_application_acknowledgment` timestamps per peer feed min/mean/max/count
-  into the same per-peer record each interval.
+  into the same per-peer record each interval. **App-ack delivery is listener-only**
+  (verified: users manual §34.6.1 + headers — a `datawriter_application_acknowledgment()`
+  StatusMask bit exists but there is no getter/condition path to `AcknowledgmentInfo`, so a
+  waitset wake would carry no payload). D81 contains the codebase's first listener to the
+  probe writer alone: exactly that mask, callback does clock-read + push
+  `(subscription_handle, sample_identity, recv_time)` into a mutex-guarded accumulator the
+  collector drains on its tick (no `ControllerEvent`s — telemetry, not state); listener
+  reset before writer close (D31/D32 discipline). Per-peer attribution via the same
+  `matched_subscription_participant_data(subscription_handle)` call. Gated on
+  `spikes/link_probe/` (the `KEEP_LAST(1)` × `APPLICATION_AUTO` retention interaction is
+  unvalidated — the same concern that rejected `RouterHealth` reuse applies to the probe
+  itself); pinned fallback if disproven: a probe/echo topic pair measured entirely with
+  `ReadCondition`s (waitset-pure; costs a responder per router and a second topic).
 - **Publication: LAN only.** Per-peer `ActRouterLinkStats` samples on the LAN admin plane —
   WAN-frugal (nothing new crosses the constrained link), consistent with the
   `ActRouterMeshStatus` pattern. Additionally one structured log line per poll interval
@@ -249,9 +285,12 @@ computed at analysis time, so their definitions can change without touching the 
 
 ```idl
 // LAN: per-interval reliable-protocol metrics for one WAN link (observer → peer).
+// Keys are the D74/D79 name-only identity (router_id is retired); types land in
+// router/admin/RouterAdminTypes.idl (D75/D81 single codegen path).
 struct RouterLinkStats {
-    @key uint32 observer_router_id;
-    @key uint32 peer_router_id;
+    @key string observer_router;     // "<node>/<router>" (D79)
+    @key string peer_router;         // "<node>/<router>" (D79)
+    string network;                  // local WAN participant name (D18: (peer, network) when N>1)
     uint64 capture_seq;
     int64  capture_timestamp;        // ns since epoch
     uint32 interval_ms;              // actual elapsed poll interval

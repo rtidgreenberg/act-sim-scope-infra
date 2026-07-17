@@ -52,7 +52,7 @@ RouterInstance
   CommandHandler
   StatusPublisher
   PresenceMonitor        # RouterHealth pub/sub + roster; presence-driven reset (Tenet 4/5)
-  LinkStatsCollector     # WAN link metric capture: protocol-status polling + RTT probe (D14)
+  LinkStatsCollector     # WAN link metric capture: protocol-status polling + RTT probe (D14/D81)
   Log                    # one structured stream; Connext logger bridged in (below)
 ```
 
@@ -143,7 +143,8 @@ RouterInstance
 - `PresenceMonitor` (shipped, Phase 8/D76) publishes this router's compact `RouterHealth`
   summary over the WAN (the controller's `PresenceTick` handler builds it from state on
   the strand — the writer QoS is the D75 pinned set) and subscribes to peers', maintaining
-  the `router_id → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary}` roster off the
+  the `router name → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary}` roster (D79
+  name-only identity) off the
   designed signals (valid sample → ALIVE; `REQUESTED_DEADLINE_MISSED` → STALE; instance
   `NOT_ALIVE_NO_WRITERS` → DEAD). It republishes the aggregated connected-router list over
   the LAN (admin participant) on `ActRouterMeshStatus` on every roster change. The heartbeat
@@ -153,13 +154,20 @@ RouterInstance
   deferred to Phase 12 with the keyed-lifecycle machinery (D72 scope split). Only the
   compact summary crosses the WAN — never liveliness on data topics, never the full route
   table. See [Presence & Health](presence-and-health.md).
-- `LinkStatsCollector` captures per-peer WAN link metrics (D14,
-  [link-health.md](link-health.md)): on a config-fixed tick (~1 s) it is the **sole reader**
-  of the WAN endpoints' matched-endpoint protocol statuses (reads reset `_change`
-  fields/changed-flags; it polls cumulative totals and computes its own interval deltas),
-  rolls them up per peer `router_id` (GUID join via the presence roster / D15 tag), and
+- `LinkStatsCollector` captures per-peer WAN link metrics (D14/D81,
+  [link-health.md](link-health.md)): on a config-fixed tick (`link_stats_period`, ~1 s) it
+  is the **sole reader** of the WAN endpoints' matched-endpoint protocol statuses (reads
+  reset `_change` fields/changed-flags; it polls cumulative totals and computes its own
+  interval deltas; a negative delta = rematch reset → re-baseline +
+  `rediscovery_in_interval`), rolls them up per peer **name** resolved via
+  `matched_*_participant_data` (the middleware discovery DB — no roster join, D81), and
   publishes per-peer `ActRouterLinkStats` on the **LAN** plus one structured log line per
-  interval. It also owns the `RouterLinkProbe` writer/reader (app-ack RTT, probe-only QoS).
+  interval. Endpoints reach it by **registration**: a `collect_wan_stats` virtual on
+  `RouteTopicRuntimeBase` (typed-only status getters) + `PresenceMonitor`'s `RouterHealth`
+  pair (bellwether), register-at-build/unregister-at-close on the controller strand; active
+  only when presence is active. It also owns the `RouterLinkProbe` writer/reader (app-ack
+  RTT, probe-only QoS) — app-ack is listener-only, so the probe writer carries the
+  codebase's one listener, feeding a mutex-guarded accumulator drained on the tick (D81).
   Capture only — no health classification (presence remains the health authority); metric
   deltas never bump `state_revision`.
 - `Log` is the single structured log stream. The Connext logger is bridged into it at startup
@@ -206,8 +214,7 @@ The state model should be copy-on-write at the router level:
 ```text
 MutableRouterState
   node_name
-  router_name
-  router_id
+  router_name                # "<node>/<router>" is the identity (D79 — router_id retired)
   state_revision
   entity_generation_counter  # one global counter; RouteView mints and topic entity
                              # builds take stamps from it (D23)

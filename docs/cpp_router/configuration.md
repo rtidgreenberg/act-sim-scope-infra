@@ -123,15 +123,29 @@ Config implications:
   `rtiddsgen` version). If the structural equivalence hashes drift, Connext silently falls
   back to fetching full TypeObjects per affected topic — the WAN cost this design avoids.
 
-Use two config sets:
+**One system-wide config (D80; supersedes the two-config-set model below).** A single YAML
+describes the whole system — every route (control↔platform and platform↔platform team),
+every participant, all QoS aliases — and every node (C2 and platforms) loads the same file,
+so the fleet stays in sync by construction:
 
-- **control-platform YAML**: loaded by the `control-platform` router instance on the control
-  node and on each platform node. It defines each logical control/platform route once. The
-  local `node.role` chooses whether this process runs the route's source side or
-  destination side.
-- **platform-team YAML**: loaded by the `platform-team` router instance on platform nodes.
-  It defines concrete platform-to-platform team routes through `team_wan` and uses
-  `team_wan.participant_partition` for discovery and group scoping.
+- **Node identity is injected per node** (CLI/env `name`/`role` overrides — previously a
+  test aid, now the production mechanism). Per-node state shrinks to "who am I"; one router
+  process per node (D79).
+- **Role-pair routes are the only route form.** Each node materializes only its side
+  (`node.role` vs `source`/`destination`); team routes are written platform↔platform. The
+  old flat `input:`/`output:`-only form is retired — a route without a role pair is a hard
+  parse error (it would otherwise materialize on every node, including C2).
+- **Per-node values use substitution**: e.g. `team_wan.participant_partition` defaults to
+  `"${node.name}"`, giving every platform a unique partition ("team disabled by default")
+  from one shared line.
+- **Config drift is observable**: at load, the router stamps a digest of the config file
+  into its `RouterHealth` heartbeat (`config_hash`, D80) — C2 sees a stale or divergent
+  node as a mismatched hash on the topic it already watches. Distribution of the file
+  itself is deployment's job (Phase 13), not the router's.
+
+The two historical config sets (`control-platform.yaml`, `platform-team.yaml`) merge into
+that single file when Phase 10 lands; the examples below predate D80 and are annotated
+where they diverge.
 
 Shared QoS aliases stay in the config set. WAN participants and WAN route legs are explicit.
 LAN participants use built-in defaults plus auto-match behavior, so the YAML only names LAN
@@ -154,16 +168,19 @@ node:
   role: platform   # control or platform
 
 router:
-  id: 30
+  # (router.id retired by D79 — the identity is the D74 name alone)
   name: platform-30-control-platform
   config_set: control-platform
   default_forwarding_mode: dynamic_data
   # Phase 8 (D75/D76): which participant carries the RouterHealth heartbeat pair —
   # normally this role's WAN participant. Scalar, or a per-role map when one shared
-  # config file serves both roles (as here). Absent = presence disabled.
+  # config file serves both roles (as here). Absent = presence disabled (which also
+  # disables Phase 9 link-stats collection, D81).
   presence_participant:
     control: control_wan
     platform: platform_wan
+  # Phase 9 (D81): link-stats poll period, constant per run (D14). Default 1s.
+  link_stats_period: 1s
 
 control:
   domain: 100
@@ -304,13 +321,19 @@ before the POC run.
 
 ## Platform/Team Config Example
 
+> **Predates D79/D80 — annotated, not yet rewritten.** These routes are in the flat
+> `input:`/`output:` form that D80 retires: under the single system-wide config they get
+> rewritten as role-pair routes (source `platform` ↔ destination `platform`), this file
+> merges into that config, `router.id` disappears (D79), and
+> `participant_partition: PLATFORM_30` becomes the shared-line default
+> `participant_partition: "${node.name}"`. The rewrite lands with Phase 10.
+
 ```yaml
 node:
   name: Platform_30
   role: platform
 
 router:
-  id: 30
   name: platform-30-team
   config_set: platform-team
   default_forwarding_mode: dynamic_data

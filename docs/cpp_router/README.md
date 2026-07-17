@@ -174,6 +174,14 @@ The ACT DynamicData types come from
 
 ## Process Model
 
+> **Superseded by D79/D80 (2026-07-17): ONE router process per node, ONE system-wide
+> config.** The two-instance-class model below predates that decision. Under D79/D80 a
+> platform node runs a single router process whose one config (shared verbatim with C2 and
+> every other node) carries both the control/platform routes and the platform↔platform team
+> routes; multiple WAN needs are met by multiple WAN participants inside that process (D18
+> — e.g. `control_wan`/`platform_wan`, `team_wan`, per-network C2 links). The historical
+> text below is kept for the route/participant inventory it documents.
+
 Run one router process per configured routing instance. The POC uses two instance classes:
 
 - `control-platform`: runs on the control node and on each platform node. It carries
@@ -203,7 +211,8 @@ Across the two instance classes, the router owns the same logical participant ro
 - `team_wan`
 
 For the POC, each router instance creates only the participants referenced by route sides
-that match its local role. A platform node runs both router instances; a control node runs only the
-`control-platform` instance. The control/platform config can define both roles; the local
-`node.role` selects which participant definitions are instantiated and which side of each
-role-aware route runs.
+that match its local role. Under D79/D80 every node runs exactly one router instance
+loading the single system-wide config; the injected `node.role` selects which participant
+definitions are instantiated and which side of each role-aware route runs (a platform node
+thus gets `platform_lan` + `platform_wan` + `team_wan`, a control node `control_lan` +
+`control_wan`).
