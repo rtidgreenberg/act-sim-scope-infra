@@ -56,7 +56,6 @@ int main() {
         CHECK(ok);
         CHECK_EQ(id.node_name, std::string("Platform_30"));
         CHECK_EQ(id.node_role, std::string("platform"));
-        CHECK(id.router_id == 30);
         CHECK_EQ(id.router_name, std::string("platform-30-control-platform"));
         CHECK_EQ(id.config_set, std::string("control-platform"));
         CHECK_EQ(id.default_forwarding_mode, std::string("dynamic_data"));
@@ -82,7 +81,7 @@ int main() {
         CHECK(!err.empty());
     }
 
-    // 4. inline comments stripped, quotes handled, required-field validation.
+    // 4. inline comments stripped, quotes handled, identity-field validation.
     {
         std::string path = "/tmp/router_p0_test_" + std::to_string(getpid()) + ".yaml";
         {
@@ -91,7 +90,6 @@ int main() {
               << "  name: \"Control_1\"   # quoted + inline comment\n"
               << "  role: control\n"
               << "router:\n"
-              << "  id: 1\n"
               << "  name: control-1-control-platform\n";
         }
         RouterIdentity id;
@@ -100,20 +98,32 @@ int main() {
         CHECK(ok);
         CHECK_EQ(id.node_name, std::string("Control_1"));
         CHECK_EQ(id.node_role, std::string("control"));
-        CHECK(id.router_id == 1);
         std::remove(path.c_str());
 
-        // missing router.name -> failure
-        std::string bad = "/tmp/router_p0_test_bad_" + std::to_string(getpid()) + ".yaml";
+        // missing router.name -> the fleet-wide default "router" (D79 addendum/D80).
+        std::string bare = "/tmp/router_p0_test_bare_" + std::to_string(getpid()) + ".yaml";
         {
-            std::ofstream f(bad);
+            std::ofstream f(bare);
             f << "node:\n  name: X\n  role: control\n";
         }
         RouterIdentity id2;
         std::string err2;
-        CHECK(!load_identity(bad, id2, err2));
-        CHECK(!err2.empty());
-        std::remove(bad.c_str());
+        CHECK(load_identity(bare, id2, err2));
+        CHECK_EQ(id2.router_name, std::string("router"));
+        std::remove(bare.c_str());
+
+        // 5. stale-config guard (D79): a config still carrying router.id is a hard,
+        // labeled parse error — never silently ignored.
+        std::string stale = "/tmp/router_p0_test_stale_" + std::to_string(getpid()) + ".yaml";
+        {
+            std::ofstream f(stale);
+            f << "node:\n  name: X\n  role: control\nrouter:\n  id: 30\n  name: r\n";
+        }
+        RouterIdentity id3;
+        std::string err3;
+        CHECK(!load_identity(stale, id3, err3));
+        CHECK(err3.find("router.id") != std::string::npos);
+        std::remove(stale.c_str());
     }
 
     if (g_failures == 0) {

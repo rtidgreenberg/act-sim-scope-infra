@@ -15,7 +15,6 @@ node:
   role: platform   # overridden per-process by --role
 
 router:
-  id: 30
   name: e2e-platform-status
   # Default admin participant for the file's own (platform) role; the control-role
   # process launched against this same file overrides this with

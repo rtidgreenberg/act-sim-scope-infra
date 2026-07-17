@@ -6,9 +6,12 @@
 // with a control-role override, covering both source-side and destination-side selection.
 
 #include "config/RouteConfigParser.hpp"
+#include "config/Sha256.hpp"
 
 #include <cstdio>
+#include <fstream>
 #include <string>
+#include <unistd.h>
 
 using namespace router;
 
@@ -117,6 +120,54 @@ int main() {
               == "WAN_QOS_LIB::control_participant_udpv4_qos");
         CHECK(cfg.qos_profiles.at("platform_wan_udpv4_qos")
               == "WAN_QOS_LIB::platform_participant_udpv4_qos");
+    }
+
+    // --- config_hash (D80): SHA-256 over the file's raw bytes, full lowercase hex ---
+    {
+        // NIST FIPS 180-4 test vector pins the algorithm itself.
+        CHECK(sha256_hex(std::string("abc"))
+              == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(path, cfg, err));
+        std::ifstream in(path, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+        CHECK(cfg.config_hash.size() == 64);
+        CHECK(cfg.config_hash == sha256_hex(bytes));
+    }
+
+    // --- Stale-config guard (D79, E-R4): router.id is a hard, labeled parse error ---
+    {
+        std::string stale = "/tmp/router_route_cfg_stale_" + std::to_string(getpid())
+                            + ".yaml";
+        {
+            std::ofstream f(stale);
+            f << "node:\n  name: X\n  role: control\n"
+              << "router:\n  id: 30\n  name: r\n"
+              << "participants:\n  control_lan:\n    domain: 0\n";
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(!parse_route_config(stale, cfg, err));
+        CHECK(err.find("router.id") != std::string::npos);
+        std::remove(stale.c_str());
+    }
+
+    // --- router.name is optional: absent -> the fleet-wide default "router" (D79/D80) ---
+    {
+        std::string bare = "/tmp/router_route_cfg_bare_" + std::to_string(getpid())
+                           + ".yaml";
+        {
+            std::ofstream f(bare);
+            f << "node:\n  name: X\n  role: control\n"
+              << "participants:\n  control_lan:\n    domain: 0\n";
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(bare, cfg, err));
+        CHECK(cfg.router_name == "router");
+        std::remove(bare.c_str());
     }
 
     // --- Numeric-looking node name: quoted YAML scalar must still be quoted (D43) ---

@@ -10,7 +10,6 @@ node:
   role: platform
 
 router:
-  id: 30
   name: platform-30-team
   config_set: platform-team
   default_forwarding_mode: dynamic_data

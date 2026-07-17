@@ -58,6 +58,7 @@ connextdds_rtiddsgen_run(
 add_executable(router_main
     src/router_main.cxx
     src/config/RouteConfigParser.cxx
+    src/config/Sha256.cxx
     src/core/RouterState.cxx
     src/core/RouterController.cxx
     src/core/ParticipantRegistry.cxx
@@ -142,6 +143,7 @@ add_test(NAME admin_types COMMAND test_admin_types)
 add_executable(test_route_config
     test/test_route_config.cxx
     src/config/RouteConfigParser.cxx
+    src/config/Sha256.cxx
     ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
 )
 target_include_directories(test_route_config PRIVATE

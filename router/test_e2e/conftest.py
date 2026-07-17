@@ -180,7 +180,7 @@ def wait_for_mutual_discovery(control_proc, platform_proc, timeout_s=35.0, poll_
 
 
 def start_router(router_binary, config_path, role, e2e_tmp_dir,
-                 node_name=None, name=None, admin_participant=None, router_id=None):
+                 node_name=None, name=None, admin_participant=None):
     log_path = e2e_tmp_dir / f"router_{role}_{os.path.basename(config_path)}.log"
     args = [str(router_binary), "--config", str(config_path), "--role", role]
     if node_name:
@@ -189,8 +189,6 @@ def start_router(router_binary, config_path, role, e2e_tmp_dir,
         args += ["--name", name]
     if admin_participant:
         args += ["--admin-participant", admin_participant]
-    if router_id is not None:
-        args += ["--router-id", str(router_id)]
     with open(log_path, "w") as log_file:
         popen = subprocess.Popen(
             args, cwd=str(REPO_ROOT), stdout=log_file, stderr=subprocess.STDOUT)
@@ -216,13 +214,13 @@ def router_pair(router_binary, e2e_tmp_dir):
         platform_proc = start_router(
             router_binary, config_path, "platform", e2e_tmp_dir,
             admin_participant=platform_admin_participant)
-        # router_id override: both processes load the same file, and RouterHealth is
-        # keyed by router_id (Phase 8) — sharing the file's id would merge the two
-        # routers into one presence instance.
+        # Identity overrides: both processes load the same file, and RouterHealth is
+        # keyed by the "<node>/<router>" name (D79) — sharing the file's node.name
+        # would merge the two routers into one presence instance.
         control_proc = start_router(
             router_binary, config_path, "control", e2e_tmp_dir,
             node_name="Control_20", name="e2e-control-role",
-            admin_participant=control_admin_participant, router_id=20)
+            admin_participant=control_admin_participant)
         started.extend([platform_proc, control_proc])
         control_ok, platform_ok = wait_for_mutual_discovery(control_proc, platform_proc)
         assert control_ok and platform_ok, (

@@ -3773,8 +3773,14 @@ Evidence → named tests (rework done = all of these green, ctest 4/4 + full e2e
 **Docs to reconcile:** ~~`presence-and-health.md` (key, roster sketch, edge list),
 `implementation-plan.md` (Phase 8 supersede note; Phase 12 reset wording; POC table),
 `link-health.md` rollup-key text (jointly with D81), `code-architecture.md`~~ **done
-2026-07-17 (f519a09)**. Remaining with the code commit: `RouterAdminTypes.idl` (types +
-comments), `test_presence_roster.py` and any fixture passing `--router-id`.
+2026-07-17 (f519a09)**. ~~Remaining with the code commit: `RouterAdminTypes.idl` (types +
+comments), `test_presence_roster.py` and any fixture passing `--router-id`~~ **done
+2026-07-17 with the joint D79/D80 code commit** (IDL re-keyed + `config_hash`; presence
+e2e re-keyed by name with the E-R3 drift test added; `--router-id` removed from
+`router_main`/conftest; every `router/config/*.yaml` dropped `router.id`; the duplicate
+detection that used to compare `router_id`+`node_name` now splits own-heartbeat from
+imposter on the publication handle vs. the local writer's instance handle, since with a
+name key both wear the same instance).
 
 ---
 

@@ -13,7 +13,6 @@ node:
   role: platform   # control or platform
 
 router:
-  id: 30
   name: platform-30-control-platform
   config_set: control-platform
   default_forwarding_mode: dynamic_data

@@ -15,7 +15,6 @@ node:
   role: platform
 
 router:
-  id: 7
   name: spine
   admin_participant: lan_in
 

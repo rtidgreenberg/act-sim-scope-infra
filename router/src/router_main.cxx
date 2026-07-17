@@ -61,8 +61,7 @@ void print_usage() {
               {{"invocation",
                 "router_main --config <path> [--name <router-instance-name>] "
                 "[--role <node-role>] [--node-name <node-name>] "
-                "[--admin-participant <name>] [--presence-participant <name>] "
-                "[--router-id <n>]"}});
+                "[--admin-participant <name>] [--presence-participant <name>]"}});
 }
 
 // SIGINT/SIGTERM flip this; the run loop wakes every 200ms to re-check it (mirrors
@@ -92,7 +91,6 @@ int main(int argc, char **argv) {
     std::string node_name_override;
     std::string admin_participant_override;
     std::string presence_participant_override;
-    std::string router_id_override;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -108,10 +106,6 @@ int main(int argc, char **argv) {
             admin_participant_override = argv[++i];
         } else if (arg == "--presence-participant" && i + 1 < argc) {
             presence_participant_override = argv[++i];
-        } else if (arg == "--router-id" && i + 1 < argc) {
-            // Test/deployment override: two processes launched from one shared config
-            // file (e2e router_pair) must not share the RouterHealth key (Phase 8).
-            router_id_override = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
@@ -143,24 +137,6 @@ int main(int argc, char **argv) {
         }
         if (!presence_participant_override.empty()) {
             cfg.presence_participant = presence_participant_override;
-        }
-        if (!router_id_override.empty()) {
-            // Full-string, non-negative parse: stoi alone would accept "20x" as 20,
-            // wrap "-1" to a huge uint32 at the cast sites, and surface garbage as an
-            // unlabeled router.fatal instead of a config error naming the flag.
-            try {
-                std::size_t consumed = 0;
-                int parsed = std::stoi(router_id_override, &consumed);
-                if (consumed != router_id_override.size() || parsed < 0) {
-                    throw std::invalid_argument("not a non-negative integer");
-                }
-                cfg.router_id = parsed;
-            } catch (const std::exception &) {
-                Log::error("router.config.router_id_invalid",
-                          {{"value", router_id_override},
-                           {"reason", "--router-id must be a non-negative integer"}});
-                return 2;
-            }
         }
         if (!validate_qos_aliases(cfg, error)) {
             Log::error("router.config.qos_alias", {{"config", config_path}, {"error", error}});
@@ -223,7 +199,7 @@ int main(int argc, char **argv) {
                                       {"node", cfg.node_name},
                                       {"role", cfg.node_role},
                                       {"router", cfg.router_name},
-                                      {"router_id", std::to_string(cfg.router_id)}});
+                                      {"config_hash", cfg.config_hash}});
 
         if (!cfg.types_xml_path.empty() && !file_exists(cfg.types_xml_path)) {
             Log::error("router.config.types_xml_missing",
@@ -420,14 +396,13 @@ int main(int argc, char **argv) {
         if (!cfg.presence_participant.empty()) {
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
-                    cfg.node_name, cfg.router_name,
-                    static_cast<std::uint32_t>(cfg.router_id)));
+                    cfg.node_name, cfg.router_name));
         }
 
         RouterIdentityInfo identity;
         identity.node_name = cfg.node_name;
         identity.router_name = cfg.router_name;
-        identity.router_id = static_cast<std::uint32_t>(cfg.router_id);
+        identity.config_hash = cfg.config_hash;
         identity.status_id = cfg.router_name + "-" + std::to_string(::getpid());
         identity.node_role = cfg.node_role;
 

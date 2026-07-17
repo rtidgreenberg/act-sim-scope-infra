@@ -21,8 +21,14 @@ namespace router {
 struct RouteConfig {
     std::string node_name;
     std::string node_role;
+    // The identity's router half (D79: the D74 "<node>/<router>" participant name is the
+    // ONLY router identity; router_id is retired). Under D80's one system-wide config
+    // this is a fleet-wide constant — optional in the YAML, default "router".
     std::string router_name;
-    std::int32_t router_id = 0;
+    // SHA-256 (full lowercase hex, 64 chars) over the RAW BYTES of the loaded config
+    // file, computed once at load (D80/D79-addendum). Stamped into every RouterHealth
+    // heartbeat so C2 observes config drift mesh-wide.
+    std::string config_hash;
     std::vector<ParticipantState> participants;
     // Concrete active-side routes for this node (routes where node.role is source or
     // destination); each already reduced to the selected side's input/output.

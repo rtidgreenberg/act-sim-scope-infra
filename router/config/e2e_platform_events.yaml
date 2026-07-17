@@ -19,7 +19,6 @@ node:
   role: platform
 
 router:
-  id: 9
   name: events
   admin_participant: wan_in
 

@@ -1,10 +1,16 @@
 // PresenceMonitor.hpp — Phase 8 presence & health (D75; design:
-// docs/cpp_router/presence-and-health.md).
+// docs/cpp_router/presence-and-health.md), re-keyed by the router NAME (D79).
 //
 // Publishes this router's compact RouterHealth heartbeat on the WAN participant (the ONE
 // liveliness-bearing WAN topic), subscribes to peers', maintains the ALIVE/STALE/DEAD
 // roster, and republishes the aggregated connected-router list on the LAN participant as
 // ActRouterMeshStatus whenever the roster changes.
+//
+// Identity (D79): the D74 participant name "<node>/<router>" is the ONLY router
+// identity — RouterHealth is keyed by it, the roster maps it, and peers_seen edges carry
+// it. router_id is retired; consumers needing a GUID resolve it through the middleware
+// discovery database (D81), so the old participant_guid_of correlation is gone too —
+// the roster is purely the presence authority.
 //
 // Roster signals (spike-proven, spikes/presence/):
 //   valid heartbeat sample                  -> ALIVE (+summary update)
@@ -37,7 +43,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -61,7 +66,6 @@ public:
                     dds::domain::DomainParticipant lan_participant,
                     const std::string &node_name,
                     const std::string &router_name,
-                    std::uint32_t router_id,
                     const std::string &health_topic = "RouterHealth",
                     const std::string &mesh_topic = "ActRouterMeshStatus");
 
@@ -69,10 +73,6 @@ public:
 
     // IPresencePublisher — called from the controller strand on each PresenceTick.
     void publish_heartbeat(const RouterHealth &hb) override;
-
-    // Roster correlation router_id -> current participant GUID (D74/D75), for future
-    // consumers (Phase 9 rollup join, Phase 12 reset). Empty if unknown.
-    std::string participant_guid_of(std::uint32_t router_id) const;
 
     // Detach the conditions from the AsyncWaitSet (D32 barriers). Call before aws.stop().
     void shutdown();
@@ -82,7 +82,6 @@ private:
         RouterHealth last_summary;
         RouterPresenceState presence = RouterPresenceState::PRESENCE_ALIVE;
         std::chrono::steady_clock::time_point last_seen;
-        std::string participant_guid; // from the heartbeat writer's publication data
     };
 
     void on_health_data();
@@ -96,7 +95,7 @@ private:
     rti::core::cond::AsyncWaitSet &aws_;
     std::string node_name_;
     std::string router_name_;
-    std::uint32_t router_id_;
+    std::string identity_; // "<node>/<router>" — the D74/D79 name, our RouterHealth key
 
     dds::pub::Publisher wan_publisher_;
     dds::sub::Subscriber wan_subscriber_;
@@ -108,13 +107,13 @@ private:
     dds::pub::DataWriter<RouterMeshStatus> mesh_writer_;
 
     mutable std::mutex roster_mutex_;
-    std::map<std::uint32_t, PeerEntry> roster_;
-    std::map<std::string, std::uint32_t> handle_to_id_; // health instance handle -> id
+    std::map<std::string, PeerEntry> roster_; // keyed by the peer's router name (D79)
+    std::map<std::string, std::string> handle_to_name_; // health instance handle -> name
     std::uint64_t mesh_revision_ = 0;
     std::int32_t deadline_missed_total_ = 0;
-    // Guarded by roster_mutex_: duplicate-router_id offender already warned about, and
+    // Guarded by roster_mutex_: duplicate-identity offender already warned about, and
     // edge-trigger flags for the bounded_sequence(100) truncation warnings.
-    std::string duplicate_id_node_;
+    bool duplicate_identity_warned_ = false;
     bool heartbeat_peers_truncated_ = false;
     bool mesh_peers_truncated_ = false;
     // Serializes build+write of the mesh aggregate (see publish_mesh()). Always taken

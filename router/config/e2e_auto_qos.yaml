@@ -16,7 +16,6 @@ node:
   role: platform
 
 router:
-  id: 5
   name: autoqos
   admin_participant: wan_in
 

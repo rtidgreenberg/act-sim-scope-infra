@@ -166,7 +166,6 @@ struct RouterStatus {
     string target_node;
     @key
     string target_router;
-    uint32 router_id;
     string status_id;
     string caused_by_command_id;
     uint64 state_revision;
@@ -177,9 +176,10 @@ struct RouterStatus {
 // ---- Presence & Health (Phase 8, D75; sketch: docs/cpp_router/presence-and-health.md) ----
 //
 // RouterHealth is the ONE liveliness-bearing WAN topic ("RouterHealth"): a compact
-// per-router summary, keyed by router_id, heartbeat-written at 1 s with DEADLINE 2 s and
-// AUTOMATIC liveliness lease 3 s (the D75-pinned demo numbers; D16 ordering requires the
-// WAN participant lease to stay longer than the 3 s liveliness window).
+// per-router summary, keyed by the router NAME ("<node>/<router>" — the D74/D79
+// name-only identity; router_id is retired), heartbeat-written at 1 s with DEADLINE 2 s
+// and AUTOMATIC liveliness lease 3 s (the D75-pinned demo numbers; D16 ordering requires
+// the WAN participant lease to stay longer than the 3 s liveliness window).
 // RouterMeshStatus is the LAN aggregate ("ActRouterMeshStatus"): each router's roster of
 // every peer's last summary + presence, republished on roster change.
 //
@@ -207,15 +207,17 @@ enum RouterPresenceState {
 // nodes come from the heartbeats, edges from peers_seen; a DEAD edge means "lost this
 // peer", no edge means "never saw it").
 struct RouterPeerRef {
-    uint32 router_id;
+    string router;         // "<node>/<router>" (name-only identity, D79)
     RouterPresenceState presence;
 };
 
 struct RouterHealth {
     @key
-    uint32 router_id;
-    string node_name;      // "<node>" (the D74 identity's node half)
+    string router;         // "<node>/<router>" — the D74/D79 identity; its node half
+                           // replaces the retired node_name field
     string role;           // node role (control/platform)
+    string config_hash;    // SHA-256 (full lowercase hex) of the loaded system-wide
+                           // config's raw bytes (D80 — C2 sees config drift mesh-wide)
     uint64 heartbeat_seq;
     int64 send_timestamp;  // ns since epoch
     uint64 state_revision; // this router's RouterStatus revision at send time
@@ -250,7 +252,6 @@ struct ControllerJournalRecord {
     string target_node;
     @key
     string target_router;
-    uint32 router_id;
     string status_id;
     uint64 event_sequence;
     int64 timestamp_unix_nanos;

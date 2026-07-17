@@ -23,7 +23,6 @@ node:
   role: platform
 
 router:
-  id: 6
   name: admincmd
   admin_participant: wan_in
 

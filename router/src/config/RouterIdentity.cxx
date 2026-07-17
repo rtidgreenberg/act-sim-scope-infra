@@ -96,11 +96,11 @@ bool load_identity(const std::string &path, RouterIdentity &out, std::string &er
             } else if (key == "default_forwarding_mode") {
                 out.default_forwarding_mode = value;
             } else if (key == "id") {
-                try {
-                    out.router_id = std::stol(value);
-                } catch (...) {
-                    // Non-numeric id: leave as -1; identity print will show it.
-                }
+                // Stale-config guard (D79): router.id is retired; hard error so a
+                // stale fleet config cannot hide behind a silently ignored field.
+                error = "router.id is retired (D79: the router name is the only "
+                        "identity) — remove it from " + path;
+                return false;
             }
         }
     }
@@ -110,8 +110,7 @@ bool load_identity(const std::string &path, RouterIdentity &out, std::string &er
         return false;
     }
     if (out.router_name.empty()) {
-        error = "missing required field router.name in " + path;
-        return false;
+        out.router_name = "router"; // fleet-wide default (D79 addendum/D80)
     }
     return true;
 }

@@ -1,10 +1,13 @@
 // RouteConfigParser.cxx — yaml-cpp route/participant parsing + role-aware selection (D36).
 
 #include "config/RouteConfigParser.hpp"
+#include "config/Sha256.hpp"
 #include "core/QosAliasPolicy.hpp"
 
 #include <yaml-cpp/yaml.h>
 
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace router {
@@ -98,6 +101,19 @@ void fill_endpoint(const YAML::Node &ep, RouterRouteEndpointSpec &out,
 bool parse_route_config(const std::string &path, RouteConfig &out, std::string &error,
                         const std::string &role_override,
                         const std::string &name_override) {
+    // config_hash (D80): SHA-256 over the file's raw bytes, computed once at load —
+    // the same bytes every node of the fleet is supposed to be running.
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+            error = "cannot open config file: " + path;
+            return false;
+        }
+        std::ostringstream bytes;
+        bytes << in.rdbuf();
+        out.config_hash = sha256_hex(bytes.str());
+    }
+
     YAML::Node root;
     try {
         root = YAML::LoadFile(path);
@@ -120,14 +136,17 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         }
 
         const YAML::Node &router = root["router"];
-        out.router_name = get_str(router, "name");
-        if (out.router_name.empty()) {
-            error = "missing router.name";
+        // Stale-config guard (D79 addendum, same posture as D73's unknown-sentinel
+        // rule): router.id is retired — a silently ignored identity field is exactly
+        // how a stale fleet config would hide.
+        if (router && router["id"]) {
+            error = "router.id is retired (D79: the router name is the only identity) "
+                    "— remove it from the config";
             return false;
         }
-        if (router && router["id"]) {
-            out.router_id = router["id"].as<std::int32_t>();
-        }
+        // The router half of the identity is a fleet-wide constant under D80's one
+        // system-wide config; absent => default "router" (D79 addendum).
+        out.router_name = get_str(router, "name", "router");
         // router.type_name retired (7c, D70): topic types are wire-learned. A leftover
         // type_name: key in a config is silently ignored.
         out.admin_participant = get_str(router, "admin_participant");

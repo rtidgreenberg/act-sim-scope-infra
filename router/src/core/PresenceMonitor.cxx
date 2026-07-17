@@ -1,11 +1,10 @@
-// PresenceMonitor.cxx — Phase 8 presence & health (D75).
+// PresenceMonitor.cxx — Phase 8 presence & health (D75), name-keyed roster (D79).
 
 #include "PresenceMonitor.hpp"
 #include "Log.hpp"
 
 #include <dds/sub/ddssub.hpp>
 
-#include <iomanip>
 #include <sstream>
 
 namespace router {
@@ -36,17 +35,6 @@ dds::pub::qos::DataWriterQos mesh_writer_qos(const dds::pub::Publisher &publishe
     return qos;
 }
 
-std::string format_guid(const dds::topic::BuiltinTopicKey &key) {
-    const auto &v = key.value();
-    std::ostringstream os;
-    os << std::hex << std::setfill('0');
-    for (size_t i = 0; i < v.size(); ++i) {
-        if (i != 0) os << ':';
-        os << std::setw(8) << v[i];
-    }
-    return os.str();
-}
-
 const char *presence_name(RouterPresenceState s) {
     switch (s) {
     case RouterPresenceState::PRESENCE_ALIVE: return "ALIVE";
@@ -63,13 +51,12 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  dds::domain::DomainParticipant lan_participant,
                                  const std::string &node_name,
                                  const std::string &router_name,
-                                 std::uint32_t router_id,
                                  const std::string &health_topic,
                                  const std::string &mesh_topic)
         : aws_(aws),
           node_name_(node_name),
           router_name_(router_name),
-          router_id_(router_id),
+          identity_(node_name + "/" + router_name),
           wan_publisher_(wan_participant),
           wan_subscriber_(wan_participant),
           health_topic_(wan_participant, health_topic),
@@ -98,7 +85,7 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
     Log::info("presence_monitor_ready",
               {{"health_topic", health_topic},
                {"mesh_topic", mesh_topic},
-               {"router_id", std::to_string(router_id_)}});
+               {"identity", identity_}});
 }
 
 PresenceMonitor::~PresenceMonitor() {
@@ -130,7 +117,7 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             // peers_seen is a codegen bounded_sequence (unbounded IDL -> cap 100);
             // growing past the cap throws PreconditionNotMetError, which would escape
             // the controller strand's DrainThread and terminate the process. Truncate
-            // instead (lowest router_ids kept — roster_ is id-ordered) and say so once.
+            // instead (name-order-lowest kept — roster_ is name-ordered) and say so once.
             if (out.peers_seen.size() == out.peers_seen.max_size()) {
                 if (!heartbeat_peers_truncated_) {
                     heartbeat_peers_truncated_ = true;
@@ -141,7 +128,7 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
                 break;
             }
             RouterPeerRef ref;
-            ref.router_id = entry.first;
+            ref.router = entry.first;
             ref.presence = entry.second.presence;
             out.peers_seen.push_back(ref);
         }
@@ -160,24 +147,17 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     }
 }
 
-std::string PresenceMonitor::participant_guid_of(std::uint32_t router_id) const {
-    std::lock_guard<std::mutex> lk(roster_mutex_);
-    auto it = roster_.find(router_id);
-    return (it == roster_.end()) ? std::string() : it->second.participant_guid;
-}
-
 void PresenceMonitor::on_health_data() {
     // Two phases so no DDS call runs under roster_mutex_ — the controller strand's
     // publish_heartbeat() takes the same mutex and must never block route control
-    // behind loan iteration or discovery-DB lookups. Phase 1 (no lock): drain the
-    // loan into plain events and resolve participant GUIDs. Phase 2 (lock): apply
-    // the events to the roster and build the mesh; the mesh write happens after.
+    // behind loan iteration. Phase 1 (no lock): drain the loan into plain events.
+    // Phase 2 (lock): apply the events to the roster and build the mesh; the mesh
+    // write happens after.
     struct HealthEvent {
         bool valid = false;
-        bool duplicate_id = false; // valid sample wearing OUR router_id, other node
+        bool duplicate_identity = false; // valid sample wearing OUR name, foreign writer
         std::string handle_key;
-        RouterHealth hb;              // valid only
-        std::string participant_guid; // valid only; empty if the writer was gone
+        RouterHealth hb; // valid only
     };
     std::vector<HealthEvent> events;
     {
@@ -192,28 +172,18 @@ void PresenceMonitor::on_health_data() {
             if (it->info().valid()) {
                 ev.valid = true;
                 ev.hb = it->data();
-                if (ev.hb.router_id == router_id_) {
-                    if (ev.hb.node_name == node_name_) {
-                        continue; // own heartbeat (the reader matches the local writer)
+                if (ev.hb.router == identity_) {
+                    // A sample wearing OUR key: normally our own heartbeat (the reader
+                    // matches the local writer — publication_handle IS that writer's
+                    // instance handle). A foreign writer on our exact name is a
+                    // duplicate-identity misconfiguration: it can never enter the
+                    // roster (same key = OUR instance), but staying silent would make
+                    // the two routers mutually invisible with no clue why.
+                    if (it->info().publication_handle()
+                        == health_writer_.instance_handle()) {
+                        continue; // own heartbeat
                     }
-                    // Another node heartbeating OUR key: a duplicate-router_id
-                    // misconfiguration. It can never enter the roster (RouterHealth is
-                    // keyed by router_id, so its instance is ours), but staying silent
-                    // would make the two routers mutually invisible with no clue why.
-                    ev.duplicate_id = true;
-                } else {
-                    // Roster correlation router_id -> participant GUID (D74/D75): read
-                    // the heartbeat writer's participant key off its publication data.
-                    // Cheap local discovery-DB read, done per heartbeat so a restarted
-                    // peer's GUID refreshes as soon as its new writer is heard.
-                    try {
-                        dds::topic::PublicationBuiltinTopicData pub =
-                                dds::sub::matched_publication_data(
-                                        health_reader_, it->info().publication_handle());
-                        ev.participant_guid = format_guid(pub.participant_key());
-                    } catch (const std::exception &) {
-                        // Writer already gone — leave empty; a later heartbeat refills.
-                    }
+                    ev.duplicate_identity = true;
                 }
             } else if (it->info().state().instance_state()
                        != dds::sub::status::InstanceState::not_alive_no_writers()) {
@@ -230,19 +200,19 @@ void PresenceMonitor::on_health_data() {
     {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         for (const HealthEvent &ev : events) {
-            if (ev.duplicate_id) {
-                if (duplicate_id_node_ != ev.hb.node_name) { // warn once per offender
-                    duplicate_id_node_ = ev.hb.node_name;
-                    Log::warn("presence_duplicate_router_id",
-                              {{"router_id", std::to_string(router_id_)},
-                               {"node", ev.hb.node_name},
-                               {"own_node", node_name_}});
+            if (ev.duplicate_identity) {
+                if (!duplicate_identity_warned_) { // warn once (edge-trigger)
+                    duplicate_identity_warned_ = true;
+                    Log::warn("presence_duplicate_identity",
+                              {{"identity", identity_},
+                               {"reason", "another router is heartbeating under this "
+                                          "exact \"<node>/<router>\" name"}});
                 }
                 continue;
             }
             if (ev.valid) {
-                handle_to_id_[ev.handle_key] = ev.hb.router_id;
-                PeerEntry &e = roster_[ev.hb.router_id];
+                handle_to_name_[ev.handle_key] = ev.hb.router;
+                PeerEntry &e = roster_[ev.hb.router];
                 const bool was_alive =
                         e.presence == RouterPresenceState::PRESENCE_ALIVE
                         && e.last_seen != std::chrono::steady_clock::time_point();
@@ -252,9 +222,7 @@ void PresenceMonitor::on_health_data() {
                     changed = true;
                 }
                 if (!was_alive) { // first appearance AND STALE/DEAD -> ALIVE recovery
-                    Log::info("presence_peer_alive",
-                              {{"router_id", std::to_string(ev.hb.router_id)},
-                               {"node", ev.hb.node_name}});
+                    Log::info("presence_peer_alive", {{"router", ev.hb.router}});
                 }
                 e.presence = RouterPresenceState::PRESENCE_ALIVE;
                 e.last_summary = ev.hb;
@@ -263,24 +231,19 @@ void PresenceMonitor::on_health_data() {
                 // explicitly rejected (edges belong to RouterHealth alone).
                 e.last_summary.peers_seen.clear();
                 e.last_seen = std::chrono::steady_clock::now();
-                if (!ev.participant_guid.empty()) {
-                    e.participant_guid = ev.participant_guid;
-                }
             } else {
                 // Liveliness lost or participant purged -> DEAD (the roster passes
                 // through STALE first on a real crash — deadline fires before the
                 // lease; D75).
-                auto found = handle_to_id_.find(ev.handle_key);
-                if (found == handle_to_id_.end()) {
+                auto found = handle_to_name_.find(ev.handle_key);
+                if (found == handle_to_name_.end()) {
                     continue; // never seen a valid heartbeat for this instance
                 }
                 PeerEntry &e = roster_[found->second];
                 if (e.presence != RouterPresenceState::PRESENCE_DEAD) {
                     e.presence = RouterPresenceState::PRESENCE_DEAD;
-                    e.participant_guid.clear(); // stale GUID: that participant is gone
                     changed = true;
-                    Log::info("presence_peer_dead",
-                              {{"router_id", std::to_string(found->second)}});
+                    Log::info("presence_peer_dead", {{"router", found->second}});
                 }
             }
         }
@@ -308,21 +271,21 @@ void PresenceMonitor::on_health_reader_status() {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         // STALE only from ALIVE: deadline misses keep firing for a DEAD instance, and a
         // policy flag must never mask definite death (presence-and-health.md).
-        auto mark_stale = [&](std::uint32_t id, PeerEntry &e) {
+        auto mark_stale = [&](const std::string &name, PeerEntry &e) {
             if (e.presence != RouterPresenceState::PRESENCE_ALIVE) {
                 return;
             }
             e.presence = RouterPresenceState::PRESENCE_STALE;
             changed = true;
-            Log::info("presence_peer_stale", {{"router_id", std::to_string(id)}});
+            Log::info("presence_peer_stale", {{"router", name}});
         };
         // The status carries only last_instance_handle, so coalesced misses (several
         // peers silent inside one dispatch window) would surface just one peer through
         // the handle. Handle path first for the triggering instance (whose last_seen
         // delta can still be marginally under the deadline), then a last_seen sweep
         // catches every other overdue ALIVE peer in the same pass.
-        auto found = handle_to_id_.find(handle_key);
-        if (found != handle_to_id_.end()) {
+        auto found = handle_to_name_.find(handle_key);
+        if (found != handle_to_name_.end()) {
             auto rit = roster_.find(found->second);
             if (rit != roster_.end()) {
                 mark_stale(rit->first, rit->second);
@@ -349,7 +312,7 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
     const auto now = std::chrono::steady_clock::now();
     for (const auto &entry : roster_) {
         // Same bounded_sequence cap as peers_seen (unbounded IDL -> 100): overflowing
-        // it throws on the AWS worker; truncate (lowest ids kept) and say so once.
+        // it throws on the AWS worker; truncate (name-order-lowest kept) and say so once.
         if (mesh.peers.size() == mesh.peers.max_size()) {
             if (!mesh_peers_truncated_) {
                 mesh_peers_truncated_ = true;
@@ -366,7 +329,7 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
                 now - entry.second.last_seen).count();
         mesh.peers.push_back(peer);
         Log::debug("presence_mesh_peer",
-                   {{"router_id", std::to_string(entry.first)},
+                   {{"router", entry.first},
                     {"presence", presence_name(entry.second.presence)}});
     }
     if (mesh.peers.size() < mesh.peers.max_size()) {

@@ -26,7 +26,6 @@ int main() {
     RouterStatus status;
     status.target_node = "Platform_30";
     status.target_router = "platform-30-control-platform";
-    status.router_id = 30;
     status.status_id = "status-1";
     status.state_revision = 1; // uint64 monotonic counter (design-decisions.md D5)
 
@@ -53,7 +52,6 @@ int main() {
     status.participants.push_back(part);
 
     CHECK(status.target_node == "Platform_30");
-    CHECK(status.router_id == 30u);
     CHECK(status.routes.size() == 1);
     CHECK(status.routes.at(0).route_name == "control_command");
     CHECK(status.routes.at(0).state == RouterRouteOperationalState::ROUTE_DISABLED);

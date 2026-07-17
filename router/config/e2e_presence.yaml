@@ -9,15 +9,15 @@
 # drive traffic through it.
 #
 # Loaded twice by the test harness against the SAME file: once with --role platform, once
-# with --role control (which also overrides --router-id so the two processes don't share
-# the RouterHealth key). Domain placeholders substituted per test run — see conftest.py.
+# with --role control (which also overrides --node-name/--name, so the two processes get
+# distinct "<node>/<router>" identities — RouterHealth is keyed by that name, D79).
+# Domain placeholders substituted per test run — see conftest.py.
 
 node:
   name: Platform_30
   role: platform   # overridden per-process by --role
 
 router:
-  id: 30
   name: e2e-presence
   admin_participant: platform_lan   # control-role process overrides via CLI
   presence_participant:

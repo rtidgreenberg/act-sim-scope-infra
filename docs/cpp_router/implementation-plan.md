@@ -629,7 +629,9 @@ Deliver (all DELIVERED, D76):
   gain `config_hash` per D80, an IDL/code rework committed before Phase 9), and peer
   attribution goes through the middleware discovery DB
   (`matched_*_participant_data`) rather than any roster join — `participant_guid_of` is
-  dropped; the roster is purely the presence authority.
+  dropped; the roster is purely the presence authority. **The rework landed 2026-07-17**
+  (evidence re-proven as E-R1..E-R6, see the D79 addendum; the E-P bullets below record
+  the original `router_id`-keyed run and stand as history).
 
 Evidence (all in `test_presence_roster.py` unless noted; ran green twice with the full
 suite, 20/20):

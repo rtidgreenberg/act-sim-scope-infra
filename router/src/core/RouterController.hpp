@@ -22,7 +22,7 @@ namespace router {
 struct RouterIdentityInfo {
     std::string node_name;
     std::string router_name;
-    std::uint32_t router_id = 0;
+    std::string config_hash; // digest of the loaded config, echoed in RouterHealth (D80)
     std::string status_id;
     std::string node_role; // control/platform — echoed in the RouterHealth heartbeat (D75)
 };

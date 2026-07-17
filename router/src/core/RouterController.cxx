@@ -69,7 +69,7 @@ RouterController::RouterController(const RouterIdentityInfo &identity,
           node_role_(identity.node_role) {
     state_.node_name = identity.node_name;
     state_.router_name = identity.router_name;
-    state_.router_id = identity.router_id;
+    state_.config_hash = identity.config_hash;
     state_.status_id = identity.status_id;
 
     for (size_t i = 0; i < participants.size(); ++i) {
@@ -202,7 +202,6 @@ ControllerJournalRecord RouterController::build_journal_record(
     ControllerJournalRecord rec;
     rec.target_node = state_.node_name;
     rec.target_router = state_.router_name;
-    rec.router_id = state_.router_id;
     rec.status_id = state_.status_id;
     rec.event_sequence = ++journal_sequence_;
     rec.timestamp_unix_nanos = static_cast<std::int64_t>(
@@ -661,9 +660,9 @@ void RouterController::apply_presence_tick() {
         return;
     }
     RouterHealth hb;
-    hb.router_id = state_.router_id;
-    hb.node_name = state_.node_name;
+    hb.router = state_.node_name + "/" + state_.router_name; // D74/D79 name-only key
     hb.role = node_role_;
+    hb.config_hash = state_.config_hash; // D80 drift detection
     hb.heartbeat_seq = ++heartbeat_sequence_;
     hb.send_timestamp = static_cast<std::int64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -896,7 +895,6 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
     std::shared_ptr<RouterStatus> s(new RouterStatus());
     s->target_node = state_.node_name;
     s->target_router = state_.router_name;
-    s->router_id = state_.router_id;
     s->status_id = state_.status_id;
     s->state_revision = state_.state_revision;
     s->caused_by_command_id = current_cause_;

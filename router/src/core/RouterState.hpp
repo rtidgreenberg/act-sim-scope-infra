@@ -111,7 +111,7 @@ struct ParticipantState {
 struct MutableRouterState {
     std::string node_name;
     std::string router_name;
-    std::uint32_t router_id = 0;
+    std::string config_hash; // SHA-256 of the loaded config, for the heartbeat (D80)
     std::string status_id; // process identity; restart detection is not revision's job (D5)
 
     std::uint64_t state_revision = 0;           // one global counter (D5)

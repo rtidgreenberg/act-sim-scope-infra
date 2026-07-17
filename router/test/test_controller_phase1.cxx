@@ -198,7 +198,6 @@ struct Fixture {
         RouterIdentityInfo id;
         id.node_name = "Platform_30";
         id.router_name = "control-platform";
-        id.router_id = 30;
         id.status_id = "status-test";
         return id;
     }
