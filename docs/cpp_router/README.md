@@ -19,6 +19,7 @@
 - [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
 - [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.
 - [Link Metrics](link-health.md): capture-first per-peer WAN link metrics from reliable protocol statistics (NACKs, repair traffic, send-window backpressure, RTT probe via app-ack on a dedicated `RouterLinkProbe` topic); health *inference* deferred until a link-degradation correlation experiment (D14); multi-network posture: one WAN participant per network, never multi-homed (D18).
+- [Mission Orchestrator (early concept capture)](orchestrator-design.md): a separate per-node process, not a router decision — single arbiter of control is the platform itself; C2 sends mission state (not commands) over a regular route; C2 liveliness comes free from the existing presence roster since C2 is just another router-role mesh node. Not yet a design-decisions.md entry.
 
 ## Goal
 

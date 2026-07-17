@@ -3603,3 +3603,90 @@ survivor's edge FLIPS to DEAD rather than disappearing. ctest 4/4; full e2e 20/2
 bullet + roster section + IDL sketch gained `peers_seen`/`RouterPeerRef`);
 `code-architecture.md` (PresenceMonitor bullet); `router/admin/RouterAdminTypes.idl`;
 this entry.
+
+## D78 — WAN participants use SPDP2; LAN participants stay on plain SPDP — measured numbers replace D73's MCP-sourced "announcement-paced" characterization (2026-07-17, accepted; refines D73's mechanism claim for Phase 10's `SET_PARTICIPANT_PARTITION` implementation)
+
+**Context.** D73 decided `participant_partition` as the sole WAN team-scope mechanism on
+the strength of an `ask_connext_question` answer alone, flagging its own "announcement-
+paced, slower than SEDP" claim as unconfirmed. Two spikes have since measured this
+directly instead of relying on the MCP: `spikes/partition_retarget/` (retarget timing and
+wire-level bandwidth across plain SPDP, SPDP with a shortened
+`participant_liveliness_assert_period`, and SPDP2) and `spikes/spdp2_wan_lan_mix/`
+(whether SPDP2 can be scoped to WAN participants only, alongside plain-SPDP LAN
+participants, in one router process).
+
+**Findings that drove the decision (observed, not assumed).**
+
+- D73's framing was directionally right but got the side backward: the slow leg is the
+  *changer's own* re-establishment of SPDP-level sight of the peer, not the remote peer
+  lagging — `t_local_rematch`, `t_remote_rematch`, and `t_local_spdp_regained` land at the
+  same instant in every run. There is no scenario where the remote peer specifically lags.
+- Two real fixes exist, with different cost shapes. Shortening
+  `participant_liveliness_assert_period` (plain SPDP) buys rematch speed (170–195ms at a
+  200ms period, vs. 86–684ms at the default) but costs **~14x continuous steady-state
+  bandwidth forever** (64,669–65,425 B/s vs. default SPDP's 3,785–5,293 B/s) — that cost is
+  paid by every participant pair in the mesh whether or not anything ever changes, and
+  scales with mesh size.
+- **SPDP2** (`discovery_config.builtin_discovery_plugins = SPDP2 | SEDP`, confirmed a real
+  Connext 7.7.0 discovery plugin via direct `rti.connextdds` introspection, not just the
+  MCP) wins on every axis measured once its post-match state has settled: rematch typically
+  11–20ms (n=8 median 12ms, ~30x faster than default SPDP), idle bandwidth **lower** than
+  even unmodified default SPDP (1,612–1,876 B/s), and ~30% fewer bytes per retarget event.
+- **The cost SPDP2 does carry:** a probabilistic, undocumented-duration post-match
+  handshake (MCP: "first discovered" bootstrap match vs. "fully discovered" reliable
+  configuration exchange, no QoS field sets this duration). A `settle_s` sweep found no
+  clean monotonic threshold below ~1.5s; a fixed 2.0s margin gave 7/8 fast reps in a larger
+  sample, empirically reasonable for the test rig but not a derived or portable constant.
+  SPDP2 is also **not interoperable with plain SPDP** — every WAN participant in the mesh
+  must run it together.
+- **`spdp2_wan_lan_mix` confirmed the scoped-adoption plan is safe:** a single router
+  process running `SPDP2|SEDP` on its WAN participant and plain SPDP on its LAN participant
+  showed no cross-domain leak in `discovered_participants()` (3/3), no interference with the
+  WAN participant's SPDP2 rematch speed from the concurrent LAN participant (10–11ms, 3/3,
+  matching the standalone result), and a not-yet-upgraded (plain SPDP) WAN peer stayed
+  mutually invisible to an SPDP2-only participant (3/3) — the same fail-closed signature as
+  any other participant-partition mismatch, not a silent half-working state.
+
+**Decision.**
+
+- **WAN participants** (`control_wan`, `platform_wan`, `team_wan`, and any per-network D18
+  participant) are created with `discovery_config.builtin_discovery_plugins = SPDP2 | SEDP`.
+- **LAN participants** (`control_lan`/`platform_lan`, the admin/mesh LAN participant) stay
+  on plain SPDP (default `builtin_discovery_plugins`) — they never do a partition retarget
+  (D20: LAN partition is fixed), so there's no reason to take on SPDP2's settle-time risk
+  there, and the mix is confirmed safe in one process.
+- **Rejected: shortening `participant_liveliness_assert_period` as the primary fix.** Its
+  ~14x continuous bandwidth cost, paid forever and scaling with mesh size, is worse than
+  SPDP2's one-time (if probabilistic) per-match cost for any mesh that isn't churning
+  memberships constantly. Kept as a documented fallback knob only if SPDP2 adoption is
+  blocked for some other reason.
+- **Accepted residual:** the post-match settle window is real and unbounded by any
+  documented Connext setting. Phase 10's `SET_PARTICIPANT_PARTITION` accept path must not
+  assume SPDP2's fast path is available for a retarget attempted immediately after a WAN
+  peer is first discovered — evidence/tests should allow for this window rather than
+  asserting a fixed fast bound. This **narrows** D73's restart-fallback rationale
+  (`connext-investigation-review.md:315-319`): since the remote peer never lags behind the
+  changer, restarting a router to force a retarget buys nothing a router already running
+  SPDP2 doesn't get on its own once settled — the fallback's value is now specifically
+  bounded to the pre-settle window, not general announcement-paced slowness mesh-wide.
+
+**Consequences for Phase 10.** The `participant_partition`-applied-at-creation step
+(readiness item 2, `implementation-plan.md`) must also set `SPDP2 | SEDP` on the WAN
+participant's discovery config at construction; LAN participant construction is unchanged.
+The phase's e2e evidence (moving a platform out of team scope, D66/D67 matched-count
+transitions) should tolerate the settle-window variance rather than pin a specific rematch
+latency; if a future run shows the settle window unacceptable for the demo, the pinned
+fallback is still option D (endpoint-only fan-out, D73) or the fast-assert knob above —
+neither requires re-deciding this entry, both are documented fallbacks with known costs.
+
+**Evidence.** `spikes/partition_retarget/` — `PLAN.md`/`README.md` (timing: Parts A–F,
+stable 3/3 to 8/8 depending on part; wire bandwidth: `bandwidth_compare.py`, stable 3/3)
+and `spikes/spdp2_wan_lan_mix/` — `PLAN.md`/`README.md` (mixed-process safety and
+fail-closed check, stable 3/3). SPDP2's existence and mechanism sourced from
+`ask_connext_question` (cross-checked against `docs/connext-ai-issues/` — no contradicting
+entry) but every load-bearing number above is from the spikes' own measurements, not the
+MCP — the MCP under-specified the settle-window's duration, which only the spike surfaced.
+
+**Docs changed.** `implementation-plan.md` (Phase 10 readiness item 2 and the Deliver list
+note the SPDP2/LAN-plain-SPDP split; evidence section notes the settle-window tolerance);
+this entry.

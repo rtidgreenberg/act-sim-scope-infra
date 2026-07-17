@@ -33,6 +33,11 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   stray `RTI*`/`dds*` segments.
 - Loopback UDP works for co-located test processes; isolate concurrent tests by DDS
   **domain id**.
+- **Domain IDs above ~5900–6000 can hit the default port-mapping ceiling** on this install
+  and fail with `RTIOsapiSocket_bindWithIP: Permission denied` (the computed port lands in
+  the privileged <1024 range). Keep ad hoc spike/test domain ids in the low thousands or
+  below (existing spikes use domains from ~60 up to ~5900) rather than picking arbitrary
+  large numbers.
 
 ## Connext environment (this VM)
 
@@ -90,6 +95,35 @@ Instance-state consistency (ISC) findings validated against 7.7.0 (see
 (new physical GUID, same virtual GUID)** is **not** shipped in 7.7 (Scenario B; CORE-13337
 for infrastructure services) — it requires durable writer history + app-level state
 republish, and is the F3 feature under design.
+
+## Wire-level verification (tshark/dumpcap)
+
+For discovery/protocol claims the MCP can't settle (message timing, message size,
+periodic-vs-event-driven behavior, which builtin entity sent what) — capture the real
+traffic instead of trusting a description. Verified working on this VM without sudo:
+`dumpcap` already carries `cap_net_raw,cap_net_admin` (`getcap $(which dumpcap)` to
+confirm) and this user is in the `wireshark` group, so `dumpcap -i lo -w out.pcap` and
+`tshark -r out.pcap ...` both run unprivileged. **Never run `tshark`/`dumpcap` without
+`-r <file>` or `-w <file>`/`-c <count>`/`-a duration:N`** — an unbounded live capture on a
+real interface (not `lo`) will pick up unrelated host traffic and run forever.
+
+- Filter to DDS-RTPS traffic with `-Y rtps` (tshark's RTPS dissector understands SPDP,
+  SEDP, and RTI's SPDP2 builtin discovery messages).
+- Useful fields via `-T fields -e <field>`: `frame.time_epoch` (wall-clock, for bucketing
+  against Python-side `time.time()` timestamps — not `time.monotonic()`), `frame.len`
+  (wire size), `rtps.sm.id` (submessage type), `rtps.sm.wrEntityId` (which builtin writer
+  sent it), `rtps.guidPrefix.src`/`.dst` (sender/receiver GUID prefix).
+- **`rtps.guidPrefix.src` is a message-header field — one value per packet, not per
+  submessage** (unlike `rtps.sm.id`/`rtps.sm.wrEntityId`, which can repeat if a packet
+  bundles multiple submessages). Attribute captured traffic to specific participants by
+  filtering on GuidPrefix (obtain a running participant's own prefix from
+  `str(participant.instance_handle)[:24]` in the Python binding) — this avoids
+  double-counting a packet across its submessages, which per-submessage fields would risk.
+- Worked example: `spikes/partition_retarget/bandwidth_compare.py` captures on `lo` with
+  `dumpcap`, parses with `tshark -T fields`, and attributes bytes to two test participants
+  by GuidPrefix to compare steady-state bandwidth and per-event wire cost across discovery
+  configurations (see `spikes/partition_retarget/README.md`'s "Wire-level bandwidth"
+  section for the pattern and results).
 
 ## Spikes
 

@@ -717,13 +717,21 @@ Evidence:
 2. **`participant_partition` — decided as THE team-scope mechanism (D73):** parse it on
    `participants:` entries; apply at participant creation (participant QoS partition);
    mutate in place on `SET_PARTICIPANT_PARTITION` via participant `set_qos` (D15 —
-   automatic rematch; participant-level match-from-unmatch propagates via participant
-   announcements, slower than endpoint-level — cited 7.7 Users Manual §56.6.8, D73).
-   Non-overlapping participant partitions suppress WAN endpoint discovery entirely — the
-   phase e2e must confirm this empirically (out-of-team peers exchange no endpoint
-   records). Recreate-on-change is retired even as a fallback; the pinned fallback is
-   **option D** (endpoint-only fan-out through the D69 `set_partitions` path) if e2e shows
-   announcement-paced joining is too slow for the demo.
+   automatic rematch). **WAN participant construction also sets
+   `discovery_config.builtin_discovery_plugins = SPDP2 | SEDP` (D78)** — measured spikes
+   replaced D73's MCP-sourced "announcement-paced, slower than SEDP" claim with real
+   numbers: SPDP2 rematches ~11–20ms typically (vs. plain SPDP's 86–684ms) and uses less
+   steady-state bandwidth than even default SPDP, but only after a probabilistic,
+   undocumented-duration post-match settle window — the accept path and e2e must tolerate
+   that window, not assume the fast path is available immediately after a peer is first
+   discovered. LAN participant construction is unchanged (plain SPDP; D78 — LAN never does
+   a partition retarget). Non-overlapping participant partitions suppress WAN endpoint
+   discovery entirely — the phase e2e must confirm this empirically (out-of-team peers
+   exchange no endpoint records). Recreate-on-change is retired even as a fallback; pinned
+   fallbacks if the settle window proves unacceptable for the demo: **option D**
+   (endpoint-only fan-out through the D69 `set_partitions` path, D73) or shortening
+   `participant_liveliness_assert_period` on plain SPDP (D78 — works, but costs ~14x
+   continuous bandwidth mesh-wide, forever).
 3. ~~`inherit_participant` sentinel semantics~~ **Decided (D73): the sentinel is retired.**
    Route endpoints on `team_wan` use the default partition; the participant gate alone
    scopes the team. The parser hard-errors on unknown partition sentinels rather than
@@ -746,7 +754,8 @@ Deliver:
   `platform-team.yaml` (flat form).
 - `team_wan.participant_partition` parsed, applied at creation, runtime-mutable via the
   `SET_PARTICIPANT_PARTITION` accept path (replacing the D7 reject) — the single team-scope
-  mechanism (D73).
+  mechanism (D73). `team_wan` (and other WAN participants) built with
+  `SPDP2 | SEDP`; LAN participants unchanged (D78).
 - `platform-team.yaml` and [configuration.md](configuration.md) updated: the
   `inherit_participant` sentinel removed (D73); unknown partition sentinels are a parse
   error.
@@ -759,7 +768,8 @@ Evidence:
   suppression claim confirmed empirically, e.g. no peer endpoint records in the discovery
   log).
 - after `SET_PARTICIPANT_PARTITION team_wan=TEAM_A` to both, `PlatformData` crosses; acks
-  return on apply; matched counts advance after rediscovery settles.
+  return on apply; matched counts advance after rediscovery settles — allow for SPDP2's
+  probabilistic post-match settle window (D78) rather than asserting a fixed bound.
 - moving one platform out of the team stops delivery: matched counts regress to zero on
   live entities, forwarding stops, no entities are torn down.
 - a duplicate `SET_PARTICIPANT_PARTITION` with the same value returns an idempotent accept
