@@ -3731,11 +3731,50 @@ identity ("only use router name, no router id").
 **Sequencing.** This rewrites shipped Phase 8 wire types and `PresenceMonitor`; it lands as
 its own commit BEFORE any Phase 9 code, while nothing external consumes these topics.
 
-**Docs to reconcile (pending this entry):** `presence-and-health.md` (key, roster sketch,
-edge list), `RouterAdminTypes.idl` (types + comments), `implementation-plan.md` (Phase 8
-delivered text gains a supersede note; Phase 12 reset wording; POC table),
-`link-health.md` rollup-key text (jointly with D81), `code-architecture.md` if it names
-`router_id`. Tests: `test_presence_roster.py` and any fixture passing `--router-id`.
+**Implementation pins + evidence→test map (added 2026-07-17, D56 pattern — covers the
+joint D79/D80 rework, which ships as one commit; the config_hash rows execute D80):**
+
+Two micro-opens closed:
+
+- **Hash algorithm (D80's `config_hash`):** SHA-256 over the raw bytes of the loaded config
+  file, full lowercase-hex digest (64 chars). Computed once at load; no truncation (no
+  ambiguity to litigate later, and 64 bytes at 1 Hz is nothing).
+- **Router-half default:** the identity's router half comes from the shared config's
+  `router.name` — under D80 that is a fleet-wide constant (no longer per-node); the node
+  half comes from the per-node injected name. `"<node>/<router>"` stays unique per node
+  because the node half varies. `router.name` absent → default `"router"`.
+- **Stale-config guard:** a config still carrying `router.id` is a **hard parse error**
+  (same posture as D73's unknown-sentinel rule) — a silently ignored identity field is
+  exactly how a stale fleet config would hide.
+
+Evidence → named tests (rework done = all of these green, ctest 4/4 + full e2e suite):
+
+- **E-R1** `RouterHealth` samples are keyed by `"<node>/<router>"`, carry no `router_id`,
+  and the key equals the publishing participant's `participant_name` (D74 join observable)
+  → `test_presence_roster.py` (existing assertions re-keyed).
+- **E-R2** the Phase 8 roster/mesh evidence re-proven on the new key: two routers name each
+  other ALIVE in `ActRouterMeshStatus` by name; SIGKILL → DEAD by name; restart re-enters
+  under the SAME name with fresh `heartbeat_seq` → `test_presence_roster.py`
+  (E-P1/E-P2/E-P4 re-keyed).
+- **E-R3** every `RouterHealth` sample carries `config_hash` equal to a digest the test
+  computes independently from the same file; two routers loading the same file publish
+  EQUAL hashes; a router loading a modified copy publishes a DIFFERENT one (drift
+  detection observable end-to-end) → new test function in `test_presence_roster.py`.
+- **E-R4** `--router-id` is gone (unknown-argument exit) and a config with `router.id`
+  fails parse with a labeled error → `test_route_config` (ctest unit) for the parse rule;
+  e2e fixtures/conftest updated to stop passing the flag.
+- **E-R5** `RouterStatus` and `ControllerJournalRecord` no longer carry `router_id` and the
+  existing consumers pass against the new shape → `test_router_admin_commands.py`,
+  `test_controller_journal.py` (green, updated only if they referenced the field).
+- **E-R6** identity detection untouched by the rework: `test_same_node_ignore.py` and
+  `test_discovery_smoke.py` green UNCHANGED (detection was already `participant_name`-based
+  per D74 — proves the flip didn't reach into discovery).
+
+**Docs to reconcile:** ~~`presence-and-health.md` (key, roster sketch, edge list),
+`implementation-plan.md` (Phase 8 supersede note; Phase 12 reset wording; POC table),
+`link-health.md` rollup-key text (jointly with D81), `code-architecture.md`~~ **done
+2026-07-17 (f519a09)**. Remaining with the code commit: `RouterAdminTypes.idl` (types +
+comments), `test_presence_roster.py` and any fixture passing `--router-id`.
 
 ---
 
@@ -3775,11 +3814,15 @@ per-role map, and `${node.name}` substitution exists for per-node values.
 - **Distribution stays deployment's job** (Phase 13 territory) — the router verifies nothing
   and fetches nothing; it just reports what it loaded.
 
-**Docs to reconcile (pending this entry):** `implementation-plan.md` (Phase 10 readiness
-item 1 rewritten; POC config-smoke row becomes one process + one config; Phase 13 checklist
-notes distribution), `configuration.md` (single-file model, identity injection, partition
-default, hash), `presence-and-health.md` (+`config_hash` field), the example YAMLs
-(merge/rewrite in role-pair form).
+**Implementation pins + evidence for `config_hash`:** see the D79 addendum (the joint
+rework's map — hash algorithm pinned SHA-256 full hex; evidence rows E-R3/E-R4). The
+config-merge/role-pair rewrite of the example YAMLs executes with Phase 10, not the rework.
+
+**Docs to reconcile:** ~~`implementation-plan.md` (Phase 10 readiness item 1 rewritten; POC
+config-smoke row becomes one process + one config; Phase 13 checklist notes distribution),
+`configuration.md` (single-file model, identity injection, partition default, hash),
+`presence-and-health.md` (+`config_hash` field)~~ **done 2026-07-17 (f519a09)**. Remaining:
+the example YAMLs (merge/rewrite in role-pair form — lands with Phase 10).
 
 ---
 
@@ -3860,9 +3903,9 @@ submodule current, no contradicting entries): matched-endpoint protocol statuses
    as the pre-heartbeat fallback" — superseded twice over (D74 retired the tag; this entry
    retires the fallback). Reconcile to discovery-DB attribution.
 
-**Docs to reconcile (pending this entry):** `link-health.md` (attribution/rollup-key
-section, IDL sketch keys, probe-listener note), `implementation-plan.md` (Phase 9 banner
-gains the readiness-complete note; Deliver/Evidence bullets re-worded for name keys and
-discovery-DB attribution; investigation-order note for the spike), `code-architecture.md`
-(collector registration seam sentence), `command-status.md` (`ActRouterLinkStats` key
-shape).
+**Docs to reconcile:** ~~`link-health.md` (attribution/rollup-key section, IDL sketch keys,
+probe-listener note), `implementation-plan.md` (Phase 9 banner gains the readiness-complete
+note; Deliver/Evidence bullets re-worded for name keys and discovery-DB attribution;
+investigation-order note for the spike), `code-architecture.md` (collector registration
+seam sentence), `command-status.md` (`ActRouterLinkStats` key shape)~~ **done 2026-07-17
+(f519a09)**.
