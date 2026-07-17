@@ -8,7 +8,10 @@
 //
 // Roster signals (spike-proven, spikes/presence/):
 //   valid heartbeat sample                  -> ALIVE (+summary update)
-//   REQUESTED_DEADLINE_MISSED on the reader -> STALE (policy flag, never a teardown)
+//   REQUESTED_DEADLINE_MISSED on the reader -> STALE (policy flag, never a teardown).
+//     The status carries only last_instance_handle, so the handler also sweeps every
+//     ALIVE peer's last_seen against the deadline — coalesced misses (several peers
+//     silent in one dispatch window) all surface in the same pass.
 //   instance NOT_ALIVE_NO_WRITERS           -> DEAD  (liveliness lost / participant purge)
 // A real crash cascades STALE -> DEAD (the 2s deadline fires before the 3s liveliness
 // lease) — normal, not an anomaly (D75).
@@ -84,8 +87,11 @@ private:
 
     void on_health_data();
     void on_health_reader_status();
-    // Rebuild + write the LAN mesh aggregate. Caller holds roster_mutex_.
-    void republish_mesh_locked();
+    // Snapshot the roster into a mesh sample. Caller holds roster_mutex_.
+    RouterMeshStatus build_mesh_locked();
+    // Build (briefly under roster_mutex_) + write (off it) the LAN mesh aggregate,
+    // serialized under mesh_write_mutex_ so revisions reach the wire in order.
+    void publish_mesh();
 
     rti::core::cond::AsyncWaitSet &aws_;
     std::string node_name_;
@@ -106,6 +112,14 @@ private:
     std::map<std::string, std::uint32_t> handle_to_id_; // health instance handle -> id
     std::uint64_t mesh_revision_ = 0;
     std::int32_t deadline_missed_total_ = 0;
+    // Guarded by roster_mutex_: duplicate-router_id offender already warned about, and
+    // edge-trigger flags for the bounded_sequence(100) truncation warnings.
+    std::string duplicate_id_node_;
+    bool heartbeat_peers_truncated_ = false;
+    bool mesh_peers_truncated_ = false;
+    // Serializes build+write of the mesh aggregate (see publish_mesh()). Always taken
+    // BEFORE roster_mutex_; publish_heartbeat takes only roster_mutex_.
+    std::mutex mesh_write_mutex_;
 
     std::vector<dds::core::cond::Condition> conditions_;
     std::atomic<bool> shut_down_;

@@ -145,7 +145,22 @@ int main(int argc, char **argv) {
             cfg.presence_participant = presence_participant_override;
         }
         if (!router_id_override.empty()) {
-            cfg.router_id = std::stoi(router_id_override);
+            // Full-string, non-negative parse: stoi alone would accept "20x" as 20,
+            // wrap "-1" to a huge uint32 at the cast sites, and surface garbage as an
+            // unlabeled router.fatal instead of a config error naming the flag.
+            try {
+                std::size_t consumed = 0;
+                int parsed = std::stoi(router_id_override, &consumed);
+                if (consumed != router_id_override.size() || parsed < 0) {
+                    throw std::invalid_argument("not a non-negative integer");
+                }
+                cfg.router_id = parsed;
+            } catch (const std::exception &) {
+                Log::error("router.config.router_id_invalid",
+                          {{"value", router_id_override},
+                           {"reason", "--router-id must be a non-negative integer"}});
+                return 2;
+            }
         }
         if (!validate_qos_aliases(cfg, error)) {
             Log::error("router.config.qos_alias", {{"config", config_path}, {"error", error}});

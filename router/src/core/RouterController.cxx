@@ -271,7 +271,8 @@ ControllerJournalRecord RouterController::build_journal_record(
         rec.decision = rec.state_changed ? "state_updated" : "no_change";
         break;
     case ControllerEventKind::RefreshCounters:
-        break; // unreachable — process_one never journals the tick (D63/D71)
+    case ControllerEventKind::PresenceTick:
+        break; // unreachable — process_one never journals the ticks (D63/D71/D75)
     }
 
     // Status is published iff externally-visible state changed (publish_if_changed) — so
