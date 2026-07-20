@@ -262,11 +262,17 @@ LinkStatsCollector     # polls WAN endpoint protocol statuses; per-peer rollup;
   `(subscription_handle, sample_identity, recv_time)` into a mutex-guarded accumulator the
   collector drains on its tick (no `ControllerEvent`s — telemetry, not state); listener
   reset before writer close (D31/D32 discipline). Per-peer attribution via the same
-  `matched_subscription_participant_data(subscription_handle)` call. Gated on
+  `matched_subscription_participant_data(subscription_handle)` call. ~~Gated on
   `spikes/link_probe/` (the `KEEP_LAST(1)` × `APPLICATION_AUTO` retention interaction is
   unvalidated — the same concern that rejected `RouterHealth` reuse applies to the probe
   itself); pinned fallback if disproven: a probe/echo topic pair measured entirely with
-  `ReadCondition`s (waitset-pure; costs a responder per router and a second topic).
+  `ReadCondition`s (waitset-pure; costs a responder per router and a second topic).~~
+  **Gate cleared (2026-07-17): `spikes/link_probe/` PASSED 3/3** — retention is benign
+  (`KEEP_LAST(1)` replacement proceeds, `write()` never blocks behind a non-taking peer;
+  a replaced-never-taken sample produces NO app-ack, so an ack always means the peer
+  consumed the sample), attribution and ~1 Hz cadence proven, RTTs ms-scale on `lo`.
+  Join send-times by the ack's 1-based RTPS `sequence_number`, not payload `probe_seq`.
+  The echo fallback is retired unused.
 - **Publication: LAN only.** Per-peer `ActRouterLinkStats` samples on the LAN admin plane —
   WAN-frugal (nothing new crosses the constrained link), consistent with the
   `ActRouterMeshStatus` pattern. Additionally one structured log line per poll interval

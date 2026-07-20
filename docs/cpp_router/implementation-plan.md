@@ -58,7 +58,7 @@ route engine one behavior at a time.
 | 6 | Command/status control loop | **Done (D57/D58)** | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | **Done (D65/D67/D69/D70/D71)** | the verbatim production `control-platform.yaml` runs as a two-process pair without Routing Service; DDS is the matching authority (D64/D66) | ACT topic/type mapping diverges from the planned route model |
 | 8 | Presence & Health | **Done (D75/D76)** | `RouterHealth` heartbeat, per-router roster with ALIVE/STALE/DEAD, LAN `ActRouterMeshStatus` aggregate, the D74 identity flip | ~~liveliness/lease mechanics don't produce a stable DEAD signal ahead of participant purge~~ disproven by `spikes/presence/` (DEAD 2.6–5.3 s, purge trailing 11–16 s) |
-| 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; readiness pinned D81, gated on `spikes/link_probe/` + the D79/D80 wire rework; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
+| 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; readiness pinned D81; both gates cleared 2026-07-17: D79/D80 rework landed + `spikes/link_probe/` passed; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
 | 10 | Team partition route | Medium-high — **needs its readiness pass first** (the least-prepared numbered phase; see the section's gap list) | `SET_PARTICIPANT_PARTITION` applies in place and `PlatformData` crosses/stops crossing team scope, observable as matched-count transitions | participant/partition changes cannot be made predictable enough |
 | 11 | Serialized-CDR fast path | Medium — **opt-in, off the critical path** (Tenet 7) | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` and drop the optimization |
 | 12 | Keyed lifecycle mirroring + presence-driven reset | **High** (mechanism proven by `spikes/isc_recovery/`; needs a deliberately keyed fixture, Tenet 8) | one keyed route mirrors dispose/unregister with recovered keys; peer-DEAD unregisters that peer's instances downstream | key recovery in generic mode is not reliable; require generated-type lifecycle routes |
@@ -661,11 +661,15 @@ suite, 20/20):
 > classification, no health inference** — that stays gated on the netem correlation
 > experiment (its own `spikes/` entry, and it gates only *inference*, never this phase).
 > The full call surface was header-verified in the D81 pass (statuses, probe QoS knobs,
-> app-ack listener). **Implementation is gated on:** (a) D79/D80 landing first (name-keyed
-> presence types + `config_hash` — one wire change), and (b) the `spikes/link_probe/`
-> app-ack spike (the probe's `KEEP_LAST(1)` × `APPLICATION_AUTO` retention interaction is
-> the one unvalidated runtime assumption; fallback if disproven: probe/echo topic pair on
-> `ReadCondition`s, D81).
+> app-ack listener). **Both implementation gates are CLEARED (2026-07-17):** (a) the
+> D79/D80 wire rework landed (name-keyed presence types + `config_hash` — one wire
+> change), and (b) `spikes/link_probe/` PASSED 3/3 — app-acks 10/10 per peer at 1 Hz with
+> exact discovery-DB name attribution, ms-scale RTTs on `lo`, and the `KEEP_LAST(1)` ×
+> `APPLICATION_AUTO` retention interaction is benign (`write()` never blocks behind a
+> non-taking peer; replaced-never-taken samples produce NO app-ack, so no stale-ack
+> filtering is needed; ack `sample_identity.sequence_number` is the 1-based RTPS seq —
+> join send-times by that, not payload seq). The `ReadCondition` echo fallback is
+> retired unused. Phase 9 is ready to implement.
 
 Deliver:
 
@@ -919,9 +923,9 @@ or narrows the fallback path.
 Investigation order (updated at D72 — the original hardest-first list is done: attach/detach
 D31/D32, auto QoS D39/D45, partition mutability D15, plus the Phase 7 spikes): ~~(1) the
 presence spike~~ **done (D75)**; ~~(2) the D53 prototype~~ **done — the identity checks rode
-the presence spike (D74/D75)**; next: **`spikes/link_probe/`** (app-ack probe under the full
-probe QoS — gates Phase 9 implementation, D81, after the D79/D80 wire-type rework lands);
-then **the netem correlation experiment** any time after Phase 9 ships capture (it gates
+the presence spike (D74/D75)**; ~~(3) `spikes/link_probe/`~~ **done (2026-07-17, PASSED
+3/3 — Phase 9's gate cleared, see the Phase 9 banner)**; next:
+**the netem correlation experiment** any time after Phase 9 ships capture (it gates
 only inference); then **the Phase 11/12 investigations only when those phases go active** —
 Phase 11 is opt-in, and Phase 12's residual check rides the phase itself. Phase 10 needs
 decisions, not a spike (its remaining items are D80's config rewrite + the accept path).

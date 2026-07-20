@@ -3886,7 +3886,15 @@ submodule current, no contradicting entries): matched-endpoint protocol statuses
    `lo`, and sane `KEEP_LAST(1)`×app-ack retention — the one interaction link-health.md
    itself flagged as unvalidated when rejecting `RouterHealth` reuse. Python driver if
    `rti.connextdds` exposes the app-ack listener; otherwise a small C++ pair under a Python
-   runner.
+   runner. **GATE CLEARED (2026-07-17): PASSED 3/3** — the Python binding exposes the full
+   surface (pure-Python spike); 10/10 acks per peer at 1 Hz with exact
+   `matched_subscription_participant_data` name attribution; RTT min≈0.7–1.0 ms /
+   mean≈2.7–4.6 ms on `lo`; retention benign — `write()` never blocks behind a non-taking
+   peer (worst 2.09 ms), replaced-never-taken samples produce NO app-ack (no stale-ack
+   filtering needed), and the hold-take yields exactly the newest sample. Implementation
+   note from the spike: `AcknowledgmentInfo.sample_identity.sequence_number` is the
+   1-based RTPS sequence number — the collector joins send-times by RTPS seq recorded at
+   `write()`, not by payload `probe_seq`. The item-3 fallback is retired unused.
 5. **Delta semantics:** the collector self-computes deltas from totals (D14); a negative
    delta means the peer's matched-endpoint status restarted (rematch) → re-baseline, count
    from zero, and that interval is stamped `rediscovery_in_interval` (the flag marks
