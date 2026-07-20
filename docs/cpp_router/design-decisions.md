@@ -3894,7 +3894,15 @@ submodule current, no contradicting entries): matched-endpoint protocol statuses
    filtering needed), and the hold-take yields exactly the newest sample. Implementation
    note from the spike: `AcknowledgmentInfo.sample_identity.sequence_number` is the
    1-based RTPS sequence number — the collector joins send-times by RTPS seq recorded at
-   `write()`, not by payload `probe_seq`. The item-3 fallback is retired unused.
+   `write()`, not by payload `probe_seq`. The item-3 fallback is retired unused. **Pros/cons
+   of app-ack vs. that fallback recorded** in
+   [link-health.md](link-health.md#rtt-probe-the-one-thing-counters-cant-give)'s app-ack
+   section: app-ack costs zero extra topics/peer code and free per-peer attribution but is
+   opaque to root-cause without a wire capture when the 3-stage handshake (DATA+HB, AppAck,
+   AppAckConf) stalls; the echo pair is transparent (reply-absent IS the failure signal) but
+   costs a permanent second topic + responder code scaling with mesh size. Verdict: app-ack
+   stays primary — the debug-opacity cost is one-time (paid proving the mechanism, already
+   done by this spike); the echo pair's cost is forever.
 5. **Delta semantics:** the collector self-computes deltas from totals (D14); a negative
    delta means the peer's matched-endpoint status restarted (rematch) → re-baseline, count
    from zero, and that interval is stamped `rediscovery_in_interval` (the flag marks

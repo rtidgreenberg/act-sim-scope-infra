@@ -185,6 +185,29 @@ extends to "fully ACKed" (protocol **+** app ack), adding queue/memory pressure 
 interacting with `KEEP_LAST` replacement. AppAck retransmissions under loss are themselves
 recorded (they correlate with impairment).
 
+**App-ack vs. a dedicated echo topic pair (weighed 2026-07-17, alongside the
+`spikes/link_probe/` readiness pass; the echo pair is D81's pinned fallback if app-ack had
+been disproven — it wasn't, so this records why app-ack stays primary rather than just
+"cheaper," and gives the next reader the debugging cost up front):**
+
+| | App-ack (`APPLICATION_AUTO` + listener) | Dedicated echo topic pair |
+|---|---|---|
+| Wire messages/probe/peer | ~3 (DATA+piggyback HB bundled, AppAck, AppAckConf) | ~2 (ping, pong) — `BEST_EFFORT`, no reliability protocol at all |
+| New topics | 0 (rides the one `RouterLinkProbe` topic, bidirectional) | 1 (a reply topic) → 2 more discovered endpoints per router, scaling with mesh size |
+| New peer-side code | none — the ack is middleware-automatic on an ordinary `take()` | a responder every router must implement, test, and keep correct forever |
+| Per-peer attribution | free — callback carries the acknowledging reader's `subscription_handle` | needs the reply to carry (or the responder to resolve) the asker's identity itself |
+| Debug surface when it stalls | **opaque**: the writer only exposes `first_unacknowledged_sample_sequence_number` / `..._subscription_handle` (a peer is stuck) with no signal for *which* of AppAck/AppAckConf was lost — root-causing the mechanism itself needs a wire capture (`tshark`/`dumpcap`, `rtps.sm.id`) | **transparent**: the reply's absence *is* the failure signal, nothing further to disambiguate |
+| Self-healing under loss | yes — AppAck re-sends every `app_ack_period` (5 s default) until confirmed | needs its own retry design (the probe write itself has no reliability to lean on) |
+
+**Verdict: app-ack stays primary.** The debug-opacity cost is paid once, while building and
+proving the probe mechanism itself (and `spikes/link_probe/` already did that — cadence,
+attribution, and the `KEEP_LAST(1)` retention interaction all came back clean, 3/3). The
+echo pair's costs — a second topic and responder code — are permanent and scale with mesh
+size, paid by every router for the life of the system. If a genuine field case ever needs
+finer-grained visibility into *which* ack stage stalled, that is exactly what a wire capture
+is for (see `.github/copilot-instructions.md`'s tshark section) — it does not by itself
+justify carrying the extra topic and code.
+
 **Why not reuse `RouterHealth` as the probe carrier** (discussed and decided 2026-07-08):
 
 - **Blast radius.** Presence is the single health authority and drives the destructive
