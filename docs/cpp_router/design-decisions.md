@@ -4007,3 +4007,232 @@ the WAN and `ActRouterLinkStats`/`ActRouterStatus` are not (steady-state ~23 KB/
 **Docs reconciled:** `implementation-plan.md` (Phase 9 DELIVERED banner + phase-table row),
 `code-architecture.md` (LinkStatsCollector shipped bullet), this entry. Health *inference*
 stays deferred to the netem correlation experiment (D14 unchanged).
+
+## D83 — Participant partition membership is multi-valued: protected node identity + team + ad-hoc direct joins, via ADD/REMOVE commands (2026-07-20, accepted; supersedes D73's scalar `participant_partition` field, amends Phase 10 readiness item 2)
+
+**Context.** User direction: every node's WAN-facing participant must carry its own
+unique-id partition by default (so any other node can, at any time, add that exact name to
+its own partition set and receive that node's data directly — C2 tapping a specific
+platform, or platform-to-platform direct communication), with team membership layered on
+top of that same mechanism. D73 decided `participant_partition` as the sole team-scope
+mechanism but scoped it as a single scalar `string` (one name per participant) — sufficient
+for "which team am I in" but not for "my own identity, my team, AND whichever specific
+peers I've chosen to tap into, all at once."
+
+**Validated against 7.7** (headers, not just MCP — the CLAUDE.md-mandated stronger check):
+`DomainParticipantQosImpl` carries a public `dds::core::policy::Partition partition;` member
+(`$NDDSHOME/include/ndds/hpp/rti/domain/qos/DomainParticipantQosImpl.hpp:141`) — the same
+`Partition` policy type used on Publisher/Subscriber, documented as "Set of strings that
+introduces logical partitions in `dds::domain::DomainParticipant`, `dds::pub::Publisher`, or
+`dds::sub::Subscriber` entities," constructible from a `dds::core::StringSeq`
+(`TCorePolicy.hpp:698-728`). This is inherently multi-valued at the protocol level; nothing
+in Connext limits a participant to one partition name. `ask_connext_question` (2026-07-20,
+no contradicting `connext-ai-issues` entry) corroborates the matching rule — two entities
+match on **non-empty intersection** of their name sets (concrete-vs-concrete, or
+wildcard-vs-concrete; two wildcards never match each other) — and cites default resource
+limits of 64 partition names / 256 cumulative characters per participant
+(`DOMAINPARTICIPANTRESOURCELIMITSQos`); the limit figures are MCP-sourced only, not
+independently header-verified, but are far above anything this system needs.
+
+**Decision.**
+
+- **`participant_partition` becomes a set, not a scalar.** `RouterAdminTypes.idl`'s
+  `string participant_partition` (on `RouterParticipantStatus`) becomes a bounded
+  `sequence<string, N>` (N to be pinned small, e.g. 16 — comfortably under Connext's 64-name
+  ceiling with headroom); `ParticipantState.participant_partition` follows in
+  `RouterState.hpp`. Applied to the WAN participant's `DomainParticipantQos.partition` at
+  creation (D73's mechanism, now StringSeq-valued instead of one name).
+- **The node's own identity entry is protected.** Every WAN-facing participant's set
+  always contains its own unique id, defaulted at config/boot to `"${node.name}"` (D80's
+  substitution precedent) — this entry is **never removable by command**, only ever set at
+  config time. This is what makes "any node can tap any other node's data at will" durable:
+  a node can never accidentally partition itself out of its own identity.
+- **Team membership is one more entry in the same set**, addable/removable the same way as
+  an ad-hoc join — no separate mechanism for "team" vs. "direct peer tap." Config may seed
+  additional fixed entries (team name) at load, unioned with the protected identity entry.
+- **`SET_PARTICIPANT_PARTITION` (replace-the-whole-value) is retired before it ever ships**,
+  replaced by two new command kinds: `ADD_PARTICIPANT_PARTITION` and
+  `REMOVE_PARTICIPANT_PARTITION`, each naming exactly one partition string to add to or
+  remove from the live participant's set via `set_qos` (D15/D73's already-validated
+  in-place-mutation mechanism — unchanged rematch/SPDP2 behavior per D78, since
+  adding/removing one name from the sequence is still one participant-level `set_qos` call).
+  Removing the node's own protected identity entry, or removing a name not currently
+  present, is rejected at the accept path (invalid, not a silent no-op) — enforced in code,
+  not left as an operator convention.
+- **Route endpoint partitions are unaffected.** `subscriber_partition`/`publisher_partition`
+  (D61/D69, scalar) stay exactly as decided — D73's finding still holds: WAN route
+  endpoints stay in the default partition, and the participant-level gate alone does the
+  scoping (team **and** direct-peer) work. No change needed at the endpoint level for this
+  requirement.
+
+**Consequences for Phase 10 readiness item 2:** the parse/apply/mutate description is
+revised — parse a set with a protected default entry instead of a single scalar; the accept
+path gains `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` (with the
+protected-identity and not-present rejection cases) in place of the old replace-all
+`SET_PARTICIPANT_PARTITION`. The phase's evidence set gains a case beyond team join/leave:
+a direct peer tap (e.g. Platform_30 `ADD`s Platform_31's own identity name to its set;
+`PlatformData` starts crossing between exactly those two nodes without a team assignment
+in common). `RouterParticipantStatus.participant_partition` (status) becomes a sequence so
+admin observers can read each participant's live membership set per node. No new spike
+needed — the mechanism is a straight generalization of D73's already-validated `set_qos`
+path; D78's SPDP2 settle-window characterization applies unchanged.
+
+## D84 — One shared WAN participant per node serves both platform↔platform (team) and platform↔C2 traffic; endpoint-level partition (D61/D69) becomes the per-topic audience gate; a protected `"C2"` participant-partition entry preserves baseline control-plane reachability through the merge (2026-07-20, **REVERTED same-day by D85** — kept as historical record only; amends D83, refines D73's "route endpoints use default partition" for the single-shared-participant topology)
+
+**Context.** User direction: simplify from separate WAN participants per audience
+(`control_wan`/`platform_wan` for control↔platform, `team_wan` for platform↔platform) to
+**one** WAN participant per node carrying both kinds of traffic. Requirement: some topics
+must flow platform→C2 but must **never** also flow platform→platform, even though both now
+ride the same participant. D83 governs participant-level partition (identity/team/ad-hoc
+joins); on its own that only gates *discovery reachability*, not *which topics match* — an
+orthogonal problem the merge newly creates, since D73's team routes were designed to lean
+on a **separate** `team_wan` participant for their entire scoping story.
+
+**Two independent, already-existing mechanisms compose to solve this — nothing new to
+build:**
+
+- **Participant-level partition (D83, unchanged):** coarse gate on discoverability.
+- **Endpoint-level (route) partition (D61/D69, already shipped):** fine gate on whether a
+  specific topic's writer/reader actually matches once discovery is open. This is exactly
+  what `control-platform.yaml` already does today with `publisher_partition: CONTROL`/
+  `PLATFORM` on separate participants — the mechanism doesn't care whether the two
+  endpoints live under one participant or two.
+
+**Decision.**
+
+- **One `wan` participant per node** replaces the separate `control_wan`/`platform_wan`
+  (control-platform.yaml) and `team_wan` (platform-team.yaml) participants once the system
+  wide config (D80) carries both route families.
+- **Endpoint-level partition becomes the per-topic audience discriminator, with a hard
+  naming rule: platform↔C2 routes and platform↔platform (team) routes must use disjoint
+  partition-name spaces** (e.g. `"C2"` for anything platform→C2-only vs. `"TEAM_<name>"`
+  for anything team-scoped). Because a DataWriter/DataReader match requires overlap at
+  *both* the participant level AND the endpoint level (D73's cited Users Manual finding,
+  reconfirmed here), a disjoint endpoint-level name is a **structural** guarantee that a
+  C2-only topic's writer can never match a sibling platform's reader for that same topic,
+  independent of whatever the participant-level sets have in common. Team-scoped route
+  endpoints keep D73's team-name convention; C2-facing route endpoints keep today's
+  CONTROL/PLATFORM-style names (or are renamed for clarity — naming is a config detail, the
+  disjointness rule is the load-bearing part).
+- **Baseline control-plane reachability requires one more protected participant-partition
+  entry.** Verified against 7.7 (`ask_connext_question`, 2026-07-20, no contradicting
+  `connext-ai-issues` entry): an empty/default participant partition is treated as the
+  single concrete partition `""`, which does **NOT** intersect a concrete-only set like
+  D83's `{identity, team}` — so naively merging onto D83's set as-is would silently make
+  every platform invisible to C2 at the SEDP level (C2's participant partition is empty
+  today, which is *why* it currently sees every platform unconditionally). Fix: every
+  platform's participant-partition set gains a second **protected, config-time-only**
+  default entry, `"C2"`, alongside D83's own-identity entry; C2's own participant-partition
+  set defaults to `{"C2"}` (also protected) plus whatever ad-hoc platform-identity taps it
+  adds via D83's `ADD_PARTICIPANT_PARTITION`. Net default sets: platform =
+  `{node_identity, "C2", team_name}` (identity and `"C2"` protected, team mutable); C2 =
+  `{"C2"}` (protected) plus ad-hoc taps (mutable). This restores today's always-on
+  control-plane visibility through the merge without reopening platform↔platform team
+  boundaries — C2 and an out-of-tap platform still share only `"C2"`, never a team name.
+- **No new IDL, no new command kind, no new spike.** `ADD_PARTICIPANT_PARTITION`/
+  `REMOVE_PARTICIPANT_PARTITION` (D83) already treat the protected-entry-is-a-config-time-
+  constant rule generically — `"C2"` is just one more protected default value alongside
+  `"${node.name}"`, not a new mechanism. Endpoint-level partition application is unchanged
+  code (D61/D69); this decision only adds the naming-disjointness rule as a config
+  convention.
+
+**Consequences for Phase 10:** the config sketch (`configuration.md`'s control/platform and
+platform-team examples) collapses to one `wan` participant per node; the evidence set
+gains a negative case — a platform→C2-only topic (e.g. a hypothetical `PlatformTelemetry`
+routed only to C2) must show a held-zero matched count on any sibling platform's reader for
+that topic even when the two platforms share a team, proving the endpoint-level disjoint-
+name rule holds under the shared participant. `RouterParticipantStatus`'s per-participant
+partition set (D83) will show `"C2"` alongside identity/team entries — expected, not a bug.
+
+## D85 — D84 reverted same-day: keep separate WAN participants (`platform_wan` for control↔platform, `team_wan` for platform↔platform); a platform node has 2 WAN participants, not 1 (2026-07-20, accepted; reverts D84 in full, D83 stands unchanged)
+
+**Context.** Discussing D84 further surfaced a cost the merge doesn't actually need to pay.
+Participant-level partition overlap is checked once per **participant pair**, not per topic:
+merging `platform_wan`/`team_wan` into one shared `wan` participant means anyone who shares
+*any* one partition name with it (C2 via the D84 `"C2"` entry, team-mates via the team name)
+gets full SEDP endpoint discovery for **every** endpoint that participant hosts — including
+metadata (existence, type, QoS, partition-name string — D19 already captures partition in
+discovered endpoint data) for team-only topics C2 never needed visibility into and can never
+actually match (endpoint-partition mismatch still blocks the data, but not the discovery
+exchange itself). That's a real observability/bandwidth surface increase over today's split
+model, where `team_wan` and `platform_wan` don't overlap on any participant partition and so
+exchange **zero** SEDP with each other at all — full suppression, not just data-level
+non-match. D84 then had to spend a whole mechanism (the protected `"C2"` default entry) just
+to claw back baseline control-plane connectivity the split model gets for free. Also
+corrects a miscount surfaced in this discussion: a single platform node never has three WAN
+participants simultaneously — `control_wan`/`control_lan` are role:control and never built
+on a platform node (`router_main.cxx:83`'s role filter); a platform node has exactly 2 WAN
+participants (`platform_wan`, `team_wan`) + 1 LAN (`platform_lan`). The D84 merge question
+was therefore 2→1, not 3→1.
+
+**Decision.**
+
+- **Revert D84 in full.** Keep `platform_wan` (control↔platform) and `team_wan`
+  (platform↔platform team) as separate participants per platform node, matching D73's
+  original design; C2 keeps its single `control_wan` unchanged (nothing to merge there — it
+  only ever had one WAN participant).
+- **Rationale, weighed explicitly:** the isolation split participants give for free
+  (SEDP-level suppression, not just endpoint-partition non-match) is exactly what D73/D78
+  already spent effort measuring and validating as a real bandwidth/observability win for
+  out-of-team peers; extending that same property to the C2 relationship is free under the
+  split model and costly to fake under the merged one. One more participant per node is not
+  a new category of complexity — D18 already established multiple WAN participants (one per
+  network) as a normal, accepted pattern on this system. No concrete resource constraint
+  (participant-count ceiling, measured overhead) was raised to justify paying the merge's
+  cost; absent one, the split model is the safer default.
+- **D83 is unaffected and stands as designed** — participant-level partition (protected
+  identity + mutable team + ad-hoc `ADD`/`REMOVE` joins) still governs `team_wan`'s
+  discovery scoping exactly as pinned; it simply never needed the D84 `"C2"` entry or the
+  endpoint-level disjoint-naming rule, since `platform_wan` and `team_wan` were never the
+  same object to begin with.
+
+**Consequences for Phase 10:** `implementation-plan.md`'s Phase 10 section reverts the D84
+additions (the "one shared WAN participant" callout, readiness item 3's D84 refinement, and
+the Deliver/Evidence bullets naming a merged `wan` participant / the `"C2"` protected entry
+/ the disjoint-topic negative-evidence case) back to their pre-D84 (D83-only) wording. No
+code was affected either way — D84 was never implemented.
+
+## D86 — Command relay: graph-first path selection off the existing `RouterHealth` mesh graph, flood-with-TTL only as fallback; no dedicated route-discovery protocol (2026-07-20, accepted — captured for a future phase, not yet scheduled)
+
+**Context.** `RouterCommand` addressing (`target_node`/`target_router`) assumes the sender has
+a direct, healthy link to the target. On a lossy/partitioned WAN that isn't always true, and
+today there is no way to get a command to an unreachable target via an intermediate router:
+the command reader is a **ContentFilteredTopic** (`target_node = %0 AND target_router = %1`,
+[command-status.md](command-status.md)), so a non-matching router never receives the sample
+at the middleware level and has nothing to forward. Full design writeup:
+[command-relay.md](command-relay.md).
+
+**Decision.**
+
+- **Prefer graph-directed unicast relay over blind flood.** Every `RouterHealth` sample already
+  carries `peers_seen` (D77), heartbeated at 1 s (D75) — any WAN observer can already assemble
+  a continuously-refreshed who-sees-who graph from data the router publishes regardless of this
+  feature. Compute a relay path from that graph at send time and address the command along it,
+  rather than flooding to every peer by default.
+- **No dedicated route-discovery/probe protocol.** Considered and rejected: flooding a small
+  probe to map a path before sending the real command (AODV/DSR-style route discovery) adds a
+  second mechanism to answer a question the standing `RouterHealth` graph already answers, and
+  no less freshly — a probe's discovered path is only as current as its round trip, while the
+  heartbeat-fed graph is continuously live. Building it anyway would violate Tenet 9 (prefer
+  DDS-native / already-paid-for mechanisms over new app-level machinery,
+  [thesis-and-tenets.md](thesis-and-tenets.md)).
+- **Flood-with-TTL is the fallback, not the primary mechanism.** Used only when the graph shows
+  no path to the target, or a graph-directed attempt times out unacked. Bounded by a
+  `command_id` dedupe cache at each relay plus a hop-count/TTL, to guarantee termination.
+- **Ack scope unchanged: only the target router acks.** Relay hops are transparent — no
+  relay-level ack, no change to the existing `RouterCommandAck`/`command_id` retry contract.
+  Relay hops are traceable via `ActRouterControllerJournal` logging (command_id, from/to,
+  hop position) for diagnostics only, never via the ack protocol.
+- **Graph edges are directed, not assumed symmetric.** `peers_seen` records one-way heartbeat
+  reception; path computation must not assume a router that can hear a peer can also send to
+  it (asymmetric links are an observed, documented case in
+  [presence-and-health.md](presence-and-health.md)).
+- **Out of scope for the first version:** link-cost-weighted path selection (plain reachability
+  only), and `target_team`/group addressing (left as an open question in
+  [command-relay.md](command-relay.md)).
+
+**Consequences:** no code changes yet — this pins the approach for the future phase
+(Phase 14, [implementation-plan.md](implementation-plan.md)) so the readiness pass starts from
+graph-first design rather than re-deriving it. `RouterCommand`/`RouterCommandAck` gain new
+fields (`relay_path`, `relay_hop_index`, `relay_requested`, `hop_count`) only when that phase
+goes active; nothing about today's direct-delivery command path changes before then.

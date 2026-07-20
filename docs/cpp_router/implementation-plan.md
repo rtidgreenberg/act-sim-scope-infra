@@ -58,8 +58,8 @@ route engine one behavior at a time.
 | 6 | Command/status control loop | **Done (D57/D58)** | `ENABLE_ROUTE`, `DISABLE_ROUTE`, full status snapshots, duplicate command handling, controller event/decision journal | status, commands, or debug observability introduce racey state changes |
 | 7 | Platform status/events replacement | **Done (D65/D67/D69/D70/D71)** | the verbatim production `control-platform.yaml` runs as a two-process pair without Routing Service; DDS is the matching authority (D64/D66) | ACT topic/type mapping diverges from the planned route model |
 | 8 | Presence & Health | **Done (D75/D76)** | `RouterHealth` heartbeat, per-router roster with ALIVE/STALE/DEAD, LAN `ActRouterMeshStatus` aggregate, the D74 identity flip | ~~liveliness/lease mechanics don't produce a stable DEAD signal ahead of participant purge~~ disproven by `spikes/presence/` (DEAD 2.6–5.3 s, purge trailing 11–16 s) |
-| 9 | Link-Metrics Capture | High (capture only — D14/D18 pinned; readiness pinned D81; both gates cleared 2026-07-17: D79/D80 rework landed + `spikes/link_probe/` passed; *inference* stays gated on the correlation experiment) | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair | matched-endpoint statuses or app-ack don't attribute per peer in practice |
-| 10 | Team partition route | Medium-high — **needs its readiness pass first** (the least-prepared numbered phase; see the section's gap list) | `SET_PARTICIPANT_PARTITION` applies in place and `PlatformData` crosses/stops crossing team scope, observable as matched-count transitions | participant/partition changes cannot be made predictable enough |
+| 9 | Link-Metrics Capture | **DONE (D82, 2026-07-20)** — capture only; `LinkStatsCollector` ships (D14/D18/D81 realized); *inference* stays gated on the correlation experiment | per-peer reliable-protocol counters + app-ack RTT published on the LAN, nothing new on the WAN except the probe pair — proven by `test_link_stats.py` + `test_link_stats_wire_frugal` | ~~matched-endpoint statuses or app-ack don't attribute per peer~~ resolved: per-peer name attribution via the discovery DB, e2e-confirmed |
+| 10 | Team partition route | Medium-high — **needs its readiness pass first** (the least-prepared numbered phase; see the section's gap list) | `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` (D83, multi-valued set) applies in place and `PlatformData` crosses/stops crossing team scope **or** a direct peer's own identity partition, observable as matched-count transitions | participant/partition changes cannot be made predictable enough |
 | 11 | Serialized-CDR fast path | Medium — **opt-in, off the critical path** (Tenet 7) | pass-through route avoids app-level field materialization where supported | Connext API surface is too awkward; keep `dynamic_data` and drop the optimization |
 | 12 | Keyed lifecycle mirroring + presence-driven reset | **High** (mechanism proven by `spikes/isc_recovery/`; needs a deliberately keyed fixture, Tenet 8) | one keyed route mirrors dispose/unregister with recovered keys; peer-DEAD unregisters that peer's instances downstream | key recovery in generic mode is not reliable; require generated-type lifecycle routes |
 | 13 | Harness replacement | Medium-high; inherently last | one platform then one control node runs without Routing Service | container/startup sequencing needs more infrastructure than the POC budget allows |
@@ -655,6 +655,19 @@ suite, 20/20):
 
 ### Phase 9: Link-Metrics Capture
 
+> **DELIVERED 2026-07-20 (D82).** `LinkStatsCollector` ships beside `PresenceMonitor`:
+> per-peer reliable-protocol counters (registration enumeration via `collect_wan_stats` on
+> route WAN legs + the `RouterHealth` bellwether) rolled up by peer NAME from the discovery
+> DB, app-ack RTT on the dedicated `RouterLinkProbe` topic (the codebase's first, contained,
+> `DataWriterListener`), published per-peer on the LAN `ActRouterLinkStats` + a log line, on
+> a third config-fixed `DrainThread` tick (`link_stats_period_ms`), active only when presence
+> is. Capture-only — no `state_revision` interaction, health *inference* still deferred to the
+> netem correlation experiment. Evidence: `test_link_stats.py` (E1 counters advance +
+> name-attributed, E2 `rediscovery_in_interval`, E3 RTT ~1 Hz, E4 no revision bump) +
+> `test_link_stats_wire_frugal` (dumpcap/port-range: probe pair on the WAN, telemetry stream
+> LAN-only); ctest 4/4, e2e 23/23. The IDL dropped the sketch's writer-global gauges that 7.7
+> does not expose per-matched-endpoint (compile-verified; see D82).
+>
 > **Design pinned (D14/D18), capture-only by charter; readiness pass pinned (D81,
 > 2026-07-17).** [link-health.md](link-health.md) is the contract: per-peer
 > reliable-protocol counters + app-ack RTT, published raw on the LAN; **no thresholds, no
@@ -726,11 +739,21 @@ Evidence:
 >   and upgrades the silent `continue` to a hard parse error.
 > - **`participant_partition` is a struct field, not a feature**: it exists on
 >   `ParticipantState` and is copied into status, but is neither parsed from YAML nor applied
->   at participant creation.
+>   at participant creation. **Superseded by D83 (2026-07-20):** the field becomes a
+>   multi-valued set (protected node-identity entry + team + ad-hoc direct-peer joins), not
+>   a scalar — see item 2 below.
 > - **`inherit_participant`** (`platform-team.yaml`'s endpoint-partition sentinel) —
 >   **retired by D73 (2026-07-16)**: team scope is the participant partition alone; the
 >   config and configuration doc drop the sentinel when this phase lands.
-> - **`SET_PARTICIPANT_PARTITION`** has been parsed-and-rejected since D7.
+> - **`SET_PARTICIPANT_PARTITION`** has been parsed-and-rejected since D7. **Retired before
+>   shipping by D83**: replaced by `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION`
+>   (set-membership commands, not replace-all).
+> - **A platform node keeps 2 separate WAN participants (D85, 2026-07-20, reverts D84's
+>   single-shared-participant idea):** `platform_wan` (control↔platform) and `team_wan`
+>   (platform↔platform) stay distinct — a merge was considered and rejected: it would trade
+>   away today's SEDP-level discovery suppression between them (they currently share no
+>   participant partition and so exchange zero endpoint discovery with each other) for a
+>   topology simplification with no concrete resource constraint driving it.
 >
 > **What D64/D66/D69 already give this phase for free:** endpoint pub/sub partitions are
 > applied and runtime-mutable (`SET_ROUTE_PARTITION`, `RouteTopicRuntime::set_partitions`,
@@ -748,10 +771,19 @@ Evidence:
    a flat route would materialize on C2 too. Team routes are rewritten in the role-pair
    form (platform↔platform); the parser keeps exactly ONE route shape, and a route without
    a role pair becomes a hard parse error instead of a silent skip.
-2. **`participant_partition` — decided as THE team-scope mechanism (D73):** parse it on
-   `participants:` entries; apply at participant creation (participant QoS partition);
-   mutate in place on `SET_PARTICIPANT_PARTITION` via participant `set_qos` (D15 —
-   automatic rematch). **WAN participant construction also sets
+2. **`participant_partition` — decided as THE team-scope AND direct-peer-join mechanism
+   (D73, generalized to multi-valued by D83):** parse it on `participants:` entries as a
+   **set**, not a scalar — every WAN-facing participant's set always contains a **protected**
+   default entry, `"${node.name}"` (D80 substitution; never removable by command), plus
+   optional config-seeded team entries. Applied at participant creation as
+   `DomainParticipantQos.partition` built from the full name set (D83 — header-confirmed
+   `dds::core::policy::Partition` is `StringSeq`-valued and applies to
+   `DomainParticipant`/Publisher/Subscriber alike, matching on non-empty set intersection,
+   not exact equality). Mutated in place — one name added or removed per command — via
+   `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` and participant `set_qos`
+   (D15 — automatic rematch; same mechanism as D73, just per-name instead of whole-value).
+   Removing the protected identity entry, or removing an absent name, is an accept-path
+   reject, not a silent no-op. **WAN participant construction also sets
    `discovery_config.builtin_discovery_plugins = SPDP2 | SEDP` (D78)** — measured spikes
    replaced D73's MCP-sourced "announcement-paced, slower than SEDP" claim with real
    numbers: SPDP2 rematches ~11–20ms typically (vs. plain SPDP's 86–684ms) and uses less
@@ -768,20 +800,28 @@ Evidence:
    continuous bandwidth mesh-wide, forever).
 3. ~~`inherit_participant` sentinel semantics~~ **Decided (D73): the sentinel is retired.**
    Route endpoints on `team_wan` use the default partition; the participant gate alone
-   scopes the team. The parser hard-errors on unknown partition sentinels rather than
-   ignoring them. The `SET_ROUTE_PARTITION`-precedence question is moot (no inherited
-   endpoints exist).
-4. **`SET_PARTICIPANT_PARTITION` accept path**: validate participant name → apply in-place
-   `set_qos` → ack. *Ack timing decision:* ack on successful apply, **not** on rematch —
-   rematch is asynchronous and already observable via matched counts/`match_reason` (D66);
-   an ack that waits on discovery would hang on the empty-team case that is this phase's
-   own first evidence bullet. Idempotent same-value command follows D8.
+   scopes the team (kept as designed — D84's merge that would have required reopening this
+   was considered and reverted, D85). The parser hard-errors on unknown partition sentinels
+   rather than ignoring them. The `SET_ROUTE_PARTITION`-precedence question is moot (no
+   inherited endpoints exist).
+4. **`ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` accept path (D83)**:
+   validate participant name + target name → reject if ADD would exceed the bounded
+   sequence, if REMOVE targets the protected identity entry, or if REMOVE targets a name
+   not currently present → apply in-place `set_qos` (full current set ± the one name) →
+   ack. *Ack timing decision (unchanged from D73):* ack on successful apply, **not** on
+   rematch — rematch is asynchronous and already observable via matched counts/`match_reason`
+   (D66); an ack that waits on discovery would hang on the empty-team case that is this
+   phase's own first evidence bullet. Idempotent same-value command (ADD of an
+   already-present name, REMOVE already applied) follows D8.
 5. **Evidence→test map** (D56 pattern): the bullets below land in
    `router/test_e2e/test_team_partition.py` against the single system-wide config (D80 —
    the team routes rewritten in role-pair form, `team_wan.participant_partition` defaulting
-   to `"${node.name}"`), claiming the POC rows "Team disabled by default" and "Team
+   to `{"${node.name}"}`), claiming the POC rows "Team disabled by default" and "Team
    assignment"; unit coverage for the parser's no-role-pair-is-an-error and
-   sentinel-error rules extends `test_route_config`. Confirm or adjust these names when
+   sentinel-error rules extends `test_route_config`. **D83 adds one evidence case beyond
+   team join/leave**: a direct peer tap — Platform_30 `ADD_PARTICIPANT_PARTITION`s
+   Platform_31's own identity name (no shared team) and `PlatformData` starts crossing
+   between exactly those two nodes; `REMOVE` reverses it. Confirm or adjust test names when
    pinning.
 
 Deliver:
@@ -789,10 +829,13 @@ Deliver:
 - `platform_team_to_wan` and `wan_team_to_platform` concrete routes parsed from the
   system-wide config's role-pair form (D80 — the old flat `platform-team.yaml` shape is
   retired).
-- `team_wan.participant_partition` parsed, applied at creation, runtime-mutable via the
-  `SET_PARTICIPANT_PARTITION` accept path (replacing the D7 reject) — the single team-scope
-  mechanism (D73). `team_wan` (and other WAN participants) built with
-  `SPDP2 | SEDP`; LAN participants unchanged (D78).
+- `team_wan.participant_partition` parsed as a set (protected `"${node.name}"` identity
+  entry + optional config-seeded team entries), applied at creation, runtime-mutable via the
+  `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` accept path (replacing the D7
+  reject) — the team-scope AND direct-peer-join mechanism (D73, generalized by D83).
+  `team_wan` (and other WAN participants) built with `SPDP2 | SEDP`; LAN participants
+  unchanged (D78). `team_wan` stays a participant separate from `platform_wan` (D85 —
+  reverted the D84 single-shared-participant idea).
 - `platform-team.yaml` and [configuration.md](configuration.md) updated: the
   `inherit_participant` sentinel removed (D73); unknown partition sentinels are a parse
   error.
@@ -804,13 +847,17 @@ Evidence:
   not silence-and-hope (D66) — **and exchange no WAN endpoint discovery** (the D73
   suppression claim confirmed empirically, e.g. no peer endpoint records in the discovery
   log).
-- after `SET_PARTICIPANT_PARTITION team_wan=TEAM_A` to both, `PlatformData` crosses; acks
+- after `ADD_PARTICIPANT_PARTITION team_wan=TEAM_A` to both, `PlatformData` crosses; acks
   return on apply; matched counts advance after rediscovery settles — allow for SPDP2's
   probabilistic post-match settle window (D78) rather than asserting a fixed bound.
-- moving one platform out of the team stops delivery: matched counts regress to zero on
-  live entities, forwarding stops, no entities are torn down.
-- a duplicate `SET_PARTICIPANT_PARTITION` with the same value returns an idempotent accept
-  with no revision bump (D8).
+- `REMOVE_PARTICIPANT_PARTITION team_wan=TEAM_A` on one platform stops delivery: matched
+  counts regress to zero on live entities, forwarding stops, no entities are torn down.
+- a direct peer tap without a shared team: `ADD_PARTICIPANT_PARTITION team_wan=Platform_31`
+  on Platform_30 (naming Platform_31's own protected identity entry) makes `PlatformData`
+  cross between exactly those two nodes; `REMOVE_PARTICIPANT_PARTITION` reverses it (D83).
+- a duplicate `ADD`/`REMOVE` (name already present / already absent) returns an idempotent
+  accept with no revision bump (D8); `REMOVE` targeting the protected `"${node.name}"` entry
+  or a name not currently present is rejected, not silently accepted.
 
 ### Phase 11: Serialized-CDR Fast Path
 
@@ -901,6 +948,47 @@ Evidence:
 - ACT quick-start works without Routing Service for one control and one platform.
 - two-platform team scenario works for command, status, events, and `PlatformData`.
 
+### Phase 14: Command Relay (Multi-Hop Gossip Delivery)
+
+> **Proposed, not yet scheduled.** Motivated by a sender (e.g. C2) having no direct/healthy
+> link to a target router while intermediate routers do — today's `RouterCommand` delivery
+> is a **ContentFilteredTopic** (`target_node = %0 AND target_router = %1`,
+> [command-status.md](command-status.md)) with no relay path. Design and rationale pinned in
+> D86; full writeup [command-relay.md](command-relay.md). Readiness items before this phase
+> can start: (a) confirm no phase ahead of it depends on relay delivery (none currently do —
+> every phase through 13 assumes direct command delivery); (b) a small spike building the
+> `RouterHealth`/`peers_seen` graph-assembly + path computation standalone, before wiring it
+> into `RouterController`, mirroring how other phases de-risk mechanism before shipping it.
+
+Deliver:
+
+- graph assembly from `RouterHealth.peers_seen` (D77) at the sender, kept live off heartbeats
+  — no new WAN traffic, reuses data already published.
+- path computation (plain reachability to start) from the assembled graph to
+  `target_node`/`target_router`, treating edges as directed (no symmetry assumption, per
+  [presence-and-health.md](presence-and-health.md)'s asymmetric-edge case).
+- new `RouterCommand` fields: `relay_path` (ordered router names), `relay_hop_index`,
+  `relay_requested`, `hop_count` — additive, direct delivery unchanged.
+- relay-forward logic in `RouterController`: forward when addressed as next hop
+  (`relay_path`) or in flood mode (`hop_count > 0`), deduped by `command_id`.
+- sender retry ladder reusing the existing `RouterCommandAck`/`command_id` contract
+  unchanged: direct → graph-directed relay → flood, escalating on unacked retries. Only the
+  target router acks; relay hops are transparent.
+- relay-hop diagnostics via `ActRouterControllerJournal` (command_id, from/to, hop position)
+  for path traceability after the fact.
+
+Evidence:
+
+- three-router chain (sender → relay → target, no direct sender↔target link): a command
+  addressed to the target arrives and is acked, having actually traveled through the relay
+  (confirmed via journal logging, not inferred).
+- graph-directed relay is attempted before flood when the graph shows a path; flood only
+  triggers when the graph has no path or the graph-directed attempt times out unacked.
+- a duplicate command (same `command_id` re-delivered, e.g. via retry racing a slow ack)
+  is not double-executed at the target and is not infinitely re-forwarded by relays.
+- a command sent when a direct sender↔target link exists behaves identically to today's
+  unicast delivery — this phase adds no regression to the direct-delivery path.
+
 ## Confidence-Increasing Investigations
 
 These investigations should be short spikes, not new architecture phases. Each one should
@@ -976,9 +1064,10 @@ forwarding mode everywhere (Tenet 7).
 | Platform status path | **Done** (7d, `test_control_platform_full.py`) | Platform_30 publishes `PlatformStatus` | Control receives status through router |
 | Events path | **Done** (7c/7d, `test_platform_events.py` + E5) | Platform publishes `PlatformCommandAck` and `ContactReport` | Control receives both topics |
 | Team disabled by default | Phase 10 | Platform_30 and Platform_31 start with unique `team_wan.participant_partition` values | no platform-to-platform `PlatformData` crosses (held-zero matched counts, D66) |
-| Team assignment | Phase 10 | Send `SET_PARTICIPANT_PARTITION team_wan=TEAM_A` to both platform routers | `PlatformData` crosses between both platforms |
+| Team assignment | Phase 10 | Send `ADD_PARTICIPANT_PARTITION team_wan=TEAM_A` to both platform routers | `PlatformData` crosses between both platforms |
+| Direct peer tap | Phase 10 (D83) | Send `ADD_PARTICIPANT_PARTITION team_wan=Platform_31` to Platform_30 (no shared team) | `PlatformData` crosses between exactly Platform_30 and Platform_31 |
 | Detail status toggle | **Done** (7d, `test_detail_status_toggle.py`) | Send `ENABLE_ROUTE platform_detail_status` | control starts receiving detail status from target only; router publishes updated status |
-| Router command/status | `ENABLE_ROUTE` **done** (Phase 6); `SET_PARTICIPANT_PARTITION` → Phase 10 | Send `SET_PARTICIPANT_PARTITION` or `ENABLE_ROUTE` | command ack is returned and status topic reports new state revision with the full route table |
+| Router command/status | `ENABLE_ROUTE` **done** (Phase 6); `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` → Phase 10 | Send `ADD_PARTICIPANT_PARTITION`, `REMOVE_PARTICIPANT_PARTITION`, or `ENABLE_ROUTE` | command ack is returned and status topic reports new state revision with the full route table |
 | Serialized forwarding smoke | Phase 11 — **optional/stretch** (Tenet 7; not on the acceptance path) | Route `PlatformStatus` with `forwarding_mode: serialized_cdr` | sample arrives downstream without app-level field materialization in the router |
 | Meta-sample lifecycle | Phase 12 | App disposes/unregisters a keyed instance | downstream sees matching `NOT_ALIVE_DISPOSED` / `NOT_ALIVE_NO_WRITERS` (meta-mirror, not ISC — no reconnect recovery) |
 | Presence reset | Phases 8 + 12 (roster in 8; reset action in 12) | A peer router declared `DEAD` on `RouterHealth` | relay unregisters that peer's instances downstream; a returning peer re-writes and they recover as data |
