@@ -222,7 +222,7 @@ def run_prober(args):
         # ---- the 1 Hz probe burst -------------------------------------------------
         beat = dds.DynamicData(probe_type())
         beat["router"] = PROBER
-        send_time = {}     # probe_seq -> send monotonic
+        send_time = {}     # RTPS sample sequence number -> send monotonic
         write_stall = 0.0  # worst write() latency (part C: must never block)
         for i in range(N_PROBES):
             beat["probe_seq"] = i
@@ -231,8 +231,13 @@ def run_prober(args):
             writer.write(beat)
             dt = time.monotonic() - t0
             write_stall = max(write_stall, dt)
-            # RTPS sequence numbers are 1-based in ack sample_identity: seq i -> i+1.
-            send_time[i + 1] = t0
+            # The RTPS seq an ack's sample_identity carries is the middleware-assigned
+            # one, not derived from probe_seq — read it back off the writer instead of
+            # assuming a fixed i->seq offset (last_available_sample_sequence_number
+            # reflects the sample this write() call just produced).
+            rtps_seq = writer.datawriter_protocol_status \
+                .last_available_sample_sequence_number.value
+            send_time[rtps_seq] = t0
             time.sleep(PROBE_PERIOD_S)
 
         log(f"burst done; worst write() latency {write_stall*1000:.2f} ms")
@@ -281,7 +286,7 @@ def run_prober(args):
             failures.append(
                 f"C: write() blocked {write_stall:.2f}s behind the non-taking peer")
         c_acks = by_peer.get(PEER_C, {})
-        last_seq = N_PROBES  # RTPS seq of the newest probe
+        last_seq = max(send_time)  # RTPS seq of the newest probe (measured, not assumed)
         stale = [s for s in c_acks if s != last_seq]
         # The claim: after the single take, the NEWEST sample gets acked; replaced
         # never-taken samples must not produce a stale-ack backlog. (An ack for an
