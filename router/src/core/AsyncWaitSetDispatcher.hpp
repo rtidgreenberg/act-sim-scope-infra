@@ -26,6 +26,11 @@ class AsyncWaitSetDispatcher {
 public:
     explicit AsyncWaitSetDispatcher(rti::core::cond::AsyncWaitSet &aws) : aws_(aws) {}
 
+    // Phase 9 (D81): the link-stats collector to register WAN-leg runtimes with at attach
+    // and unregister at detach/close. nullptr (the default) = no collector, no
+    // registration. Set once at wiring time, before any route is built, on the strand.
+    void set_stats_registry(IWanStatsRegistry *registry) { stats_registry_ = registry; }
+
     // Take ownership of a route runtime and attach its conditions (read condition +
     // entity status conditions, D45) to the AsyncWaitSet.
     void attach(const std::string &route, const std::string &topic,
@@ -62,6 +67,7 @@ private:
 
     rti::core::cond::AsyncWaitSet &aws_;
     std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>> runtimes_;
+    IWanStatsRegistry *stats_registry_ = nullptr; // Phase 9 (D81); nullptr = no collector
 };
 
 } // namespace router

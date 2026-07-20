@@ -3931,3 +3931,79 @@ note; Deliver/Evidence bullets re-worded for name keys and discovery-DB attribut
 investigation-order note for the spike), `code-architecture.md` (collector registration
 seam sentence), `command-status.md` (`ActRouterLinkStats` key shape)~~ **done 2026-07-17
 (f519a09)**.
+
+---
+
+## D82 — Phase 9 Link-Metrics Capture IMPLEMENTED (D14/D18/D81 realized; capture-only, telemetry) (2026-07-20, accepted)
+
+**Context.** Both D81 gates were clear (D79/D80 wire rework `0b675f8`; `spikes/link_probe/`
+PASSED `ca547b1`). This entry records the shipped implementation and the small deviations the
+build/compile forced.
+
+**Shipped.**
+
+- **IDL** (`router/admin/RouterAdminTypes.idl`): `RouterLinkProbe` (WAN RTT topic, keyed by
+  router name — `{router, probe_seq, send_timestamp}`) and `RouterLinkStats` (LAN per-interval
+  rollup, `@key (observer_router, peer_router)` name pair per D79 + a `network` field for
+  D18's N>1). **Field-set deviation from the link-health.md sketch, compile-verified:** the
+  writer-global gauges the sketch listed (unacked / send-window-full / high-watermark /
+  inactive-reader / `samples_lost_by_writer`) are **not** exposed per-matched-endpoint by 7.7's
+  `matched_*_datawriter/datareader_protocol_status` (they live on the writer-global
+  `ReliableWriterCacheChangedStatus`, un-attributable per peer), so they are dropped from the
+  wire type; every field shipped is populated from a real per-endpoint source. Per-endpoint
+  reader gauge `uncommitted_samples` is kept.
+- **Collector** (`LinkStatsCollector.{hpp,cxx}`, beside `PresenceMonitor`): driven by a new
+  `ControllerEventKind::LinkStatsTick` on a **third** `DrainThread` knob (config-fixed
+  `router.link_stats_period_ms`, default 1000 — independent of the refresh/heartbeat ticks so
+  cadences never couple). Each tick, on the controller strand: poll every registered
+  `IWanStatsSource`, drain the probe app-ack accumulator, publish one `ActRouterLinkStats` per
+  peer on the LAN + an `event=link_stats` log line, and write one `RouterLinkProbe`. Behind a
+  nullable `ILinkStatsTick` seam on `RouterController` (Interfaces.hpp), symmetric with
+  presence/journal; **active only when presence is active** (D81 item 6) — `router_main`
+  constructs it only when `presence_participant` is set.
+- **Registration enumeration (D81 item 2):** `RouteTopicRuntimeBase` now *is* an
+  `IWanStatsSource` (`collect_wan_stats`, default no-op) with `has_wan_leg()`. The shared
+  per-matched-endpoint poll — discovery-DB peer attribution
+  (`rti::pub/sub::matched_*_participant_data(...)->participant_name().name()`) + self-computed
+  deltas from cumulative totals (never native `_change`, D14) + rematch/re-baseline on a
+  new/reset handle (`rediscovery_in_interval`, D81 item 5) — lives once in `WanStatsPoll.hpp`
+  (templated), reused by `RouteTopicRuntime<T>` (WAN leg, flagged by `RouteEntityFactory` when
+  the endpoint participant == the WAN participant) and by `PresenceMonitor` (now also an
+  `IWanStatsSource` — its `RouterHealth` pair is the mandatory idle-mesh bellwether).
+  `AsyncWaitSetDispatcher` register/unregisters WAN-leg runtimes with the collector at
+  attach/detach-close (strand-only; baselines drop with the endpoint).
+- **RTT probe (D81 item 3):** the codebase's first `DataWriterListener`, on the probe writer
+  alone with exactly `datawriter_application_acknowledgment()`; the callback pushes
+  `(subscription_handle, RTPS seq, recv_ns)` into a `shared_ptr`-held mutex-guarded
+  accumulator (safe against a teardown-racing callback). Send-times are joined by **RTPS
+  sequence number** recorded at `write()` — a single reliable writer's seq is monotonic 1,2,3…
+  and the ack's `sample_identity().sequence_number()` is that 1-based seq (spike finding). A
+  probe-reader `ReadCondition` takes+discards peers' probes to emit the reciprocal
+  APPLICATION_AUTO acks. Listener reset before writer close (D31/D32 extended to listeners).
+- **Teardown ordering fix:** `router_main` now stops the `DrainThread` FIRST at shutdown, so
+  no tick fires while route sources are torn down (the tick iterates registered sources and
+  would otherwise race `route_disp.shutdown()` deleting a runtime — this also closes a latent
+  race the pre-existing `RefreshCounters` path had).
+
+**Compile-verified Connext facts** (headers, not MCP — extends
+`spikes/matched_endpoints/cpp_compile_check.cxx` with the P9 surface, passes `-fsyntax-only`):
+`writer->matched_subscription_datawriter_protocol_status(h)` / `reader->…datareader…` (via
+operator-> — the getters are non-const, so the poll takes the entity by non-const ref);
+`EventCount64.total()`; `pushed_fragment_bytes()`; the rti discovery extensions arrive via
+`dds/pub|sub/discovery.hpp`; `Reliability` acknowledgment_kind set through the policy delegate
+(`rel->acknowledgment_kind(APPLICATION_AUTO)` then `qos << rel`); `set_listener` takes a
+`shared_ptr` + mask; `unacknowledged_sample_count` is NOT on `DataWriterProtocolStatus` (see
+the IDL deviation above).
+
+**Evidence.** `router/test_e2e/test_link_stats.py`: `test_link_stats` proves E1 (counters
+advance — `pushed_samples`/`heartbeats_sent`/`samples_received` — with peer attributed by
+`<node>/<router>` name), E2 (`rediscovery_in_interval` stamped on the first-match interval,
+zero-baseline then advancing), E3 (`rtt_count`/`rtt_mean_us` at ~1 Hz), E4 (RouterStatus
+`state_revision` holds steady across link-stats ticks). `test_link_stats_wire_frugal`
+(dumpcap-from-startup + tshark, WAN isolated by RTPS port range) proves the probe pair is on
+the WAN and `ActRouterLinkStats`/`ActRouterStatus` are not (steady-state ~23 KB/s, bounded).
+`ctest` 4/4, e2e **23/23**, `/dev/shm` clean, no stray `router_main`.
+
+**Docs reconciled:** `implementation-plan.md` (Phase 9 DELIVERED banner + phase-table row),
+`code-architecture.md` (LinkStatsCollector shipped bullet), this entry. Health *inference*
+stays deferred to the netem correlation experiment (D14 unchanged).

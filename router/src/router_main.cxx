@@ -29,6 +29,7 @@
 #include "core/DiscoveryDispatcher.hpp"
 #include "core/DrainThread.hpp"
 #include "core/DynamicRouteFactory.hpp"
+#include "core/LinkStatsCollector.hpp"
 #include "core/Log.hpp"
 #include "core/ParticipantRegistry.hpp"
 #include "core/PresenceMonitor.hpp"
@@ -399,6 +400,25 @@ int main(int argc, char **argv) {
                     cfg.node_name, cfg.router_name));
         }
 
+        // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the
+        // presence (WAN) participant, ActRouterLinkStats on the admin (LAN) participant.
+        // Active ONLY when presence is active (no WAN participant => no bellwether, no
+        // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
+        // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
+        // dispatcher registers each route's WAN leg; the factory learns which endpoint
+        // participant is the WAN one so it flags the right leg. Conditions attach to the
+        // AWS here, before aws.start()/enable_all() (D52).
+        std::unique_ptr<LinkStatsCollector> link_stats;
+        if (presence) {
+            link_stats.reset(new LinkStatsCollector(
+                    aws, registry.get(cfg.presence_participant), admin_dp,
+                    router_identity, cfg.presence_participant,
+                    cfg.link_stats_period_ms));
+            route_disp.set_stats_registry(link_stats.get());
+            factory.set_wan_participant(cfg.presence_participant);
+            link_stats->register_source(presence.get());
+        }
+
         RouterIdentityInfo identity;
         identity.node_name = cfg.node_name;
         identity.router_name = cfg.router_name;
@@ -407,7 +427,8 @@ int main(int argc, char **argv) {
         identity.node_role = cfg.node_role;
 
         RouterController ctrl(identity, cfg.routes, filtered_participants, &factory,
-                              &status_pub, &journal_pub, presence.get());
+                              &status_pub, &journal_pub, presence.get(),
+                              link_stats.get());
         factory.set_controller(&ctrl);
 
         DiscoveryDispatcher discovery(aws, ctrl, registry, router_identity, types);
@@ -444,9 +465,14 @@ int main(int argc, char **argv) {
         // precedent. Phase 8 (D75): with presence configured it also carries the 1 s
         // PresenceTick — the RouterHealth heartbeat (separate knob: the heartbeat must
         // stay inside its 2 s DEADLINE offer regardless of refresh retuning).
+        // Phase 9 (D14/D81): a third tick, the config-fixed link-metrics poll, active only
+        // when the collector is (presence configured). Independent knob so its cadence
+        // never couples to the refresh/heartbeat ticks.
         DrainThread drain(ctrl, std::chrono::milliseconds(1000),
                           std::chrono::milliseconds(
-                                  presence ? kHeartbeatPeriodMs : 0));
+                                  presence ? kHeartbeatPeriodMs : 0),
+                          std::chrono::milliseconds(
+                                  link_stats ? cfg.link_stats_period_ms : 0));
 
         Log::info("router.start.ok",
                   {{"admin_participant", admin_participant_name},
@@ -460,10 +486,18 @@ int main(int argc, char **argv) {
         }
 
         Log::info("router.stop.begin", {});
-        route_disp.shutdown();
+        // Stop the drain thread FIRST so no tick (RefreshCounters/PresenceTick/
+        // LinkStatsTick) fires while we tear the sources down — the LinkStatsTick iterates
+        // the registered route/health sources and would otherwise race route_disp.shutdown()
+        // deleting a runtime out from under a poll (Phase 9). With the ticks stopped,
+        // everything below runs single-threaded.
+        drain.stop();
+        route_disp.shutdown(); // unregisters each WAN route leg from the collector, then closes
         discovery.shutdown();
         command_reader.shutdown();
-        drain.stop(); // stop the ticks before detaching the presence conditions
+        if (link_stats) {
+            link_stats->shutdown(); // reset the app-ack listener + detach the probe cond
+        }
         if (presence) {
             presence->shutdown();
         }

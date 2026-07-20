@@ -40,7 +40,8 @@ public:
                      IEntityFactory *entity_factory,
                      IStatusPublisher *status_publisher,
                      IControllerJournal *journal = nullptr,
-                     IPresencePublisher *presence = nullptr);
+                     IPresencePublisher *presence = nullptr,
+                     ILinkStatsTick *link_stats = nullptr);
 
     // Create entities for every startup-enabled route (D64/D66 create-and-observe: the
     // creation gate is retired — with XML-provided types, creation needs nothing from
@@ -98,6 +99,7 @@ private:
     void apply_type_resolved(const ControllerEvent &e);
     void apply_refresh_counters();
     void apply_presence_tick();
+    void apply_link_stats_tick();
 
     // Tighten a FORWARDING build's writer deadline in place when the derivation over
     // the current matched readers is stricter than the offer (D39/D45).
@@ -121,6 +123,7 @@ private:
     IControllerJournal *journal_;    // optional debug journal (D55); nullptr = disabled
     std::uint64_t journal_sequence_; // monotonic per-record sequence (D55)
     IPresencePublisher *presence_;   // optional heartbeat publisher (D75); nullptr = off
+    ILinkStatsTick *link_stats_;     // optional link-metrics collector (D81); nullptr = off
     std::string node_role_;          // echoed in the heartbeat (D75)
     std::uint64_t heartbeat_sequence_ = 0; // monotonic per-process heartbeat_seq (D75)
     std::string current_cause_; // accepted command id during this event, else empty (D8)

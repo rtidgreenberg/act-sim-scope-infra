@@ -65,6 +65,12 @@ public:
     // Wire the controller after construction (completion events are posted to it).
     void set_controller(RouterController *controller) { controller_ = controller; }
 
+    // Phase 9 (D81): the WAN participant name (the presence participant). A route leg whose
+    // endpoint participant equals this is a WAN leg — its runtime is registered with the
+    // link-stats collector and polls that leg's per-matched-endpoint protocol statuses.
+    // Empty (the default) = no WAN participant, no leg ever flagged (no collector).
+    void set_wan_participant(const std::string &name) { wan_participant_ = name; }
+
     void create_topic_entities(const RouteView &view, const std::string &topic_name,
                                std::uint64_t generation,
                                const DerivedWriterQos &derived) override {
@@ -168,9 +174,20 @@ public:
                 };
             }
 
+            // Phase 9 (D81): flag whichever leg lives on the WAN participant so the
+            // runtime polls only its WAN-side matched-endpoint statuses (LAN legs match
+            // apps, not peer routers).
+            const bool reader_is_wan =
+                    !wan_participant_.empty()
+                    && view.spec.input.participant == wan_participant_;
+            const bool writer_is_wan =
+                    !wan_participant_.empty()
+                    && view.spec.output.participant == wan_participant_;
+
             std::unique_ptr<RouteTopicRuntimeBase> runtime(
                     new RouteTopicRuntime<T>(reader, writer, publisher, subscriber, cft,
-                                             on_warning, manual_liveliness, on_match));
+                                             on_warning, manual_liveliness, on_match,
+                                             reader_is_wan, writer_is_wan));
 
             // (4) attach the forwarding + status conditions to the AsyncWaitSet.
             dispatcher_.attach(route, topic_name, std::move(runtime));
@@ -261,6 +278,7 @@ private:
     QosResolver &qos_;
     AsyncWaitSetDispatcher &dispatcher_;
     RouterController *controller_;
+    std::string wan_participant_; // Phase 9 (D81); empty = no WAN leg flagging
 };
 
 } // namespace router

@@ -47,7 +47,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
         return ControllerJournalEventKind::JOURNAL_TYPE_RESOLVED;
     case ControllerEventKind::RefreshCounters:
     case ControllerEventKind::PresenceTick:
-        break; // never journaled (D63/D71/D75 — process_one skips the ticks); fall through
+    case ControllerEventKind::LinkStatsTick:
+        break; // never journaled (D63/D71/D75/D81 — process_one skips the ticks)
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -60,12 +61,14 @@ RouterController::RouterController(const RouterIdentityInfo &identity,
                                    IEntityFactory *entity_factory,
                                    IStatusPublisher *status_publisher,
                                    IControllerJournal *journal,
-                                   IPresencePublisher *presence)
+                                   IPresencePublisher *presence,
+                                   ILinkStatsTick *link_stats)
         : factory_(entity_factory),
           status_(status_publisher),
           journal_(journal),
           journal_sequence_(0),
           presence_(presence),
+          link_stats_(link_stats),
           node_role_(identity.node_role) {
     state_.node_name = identity.node_name;
     state_.router_name = identity.router_name;
@@ -147,6 +150,12 @@ void RouterController::process_one(const ControllerEvent &event) {
         apply_presence_tick();
         return;
     }
+    // The LinkStatsTick (Phase 9, D14/D81) is the same shape: pure telemetry, the collector
+    // owns its own (revision-less) publish, never journaled.
+    if (event.kind == ControllerEventKind::LinkStatsTick) {
+        apply_link_stats_tick();
+        return;
+    }
     std::vector<std::string> pre = fingerprints();
     std::uint64_t pre_revision = state_.state_revision;
     current_cause_.clear();
@@ -193,7 +202,8 @@ void RouterController::process(const ControllerEvent &event) {
         break;
     case ControllerEventKind::RefreshCounters:
     case ControllerEventKind::PresenceTick:
-        break; // handled directly by process_one() before ever reaching here (D63/D71/D75)
+    case ControllerEventKind::LinkStatsTick:
+        break; // handled directly by process_one() before here (D63/D71/D75/D81)
     }
 }
 
@@ -685,6 +695,16 @@ void RouterController::apply_presence_tick() {
                      : (degraded > 0) ? RouterOverallState::ROUTER_DEGRADED
                                       : RouterOverallState::ROUTER_OK;
     presence_->publish_heartbeat(hb);
+}
+
+void RouterController::apply_link_stats_tick() {
+    // Phase 9 (D14/D81): telemetry only. The controller holds no link-metrics state; it
+    // just drives the collector on the strand (so polling never races the dispatcher's
+    // build/close registration of route WAN legs). No revision bump, never journaled.
+    if (link_stats_ == nullptr) {
+        return;
+    }
+    link_stats_->on_link_stats_tick();
 }
 
 // --- Entity operation completions (D21), stale-stamp discard (D23) ---

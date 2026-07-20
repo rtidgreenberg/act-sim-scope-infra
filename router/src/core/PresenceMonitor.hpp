@@ -35,6 +35,7 @@
 #pragma once
 
 #include "Interfaces.hpp"
+#include "WanStatsPoll.hpp" // Phase 9: the RouterHealth pair is a WAN-stats source (D81)
 
 #include "RouterAdminTypes.hpp"
 
@@ -55,7 +56,11 @@ const int kHeartbeatPeriodMs = 1000;
 const int kHealthDeadlineMs = 2000;       // 2x heartbeat period
 const int kHealthLivelinessLeaseMs = 3000; // 3x heartbeat period (AUTOMATIC)
 
-class PresenceMonitor : public IPresencePublisher {
+// Also an IWanStatsSource (Phase 9, D81): the RouterHealth writer/reader pair is the
+// mandatory idle-mesh bellwether — a known-rate WAN pair the LinkStatsCollector polls so
+// per-peer protocol counters advance even when every data route is idle. router_main
+// registers the monitor with the collector when both are active.
+class PresenceMonitor : public IPresencePublisher, public IWanStatsSource {
 public:
     // wan_participant carries the RouterHealth pair; lan_participant (the admin
     // participant) carries the ActRouterMeshStatus aggregate. Conditions attach to aws
@@ -73,6 +78,12 @@ public:
 
     // IPresencePublisher — called from the controller strand on each PresenceTick.
     void publish_heartbeat(const RouterHealth &hb) override;
+
+    // IWanStatsSource — poll the RouterHealth pair's per-matched-endpoint protocol
+    // statuses (Phase 9, D81). Called on the controller strand (the LinkStatsTick),
+    // single-threaded with publish_heartbeat; the DDS reads are thread-safe and the
+    // baseline maps are strand-only.
+    void collect_wan_stats(LinkStatsSink &sink) override;
 
     // Detach the conditions from the AsyncWaitSet (D32 barriers). Call before aws.stop().
     void shutdown();
@@ -122,6 +133,11 @@ private:
 
     std::vector<dds::core::cond::Condition> conditions_;
     std::atomic<bool> shut_down_;
+
+    // Phase 9 (D81) link-stats delta baselines for the RouterHealth pair. Strand-only
+    // (collect_wan_stats), so no lock — separate from roster_mutex_.
+    std::map<std::string, WriterTotals> health_writer_prev_;
+    std::map<std::string, ReaderTotals> health_reader_prev_;
 };
 
 } // namespace router

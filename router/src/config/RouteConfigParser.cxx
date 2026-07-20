@@ -168,6 +168,19 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             }
         }
 
+        // router.link_stats_period_ms (Phase 9, D14/D81): config-fixed poll cadence. Must
+        // be > 0 — a 0/negative value would build the collector's WAN entities but leave it
+        // silently inert (the DrainThread tick guard is period > 0), so reject it up front
+        // (D79 fail-fast posture) rather than ship a half-live collector.
+        if (router && router["link_stats_period_ms"]) {
+            out.link_stats_period_ms = router["link_stats_period_ms"].as<int>();
+            if (out.link_stats_period_ms <= 0) {
+                error = "router.link_stats_period_ms must be a positive integer (ms); got "
+                        + std::to_string(out.link_stats_period_ms);
+                return false;
+            }
+        }
+
         out.types_xml_path = get_str(root["types"], "xml");
         for (std::size_t i = 0; i < root["qos_libraries"].size(); ++i) {
             out.qos_library_paths.push_back(root["qos_libraries"][i].as<std::string>());

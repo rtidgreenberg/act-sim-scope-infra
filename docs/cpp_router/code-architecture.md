@@ -169,7 +169,12 @@ RouterInstance
   RTT, probe-only QoS) — app-ack is listener-only, so the probe writer carries the
   codebase's one listener, feeding a mutex-guarded accumulator drained on the tick (D81).
   Capture only — no health classification (presence remains the health authority); metric
-  deltas never bump `state_revision`.
+  deltas never bump `state_revision`. **SHIPPED D82 (2026-07-20):** the per-matched-endpoint
+  poll (attribution + self-delta + rematch) lives once in `WanStatsPoll.hpp`, reused by
+  `RouteTopicRuntime<T>` and `PresenceMonitor` (both `IWanStatsSource`); the collector is
+  driven by a `LinkStatsTick` on a third `DrainThread` knob behind a nullable `ILinkStatsTick`
+  seam; the `RouterLinkStats` IDL dropped the sketch's writer-global gauges that 7.7 does not
+  expose per-matched-endpoint (compile-verified).
 - `Log` is the single structured log stream. The Connext logger is bridged into it at startup
   via `rti::config::Logger::instance().output_handler(...)` so middleware messages arrive tagged
   `source=connext` alongside `source=router`. The handler is `noexcept`, never calls back into

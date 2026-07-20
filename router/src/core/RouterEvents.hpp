@@ -70,11 +70,15 @@ enum class ControllerEventKind {
     TypeResolved,           // topic's type learned from the wire (7c, D64/D70)
     RefreshCounters,        // periodic status-refresh tick (7d, D63): pull forwarded()
                             // counters; republish WITHOUT bumping state_revision
-    PresenceTick            // periodic heartbeat tick (Phase 8, D75): build the compact
+    PresenceTick,           // periodic heartbeat tick (Phase 8, D75): build the compact
                             // RouterHealth summary from controller state and hand it to
                             // the presence publisher; telemetry only, never bumps
                             // state_revision and is never journaled (same skip-path as
                             // RefreshCounters, D71)
+    LinkStatsTick           // periodic link-metrics tick (Phase 9, D14/D81): tell the
+                            // collector to poll WAN protocol statuses + probe app-acks and
+                            // publish per-peer ActRouterLinkStats on the LAN; telemetry
+                            // only, same never-bump/never-journal skip-path as the others
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -178,6 +182,11 @@ struct ControllerEvent {
         ControllerEvent e;
         e.kind = ControllerEventKind::PresenceTick;
         return e; // no payload: the handler snapshots the rollup from controller state
+    }
+    static ControllerEvent link_stats_tick() {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::LinkStatsTick;
+        return e; // no payload: the handler tells the collector to poll + publish
     }
     static ControllerEvent topic_match_changed(const std::string &route,
                                                const std::string &topic,

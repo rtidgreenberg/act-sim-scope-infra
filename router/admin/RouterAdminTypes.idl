@@ -269,3 +269,63 @@ struct ControllerJournalRecord {
     string action;
     string payload_json; // compact affected state delta + detailed event fields
 };
+
+// ---- Link-Metrics Capture (Phase 9, D14/D18/D81; design: link-health.md) ----
+//
+// RouterLinkProbe is the dedicated WAN RTT topic (D14: NOT RouterHealth reuse):
+// VOLATILE, no liveliness, RELIABLE + APPLICATION_AUTO with a fixed 1-sample send window
+// and a per-sample piggyback heartbeat; the writer's app-ack listener times the roundtrip
+// per peer (D81 item 3). Keyed by the router NAME (D79). Tiny by design.
+struct RouterLinkProbe {
+    @key
+    string router;             // "<node>/<router>" — the D74/D79 name-only identity
+    uint64 probe_seq;          // 0-based payload counter (the ack's RTPS seq is probe_seq+1;
+                               // the collector joins send-times by RTPS seq — spike/D81)
+    int64  send_timestamp;     // ns since epoch, informational (RTT is measured locally)
+};
+
+// RouterLinkStats is the LAN-only per-interval reliable-protocol rollup for one WAN link
+// (observer -> peer), published by the LinkStatsCollector (D14). Raw counters by design —
+// derived ratios are computed at analysis time. Keys are the D74/D79 name pair (D81).
+//
+// The field set is exactly what the per-matched-endpoint protocol statuses expose on 7.7
+// (compile-verified in spikes/matched_endpoints/cpp_compile_check.cxx): the writer-global
+// gauges from the link-health.md sketch (unacked/send-window/watermark/inactive-reader
+// events, samples_lost_by_writer) are NOT per-peer attributable through
+// matched_*_datawriter/datareader_protocol_status and are deferred to the correlation
+// experiment (they feed *inference*, which this capture phase does not ship — D14).
+struct RouterLinkStats {
+    @key
+    string observer_router;          // "<node>/<router>" (D79)
+    @key
+    string peer_router;              // "<node>/<router>" (D79)
+    string network;                  // local WAN participant name (D18: (peer, network) at N>1)
+    uint64 capture_seq;              // monotonic per observer_router
+    int64  capture_timestamp;        // ns since epoch
+    uint32 interval_ms;              // actual elapsed poll interval
+    boolean rediscovery_in_interval; // a (re)match happened this interval: TRANSIENT_LOCAL
+                                     // replay / counter reset may inflate pulled_*/received_*
+
+    // writer-side rollup: this router's WAN writers -> peer's readers (interval deltas).
+    // NOTE: *_fragment_bytes count only DATA_FRAG (fragmented-sample) bytes — 7.7's
+    // DataWriterProtocolStatus has no per-sample byte counter, so these read 0 for the
+    // small unfragmented samples typical of these routes (use *_samples for throughput).
+    uint64 pushed_samples;   uint64 pushed_fragment_bytes;
+    uint64 pulled_samples;   uint64 pulled_fragment_bytes;
+    uint64 nacks_received;   uint64 nack_frags_received;
+    uint64 heartbeats_sent;
+    uint64 samples_rejected_remote;  // writer-side rejected_sample_count delta
+
+    // reader-side rollup: peer's writers -> this router's WAN readers (interval deltas)
+    uint64 samples_received; uint64 duplicates_received;
+    uint64 heartbeats_received;
+    uint64 nacks_sent;
+    uint64 out_of_range_rejected;
+    uint64 samples_rejected_local;   // reader-side resource-limit rejections (not link loss)
+    // reader-side gauge (point-in-time, max across this peer's matched endpoints)
+    uint32 uncommitted_samples;
+
+    // probe RTT (app-ack roundtrips observed this interval)
+    uint32 rtt_count;
+    uint32 rtt_min_us;  uint32 rtt_mean_us;  uint32 rtt_max_us;
+};

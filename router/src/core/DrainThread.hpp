@@ -24,17 +24,25 @@ public:
     // heartbeat_period (Phase 8, D75): same tick pattern, posting PresenceTick — a
     // SEPARATE knob from refresh_period so retuning the counter refresh can never
     // silently stretch the heartbeat past its 2s DEADLINE offer. Default 0 = no tick.
+    // link_stats_period (Phase 9, D14/D81): same tick pattern, posting LinkStatsTick — a
+    // THIRD independent knob so the config-fixed link-metrics cadence (experiment sweeps
+    // must stay comparable) is never coupled to the refresh or heartbeat cadence. Default
+    // 0 = no tick (no collector / unit tests).
     explicit DrainThread(RouterController &ctrl,
                          std::chrono::milliseconds refresh_period
                                  = std::chrono::milliseconds(0),
                          std::chrono::milliseconds heartbeat_period
+                                 = std::chrono::milliseconds(0),
+                         std::chrono::milliseconds link_stats_period
                                  = std::chrono::milliseconds(0))
             : ctrl_(ctrl), running_(true) {
-        thread_ = std::thread([this, refresh_period, heartbeat_period]() {
+        thread_ = std::thread([this, refresh_period, heartbeat_period,
+                               link_stats_period]() {
             auto next_refresh = std::chrono::steady_clock::now() + refresh_period;
             auto next_heartbeat = std::chrono::steady_clock::now(); // first beat now:
             // the roster side (PresenceMonitor) marks a peer ALIVE only on a heartbeat,
             // so the first one should not wait a full period after startup.
+            auto next_link_stats = std::chrono::steady_clock::now() + link_stats_period;
             while (running_.load(std::memory_order_relaxed)) {
                 if (refresh_period.count() > 0
                     && std::chrono::steady_clock::now() >= next_refresh) {
@@ -54,6 +62,13 @@ public:
                     do { // same catch-up resync as the refresh tick above
                         next_heartbeat += heartbeat_period;
                     } while (next_heartbeat <= std::chrono::steady_clock::now());
+                }
+                if (link_stats_period.count() > 0
+                    && std::chrono::steady_clock::now() >= next_link_stats) {
+                    ctrl_.post(ControllerEvent::link_stats_tick());
+                    do { // same catch-up resync
+                        next_link_stats += link_stats_period;
+                    } while (next_link_stats <= std::chrono::steady_clock::now());
                 }
                 ctrl_.wait_and_drain(std::chrono::milliseconds(100));
             }

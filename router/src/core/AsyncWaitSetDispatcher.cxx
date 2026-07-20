@@ -28,9 +28,15 @@ void detach_all(rti::core::cond::AsyncWaitSet &aws, RouteTopicRuntimeBase &runti
 void AsyncWaitSetDispatcher::attach(const std::string &route, const std::string &topic,
                                     std::unique_ptr<RouteTopicRuntimeBase> runtime) {
     std::vector<dds::core::cond::Condition> conds = runtime->conditions();
+    RouteTopicRuntimeBase *raw = runtime.get();
     runtimes_[key(route, topic)] = std::move(runtime);
     for (size_t i = 0; i < conds.size(); ++i) {
         aws_.attach_condition(conds[i]);
+    }
+    // Phase 9 (D81): a build with a WAN-side leg registers with the collector so its
+    // per-matched-endpoint protocol statuses are polled on the tick. Strand-only.
+    if (stats_registry_ != nullptr && raw->has_wan_leg()) {
+        stats_registry_->register_source(raw);
     }
     Log::debug("route_conditions_attached",
                {{"route", route}, {"topic", topic},
@@ -44,6 +50,11 @@ bool AsyncWaitSetDispatcher::detach_and_close(const std::string &route,
     if (it == runtimes_.end()) {
         return false;
     }
+    // Unregister from the collector before close (D81 — baselines drop with the endpoint;
+    // no poll can touch a closing runtime since both run on the strand).
+    if (stats_registry_ != nullptr) {
+        stats_registry_->unregister_source(it->second.get());
+    }
     detach_all(aws_, *it->second, route, topic);
     it->second->close(); // close condition, then reader, then writer (D32)
     runtimes_.erase(it);
@@ -55,6 +66,9 @@ void AsyncWaitSetDispatcher::shutdown() {
     while (!runtimes_.empty()) {
         std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
             runtimes_.begin();
+        if (stats_registry_ != nullptr) {
+            stats_registry_->unregister_source(it->second.get());
+        }
         detach_all(aws_, *it->second, "", "");
         it->second->close();
         runtimes_.erase(it);

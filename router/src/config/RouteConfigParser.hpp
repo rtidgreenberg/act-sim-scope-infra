@@ -55,6 +55,11 @@ struct RouteConfig {
     // this node's role (the YAML accepts a scalar or a per-role map). Empty = presence
     // disabled for this process — configs without it are unaffected.
     std::string presence_participant;
+    // router.link_stats_period_ms (Phase 9, D14/D81): config-fixed link-metrics poll
+    // cadence (constant per run so experiment sweeps stay comparable). Default 1000 ms.
+    // Only takes effect when presence is active — the collector rides the WAN/presence
+    // participant (D81 item 6). Sits beside the (currently constant) heartbeat period.
+    int link_stats_period_ms = 1000;
 };
 
 // True if some participant in the list has this exact name. Shared by parse_route_config's

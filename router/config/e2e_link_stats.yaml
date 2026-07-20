@@ -1,0 +1,64 @@
+# e2e_link_stats.yaml — router_main-runnable fixture for the Phase 9 link-metrics e2e
+# (router/test_e2e/test_link_stats.py, D14/D18/D81).
+#
+# Same two-role shape as e2e_presence.yaml: each process runs its role's WAN participant
+# with a RouterHealth heartbeat pair (the mandatory idle-mesh bellwether) AND the Phase 9
+# RouterLinkProbe RTT pair + LinkStatsCollector. One ENABLED WAN route (PlatformPrimaryStatus,
+# platform -> control) carries steady traffic so the per-matched-endpoint protocol counters
+# advance; the collector rolls them up per peer NAME (D79) resolved from the discovery DB
+# and publishes ActRouterLinkStats on each router's admin (LAN) participant.
+#
+# The collector activates because router.presence_participant is set (D81 item 6 — no
+# presence participant means no WAN participant, no bellwether, no collection). Loaded twice
+# against the SAME file (--role platform / --role control, control also overriding
+# --node-name/--name so the two get distinct "<node>/<router>" identities — D79). Domain
+# placeholders substituted per test run (conftest.py).
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role
+
+router:
+  name: e2e-link-stats
+  admin_participant: platform_lan   # control-role process overrides via CLI
+  presence_participant:
+    platform: platform_wan
+    control: control_wan
+  link_stats_period_ms: 1000        # config-fixed poll cadence (D14/D81; the default)
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: __DOMAIN_CONTROL_LAN__
+  control_wan:
+    role: control
+    domain: __DOMAIN_WAN__
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  platform_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+
+routes:
+  - name: link_stats_route
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformPrimaryStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: default
+    destination_side:
+      input:
+        participant: control_wan
+      output:
+        participant: control_lan

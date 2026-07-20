@@ -147,6 +147,14 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     }
 }
 
+void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
+    // The bellwether pair: writer -> every peer's RouterHealth reader, reader <- every
+    // peer's RouterHealth writer. Same discovery-DB attribution + self-delta as a route
+    // WAN leg (D81), reusing the shared poll so there is one implementation.
+    poll_writer_wan_stats(health_writer_, health_writer_prev_, sink);
+    poll_reader_wan_stats(health_reader_, health_reader_prev_, sink);
+}
+
 void PresenceMonitor::on_health_data() {
     // Two phases so no DDS call runs under roster_mutex_ — the controller strand's
     // publish_heartbeat() takes the same mutex and must never block route control
