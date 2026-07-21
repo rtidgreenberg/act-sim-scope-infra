@@ -21,12 +21,13 @@ wired to run them for real (D46):
   Connext logger bridge (`source=connext`) is added in a later DDS phase.
 - `src/config/RouteConfigParser.{hpp,cxx}` — full route/participant/type YAML parsing
   (yaml-cpp), with role-aware source/destination-side selection.
-- `config/control-platform.yaml`, `config/platform-team.yaml` — the production-shape
-  sample configs matching [configuration.md](../docs/cpp_router/configuration.md). Neither
-  is runnable by `router_main` **today** as literally authored: named QoS aliases
-  (`wan_event`, `wan_status`, ...) are unresolvable until Phase 7 (D45), multi-type routes
-  need D34/D35's deferred dispatch, and `platform-team.yaml`'s flat route shape is Phase 8
-  (unstarted). See D46.
+- `config/control-platform.yaml` — the production-shape system-wide config (D80) matching
+  [configuration.md](../docs/cpp_router/configuration.md): every route family
+  (control<->platform and, since Phase 10/D87, platform<->platform team) in one file,
+  runnable by `router_main` as literally authored. `config/platform-team.yaml` is kept
+  only as a Phase-0 identity-reader fixture — its own flat-shape routes:/participants:
+  are historical and unexercised by `RouteConfigParser` (the flat route shape is retired,
+  D80/D87).
 - `config/e2e_control_command.yaml`, `config/e2e_platform_status.yaml` — trimmed,
   `router_main`-runnable fixtures (single type, `qos: ""`) used by the Python e2e suite
   (`test_e2e/`).

@@ -86,6 +86,11 @@ private:
     void handle_enable(const RouterCommand &cmd, RouterCommandAck &ack);
     void handle_disable(const RouterCommand &cmd, RouterCommandAck &ack);
     void handle_set_route_partition(const RouterCommand &cmd, RouterCommandAck &ack);
+    // D83: ADD_PARTICIPANT_PARTITION and REMOVE_PARTICIPANT_PARTITION share this one
+    // lookup/mutate/apply/rollback/ack shape, differing only in which end of the set-
+    // membership operation `adding` selects.
+    void handle_participant_partition_membership(const RouterCommand &cmd,
+                                                  RouterCommandAck &ack, bool adding);
     void cache_ack(const RouterCommandAck &ack);
 
     void apply_publication(const EndpointRecord &rec);
@@ -113,8 +118,13 @@ private:
     std::uint64_t next_generation() { return ++state_.entity_generation_counter; }
 
     std::shared_ptr<const RouterStatus> build_snapshot() const;
-    void publish_if_changed(const std::vector<std::string> &pre_fingerprints);
-    std::vector<std::string> fingerprints() const;
+    // include_participants: skip the O(participants) fingerprint scan for event kinds
+    // that structurally cannot change a participant's partition set (D83) — only
+    // ADD_PARTICIPANT_PARTITION/REMOVE_PARTICIPANT_PARTITION commands can, so every other
+    // event (including the high-frequency discovery ones) passes false.
+    void publish_if_changed(const std::vector<std::string> &pre_fingerprints,
+                            bool include_participants);
+    std::vector<std::string> fingerprints(bool include_participants) const;
 
     MutableRouterState state_;
     EventQueue queue_;

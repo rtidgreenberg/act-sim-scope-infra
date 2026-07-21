@@ -164,4 +164,13 @@ std::string route_fingerprint(const RouteState &route) {
     return os.str();
 }
 
+std::string participant_fingerprint(const ParticipantState &participant) {
+    std::ostringstream os;
+    os << participant.name;
+    for (std::size_t i = 0; i < participant.participant_partition.size(); ++i) {
+        os << '|' << participant.participant_partition.at(i);
+    }
+    return os.str();
+}
+
 } // namespace router

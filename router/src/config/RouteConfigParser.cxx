@@ -56,13 +56,17 @@ bool is_numeric_literal(const std::string &v) {
 // of shape, so a numeric-looking id like "101" or "PLATFORM232" written in quotes is never
 // misquoted. Only a plain/bare scalar (an actual number in the config) falls back to the
 // numeric-shape check (string comparison requires quotes — validated 7.7).
-std::string resolve_filter_param(const YAML::Node &param, const std::string &node_name) {
-    std::string v = param.as<std::string>();
+std::string substitute_node_name(std::string v, const std::string &node_name) {
     const std::string token = "${node.name}";
     std::string::size_type pos;
     while ((pos = v.find(token)) != std::string::npos) {
         v.replace(pos, token.size(), node_name);
     }
+    return v;
+}
+
+std::string resolve_filter_param(const YAML::Node &param, const std::string &node_name) {
+    std::string v = substitute_node_name(param.as<std::string>(), node_name);
     if (v.size() >= 2 && v[0] == '\'' && v[v.size() - 1] == '\'') {
         return v; // author embedded the SQL quotes directly
     }
@@ -201,15 +205,74 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             }
             ps.role = get_str(p, "role");
             ps.qos_profile_alias = get_str(p, "qos");
+            ps.is_wan = p["wan"] && p["wan"].as<bool>();
+
+            // participant_partition (D83): a sequence of names, or a single scalar name
+            // for convenience — either way the ${node.name} token is substituted (same
+            // rule as filter parameters). An unknown sentinel (the retired
+            // "inherit_participant") is a hard parse error (D73), not a silent no-op.
+            if (p["participant_partition"]) {
+                const YAML::Node &pp = p["participant_partition"];
+                std::vector<YAML::Node> entries;
+                if (pp.IsSequence()) {
+                    for (std::size_t i = 0; i < pp.size(); ++i) entries.push_back(pp[i]);
+                } else {
+                    entries.push_back(pp);
+                }
+                for (const YAML::Node &entry : entries) {
+                    std::string v = entry.as<std::string>();
+                    if (v == "inherit_participant") {
+                        error = "participant '" + ps.name + "' participant_partition: "
+                                "'inherit_participant' is retired (D73) — team scope is "
+                                "the participant partition alone; route endpoints use "
+                                "the default partition";
+                        return false;
+                    }
+                    ps.participant_partition.push_back(substitute_node_name(v, out.node_name));
+                }
+            }
+            // Every WAN-facing participant's set always contains its own protected
+            // identity entry (D83), config-time only — never removable by command.
+            if (ps.is_wan) {
+                if (!has_protected_partition_entry(ps, out.node_name)) {
+                    ps.participant_partition.insert(ps.participant_partition.begin(),
+                                                    out.node_name);
+                }
+            }
+            // The wire status field is a bounded sequence<string, 16>
+            // (RouterAdminTypes.idl) — reject an oversized config at parse time rather
+            // than let it overflow silently on the first status publish.
+            if (ps.participant_partition.size() > kMaxParticipantPartitionEntries) {
+                error = "participant '" + ps.name + "' participant_partition: " +
+                        std::to_string(ps.participant_partition.size()) + " entries "
+                        "exceeds the " + std::to_string(kMaxParticipantPartitionEntries) +
+                        "-entry bound (RouterParticipantStatus.participant_partition, "
+                        "RouterAdminTypes.idl)";
+                return false;
+            }
             out.participants.push_back(ps);
         }
 
         for (std::size_t r = 0; r < root["routes"].size(); ++r) {
             const YAML::Node &rt = root["routes"][r];
+            // D80: the flat top-level input:/output: route shape is retired before it
+            // ever shipped — every route declares a source/destination role pair. A
+            // route missing either key is a hard parse error, not a silently skipped
+            // route (the bug this superseded: a flat route just fell through the old
+            // role-match `continue`, invisible on every node that loaded the config).
+            if (!rt["source"] || !rt["destination"]) {
+                error = "route '" + get_str(rt, "name") + "' is missing source/destination "
+                        "— the flat input:/output: route shape is retired (D80); every "
+                        "route must declare a source/destination role pair";
+                return false;
+            }
             const std::string source = get_str(rt, "source");
             const std::string dest = get_str(rt, "destination");
 
-            // Role-aware side selection: this node materializes the side matching its role.
+            // Role-aware side selection: this node materializes the side matching its
+            // role. A same-role pair (e.g. platform<->platform team routes) always
+            // resolves to source_side — destination_side is reserved for a future
+            // symmetric-route need and is never read while source == destination.
             std::string side_key;
             if (out.node_role == source) {
                 side_key = "source_side";

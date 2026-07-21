@@ -27,7 +27,8 @@ import rti.connextdds as dds
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import start_router, render_config  # noqa: E402
 from util.dds_probe import (  # noqa: E402
-    AckCollector, JournalCollector, Probe, reader_qos, writer_qos, wait_for_route)
+    AckCollector, COMMAND_KIND, JournalCollector, Probe, reader_qos, writer_qos,
+    wait_for_route)
 
 ROUTE = "admin_r1"
 NODE = "Platform_30"
@@ -37,8 +38,7 @@ JOURNAL_TOPIC = "ActRouterControllerJournal"
 EXAMPLE_TYPES_XML = "router/config/example_types.xml"
 EX_TYPE = "ExampleCommand"
 
-KIND = {"ENABLE_ROUTE": 0, "DISABLE_ROUTE": 1,
-        "UPDATE_ROUTE": 2, "SET_PARTICIPANT_PARTITION": 3}
+KIND = COMMAND_KIND
 
 
 def _command(cmd_type, kind, route_name, command_id, target_node, target_router):

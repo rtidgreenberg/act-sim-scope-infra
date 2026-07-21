@@ -16,7 +16,14 @@ enum RouterCommandKind {
     ENABLE_ROUTE,
     DISABLE_ROUTE,
     UPDATE_ROUTE,
-    SET_PARTICIPANT_PARTITION,
+    // Participant-level partition set membership (D83; retires SET_PARTICIPANT_PARTITION
+    // before it ever shipped): each command names exactly one partition string to add to
+    // or remove from the live participant's set via set_qos (D15/D73's already-validated
+    // in-place-mutation mechanism). RouterCommand.participant_name / partition_name carry
+    // the target. Removing the protected node-identity entry, or removing a name not
+    // currently present, is rejected at the accept path.
+    ADD_PARTICIPANT_PARTITION,
+    REMOVE_PARTICIPANT_PARTITION,
     // Runtime per-route partition change (7b, D69): applies the command's embedded
     // route.input.subscriber_partition / route.output.publisher_partition to the named
     // route — desired spec updated, live builds adjusted in place via set_qos (D15:
@@ -103,6 +110,10 @@ struct RouterCommand {
     RouterCommandKind kind;
     string route_name;
     RouterRouteSpec route;
+    // ADD_PARTICIPANT_PARTITION / REMOVE_PARTICIPANT_PARTITION target (D83): the
+    // participant (by config name) and the one partition string to add/remove.
+    string participant_name;
+    string partition_name;
     string payload_json;
 };
 
@@ -157,7 +168,10 @@ struct RouterRouteStatus {
 struct RouterParticipantStatus {
     string name;
     int32 domain;
-    string participant_partition;
+    // Multi-valued (D83): protected node-identity entry + optional team + ad-hoc
+    // direct-peer joins, applied to the live participant's DomainParticipantQos.partition
+    // via set_qos. Bounded well under Connext's default 64-name/participant ceiling.
+    sequence<string, 16> participant_partition;
     string qos_profile_alias;
 };
 

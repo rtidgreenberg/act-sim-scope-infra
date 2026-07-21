@@ -104,9 +104,48 @@ struct ParticipantState {
                         // against node.role to select which participants this process
                         // actually needs (D50 follow-up: participants were previously
                         // built unconditionally regardless of role).
-    std::string participant_partition;
+    // Multi-valued partition set (D83): protected node-identity entry (always
+    // "${node.name}", substituted at parse time, never removable by command) + optional
+    // config-seeded team entries + ad-hoc direct-peer joins via ADD/REMOVE_PARTICIPANT_
+    // PARTITION. Applied to DomainParticipantQos.partition at creation and mutated in
+    // place via set_qos thereafter.
+    std::vector<std::string> participant_partition;
     std::string qos_profile_alias;
+    // YAML participants.<name>.wan (D78/D83): true for a WAN-facing participant — gates
+    // the protected-identity partition default and WAN-leg flagging for link-stats
+    // (RouteEntityFactory). D78's SPDP2|SEDP discovery-plugin selection for WAN
+    // participants is proposed but NOT applied yet — retracted by D87 pending a root-cause
+    // fix for its interaction with the D52 disabled-startup sequence; still the target for
+    // this participant class once that lands (see spikes/spdp2_partition_visibility/ and
+    // design-decisions.md D87). Explicit, not name-sniffed.
+    bool is_wan = false;
 };
+
+// Mirrors RouterAdminTypes.idl's RouterParticipantStatus.participant_partition bound
+// (sequence<string, 16>) — the accept path and the config parser both reject overflow
+// against this before it ever reaches a bounded_sequence assignment on the status-publish
+// path (build_snapshot), where it would otherwise throw uncaught.
+constexpr std::size_t kMaxParticipantPartitionEntries = 16;
+
+// D83: the protected node-identity partition entry — every WAN-facing participant's set
+// always contains its own name, seeded at config time (RouteConfigParser) and never
+// removable by command (RouterController::handle_remove_participant_partition). One
+// predicate shared by both so "what counts as protected" can't drift between the two.
+inline bool is_protected_partition_name(const ParticipantState &ps,
+                                        const std::string &node_name,
+                                        const std::string &candidate) {
+    return ps.is_wan && candidate == node_name;
+}
+
+inline bool has_protected_partition_entry(const ParticipantState &ps,
+                                          const std::string &node_name) {
+    for (const std::string &v : ps.participant_partition) {
+        if (is_protected_partition_name(ps, node_name, v)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct MutableRouterState {
     std::string node_name;
@@ -168,5 +207,10 @@ RouterRouteOperationalState derive_operational(const RouteState &route);
 // Externally-visible fingerprint of one route: the D5 increment predicate compares this
 // before/after each event (counters deliberately excluded — they never bump revision).
 std::string route_fingerprint(const RouteState &route);
+
+// Externally-visible fingerprint of one participant (D83): the partition set is
+// runtime-mutable via ADD/REMOVE_PARTICIPANT_PARTITION, so a change is D5 externally
+// visible state exactly like a route's endpoint partitions (route_fingerprint above).
+std::string participant_fingerprint(const ParticipantState &participant);
 
 } // namespace router

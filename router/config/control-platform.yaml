@@ -1,6 +1,11 @@
-# control-platform router config (sample) — loaded by the `control-platform` router
-# instance on the control node AND on each platform node. Each logical control/platform
-# route is defined once; the local node.role selects source_side vs destination_side.
+# control-platform router config — the single system-wide config (D80): every node (C2
+# and every platform) loads THIS ONE file; node identity is injected per node
+# (--role/--node-name). It carries every route family — control<->platform AND
+# platform<->platform team (D85: team_wan stays a separate WAN participant from
+# platform_wan, not merged — see design-decisions.md D84/D85) — so a platform node runs
+# ONE router_main process for all of it (D79: one router per node). Each logical route is
+# defined once; the local node.role selects source_side vs destination_side (same-role
+# pairs, e.g. the team routes below, always resolve to source_side — D80).
 #
 # Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
 # router_main parses the full route/participant shape below (RouteConfigParser), but the
@@ -55,6 +60,15 @@ participants:
     role: control
     domain: 200
     qos: control_wan_udpv4_qos
+    # No wan: true here (deliberately, D87): control_wan/platform_wan are NOT
+    # participant-partition-scoped — they stay on the default partition so
+    # control<->platform matching is unconditional, exactly as Phase 7 shipped it.
+    # The wan: true / protected-identity-partition mechanism (D83) is team_wan-only —
+    # it's how team scoping and direct-peer taps work, not a blanket "every WAN
+    # participant" flag. Marking control_wan/platform_wan wan: true was tried and
+    # reverted: it gave them different per-node identity partitions ("Control_20" vs
+    # "Platform_30") that no longer intersect, breaking their default-partition match
+    # entirely (see design-decisions.md D87).
   platform_lan:
     role: platform
     domain: 30
@@ -62,6 +76,18 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
+  # D85: a distinct WAN participant from platform_wan — separate participant
+  # partitions mean team_wan and platform_wan exchange zero SEDP endpoint discovery
+  # with each other (D18/D73/D85), unlike a merged shared participant would.
+  team_wan:
+    role: platform
+    domain: 200
+    qos: platform_wan_udpv4_qos
+    wan: true
+    # participant_partition omitted: defaults to the protected {"${node.name}"} entry
+    # alone (D83 — "team disabled by default" falls out of the shared config itself).
+    # Team membership / direct-peer taps are added at runtime via
+    # ADD_PARTICIPANT_PARTITION team_wan=<name>.
 
 routes:
   - name: control_command
@@ -156,3 +182,37 @@ routes:
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
+
+  # Platform<->platform team routes (D80/D83; historically platform-team.yaml's flat
+  # form, now folded into this single system-wide config in role-pair form). Both
+  # legs are role "platform", so each direction is its own route and both always
+  # resolve to source_side (D80). No endpoint-level partition here — team_wan's own
+  # participant-level partition set is the entire scoping mechanism (D73/D83); the
+  # retired inherit_participant sentinel is gone.
+  - name: platform_team_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: team_wan
+        writer_qos: wan_status
+    topics:
+      - name: PlatformData
+
+  - name: wan_team_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: team_wan
+        reader_qos: wan_status
+      output:
+        participant: platform_lan
+    topics:
+      - name: PlatformData

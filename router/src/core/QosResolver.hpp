@@ -98,6 +98,29 @@ inline const char *liveliness_kind_name(LivelinessKindPod kind) {
     return "?";
 }
 
+// Shared get-qos/apply-policy/set-qos skeleton (D15/D73/D83): every runtime QoS mutation
+// in this codebase (writer deadline, route pub/sub partitions, participant partitions)
+// follows this exact shape and only differs in which entity/policy `apply` touches. `qos`
+// is an out-param (the caller pre-declares an entity-matching Qos value) holding the
+// mutated value on success, so a caller that needs it (e.g. for a status summary) doesn't
+// have to re-fetch it. Never throws — a Connext exception becomes a `false` return
+// (and, if `error_out` is given, its message) instead of propagating.
+template <typename Entity, typename Qos, typename ApplyFn>
+bool try_apply_qos(Entity &entity, Qos &qos, ApplyFn apply,
+                   std::string *error_out = nullptr) {
+    try {
+        qos = entity.qos();
+        apply(qos);
+        entity.qos(qos);
+        return true;
+    } catch (const std::exception &e) {
+        if (error_out != nullptr) {
+            *error_out = e.what();
+        }
+        return false;
+    }
+}
+
 class QosResolver {
 public:
     QosResolver() = default;

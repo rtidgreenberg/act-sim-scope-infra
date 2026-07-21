@@ -22,6 +22,12 @@ tmp/
 # RTI
 rti_license.dat
 
+# rtiddsgen-generated code (router/CMakeLists.txt generates these at build time into
+# a build/ dir via connextdds_rtiddsgen_run; RouterAdminTypes.idl is the only source of
+# truth — never commit a stray manual `rtiddsgen` run's output alongside it)
+router/admin/RouterAdminTypes*.cxx
+router/admin/RouterAdminTypes*.h
+
 # Editor / OS
 .vscode/
 .idea/

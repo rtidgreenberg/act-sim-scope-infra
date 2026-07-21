@@ -54,6 +54,12 @@ struct FakeEntityFactory : IEntityFactory {
     // Counter the D63 RefreshCounters pull samples, keyed "route|topic" (7d).
     std::map<std::string, std::uint64_t> forwarded_counts;
 
+    // D83: participant-level partition apply calls, keyed by participant name -> the
+    // full name set passed. fail_participant_partition_apply models a live-entity
+    // failure (e.g. participant not found) for the controller's rollback path.
+    std::map<std::string, std::vector<std::string> > participant_partition_applies;
+    bool fail_participant_partition_apply = false;
+
     void create_topic_entities(const RouteView &view, const std::string &topic,
                                std::uint64_t gen,
                                const DerivedWriterQos &derived) override {
@@ -110,6 +116,14 @@ struct FakeEntityFactory : IEntityFactory {
         std::map<std::string, std::uint64_t>::const_iterator it =
                 forwarded_counts.find(route + "|" + topic);
         return it == forwarded_counts.end() ? 0 : it->second;
+    }
+    bool apply_participant_partition(const std::string &participant_name,
+                                     const std::vector<std::string> &names) override {
+        if (fail_participant_partition_apply) {
+            return false;
+        }
+        participant_partition_applies[participant_name] = names;
+        return true;
     }
 };
 
@@ -193,6 +207,9 @@ struct Fixture {
 
     explicit Fixture(const std::vector<RouterRouteSpec> &specs)
             : controller(identity(), specs, participants(), &factory, &status) {}
+    Fixture(const std::vector<RouterRouteSpec> &specs,
+           const std::vector<ParticipantState> &parts)
+            : controller(identity(), specs, parts, &factory, &status) {}
 
     static RouterIdentityInfo identity() {
         RouterIdentityInfo id;
@@ -208,6 +225,20 @@ struct Fixture {
         p.qos_profile_alias = "lan_default";
         std::vector<ParticipantState> v;
         v.push_back(p);
+        return v;
+    }
+    // D83: a WAN participant already carrying its protected node-identity entry, exactly
+    // as RouteConfigParser would seed it — used only by the participant-partition tests
+    // so the default participants() (and its participants.size()==1 assertion) stays
+    // untouched for every other test.
+    static std::vector<ParticipantState> participants_with_team_wan() {
+        std::vector<ParticipantState> v = participants();
+        ParticipantState wan;
+        wan.name = "team_wan";
+        wan.domain = 200;
+        wan.is_wan = true;
+        wan.participant_partition.push_back(identity().node_name); // protected identity
+        v.push_back(wan);
         return v;
     }
 
@@ -802,6 +833,141 @@ static void test_set_route_partition() {
     CHECK(f.factory.creates.back().pub_partition == "PLATFORM");
 }
 
+// D83: participant-level partition membership — ADD/REMOVE_PARTICIPANT_PARTITION accept
+// path (protected identity, not-present reject, idempotent duplicate, live-apply
+// failure rollback) and the D5 fingerprint wiring that makes a partition-only change
+// bump state_revision even though no route changed.
+static void test_participant_partition_accept_path() {
+    Fixture f(std::vector<RouterRouteSpec>(), Fixture::participants_with_team_wan());
+    std::uint64_t rev = f.revision();
+
+    // ADD a new name: accepted, live-applied, revision bumps.
+    RouterCommand add;
+    add.command_id = "pp1";
+    add.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add.participant_name = "team_wan";
+    add.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "added");
+    CHECK(f.revision() == rev + 1);
+    CHECK(f.factory.participant_partition_applies.count("team_wan") == 1);
+    CHECK(f.factory.participant_partition_applies.at("team_wan").size() == 2);
+    CHECK(f.factory.participant_partition_applies.at("team_wan").at(0) == "Platform_30");
+    CHECK(f.factory.participant_partition_applies.at("team_wan").at(1) == "TEAM_A");
+
+    // Status reflects the live set.
+    const RouterStatus &snap1 = f.status.last();
+    bool found_wan = false;
+    for (std::size_t i = 0; i < snap1.participants.size(); ++i) {
+        if (snap1.participants.at(i).name == "team_wan") {
+            found_wan = true;
+            CHECK(snap1.participants.at(i).participant_partition.size() == 2);
+        }
+    }
+    CHECK(found_wan);
+
+    // Idempotent duplicate ADD (D8): accept, no state change, no new live apply.
+    RouterCommand add_dup;
+    add_dup.command_id = "pp2";
+    add_dup.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add_dup.participant_name = "team_wan";
+    add_dup.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(add_dup));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "already present");
+    CHECK(f.revision() == rev + 1);
+
+    // REMOVE a name not currently present: rejected.
+    RouterCommand remove_absent;
+    remove_absent.command_id = "pp3";
+    remove_absent.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove_absent.participant_name = "team_wan";
+    remove_absent.partition_name = "TEAM_B";
+    f.post(ControllerEvent::command_received(remove_absent));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "partition not present");
+    CHECK(f.revision() == rev + 1);
+
+    // REMOVE the protected node-identity entry: rejected, never a silent no-op.
+    RouterCommand remove_protected;
+    remove_protected.command_id = "pp4";
+    remove_protected.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove_protected.participant_name = "team_wan";
+    remove_protected.partition_name = "Platform_30";
+    f.post(ControllerEvent::command_received(remove_protected));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message
+          == "cannot remove the protected node-identity partition entry");
+    CHECK(f.revision() == rev + 1);
+
+    // Unknown participant: rejected.
+    RouterCommand add_unknown;
+    add_unknown.command_id = "pp5";
+    add_unknown.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add_unknown.participant_name = "no_such_participant";
+    add_unknown.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(add_unknown));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "unknown participant");
+    CHECK(f.revision() == rev + 1);
+
+    // Live-apply failure: state rolls back, no revision bump.
+    f.factory.fail_participant_partition_apply = true;
+    RouterCommand add_fail;
+    add_fail.command_id = "pp6";
+    add_fail.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add_fail.participant_name = "team_wan";
+    add_fail.partition_name = "TEAM_C";
+    f.post(ControllerEvent::command_received(add_fail));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "failed to apply partition to live participant");
+    CHECK(f.revision() == rev + 1);
+    f.factory.fail_participant_partition_apply = false;
+
+    // REMOVE a present, non-protected name: accepted, revision bumps again.
+    RouterCommand remove_ok;
+    remove_ok.command_id = "pp7";
+    remove_ok.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove_ok.participant_name = "team_wan";
+    remove_ok.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(remove_ok));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "removed");
+    CHECK(f.revision() == rev + 2);
+    CHECK(f.factory.participant_partition_applies.at("team_wan").size() == 1);
+    CHECK(f.factory.participant_partition_applies.at("team_wan").at(0) == "Platform_30");
+
+    // Capacity bound (RouterAdminTypes.idl: sequence<string, 16> on
+    // RouterParticipantStatus.participant_partition) — the accept path must reject
+    // before the set ever grows past 16, not accept and let build_snapshot() overflow
+    // the bounded wire field on the next status publish.
+    std::uint64_t rev_before_fill = f.revision();
+    for (int i = 0; i < 15; ++i) {
+        RouterCommand fill;
+        fill.command_id = "pp-fill-" + std::to_string(i);
+        fill.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+        fill.participant_name = "team_wan";
+        fill.partition_name = "TEAM_FILL_" + std::to_string(i);
+        f.post(ControllerEvent::command_received(fill));
+        CHECK(f.status.last_ack().accepted);
+    }
+    // team_wan now holds the protected "Platform_30" entry + 15 TEAM_FILL_* = 16, the cap.
+    CHECK(f.factory.participant_partition_applies.at("team_wan").size() == 16);
+    CHECK(f.revision() == rev_before_fill + 15);
+
+    RouterCommand add_over_cap;
+    add_over_cap.command_id = "pp-over-cap";
+    add_over_cap.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add_over_cap.participant_name = "team_wan";
+    add_over_cap.partition_name = "TEAM_OVERFLOW";
+    f.post(ControllerEvent::command_received(add_over_cap));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "partition set full (max 16)");
+    CHECK(f.revision() == rev_before_fill + 15); // rejected: no state change
+    CHECK(f.factory.participant_partition_applies.at("team_wan").size() == 16); // unchanged
+}
+
 // The D63 counter path (7d): RefreshCounters pulls forwarded() into status and
 // republishes WITHOUT bumping state_revision (the one sanctioned D5 exception); an
 // unchanged pull publishes nothing; counters are entity facts cleared with the build.
@@ -891,6 +1057,7 @@ int main() {
     RUN(test_deadline_tightening_and_warning);
     RUN(test_disable_tears_down);
     RUN(test_set_route_partition);
+    RUN(test_participant_partition_accept_path);
     RUN(test_refresh_counters_republish_no_bump);
     RUN(test_history_fifo_eviction);
 

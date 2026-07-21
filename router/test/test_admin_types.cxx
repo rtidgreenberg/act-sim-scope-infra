@@ -48,7 +48,7 @@ int main() {
     RouterParticipantStatus part;
     part.name = "platform_wan";
     part.domain = 200;
-    part.participant_partition = "PLATFORM_30";
+    part.participant_partition.push_back("Platform_30"); // D83: multi-valued set
     status.participants.push_back(part);
 
     CHECK(status.target_node == "Platform_30");

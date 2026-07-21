@@ -1,0 +1,68 @@
+# e2e_team_partition.yaml — Phase 10 team-partition e2e fixture (D83; plan's "Team
+# disabled by default" / "Team assignment" / "Direct peer tap" evidence rows).
+#
+# The SAME file is rendered twice with different domain substitutions and started as
+# TWO router_main processes, both --role platform, distinguished by --node-name
+# (Platform_30 / Platform_31 — see test_e2e/test_team_partition.py). Each gets its own
+# platform_lan (so the two processes' own app-side test traffic never cross), but BOTH
+# render team_wan onto the SAME domain (production reality: one physical WAN). Explicit
+# "default" QoS (RELIABLE+TRANSIENT_LOCAL) on both route legs so partition membership is
+# the only matching variable under test (the same D67 lesson e2e_partition.yaml uses).
+#
+# team_wan.participant_partition is omitted: it defaults to the protected
+# {"${node.name}"} entry alone (D83 — "team disabled by default" falls out of the shared
+# config itself, no per-file authoring needed).
+#
+# Domain placeholders substituted per test run — see test_team_partition.py's local
+# render helper (two renders of this one file, sharing __DOMAIN_WAN__).
+
+node:
+  name: Platform_30
+  role: platform
+
+router:
+  name: team-partition
+  admin_participant: platform_lan
+
+types:
+  xml: router/config/example_types.xml
+
+participants:
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  team_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+    wan: true
+
+routes:
+  - name: platform_team_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: default
+      output:
+        participant: team_wan
+        writer_qos: default
+    topics:
+      - name: PlatformData
+
+  - name: wan_team_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: team_wan
+        reader_qos: default
+      output:
+        participant: platform_lan
+        writer_qos: default
+    topics:
+      - name: PlatformData

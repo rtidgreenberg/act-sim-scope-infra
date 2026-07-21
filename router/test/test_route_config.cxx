@@ -185,6 +185,144 @@ int main() {
         }
     }
 
+    // --- D83: team_wan carries the protected node-identity partition entry by default,
+    // and the team routes (folded into control-platform.yaml by D80) parse in role-pair
+    // form and always resolve to source_side (same-role pair) ---
+    {
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(path, cfg, err));
+        const ParticipantState *team_wan = nullptr;
+        for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
+            if (cfg.participants[i].name == "team_wan") team_wan = &cfg.participants[i];
+        }
+        CHECK(team_wan != nullptr);
+        if (team_wan) {
+            CHECK(team_wan->is_wan);
+            CHECK(team_wan->participant_partition.size() == 1);
+            if (team_wan->participant_partition.size() == 1) {
+                CHECK(team_wan->participant_partition.at(0) == "Platform_30"); // ${node.name}
+            }
+        }
+        const RouterRouteSpec *t1 = find_route(cfg, "platform_team_to_wan");
+        const RouterRouteSpec *t2 = find_route(cfg, "wan_team_to_platform");
+        CHECK(t1 != nullptr);
+        CHECK(t2 != nullptr);
+        if (t1) {
+            CHECK(t1->input.participant == "platform_lan");
+            CHECK(t1->output.participant == "team_wan");
+        }
+        if (t2) {
+            CHECK(t2->input.participant == "team_wan");
+            CHECK(t2->output.participant == "platform_lan");
+        }
+        // LAN participants are never flagged wan (D78).
+        for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
+            if (cfg.participants[i].name == "platform_lan"
+                || cfg.participants[i].name == "control_lan") {
+                CHECK(!cfg.participants[i].is_wan);
+            }
+        }
+    }
+
+    // --- D80: the retired flat input:/output: route shape is a hard parse error, not a
+    // silently skipped route ---
+    {
+        std::string flat = "/tmp/router_route_cfg_flat_" + std::to_string(getpid())
+                           + ".yaml";
+        {
+            std::ofstream f(flat);
+            f << "node:\n  name: Platform_30\n  role: platform\n"
+              << "participants:\n"
+              << "  platform_lan:\n    role: platform\n    domain: 0\n"
+              << "  team_wan:\n    role: platform\n    domain: 1\n"
+              << "routes:\n"
+              << "  - name: flat_route\n"
+              << "    enabled: true\n"
+              << "    input:\n      participant: platform_lan\n"
+              << "    output:\n      participant: team_wan\n"
+              << "    topics:\n      - name: PlatformData\n";
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(!parse_route_config(flat, cfg, err));
+        CHECK(err.find("flat_route") != std::string::npos);
+        CHECK(err.find("source/destination") != std::string::npos);
+        std::remove(flat.c_str());
+    }
+
+    // --- D73/D83: the retired inherit_participant sentinel is a hard parse error ---
+    {
+        std::string sentinel = "/tmp/router_route_cfg_sentinel_" + std::to_string(getpid())
+                               + ".yaml";
+        {
+            std::ofstream f(sentinel);
+            f << "node:\n  name: Platform_30\n  role: platform\n"
+              << "participants:\n"
+              << "  team_wan:\n"
+              << "    role: platform\n    domain: 1\n"
+              << "    participant_partition: inherit_participant\n";
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(!parse_route_config(sentinel, cfg, err));
+        CHECK(err.find("inherit_participant") != std::string::npos);
+        std::remove(sentinel.c_str());
+    }
+
+    // --- D83: participant_partition accepts a YAML sequence too, with ${node.name}
+    // substitution applied per entry ---
+    {
+        std::string seq = "/tmp/router_route_cfg_partseq_" + std::to_string(getpid())
+                          + ".yaml";
+        {
+            std::ofstream f(seq);
+            f << "node:\n  name: Platform_31\n  role: platform\n"
+              << "participants:\n"
+              << "  team_wan:\n"
+              << "    role: platform\n    domain: 1\n    wan: true\n"
+              << "    participant_partition: [\"TEAM_A\", \"${node.name}\"]\n";
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(parse_route_config(seq, cfg, err));
+        if (!err.empty()) std::fprintf(stderr, "partseq parse error: %s\n", err.c_str());
+        CHECK(cfg.participants.size() == 1);
+        if (cfg.participants.size() == 1) {
+            const std::vector<std::string> &names = cfg.participants[0].participant_partition;
+            CHECK(names.size() == 2); // ${node.name} already present -> no auto-add
+            CHECK(names.size() == 2 && names.at(0) == "TEAM_A");
+            CHECK(names.size() == 2 && names.at(1) == "Platform_31");
+        }
+        std::remove(seq.c_str());
+    }
+
+    // --- participant_partition over the RouterAdminTypes.idl sequence<string, 16>
+    // bound is a hard parse error, not an accepted config that overflows on the first
+    // status publish ---
+    {
+        std::string over = "/tmp/router_route_cfg_partover_" + std::to_string(getpid())
+                           + ".yaml";
+        {
+            std::ofstream f(over);
+            f << "node:\n  name: Platform_30\n  role: platform\n"
+              << "participants:\n"
+              << "  team_wan:\n"
+              << "    role: platform\n    domain: 1\n    wan: true\n"
+              << "    participant_partition: [";
+            for (int i = 0; i < 16; ++i) { // 17 explicit entries + the auto-added
+                f << "\"TEAM_" << i << "\", ";               // protected "${node.name}"
+            }
+            f << "\"TEAM_LAST\"]\n";                         // entry — well past the cap
+
+        }
+        RouteConfig cfg;
+        std::string err;
+        CHECK(!parse_route_config(over, cfg, err));
+        CHECK(err.find("participant_partition") != std::string::npos);
+        std::remove(over.c_str());
+    }
+
     if (g_failures == 0) {
         std::printf("test_route_config: OK role selection + filter substitution\n");
         return 0;

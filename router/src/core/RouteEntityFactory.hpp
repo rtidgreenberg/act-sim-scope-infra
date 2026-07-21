@@ -65,12 +65,6 @@ public:
     // Wire the controller after construction (completion events are posted to it).
     void set_controller(RouterController *controller) { controller_ = controller; }
 
-    // Phase 9 (D81): the WAN participant name (the presence participant). A route leg whose
-    // endpoint participant equals this is a WAN leg — its runtime is registered with the
-    // link-stats collector and polls that leg's per-matched-endpoint protocol statuses.
-    // Empty (the default) = no WAN participant, no leg ever flagged (no collector).
-    void set_wan_participant(const std::string &name) { wan_participant_ = name; }
-
     void create_topic_entities(const RouteView &view, const std::string &topic_name,
                                std::uint64_t generation,
                                const DerivedWriterQos &derived) override {
@@ -174,15 +168,14 @@ public:
                 };
             }
 
-            // Phase 9 (D81): flag whichever leg lives on the WAN participant so the
-            // runtime polls only its WAN-side matched-endpoint statuses (LAN legs match
-            // apps, not peer routers).
-            const bool reader_is_wan =
-                    !wan_participant_.empty()
-                    && view.spec.input.participant == wan_participant_;
-            const bool writer_is_wan =
-                    !wan_participant_.empty()
-                    && view.spec.output.participant == wan_participant_;
+            // Phase 9 (D81), generalized for D85's two-WAN-participant topology: flag
+            // whichever leg lives on ANY WAN-facing participant (registry_.is_wan(),
+            // Config::is_wan) so the runtime polls only its WAN-side matched-endpoint
+            // statuses (LAN legs match apps, not peer routers). Not tied to the single
+            // presence participant — a route on team_wan is just as much a WAN leg as one
+            // on platform_wan/control_wan.
+            const bool reader_is_wan = registry_.is_wan(view.spec.input.participant);
+            const bool writer_is_wan = registry_.is_wan(view.spec.output.participant);
 
             std::unique_ptr<RouteTopicRuntimeBase> runtime(
                     new RouteTopicRuntime<T>(reader, writer, publisher, subscriber, cft,
@@ -251,6 +244,36 @@ public:
         return dispatcher_.forwarded(route, topic_name);
     }
 
+    // D83: participant-level partition, one level up from update_route_partitions above —
+    // same in-place set_qos mechanism (D15/D73), applied to the DomainParticipant itself
+    // rather than a per-build Publisher/Subscriber. registry_ can look up any named
+    // participant, not just the ones this build's own route touches.
+    bool apply_participant_partition(const std::string &participant_name,
+                                     const std::vector<std::string> &names) override {
+        dds::domain::qos::DomainParticipantQos pq;
+        std::string error;
+        bool ok = false;
+        try {
+            // registry_.get() throws on an unknown name (std::map::at) — kept inside this
+            // try, same as the QoS mutation below, so a bad name is a logged failure here,
+            // not an exception escaping to the controller strand.
+            dds::domain::DomainParticipant dp = registry_.get(participant_name);
+            ok = try_apply_qos(
+                    dp, pq,
+                    [&names](dds::domain::qos::DomainParticipantQos &qos) {
+                        qos << dds::core::policy::Partition(names);
+                    },
+                    &error);
+        } catch (const std::exception &e) {
+            error = e.what();
+        }
+        if (!ok) {
+            Log::warn("participant_partition_apply_failed",
+                      {{"participant", participant_name}, {"error", error}});
+        }
+        return ok;
+    }
+
 protected:
     // --- Type-lane hooks (D41; per-topic since 7c/D70) ---
 
@@ -278,7 +301,6 @@ private:
     QosResolver &qos_;
     AsyncWaitSetDispatcher &dispatcher_;
     RouterController *controller_;
-    std::string wan_participant_; // Phase 9 (D81); empty = no WAN leg flagging
 };
 
 } // namespace router

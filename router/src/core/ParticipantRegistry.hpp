@@ -48,6 +48,19 @@ public:
         // resolution happens in router_main — this class only applies an already-resolved
         // profile path, so it stays alias-agnostic.
         std::string qos_provider_profile;
+        // D83: the participant's initial partition name set (protected node-identity
+        // entry + optional config-seeded team entries), applied to
+        // DomainParticipantQos.partition at creation. Empty = default (unpartitioned).
+        std::vector<std::string> partition_names;
+        // D78/D83: true for a WAN-facing participant — gates the protected-identity
+        // partition default and is queried back via is_wan() for WAN-leg flagging
+        // (RouteEntityFactory's link-stats registration). D78's proposed
+        // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP for this class is NOT
+        // applied by make_participant_qos() — retracted by D87 pending a fix for its
+        // interaction with the disabled-startup sequence (D52); still the target once
+        // that's resolved (see spikes/spdp2_partition_visibility/, design-decisions.md
+        // D87). LAN participants stay plain SPDP regardless.
+        bool is_wan = false;
     };
 
     // autoenable=false creates participants disabled for the D52 disabled-startup
@@ -64,6 +77,13 @@ public:
 
     const std::vector<std::string> &names() const { return names_; }
 
+    // The Config::is_wan this participant was created with (false for an unknown name).
+    // Lets a consumer (e.g. RouteEntityFactory's WAN-leg flagging for link-stats
+    // registration) recognize EVERY WAN-facing participant — not just one distinguished
+    // "the WAN participant" — now that a node can have more than one (platform_wan and
+    // team_wan, D85).
+    bool is_wan(const std::string &name) const;
+
     // Enables every participant and, recursively, its builtin readers plus any child
     // entities created while disabled. Safe to call once after conditions are attached
     // and the AsyncWaitSet is started (D52); a no-op for already-enabled participants.
@@ -72,6 +92,7 @@ public:
 private:
     std::vector<std::string> names_;
     std::map<std::string, dds::domain::DomainParticipant> participants_;
+    std::map<std::string, bool> is_wan_;
 };
 
 } // namespace router

@@ -4236,3 +4236,330 @@ at the middleware level and has nothing to forward. Full design writeup:
 graph-first design rather than re-deriving it. `RouterCommand`/`RouterCommandAck` gain new
 fields (`relay_path`, `relay_hop_index`, `relay_requested`, `hop_count`) only when that phase
 goes active; nothing about today's direct-delivery command path changes before then.
+
+## D87 — Phase 10 implementation findings: D78's SPDP2 proposal retracted (breaks under the D52 disabled-then-enable startup sequence); D73's participant-invisibility claim empirically confirmed, and stronger than stated; `wan: true` / the D83 protected-identity default is team_wan-only, not every WAN participant (2026-07-20, accepted; implements Phase 10 — `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION`, the multi-valued partition set, and the config role-pair rewrite)
+
+**Context.** Implementing Phase 10 (D83's multi-valued `participant_partition`, the
+role-pair config rewrite, and the readiness pass's D78 SPDP2 proposal) surfaced three
+things only a real build + a live two-process e2e run could show — exactly the posture
+this repo's execution protocol expects (build/run is the arbiter, MCP and prior spikes are
+hints). All three were found writing and debugging
+`router/test_e2e/test_team_partition.py` against the real `router_main`.
+
+**Finding 1 — D78's SPDP2 (`builtin_discovery_plugins = SPDP2 | SEDP`) does not work
+combined with this registry's D52 disabled-then-delayed-enable participant startup
+sequence.** Every real participant in `router_main` is created disabled, has its builtin
+conditions attached, then is enabled only after `aws.start()` (D52) — a sequencing every
+prior SPDP2 measurement (`spikes/partition_retarget/`, `spikes/spdp2_wan_lan_mix/`) never
+exercised, since both spikes constructed their participants with immediate (default)
+`autoenable`. A minimal `rti.connextdds` repro isolating just this variable (two SPDP2
+participants on one domain, one created-disabled-then-`enable()`-after-a-delay exactly
+like `ParticipantRegistry`) reproduced **asymmetric, non-retrying discovery failure 3/3**:
+the earlier-enabled participant sees the later one, but not vice versa — and it never
+self-heals (no periodic re-announce recovers it, unlike plain SPDP). The same repro with
+immediate `autoenable` (no delay) discovers symmetrically every time. **Decision:** SPDP2
+is not applied — `ParticipantRegistry::Config::is_wan` no longer sets
+`DiscoveryConfig::builtin_discovery_plugins`; WAN participants stay on plain SPDP.
+`cfg.is_wan` is retained for the D83 protected-identity-default gate only (Finding 3
+below). Root cause (why the delayed-enable path breaks SPDP2's handshake) is unexamined —
+a dedicated spike is needed before SPDP2 is revisited; until then Phase 10's team-partition
+retarget latency is whatever plain-SPDP announcement-paced matching costs (D73's original,
+slower number), not the D78 SPDP2 number. This does not block Phase 10: nothing in the
+phase's own evidence set depends on SPDP2's speed, only on rematch eventually happening.
+
+**Finding 2 — D73's "non-overlapping participant partitions make participants mutually
+invisible" is confirmed empirically, and is a stronger guarantee than the phase's readiness
+pass framed it.** `test_team_partition.py`'s "team disabled by default" evidence
+originally gated on `wait_for_mutual_discovery` (the same participant-level SPDP check
+`test_control_platform_full.py` uses) — which then hung for the full timeout, because two
+team_wan participants with disjoint protected-identity partitions **never see each other's
+participants at all**, confirmed independently via a raw `rti.connextdds` repro (two
+participants, same domain, disjoint concrete partitions, plain SPDP, immediate enable:
+`discovered_participants()` stays empty on both sides for the full 15 s wait). D73 already
+said this ("participants mutually invisible... skip SEDP endpoint discovery entirely" —
+`ask_connext_question`, 2026-07-16, cross-checked against `connext-ai-issues`), so this is
+a **confirmation**, not a contradiction — no `connext-ai-issues.md` entry needed. But it
+means a test (or an operator) waiting for "the two nodes see each other" before checking
+"do they share a team" has the causality backwards: **mutual participant visibility IS the
+team-join signal**, not a precondition for observing team state. `test_team_partition.py`
+was fixed to gate readiness on each process's own status (independent of the peer) instead.
+
+**Finding 3 — the D83 protected-identity-partition default must be scoped to
+team_wan-style participants only, not every `wan: true` participant.** The first
+implementation marked `control_wan`/`platform_wan` (already-shipped Phase 7 participants)
+`wan: true` alongside the new `team_wan`, on the theory that "every WAN participant" per
+D83's own framing should carry its protected identity. This broke
+`test_control_platform_full.py`/`test_detail_status_toggle.py`: `control_wan` picked up
+`{"Control_20"}` and `platform_wan` picked up `{"Platform_30"}` — disjoint, so control and
+platform stopped seeing each other entirely (Finding 2's mechanism, self-inflicted).
+Diagnosed by bisection: stripping `team_wan` from `control-platform.yaml` did **not** fix
+it (ruling out participant co-location on the shared WAN domain as the cause), but removing
+`wan: true` from `control_wan`/`platform_wan` did. **Decision:** `control_wan`/`platform_wan`
+stay on the default (empty) participant partition — unconditional matching, exactly as
+Phase 7 shipped — because their audience scoping is already the endpoint-level
+`CONTROL`/`PLATFORM` publisher/subscriber partitions (D61/D69), which is a fixed,
+non-team-scoped audience by design. Only `team_wan` declares `wan: true` and gets the
+protected-identity default; the flag is not a blanket "this is a WAN participant" marker,
+it specifically means "this participant's discoverability is meant to be scoped by
+participant-level partition membership."
+
+**Consequences:** `router/src/core/ParticipantRegistry.cxx` (SPDP2 application removed,
+`is_wan` kept for the identity-default gate only); `router/config/control-platform.yaml`
+(`wan: true` on `team_wan` only); `router/test_e2e/test_team_partition.py` (readiness gate
+fixed to per-process status, not mutual SPDP discovery); this entry. No `connext-ai-issues.md`
+entry (Finding 2 confirms an existing correctly-attributed claim; Finding 1 is a novel
+interaction no prior MCP answer or spike addressed, tracked here instead). Phase 10's
+evidence (`test_team_partition.py`: team disabled by default, team assignment, removal,
+direct peer tap, idempotent ADD/REMOVE, protected-identity-removal reject) passes 3/3
+stable, alongside the full existing e2e suite.
+
+## D88 — `RouterStatus` drops the static participant-config echo; C2 gets live, discovery-grounded mesh-participant awareness instead (2026-07-21, accepted; captured for a future phase, not yet scheduled — implementation gated on porting the LP-5 monitor mechanism into `router_main`)
+
+**Context.** `RouterStatus.participants` (`RouterParticipantStatus`: `name`, `domain`,
+`participant_partition`, `qos_profile_alias`) is built in
+`RouterController::build_snapshot()` (`RouterController.cxx:1033-1051`) directly from
+`state_.participants` — a map seeded once from the YAML `participants:` block
+(`RouteConfigParser`) and mutated only by the D83 `ADD`/`REMOVE_PARTICIPANT_PARTITION`
+command handlers. Discussing what C2-facing mesh/partition awareness should actually
+contain surfaced two problems with this as the vehicle:
+
+1. `name`/`domain`/`qos_profile_alias` are pure echo of the single system-wide config file
+   every node — including C2 — already loads verbatim (D80). Publishing them back over the
+   wire tells C2 nothing it doesn't already have locally. Config-drift detection (the one
+   legitimate reason to compare configs) already has its own dedicated, better mechanism:
+   `RouterHealth.config_hash`, a whole-file SHA-256 (D80).
+2. `participant_partition`, while runtime-mutable, is **self-asserted intent** — "what
+   commands we've applied to our own state" — not confirmed observed reality. It can
+   silently diverge from what's actually matched on the wire (a `set_qos` that silently
+   fails, a command applied but not yet effective, etc.).
+
+Separately, LP-5 (`docs/product-gaps.md`) already proved a live, discovery-grounded
+mechanism for the genuinely hard half of this problem: because `team_wan` uses non-default,
+multi-valued partitions (D83), a full mesh inventory needs `discovered_participants()`
+(matched half) **plus** `PRESParticipant_hasMatchingPartition:UNMATCH` log-parsing (unmatched
+half) **plus** a wildcard-partition (`["*"]`) identity sibling to resolve GUIDs to real
+router names — prototyped and stable to ~30-node scale in `spikes/dp_partition_monitor/`
+(Python only). `control_wan`/`platform_wan` need none of this augmentation — default
+partition already matches everyone (D87 Finding 3), so `discovered_participants()` alone is
+already a complete, live inventory there.
+
+**Decision.**
+
+- **Retire `RouterParticipantStatus`/`RouterStatus.participants` as a static-config echo.**
+  Replace it with a live field, e.g. `RouterStatus.mesh_participants:
+  sequence<RouterMeshParticipant>`, where `RouterMeshParticipant = { string name; sequence
+  <string, 16> partition; RouterParticipantSource source; int64 last_seen; }` and
+  `RouterParticipantSource` is a two-value enum (`PARTICIPANT_MATCHED`,
+  `PARTICIPANT_LOG_DERIVED`).
+- **Every participant is reported through this one path, including the router's own
+  `team_wan`/`platform_wan` — no separate self-report struct.** The router's own entry is
+  populated by an **in-process read of its own live `DomainParticipantQos.partition`**
+  (decided over routing self-observation through the matched/log-parser path) — it's
+  cheaper, has zero staleness, and doesn't manufacture a self-discovery round trip for data
+  the process already holds synchronously.
+- **Source/staleness is explicit per entry, never implied.** `PARTICIPANT_MATCHED` entries
+  are as current as the SPDP/SEDP cache (no extra lag). `PARTICIPANT_LOG_DERIVED` entries
+  carry the up-to-~30s convergence lag and need the same 3x-margin TTL LP-5 already pinned —
+  a consumer (C2) must not treat a `LOG_DERIVED` entry as real-time just because it arrived
+  in the same message as `MATCHED` ones.
+- **D85 is unaffected.** The monitor never grants C2 (or anyone) actual SEDP access to
+  `team_wan` — it republishes a curated `(name, partition-set)` summary through the
+  already-curated `RouterStatus` channel C2 receives regardless. Participant-level isolation
+  stands exactly as D85 decided it.
+
+**Consequences — no code changes yet (D86 pattern).** `RouterAdminTypes.idl`,
+`RouterController.cxx` (`build_snapshot`), `RouterState.hpp`/`ParticipantState`, and today's
+consumers (`test_admin_types.cxx`, `test_controller_phase1.cxx`, `test_route_config.cxx`,
+`router_main.cxx`, `RouteConfigParser.cxx`) all still build and reference the current static
+`RouterParticipantStatus` shape and stay untouched until this phase goes active — ripping
+them out now would break the build against a live-data source that doesn't exist in C++ yet.
+Real implementation is gated on a readiness item this entry does not resolve: porting or
+bridging the LP-5 monitor into the C++ router process. The monitor's own recommendation is a
+**separate OS process** (the Logger is process-global; there's a segfault-on-exit risk to
+manage), so `router_main` cannot simply embed the Python spike's logic in-process, and
+whether the log-parsing half is even reachable from the C++ `Logger`/`Verbosity` API (the
+spike only proved the Python binding) is itself unverified. The most idiomatic bridge given
+this codebase's own patterns: the monitor, as its own process, publishes its live table on a
+local LAN-domain topic; `router_main` subscribes to it like any other input and folds the
+latest snapshot into `build_snapshot()`. That bridge needs its own readiness pass/spike
+(`wan-dp-consolidation-task.md`/D81-style gate) before implementation — not scheduled to a
+phase yet.
+
+## D89 — Mesh-participant awareness must reuse `team_wan`'s existing participant, zero new local participants; cross-team peer identity is GUID-only, names structurally unresolvable except at boot (2026-07-21, accepted; amends D88, retires the process-bridge design)
+
+**Context.** D88 assumed a monitor mechanism (in whatever process) built on
+`spikes/dp_partition_monitor/`'s three-part design, including a wildcard-partition
+(`["*"]`) **sibling participant** whose sole job is to resolve GUIDs to real router names
+for peers `team_wan` itself doesn't match. A further deployment constraint then ruled out
+**any** new `DomainParticipant` for this feature — not a separate process (D88's original
+plan), and not even one more local participant co-located inside `router_main`'s own
+process. The mechanism must reuse `team_wan`'s existing participant exclusively.
+
+**The load-bearing technical consequence.** Name resolution for a peer outside your own
+team is only possible if *some* local participant of yours at least partially matches that
+peer — receiving its `ParticipantBuiltinTopicData` (and thus `participant_name()`) requires
+a partition match, the same D73/D85 mutual-invisibility rule, just cutting in the direction
+that hurts here. Without a wildcard-matching sibling, `team_wan` structurally never
+receives a non-matching peer's `ParticipantBuiltinTopicData` while it holds its normal
+team-scoped partition. The `UNMATCH` log line is the *only* channel that exists for an
+unmatched peer at that point, and it carries GUID + a (swapped, LP-5-corrected) partition
+string — never a name field. **Adding `"*"` to `team_wan`'s own partition set as a
+standing value, to get free wildcard matching, was considered and rejected again:**
+`team_wan`, `platform_wan`, and `control_wan` all share one domain (200,
+`control-platform.yaml`), so a permanently wildcard-matching `team_wan` would become
+mutually SEDP-visible to `platform_wan`/`control_wan` — reopening the exact D84/D85 merge
+exposure to C2 via wildcard partition instead of participant consolidation.
+
+**The one live mitigation, not yet scheduled: `spdp2-and-boot-init-tasks.md` Task 2
+(wildcard-boot-then-revert).** That task already pins a pattern where a participant joins
+wildcarded **before any routes/sessions exist**, collects a full named roster while nothing
+is exposed to leak (zero endpoints, so zero SEDP metadata regardless of who matches), then
+reverts to its real team-scoped partition before route creation. Applied to `team_wan`
+specifically, this gives a real, name-resolved census of whoever is present **at boot**,
+without violating the zero-new-participant constraint and without D84/D85's standing
+exposure (the window is bounded and endpoint-free). It does **not** eliminate this entry's
+core finding: any peer that joins *after* `team_wan` has reverted is still only visible
+GUID-only via ongoing log-derived detection — Task 2 is a one-time boot census, not a
+continuous mechanism, and explicitly must not be re-run once sessions are live. Flagged
+here as the concrete future direction (per this session's discussion) rather than designed
+now; Task 4 below should treat it as a complementary follow-on, not a substitute for
+accepting the GUID-only steady-state limitation.
+
+**Decision.**
+
+- **`RouterMeshParticipant` gains a `guid` field** (string) alongside `name`. `name` is
+  populated for `PARTICIPANT_MATCHED` entries (same-team peers, resolved off
+  `discovered_participants()`/`ParticipantBuiltinTopicData`), for the router's own
+  self-entry (in-process QoS read, per D88), and for any entry resolved during a future
+  Task-2-style boot census. For `PARTICIPANT_LOG_DERIVED` entries collected during normal
+  (post-boot) operation, `name` is left empty and `guid` is the only identity a consumer
+  (C2) gets — this must be documented as structural, not a bug someone will later "fix"
+  without another mechanism change.
+- **No separate monitor process, no monitor→`router_main` bridge.** D88's original
+  process-bridge design (Task 4, Part B) is retired outright — the log-parsing handler
+  attaches directly to `team_wan`'s own participant, inside `router_main`, in the same
+  process `team_wan` already runs in.
+- **The Logger-process-global contamination risk (LP-5 residual 4) is now unavoidably
+  live inside `router_main` itself** — `platform_wan`/`platform_lan`/`team_wan` (and
+  `control_wan`/`control_lan` on a control node) all coexist in one process, so the handler
+  MUST filter to only lines whose GUID pair involves `team_wan`'s own
+  instance-handle-derived GUID, discarding every other co-located participant's
+  mismatches.
+- **The segfault-on-exit risk (LP-5 residual 3) is now `router_main`'s own shutdown
+  responsibility** — the log handler and raised verbosity must be reset on every
+  `router_main` exit path (normal shutdown, exception, signal), tied into whatever
+  teardown discipline already gates `PresenceMonitor::shutdown()`/the D31/D32
+  blocking-barrier convention, not left to a script's `finally` block.
+- **Callback threading follows the D81 app-ack pattern.** The log callback fires on an
+  arbitrary middleware thread; it must do the minimum (GUID + partition-string
+  extraction) into a mutex-guarded accumulator, drained on the controller's own
+  strand/tick — never touching `RouterController` state directly from the callback
+  thread, the same discipline D81 already established for the RTT probe's app-ack
+  listener.
+
+**Consequences:** `docs/cpp_router/router-status-mesh-live-awareness-task.md` (Task 4) is
+rewritten to drop the process-bridge design and instead spike the in-process,
+`team_wan`-only log-handler attachment, GUID-only cross-team identity, and the D81-pattern
+callback-threading discipline, with a noted (not yet scheduled) follow-on to layer
+`spdp2-and-boot-init-tasks.md` Task 2's boot census on top once that task itself lands. No
+`connext-ai-issues.md` entry needed — this is an architectural consequence of a deployment
+constraint, not a contradicted MCP claim.
+
+## D90 — Identity gaps get filled mesh-wide by a P2P `MetadataSync` topic on `platform_wan`, not a C2-relay; `RouterStatus.mesh_participants` may become redundant with it (2026-07-21, accepted; supersedes D89's C2-relay framing for cross-platform name resolution, amends D88)
+
+**Context.** D89 left a real, accepted gap: under the zero-new-participant constraint,
+`team_wan` can only name same-team peers; an out-of-team peer is GUID-only until/unless a
+Task-2 boot census resolved it. Discussing how to close that gap without a new participant
+surfaced two options: (a) route every platform's self-resolved names up to C2 via
+`RouterStatus`, have C2 merge everyone's partial maps, and relay the merged result back down
+(the C2-relay design, N-to-1-to-N); or (b) have every platform publish its own resolved
+`(guid, name, partition)` entries directly on a **new topic riding the existing
+`platform_wan` participant** — no new participant, since `platform_wan` already exists and is
+already unconditionally matched by everyone (D87 Finding 3) — so every platform (and C2,
+which already matches `platform_wan` via `control_wan`) receives every other platform's
+contribution directly and merges locally (N-to-N, no hub).
+
+**Decision.**
+
+- **Adopt (b): a new topic, `MetadataSync` (wire type `RouterMetadataSync`), riding
+  `platform_wan`, on by default** (same posture as `platform_primary_status` — this is
+  baseline mesh awareness, not team-scoped business data, so D83's "team disabled by
+  default" doesn't apply to it). Shape: `RouterMetadataSync { @key string publisher_name;
+  sequence<RouterMeshParticipant, N> mesh_participants; }`, keyed by the publishing
+  router's own D74/D79 identity, carrying that router's own current view (its self-entry,
+  its `team_wan`-matched same-team peers by name, and its log-derived out-of-team peers by
+  GUID, per D88/D89's `RouterMeshParticipant` shape).
+- **Every consumer — every platform and C2 — merges by GUID across every instance it
+  receives.** A peer that's GUID-only in your own view may be named in a peer's
+  contribution (if that peer shares a team with them, or caught them in a boot census);
+  taking the union closes gaps no single node could close alone. Coverage is still bounded
+  by the mesh's *collective* knowledge — if nobody anywhere ever resolved a given GUID, the
+  union has nothing to contribute either, same caveat as the rejected C2-relay design.
+- **This does not reopen D85.** `MetadataSync` carries only the same curated
+  `(name, partition, guid)` tuples D88 already decided were fine to expose to C2; broadening
+  the audience to every platform doesn't cross the SEDP/endpoint-visibility line D85 drew —
+  no team's actual topics/types/QoS are on this topic, ever.
+- **`RouterStatus.mesh_participants` (D88) is likely redundant now, not additive.** Since
+  C2 already receives `MetadataSync` directly (same mechanism every platform uses), it may
+  not need a second, C2-only delivery path for the same data. Left as an open call for
+  Task 4 to resolve, not decided here: `RouterStatus.mesh_participants` could be dropped in
+  favor of `MetadataSync` alone, or kept as a point-in-time admin-query convenience
+  (`RouterStatus` is pull/snapshot-shaped; `MetadataSync` is a continuously-updating topic) —
+  both are defensible, and the choice doesn't change either type's fields.
+
+**Consequences — no code changes yet, same D86 posture.** This turns cross-platform WAN
+identity sync into steady N-to-N broadcast traffic mesh-wide, not N-to-1 — needs the same
+bandwidth measurement discipline as any other WAN topic (D18/D78 precedent) at the ~30-node
+scale LP-5 already used; not measured yet. `docs/cpp_router/
+router-status-mesh-live-awareness-task.md` (Task 4) is updated to design/spike
+`MetadataSync` alongside the `team_wan` log-handler work, including the bandwidth
+measurement and the `RouterStatus.mesh_participants` redundancy call.
+
+## D91 — `team_wan`'s default startup sequence is wildcard-boot-then-revert-then-verify; route enablement gates on a positive verification signal, never on elapsed time alone (2026-07-21, accepted; pins policy for `spdp2-and-boot-init-tasks.md` Task 2, shrinks D89's GUID-only gap)
+
+**Context.** Task 2 (`spdp2-and-boot-init-tasks.md`) already described a candidate pattern
+— `team_wan` joins wildcarded (`["*"]`), collects a full named roster while zero
+endpoints exist (so nothing SEDP-sensitive is exposed), then reverts to its real
+team-scoped partition before any route/session creation — but left it as a go/no-go
+spike outcome, with route-enablement timing framed as "measure the gap and confirm it's
+comfortably larger than propagation delay." Direction this session: make this the
+router's **standard** `team_wan` startup sequence (not merely an option Task 2's spike
+might reject), and replace the timing-heuristic gate with an explicit verification gate.
+
+**Decision.**
+
+- **`team_wan` defaults to `participant_partition = ["*"]` at startup, with no
+  routes/sessions enabled while wildcarded.** This is `team_wan` specifically (D83's
+  team-scoped participant) — `platform_wan`/`control_wan` are unaffected; they already sit
+  on the default partition unconditionally (D87 Finding 3) and have no "team" concept to
+  bootstrap.
+- **Route enablement (`platform_team_to_wan`/`wan_team_to_platform`) gates on a positive
+  verification signal, never on elapsed time alone.** After applying the real team join
+  (`ADD_PARTICIPANT_PARTITION`, D83) and reverting off the wildcard, `RouterController`/
+  `router_main` must positively confirm the revert is in effect — e.g. re-reading the live
+  `DomainParticipantQos.partition` and/or confirming mutual invisibility relative to a
+  known out-of-team peer — before flipping the routes active. A timing-margin heuristic
+  ("the gap is comfortably larger than propagation delay," Task 2's original framing) is
+  replaced by this real go/no-go check; the natural gap is still worth measuring (Task 2
+  step 5) because the verification check itself takes nonzero time, but it is no longer
+  the thing route-enablement decides on.
+- **This meaningfully shrinks, but does not close, D89's GUID-only gap.** Because the
+  wildcard census is now every `team_wan`'s standard boot behavior rather than an optional
+  future enhancement, every node gets a real, named roster of whoever else is already
+  present at its own boot time — including out-of-team peers, resolved via
+  `ParticipantBuiltinTopicData` during the wildcard window. The residual GUID-only case
+  (D89, log-derived via `UNMATCH` parsing) now applies only to a peer that joins the mesh
+  *after* a given node has already reverted off its wildcard window — a materially smaller
+  and more bounded gap than "always GUID-only for any out-of-team peer," which is what D89
+  described before this policy existed. `MetadataSync` (D90) further shrinks it by letting
+  any node's boot-time-resolved names reach nodes that missed that same window.
+
+**Consequences:** `spdp2-and-boot-init-tasks.md` Task 2's steps 4/5 are updated (this
+entry) to specify the verification-gated design instead of a timing-margin check; its
+go/no-go spike still needs to run (metadata-leak-during-wildcard, boot-storm shape,
+real-lifecycle timing per D52/D87's disabled-then-delayed-enable sequencing all remain
+unverified), but the *policy* this entry pins — standard by default, verify don't time-out
+— is decided regardless of what that spike's numbers turn out to be. `docs/cpp_router/
+router-status-mesh-live-awareness-task.md` (Task 4) and D89's framing should be read
+alongside this entry: the "structurally GUID-only" language there describes the
+steady-state/post-boot case, not the boot-time census this entry now makes standard.

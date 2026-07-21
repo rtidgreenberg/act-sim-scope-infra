@@ -87,9 +87,14 @@ by role exactly as deployed:
   multi-type routes (`test_platform_events.py`), and the full production
   `control-platform.yaml` (`test_control_platform_full.py`,
   `test_detail_status_toggle.py`).
-- **Phase 8** (team partitions) — `platform-team.yaml`'s flat route shape isn't parsed by
-  `RouteConfigParser` yet.
-- Phase 9/10 (serialized-CDR fast path, keyed lifecycle mirroring).
+- ~~Phase 8~~ — **complete (D76)**: presence/health (`test_presence_roster.py`).
+- ~~Phase 9~~ — **complete (D82)**: link-metrics capture (`test_link_stats.py`).
+- ~~Phase 10~~ — **complete (D87)**: team partition membership as a multi-valued set,
+  `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` (`test_team_partition.py`).
+  The flat route shape is retired (D80) — team routes are folded into
+  `control-platform.yaml`'s role-pair form; `platform-team.yaml` is kept only as a Phase-0
+  identity-reader fixture.
+- Phase 11/12 (serialized-CDR fast path, keyed lifecycle mirroring) — not yet implemented.
 
 ## Real bugs this suite found (D51)
 

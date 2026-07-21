@@ -2,6 +2,7 @@
 
 #include "Log.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace router {
@@ -12,11 +13,13 @@ const size_t kCommandHistoryBound = 256; // D4
 
 std::string kind_name(RouterCommandKind kind) {
     switch (kind) {
-    case RouterCommandKind::ENABLE_ROUTE:              return "ENABLE_ROUTE";
-    case RouterCommandKind::DISABLE_ROUTE:             return "DISABLE_ROUTE";
-    case RouterCommandKind::UPDATE_ROUTE:              return "UPDATE_ROUTE";
-    case RouterCommandKind::SET_PARTICIPANT_PARTITION: return "SET_PARTICIPANT_PARTITION";
-    case RouterCommandKind::SET_ROUTE_PARTITION:       return "SET_ROUTE_PARTITION";
+    case RouterCommandKind::ENABLE_ROUTE:                return "ENABLE_ROUTE";
+    case RouterCommandKind::DISABLE_ROUTE:               return "DISABLE_ROUTE";
+    case RouterCommandKind::UPDATE_ROUTE:                return "UPDATE_ROUTE";
+    case RouterCommandKind::ADD_PARTICIPANT_PARTITION:   return "ADD_PARTICIPANT_PARTITION";
+    case RouterCommandKind::REMOVE_PARTICIPANT_PARTITION:
+        return "REMOVE_PARTICIPANT_PARTITION";
+    case RouterCommandKind::SET_ROUTE_PARTITION:         return "SET_ROUTE_PARTITION";
     }
     return "?";
 }
@@ -100,7 +103,8 @@ void RouterController::activate() {
     // Create-and-observe (D64/D66): every startup-enabled route builds its entities now
     // — nothing gates on discovery. Runs through the same fingerprint/publish/journal
     // path as a drained event so the resulting CREATING states are published normally.
-    std::vector<std::string> pre = fingerprints();
+    // Startup activation only ever touches routes — never participants.
+    std::vector<std::string> pre = fingerprints(/*include_participants=*/false);
     current_cause_.clear();
     for (std::map<std::string, RouteState>::iterator it = state_.routes.begin();
          it != state_.routes.end(); ++it) {
@@ -108,7 +112,7 @@ void RouterController::activate() {
             reconcile_route(it->second);
         }
     }
-    publish_if_changed(pre);
+    publish_if_changed(pre, /*include_participants=*/false);
 }
 
 void RouterController::post(const ControllerEvent &event) {
@@ -156,11 +160,18 @@ void RouterController::process_one(const ControllerEvent &event) {
         apply_link_stats_tick();
         return;
     }
-    std::vector<std::string> pre = fingerprints();
+    // Only the two participant-partition commands can change a participant's
+    // fingerprint (D83) — every other event kind, including the high-frequency discovery
+    // ones, skips that O(participants) scan entirely.
+    const bool may_touch_participants =
+            event.kind == ControllerEventKind::CommandReceived
+            && (event.command.kind == RouterCommandKind::ADD_PARTICIPANT_PARTITION
+                || event.command.kind == RouterCommandKind::REMOVE_PARTICIPANT_PARTITION);
+    std::vector<std::string> pre = fingerprints(may_touch_participants);
     std::uint64_t pre_revision = state_.state_revision;
     current_cause_.clear();
     process(event);
-    publish_if_changed(pre);
+    publish_if_changed(pre, may_touch_participants);
     // Debug journal (D55): one record per processed event, after the status publish so the
     // post-revision reflects any bump. Skipped entirely when no journal is attached.
     if (journal_ != nullptr) {
@@ -311,10 +322,20 @@ void RouterController::handle_command(const RouterCommand &cmd) {
 
     switch (cmd.kind) {
     case RouterCommandKind::UPDATE_ROUTE:
-    case RouterCommandKind::SET_PARTICIPANT_PARTITION:
-        // Unsupported kinds are parsed-and-rejected (D4/D7), reject cached like any
+        // Unsupported kind is parsed-and-rejected (D4/D7), reject cached like any
         // other ack.
         ack.message = kind_name(cmd.kind) + std::string(" unsupported in this build");
+        cache_ack(ack);
+        status_->publish_ack(ack);
+        return;
+    case RouterCommandKind::ADD_PARTICIPANT_PARTITION:
+        // Participant-scoped, not route-scoped (D83) — no route lookup below.
+        handle_participant_partition_membership(cmd, ack, /*adding=*/true);
+        cache_ack(ack);
+        status_->publish_ack(ack);
+        return;
+    case RouterCommandKind::REMOVE_PARTICIPANT_PARTITION:
+        handle_participant_partition_membership(cmd, ack, /*adding=*/false);
         cache_ack(ack);
         status_->publish_ack(ack);
         return;
@@ -476,6 +497,78 @@ void RouterController::handle_set_route_partition(const RouterCommand &cmd,
 
     ack.accepted = true;
     ack.message = "partition updated";
+    current_cause_ = cmd.command_id;
+}
+
+// --- Participant-level partition membership (D83) ---
+
+void RouterController::handle_participant_partition_membership(const RouterCommand &cmd,
+                                                                 RouterCommandAck &ack,
+                                                                 bool adding) {
+    std::map<std::string, ParticipantState>::iterator p =
+            state_.participants.find(cmd.participant_name);
+    if (p == state_.participants.end()) {
+        ack.message = "unknown participant";
+        return;
+    }
+    ParticipantState &ps = p->second;
+    std::vector<std::string> &names = ps.participant_partition;
+    std::vector<std::string>::iterator found =
+            std::find(names.begin(), names.end(), cmd.partition_name);
+
+    // Capture the position as an index, not the iterator: erase() (below, on the REMOVE
+    // path) invalidates `found` and everything after it, so re-deriving an insert
+    // position from a stale iterator on the rollback path would be undefined behavior.
+    const std::size_t found_index = static_cast<std::size_t>(found - names.begin());
+
+    if (adding) {
+        if (cmd.partition_name.empty()) {
+            ack.message = "partition_name required";
+            return;
+        }
+        if (found != names.end()) {
+            // Idempotent duplicate ADD (D8): accept, no state change.
+            ack.accepted = true;
+            ack.message = "already present";
+            return;
+        }
+        if (names.size() >= kMaxParticipantPartitionEntries) {
+            // The wire status field is a bounded sequence<string, 16>
+            // (RouterAdminTypes.idl) — reject here rather than overflow it on the next
+            // status publish.
+            ack.message = "partition set full (max " +
+                    std::to_string(kMaxParticipantPartitionEntries) + ")";
+            return;
+        }
+        names.push_back(cmd.partition_name);
+    } else {
+        // The protected node-identity entry is never removable by command (D83) —
+        // config-time only. is_wan participants always carry it; a non-WAN participant
+        // has no protected entry at all, so this check is a no-op reject only where the
+        // identity was actually seeded.
+        if (is_protected_partition_name(ps, state_.node_name, cmd.partition_name)) {
+            ack.message = "cannot remove the protected node-identity partition entry";
+            return;
+        }
+        if (found == names.end()) {
+            ack.message = "partition not present";
+            return;
+        }
+        names.erase(found);
+    }
+
+    if (!factory_->apply_participant_partition(ps.name, names)) {
+        // Roll back: never claim a set the live participant doesn't have.
+        if (adding) {
+            names.pop_back();
+        } else {
+            names.insert(names.begin() + found_index, cmd.partition_name);
+        }
+        ack.message = "failed to apply partition to live participant";
+        return;
+    }
+    ack.accepted = true;
+    ack.message = adding ? "added" : "removed";
     current_cause_ = cmd.command_id;
 }
 
@@ -875,17 +968,32 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
 
 // --- Snapshot + revision predicate (D5/D25/D26) ---
 
-std::vector<std::string> RouterController::fingerprints() const {
+std::vector<std::string> RouterController::fingerprints(bool include_participants) const {
     std::vector<std::string> out;
     for (std::map<std::string, RouteState>::const_iterator it = state_.routes.begin();
          it != state_.routes.end(); ++it) {
         out.push_back(route_fingerprint(it->second));
     }
+    // Participant fingerprints follow the route ones, in state_.participants' stable
+    // map order — publish_if_changed below walks the same two ranges in the same order
+    // (D83: the partition set is runtime-mutable, so it is D5 externally visible state,
+    // same footing as a route's endpoint partitions). Only ADD/REMOVE_PARTICIPANT_
+    // PARTITION commands can ever change one, so the caller passes include_participants
+    // = false for every other event kind and this whole O(participants) pass is skipped —
+    // it would otherwise be a provable no-op on the (much more frequent) discovery events.
+    if (include_participants) {
+        for (std::map<std::string, ParticipantState>::const_iterator it =
+                     state_.participants.begin();
+             it != state_.participants.end(); ++it) {
+            out.push_back(participant_fingerprint(it->second));
+        }
+    }
     return out;
 }
 
-void RouterController::publish_if_changed(const std::vector<std::string> &pre) {
-    std::vector<std::string> post = fingerprints();
+void RouterController::publish_if_changed(const std::vector<std::string> &pre,
+                                          bool include_participants) {
+    std::vector<std::string> post = fingerprints(include_participants);
     bool changed = false;
     size_t i = 0;
     // First pass: did any route's externally visible state change (D5 predicate)?
@@ -893,6 +1001,18 @@ void RouterController::publish_if_changed(const std::vector<std::string> &pre) {
          it != state_.routes.end(); ++it, ++i) {
         if (post[i] != pre[i]) {
             changed = true;
+        }
+    }
+    // Second pass: did any participant's partition set change (D83)? No per-item
+    // revision/caused_by_command_id field exists on ParticipantState (unlike routes) —
+    // the global bump below is the only stamp a participant-only change needs.
+    if (include_participants) {
+        for (std::map<std::string, ParticipantState>::iterator it =
+                     state_.participants.begin();
+             it != state_.participants.end(); ++it, ++i) {
+            if (post[i] != pre[i]) {
+                changed = true;
+            }
         }
     }
     if (!changed) {

@@ -26,6 +26,22 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
         entity_name.role_name(std::string(kActRouterRoleName));
         qos << entity_name;
     }
+    if (!cfg.partition_names.empty()) {
+        // D83: initial partition name set (protected identity + optional team entries).
+        qos << dds::core::policy::Partition(cfg.partition_names);
+    }
+    // D78's SPDP2|SEDP proposal for WAN participants is NOT applied here — retracted by
+    // D87 (empirical finding): SPDP2 combined with this registry's disabled-then-
+    // delayed-enable startup sequence (D52; every real participant goes through it)
+    // produces asymmetric, non-retrying discovery failure — the second-enabled
+    // participant never discovers the first, reproducible 3/3 against a raw
+    // rti.connextdds repro of the same create-disabled/enable-later sequence, on a
+    // domain where immediate-enable SPDP2 (no D52 delay) discovers symmetrically every
+    // time. D78's spikes only ever exercised SPDP2 with immediate-enable participants,
+    // so this interaction was never covered. WAN participants stay on plain SPDP
+    // (cfg.is_wan is still used for the D83 protected-identity-partition default) until
+    // the root cause is understood — see docs/connext-ai-issues/connext-ai-issues.md
+    // and design-decisions.md D87.
     return qos;
 }
 
@@ -52,6 +68,7 @@ ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
             dds::domain::DomainParticipant dp(cfg.domain, make_participant_qos(cfg, provider));
             participants_.emplace(cfg.name, dp);
             names_.push_back(cfg.name);
+            is_wan_.emplace(cfg.name, cfg.is_wan);
             Log::info("participant_created",
                       {{"name", cfg.name},
                        {"domain", std::to_string(cfg.domain)},
@@ -74,6 +91,11 @@ ParticipantRegistry::~ParticipantRegistry() {}
 
 dds::domain::DomainParticipant ParticipantRegistry::get(const std::string &name) const {
     return participants_.at(name);
+}
+
+bool ParticipantRegistry::is_wan(const std::string &name) const {
+    std::map<std::string, bool>::const_iterator it = is_wan_.find(name);
+    return it != is_wan_.end() && it->second;
 }
 
 void ParticipantRegistry::enable_all() {

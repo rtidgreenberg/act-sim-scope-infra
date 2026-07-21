@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace router {
 
@@ -51,6 +52,14 @@ struct IEntityFactory {
                                          const std::string &topic_name,
                                          const std::string &subscriber_partition,
                                          const std::string &publisher_partition) = 0;
+    // Apply a participant's FULL partition name set to its live DomainParticipantQos via
+    // set_qos (D83; ADD/REMOVE_PARTICIPANT_PARTITION mutate the controller's state to the
+    // desired set first, then call this to push it to the real entity — same in-place
+    // set_qos mechanism as update_route_partitions, one level up at the participant).
+    // Synchronous on the controller strand; returns false if the named participant
+    // doesn't exist / the update failed.
+    virtual bool apply_participant_partition(const std::string &participant_name,
+                                             const std::vector<std::string> &names) = 0;
     // Cumulative samples forwarded by a live build's runtime (0 if none exists) — the
     // D63 counter pull, sampled by the controller's RefreshCounters handler on the
     // strand. The runtime side is a relaxed atomic; exact-at-tick is sufficient.

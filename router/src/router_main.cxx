@@ -294,6 +294,8 @@ int main(int argc, char **argv) {
             pc.name = p.name;
             pc.domain = p.domain;
             pc.participant_name = router_identity;
+            pc.is_wan = p.is_wan;
+            pc.partition_names = p.participant_partition;
             if (!p.qos_profile_alias.empty()) {
                 auto it = cfg.qos_profiles.find(p.qos_profile_alias);
                 if (it != cfg.qos_profiles.end()) {
@@ -405,9 +407,10 @@ int main(int argc, char **argv) {
         // Active ONLY when presence is active (no WAN participant => no bellwether, no
         // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
         // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
-        // dispatcher registers each route's WAN leg; the factory learns which endpoint
-        // participant is the WAN one so it flags the right leg. Conditions attach to the
-        // AWS here, before aws.start()/enable_all() (D52).
+        // dispatcher registers each route's WAN leg — the factory flags a leg as WAN via
+        // registry.is_wan(participant_name) (any Config::is_wan participant, e.g.
+        // platform_wan AND team_wan under D85, not only this presence participant).
+        // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
         std::unique_ptr<LinkStatsCollector> link_stats;
         if (presence) {
             link_stats.reset(new LinkStatsCollector(
@@ -415,7 +418,6 @@ int main(int argc, char **argv) {
                     router_identity, cfg.presence_participant,
                     cfg.link_stats_period_ms));
             route_disp.set_stats_registry(link_stats.get());
-            factory.set_wan_participant(cfg.presence_participant);
             link_stats->register_source(presence.get());
         }
 

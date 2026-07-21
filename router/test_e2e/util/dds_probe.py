@@ -184,6 +184,14 @@ DISCOVERY_STATE = {0: "DISCOVERY_NONE", 1: "DISCOVERY_PARTIAL", 2: "DISCOVERY_RE
 TOPIC_STATE = {0: "TOPIC_IDLE", 1: "TOPIC_CREATING", 2: "TOPIC_FORWARDING",
                3: "TOPIC_TEARING_DOWN", 4: "TOPIC_ERROR"}
 
+# RouterCommandKind ordinals (RouterAdminTypes.idl declaration order) — the name->ordinal
+# direction (encoding a command to send), unlike the decode-direction maps above. One
+# shared copy: this used to be hand-duplicated per e2e test file, and had already drifted
+# (one copy had SET_ROUTE_PARTITION, three didn't) before this consolidation.
+COMMAND_KIND = {"ENABLE_ROUTE": 0, "DISABLE_ROUTE": 1, "UPDATE_ROUTE": 2,
+                "ADD_PARTICIPANT_PARTITION": 3, "REMOVE_PARTICIPANT_PARTITION": 4,
+                "SET_ROUTE_PARTITION": 5}
+
 
 def read_route_facts(status_reader, route_name):
     """Read the newest RouterStatus sample and return the named route's observable facts

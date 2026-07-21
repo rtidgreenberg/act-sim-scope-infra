@@ -179,33 +179,35 @@ public:
     }
 
     std::string set_writer_deadline(std::int64_t deadline_nanos) override {
-        try {
-            dds::pub::qos::DataWriterQos q = writer_.qos();
-            q << dds::core::policy::Deadline(duration_from_nanos(deadline_nanos));
-            writer_.qos(q);
-            return QosResolver::summarize(q);
-        } catch (const std::exception &) {
+        dds::pub::qos::DataWriterQos q;
+        if (!try_apply_qos(writer_, q, [deadline_nanos](dds::pub::qos::DataWriterQos &qos) {
+                qos << dds::core::policy::Deadline(duration_from_nanos(deadline_nanos));
+            })) {
             return std::string();
         }
+        return QosResolver::summarize(q);
     }
 
     bool set_partitions(const std::string &subscriber_partition,
                         const std::string &publisher_partition) override {
-        try {
-            dds::sub::qos::SubscriberQos sq = subscriber_.qos();
-            sq << (subscriber_partition.empty()
-                           ? dds::core::policy::Partition()
-                           : dds::core::policy::Partition(subscriber_partition));
-            subscriber_.qos(sq);
-            dds::pub::qos::PublisherQos pq = publisher_.qos();
-            pq << (publisher_partition.empty()
-                           ? dds::core::policy::Partition()
-                           : dds::core::policy::Partition(publisher_partition));
-            publisher_.qos(pq);
-            return true;
-        } catch (const std::exception &) {
+        dds::sub::qos::SubscriberQos sq;
+        if (!try_apply_qos(subscriber_, sq,
+                           [&subscriber_partition](dds::sub::qos::SubscriberQos &qos) {
+                               qos << (subscriber_partition.empty()
+                                               ? dds::core::policy::Partition()
+                                               : dds::core::policy::Partition(
+                                                         subscriber_partition));
+                           })) {
             return false;
         }
+        dds::pub::qos::PublisherQos pq;
+        return try_apply_qos(publisher_, pq,
+                             [&publisher_partition](dds::pub::qos::PublisherQos &qos) {
+                                 qos << (publisher_partition.empty()
+                                                 ? dds::core::policy::Partition()
+                                                 : dds::core::policy::Partition(
+                                                           publisher_partition));
+                             });
     }
 
 private:

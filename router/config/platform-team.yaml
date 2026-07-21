@@ -1,9 +1,22 @@
-# platform-team router config (sample) — loaded by the `platform-team` router instance
-# on platform nodes. Defines concrete platform-to-platform team routes through team_wan;
-# team scope is set by team_wan.participant_partition (SET_PARTICIPANT_PARTITION).
+# platform-team router config (historical identity-only fixture — see below).
+#
+# D80 retires the two-file model: these team↔team routes now live folded into
+# control-platform.yaml's role-pair form (the single system-wide config every node
+# loads — D79/D80), alongside the control<->platform routes, so a platform node runs
+# ONE router_main process for both. This file is kept only because
+# test/test_config_identity.cxx's Phase-0 identity reader (node.*/router.* only, never
+# routes:/participants:) uses it as a "distinct config_set" fixture; its routes: /
+# participants: below are historical and are not exercised by RouteConfigParser in any
+# test — see control-platform.yaml's team_wan participant + platform_team_to_wan /
+# wan_team_to_platform routes for the real, currently-parsed shape.
+#
+# Team scope is set by team_wan.participant_partition, now a multi-valued set (D83): a
+# protected node-identity entry (default "${node.name}", never removable by command) +
+# optional team entries, mutated live via ADD_PARTICIPANT_PARTITION /
+# REMOVE_PARTICIPANT_PARTITION (SET_PARTICIPANT_PARTITION and the inherit_participant
+# sentinel are both retired — D73/D83).
 #
 # Source: docs/cpp_router/configuration.md "Platform/Team Config Example" (authoritative).
-# Phase 0 only reads node.* and router.* (identity).
 
 node:
   name: Platform_30
@@ -22,29 +35,36 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    participant_partition: PLATFORM_30
+    wan: true
+    # participant_partition omitted: defaults to the protected {"${node.name}"} entry
+    # alone (team disabled by default, D83) — team membership is added at runtime via
+    # ADD_PARTICIPANT_PARTITION.
 
 routes:
   - name: platform_team_to_wan
     enabled: true
     forwarding_mode: dynamic_data
-    input:
-      participant: platform_lan
-    output:
-      participant: team_wan
-      writer_qos: wan_status
-      publisher_partition: inherit_participant
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: team_wan
+        writer_qos: wan_status
     topics:
       - name: PlatformData
 
   - name: wan_team_to_platform
     enabled: true
     forwarding_mode: dynamic_data
-    input:
-      participant: team_wan
-      reader_qos: wan_status
-      subscriber_partition: inherit_participant
-    output:
-      participant: platform_lan
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: team_wan
+        reader_qos: wan_status
+      output:
+        participant: platform_lan
     topics:
       - name: PlatformData
