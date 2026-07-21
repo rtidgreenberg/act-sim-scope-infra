@@ -727,8 +727,33 @@ Evidence:
 
 ### Phase 10: Team Partition Route
 
-> **Needs its readiness pass most — the least-prepared numbered phase.** The gap between
-> plan text and code is wide and verified (2026-07-16):
+> **PHASE 10 IMPLEMENTED (D87, 2026-07-20).** `ADD_PARTICIPANT_PARTITION`/
+> `REMOVE_PARTICIPANT_PARTITION` ship against the multi-valued `participant_partition`
+> set (protected node-identity + team + ad-hoc direct-peer joins); `platform_team_to_wan`/
+> `wan_team_to_platform` are folded into `control-platform.yaml` (the single system-wide
+> config, D80) in role-pair form; the parser hard-errors on the retired flat route shape
+> and the retired `inherit_participant` sentinel. **D78's SPDP2 proposal is retracted, not
+> shipped** — it breaks under this router's disabled-then-delayed-enable startup sequence
+> (D52), confirmed by a targeted repro (asymmetric, non-retrying discovery failure); WAN
+> participants stay on plain SPDP (see D87). D73's core claim — non-overlapping
+> participant partitions make participants mutually invisible, suppressing endpoint
+> discovery entirely — is empirically confirmed (D87), stronger than originally examined:
+> it suppresses SPDP-level mutual visibility itself, not just SEDP. Evidence:
+> `test_team_partition.py` (team disabled by default, team assignment, removal, direct
+> peer tap, idempotent ADD/REMOVE, protected-identity-removal reject) 3/3 stable; parser
+> unit tests (flat-form hard error, `inherit_participant` hard error, sequence parsing)
+> extend `test_route_config`; controller unit tests extend `test_controller_phase1`; full
+> existing e2e suite re-passes (a regression this work introduced — marking
+> `control_wan`/`platform_wan` `wan: true` alongside `team_wan` broke their default-partition
+> match — was found and fixed before landing, see D87 finding 3). ctest 4/4 (17 tests
+> across 4 binaries), e2e suite green.
+>
+> **Superseded-below note:** the readiness-pass text and Deliver/Evidence bullets that
+> follow predate implementation and still describe the SPDP2 proposal as if it shipped —
+> read them together with the D87 banner above, which is authoritative on what actually
+> ships (plain SPDP, `wan: true` scoped to `team_wan` only).
+>
+> The gap between plan text and code was wide and verified (2026-07-16):
 >
 > - **flat routes are silently dropped**: `platform-team.yaml` writes routes as top-level
 >   `input:`/`output:` with no `source`/`destination` role pair; `parse_route_config` only
@@ -783,21 +808,22 @@ Evidence:
    `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` and participant `set_qos`
    (D15 — automatic rematch; same mechanism as D73, just per-name instead of whole-value).
    Removing the protected identity entry, or removing an absent name, is an accept-path
-   reject, not a silent no-op. **WAN participant construction also sets
-   `discovery_config.builtin_discovery_plugins = SPDP2 | SEDP` (D78)** — measured spikes
-   replaced D73's MCP-sourced "announcement-paced, slower than SEDP" claim with real
-   numbers: SPDP2 rematches ~11–20ms typically (vs. plain SPDP's 86–684ms) and uses less
-   steady-state bandwidth than even default SPDP, but only after a probabilistic,
-   undocumented-duration post-match settle window — the accept path and e2e must tolerate
-   that window, not assume the fast path is available immediately after a peer is first
-   discovered. LAN participant construction is unchanged (plain SPDP; D78 — LAN never does
-   a partition retarget). Non-overlapping participant partitions suppress WAN endpoint
-   discovery entirely — the phase e2e must confirm this empirically (out-of-team peers
-   exchange no endpoint records). Recreate-on-change is retired even as a fallback; pinned
-   fallbacks if the settle window proves unacceptable for the demo: **option D**
-   (endpoint-only fan-out through the D69 `set_partitions` path, D73) or shortening
-   `participant_liveliness_assert_period` on plain SPDP (D78 — works, but costs ~14x
-   continuous bandwidth mesh-wide, forever).
+   reject, not a silent no-op. ~~WAN participant construction also sets
+   `discovery_config.builtin_discovery_plugins = SPDP2 | SEDP` (D78)~~ **Retracted by D87
+   (2026-07-20): SPDP2 is NOT applied.** It breaks under this router's D52
+   disabled-then-delayed-enable startup sequence (asymmetric, non-retrying discovery
+   failure, reproduced 3/3) — an interaction neither `spikes/partition_retarget/` nor
+   `spikes/spdp2_wan_lan_mix/` exercised (both used immediate-enable participants). WAN
+   participants stay on plain SPDP; the protected-identity default is applied only to
+   `team_wan`-style participants (`wan: true`), not `control_wan`/`platform_wan` (D87
+   finding 3 — marking those `wan: true` too broke their default-partition match). Team
+   join/leave latency is therefore plain-SPDP announcement-paced (D73's original,
+   slower number), not the D78 SPDP2 number; revisiting SPDP2 needs a dedicated spike
+   into the disabled-then-enable interaction first. **Non-overlapping participant
+   partitions suppress mutual visibility at the SPDP layer itself, not just SEDP
+   endpoint discovery** (D87 — confirmed empirically, stronger than D73's original
+   framing) — the phase e2e confirms this (out-of-team peers show no
+   `publication_discovered`/`subscription_discovered` log entries for each other at all).
 3. ~~`inherit_participant` sentinel semantics~~ **Decided (D73): the sentinel is retired.**
    Route endpoints on `team_wan` use the default partition; the participant gate alone
    scopes the team (kept as designed — D84's merge that would have required reopening this
@@ -824,40 +850,60 @@ Evidence:
    between exactly those two nodes; `REMOVE` reverses it. Confirm or adjust test names when
    pinning.
 
-Deliver:
+Deliver (all DELIVERED, D87):
 
-- `platform_team_to_wan` and `wan_team_to_platform` concrete routes parsed from the
-  system-wide config's role-pair form (D80 — the old flat `platform-team.yaml` shape is
-  retired).
-- `team_wan.participant_partition` parsed as a set (protected `"${node.name}"` identity
-  entry + optional config-seeded team entries), applied at creation, runtime-mutable via the
-  `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` accept path (replacing the D7
-  reject) — the team-scope AND direct-peer-join mechanism (D73, generalized by D83).
-  `team_wan` (and other WAN participants) built with `SPDP2 | SEDP`; LAN participants
-  unchanged (D78). `team_wan` stays a participant separate from `platform_wan` (D85 —
-  reverted the D84 single-shared-participant idea).
+- ✅ `platform_team_to_wan` and `wan_team_to_platform` concrete routes, folded into
+  `control-platform.yaml` — the single system-wide config (D80) — in role-pair form
+  (`source: platform`, `destination: platform`, always resolving to `source_side` since
+  both legs share a role); the parser hard-errors on a route missing the source/destination
+  pair instead of silently skipping it. `platform-team.yaml` is kept only as a Phase-0
+  identity-reader fixture (its own routes:/participants: are historical, unexercised by
+  `RouteConfigParser` in any test) since production routing now lives in the merged file.
+- ✅ `participant_partition` (`RouterParticipantStatus`/`ParticipantState`) is a
+  `sequence<string, 16>`/`std::vector<std::string>` set, not a scalar: every participant
+  with YAML `wan: true` gets a protected `"${node.name}"` identity entry
+  (config-substituted, never removable by command) plus optional config-seeded entries;
+  applied to `DomainParticipantQos.partition` at creation and mutated in place via
+  `ADD_PARTICIPANT_PARTITION`/`REMOVE_PARTICIPANT_PARTITION` + participant `set_qos` (D15).
+  `wan: true` is scoped to `team_wan` only, **not** `control_wan`/`platform_wan` (D87
+  finding 3 — those stay on the default partition; their audience scoping is the
+  endpoint-level `CONTROL`/`PLATFORM` partitions, D61/D69, a fixed non-team-scoped
+  audience by design). `team_wan` stays a participant separate from `platform_wan` (D85).
+- ✅ `SET_PARTICIPANT_PARTITION` retired before shipping; `ADD_PARTICIPANT_PARTITION`/
+  `REMOVE_PARTICIPANT_PARTITION` accept path: reject unknown participant, reject removing
+  the protected identity entry, reject removing an absent name, idempotent accept on a
+  redundant ADD/REMOVE (D8); apply-then-ack (not ack-on-rematch); a participant-only
+  partition change now bumps `state_revision` (`RouterController::fingerprints()` gained
+  a participant-fingerprint pass alongside the existing route one, D5).
+- ✅ SPDP2 (D78) is **not** applied — retracted by D87 (breaks under this router's D52
+  disabled-then-delayed-enable startup sequence). WAN participants stay on plain SPDP.
 - `platform-team.yaml` and [configuration.md](configuration.md) updated: the
   `inherit_participant` sentinel removed (D73); unknown partition sentinels are a parse
   error.
 
-Evidence:
+Evidence (all in `router/test_e2e/test_team_partition.py` unless noted, 3/3 stable):
 
-- Platform_30 and Platform_31 (two `platform-team` `router_main`s) do not exchange
-  `PlatformData` with node-specific partitions — held-zero matched counts + `match_reason`,
-  not silence-and-hope (D66) — **and exchange no WAN endpoint discovery** (the D73
-  suppression claim confirmed empirically, e.g. no peer endpoint records in the discovery
-  log).
-- after `ADD_PARTICIPANT_PARTITION team_wan=TEAM_A` to both, `PlatformData` crosses; acks
-  return on apply; matched counts advance after rediscovery settles — allow for SPDP2's
-  probabilistic post-match settle window (D78) rather than asserting a fixed bound.
-- `REMOVE_PARTICIPANT_PARTITION team_wan=TEAM_A` on one platform stops delivery: matched
-  counts regress to zero on live entities, forwarding stops, no entities are torn down.
-- a direct peer tap without a shared team: `ADD_PARTICIPANT_PARTITION team_wan=Platform_31`
+- ✅ two `router_main` processes (Platform_30/Platform_31, both loading
+  `config/e2e_team_partition.yaml` — a role-pair-form fixture mirroring
+  `control-platform.yaml`'s merged shape) do not exchange `PlatformData` with disjoint
+  (protected-identity-only) `team_wan` partitions — held-zero matched count +
+  `match_reason`, not silence-and-hope (D66) — **and exchange no WAN endpoint discovery
+  at all**, confirmed via each process's own discovery log (no
+  `publication_discovered`/`subscription_discovered` entry naming the other's identity —
+  D87 finding 2: the suppression is at the SPDP layer itself, stronger than D73's
+  original SEDP-only framing).
+- ✅ after `ADD_PARTICIPANT_PARTITION team_wan=TEAM_A` to both, `PlatformData` crosses;
+  acks return on apply; matched counts advance after plain-SPDP announcement-paced
+  rediscovery (no fixed bound asserted).
+- ✅ `REMOVE_PARTICIPANT_PARTITION team_wan=TEAM_A` on one platform stops delivery: matched
+  counts regress to zero on live entities, forwarding stops (`topic_state` stays
+  `TOPIC_FORWARDING`), no entities are torn down.
+- ✅ a direct peer tap without a shared team: `ADD_PARTICIPANT_PARTITION team_wan=Platform_31`
   on Platform_30 (naming Platform_31's own protected identity entry) makes `PlatformData`
-  cross between exactly those two nodes; `REMOVE_PARTICIPANT_PARTITION` reverses it (D83).
-- a duplicate `ADD`/`REMOVE` (name already present / already absent) returns an idempotent
-  accept with no revision bump (D8); `REMOVE` targeting the protected `"${node.name}"` entry
-  or a name not currently present is rejected, not silently accepted.
+  cross between exactly those two nodes.
+- ✅ a duplicate `ADD` (name already present) returns an idempotent accept with no revision
+  bump (D8); `REMOVE` targeting the protected `"${node.name}"` entry is rejected, not
+  silently accepted.
 
 ### Phase 11: Serialized-CDR Fast Path
 
@@ -988,6 +1034,180 @@ Evidence:
   is not double-executed at the target and is not infinitely re-forwarded by relays.
 - a command sent when a direct sender↔target link exists behaves identically to today's
   unicast delivery — this phase adds no regression to the direct-delivery path.
+
+### Phase 15: Network Capture & Debug Mode
+
+> **Proposed, not yet scheduled.** Motivated by two related gaps: (1) Tenet 1's "network
+> capture" justification for building a custom relay — `rti::util::network_capture`, pcap
+> of DDS traffic including shared memory, unavailable in the Python binding — is not called
+> anywhere in the shipped router (see [poc-user-stories.md](poc-user-stories.md) US-19);
+> (2) "debug mode" is used informally today (Phase 6b/D56: the controller-journal recorder
+> is effectively "on" only when a debug reader happens to match) but nothing gates network
+> capture the same way, because a pcap file has no DDS-native matched-reader signal to
+> piggyback on. This phase gives operators one explicit knob and wires network capture
+> behind it. Readiness items before this phase can start: (a) confirm
+> `rti::util::network_capture::enable()`'s documented constraint — must run before any
+> `DomainParticipant` is created — is compatible with `router_main`'s startup order (the
+> knob must be read and acted on before `ParticipantRegistry::build()` runs); (b) confirm
+> the pcap output path lands on a local filesystem, never the vboxsf share (repo guardrail,
+> [.github/copilot-instructions.md](../../.github/copilot-instructions.md) "Filesystem
+> safety"); (c) a small spike (`spikes/network_capture/`) exercising
+> `enable()`/`start()`/`stop()`/`disable()` against a real participant pair, with the
+> `ask_connext_question` answer this phase is drafted from re-verified via
+> `validate_modern_cpp_code` and the build itself before it's trusted (per
+> [.github/copilot-instructions.md](../../.github/copilot-instructions.md) "Validate
+> Connext specifics — don't guess").
+
+Deliver:
+
+- a `debug_mode` startup knob (CLI flag `--debug` and/or a `debug: true` top-level YAML
+  key), read and acted on before `ParticipantRegistry::build()` — the only point in
+  `router_main`'s startup sequence that satisfies the enable-before-participant-creation
+  constraint.
+- when set, `router_main` calls `rti::util::network_capture::enable()` before building any
+  participant, then `start(participant, filename)` per participant as each is created
+  (per-participant pcap files, one per participant identity — closer to README's "network
+  capture" justification than one global file); `stop(participant)` before that
+  participant's close, `disable()` at process exit after every participant is closed
+  (mirrors the existing D31/D32 attach/detach/close discipline — capture control follows
+  the same lifecycle ordering as everything else).
+- pcap files written under the router's existing local runtime working directory (never
+  the vboxsf share — the same rule the e2e harness's temp dirs already follow), one
+  filename per participant identity (`<node>/<router>/<participant-name>.pcap`) so a
+  multi-participant process's captures stay distinguishable.
+- `debug_mode` also raises the structured log stream's verbosity floor (the existing
+  config-driven `WARNING` baseline per [code-architecture.md](code-architecture.md) → the
+  full category set) — reusing the existing logger, no new mechanism.
+- a startup log line naming the debug knob's state and, when enabled, each participant's
+  capture file path, so an operator can find the pcap without reading config.
+- `NetworkCaptureParams` left at defaults for the POC (all transports incl. SHMEM,
+  `parse_encrypted_content=false` — no security in the POC boundary); no new config
+  surface for the params themselves unless a concrete need shows up.
+
+Evidence:
+
+- starting `router_main` with `debug_mode` unset produces no pcap file and no behavior or
+  performance change versus today (capture is fully opt-in, zero cost when off — Tenet 7).
+- starting with `debug_mode` set produces one pcap file per participant that
+  `tshark`/`dumpcap` can decode (the repo's existing wire-verification tooling,
+  [.github/copilot-instructions.md](../../.github/copilot-instructions.md) "Wire-level
+  verification") and shows the router's own RTPS traffic, including SHMEM-transport frames
+  where a local endpoint uses shared memory.
+- killing a `debug_mode` router (SIGKILL, matching the repo's existing kill-based test
+  discipline) leaves no stray capture threads/segments — `/dev/shm` stays clean per the
+  UDPv4-only rule.
+- log verbosity visibly differs between `debug_mode` on and off for an otherwise identical
+  run (same route, same traffic).
+- no pcap file is ever written under the vboxsf-mounted source tree.
+
+### Phase 16: Mesh GUI v1 — Node Graph Over Web Integration Service
+
+> **IMPLEMENTED 2026-07-21.** Design + investigation: [gui-visualization.md](gui-visualization.md).
+> **Scope corrected mid-build, 2026-07-21: LAN-side (`ActRouterMeshStatus`), not the
+> originally-planned WAN-side `RouterHealth`.** User direction, plus a real, independently
+> confirmed blocker in the WAN approach: `control_wan`/`platform_wan` use QoS profiles
+> (`wan_qos_lib.xml`) with an explicit unicast `discovery.initial_peers` list and multicast
+> receive disabled — an arbitrary external subscriber like WIS isn't on that list and can't
+> passively discover WAN participants the way the original doc assumed. `ActRouterMeshStatus`
+> (the LAN aggregate roster) has no such restriction and is a richer dataset besides — each
+> peer entry is that peer's **complete** last `RouterHealth` summary, not the WAN topic's
+> trimmed `peers_seen` refs. v1 runs one WIS instance colocated with the **C2/control node**,
+> reading `control_lan`'s `ActRouterMeshStatus`. **Trade-off:** this is one vantage point
+> (the C2 node's own view), not the run-anywhere WAN-wide model originally proposed —
+> though since that node's roster already aggregates every peer it knows about, and each
+> peer's embedded heartbeat carries its own `peers_seen` too, the page reconstructs the
+> fuller multi-hop graph, not just a star. Presence-only (no link-quality edge coloring —
+> that's Option C, separately tracked, not implemented).
+>
+> `spikes/wis_mesh_dashboard/` (REST/WebSocket protocol mechanics, PASSED 2026-07-21 against
+> `RouterHealth`) still de-risked the load-bearing WIS integration; the domain/topic/QoS
+> specifics for `ActRouterMeshStatus` were verified separately during this phase's own build
+> (see Evidence and the two real bugs below).
+
+Deliver (as shipped):
+
+- New top-level `gui/mesh_dashboard/` directory (sibling to `router/`, `spikes/`).
+- `gui/mesh_dashboard/config/generate_wis_config.sh` — regenerates `RouterAdminTypes.xml`
+  via `rtiddsgen -convertToXml` and splices it into the WIS config at deploy time
+  (`RouterAdminTypes.idl` stays the one source of truth; the XML is a build artifact, never
+  hand-maintained).
+- `gui/mesh_dashboard/config/wis_config.xml.template` — production config: `control_lan`
+  domain (`20` per `control-platform.yaml`), one `data_reader` on `ActRouterMeshStatus`
+  with **explicit `TRANSIENT_LOCAL` + `RELIABLE` datareader QoS** (see bug #2 below — this
+  is not optional). Must launch with `-enableWebSockets` (off by default).
+- `gui/mesh_dashboard/static/index.html` + `mesh_graph.js` — the page: `vis-network`
+  (vendored locally, pinned 9.1.13, no CDN dependency), a REST GET on load to seed the graph
+  immediately, then a WebSocket (REST-created connection, browser-native `WebSocket`,
+  HELLO/BIND handshake per `spikes/wis_mesh_dashboard/ws_probe.py`'s proven sequence) for
+  live push updates. Each sample upserts the observer node, every peer (full detail: role,
+  `overall_state`, route counts, colored edge by `presence`), and — reading each peer's own
+  embedded `peers_seen` — that peer's own further edges too. Served directly via WIS's own
+  `-documentRoot`, no second web server process.
+- WIS runs as its own standalone process, colocated with (or reachable to) the C2/control
+  node's LAN.
+- `gui/mesh_dashboard/README.md` — how to run it, the scope-correction rationale, and both
+  bugs below.
+
+Evidence (real mesh, `control-platform.yaml`, control + platform roles, verified twice —
+once by the implementing agent, once independently re-run):
+
+- REST GET returns a real `ActRouterMeshStatus` sample: `observer_node`/`observer_router` =
+  the control node's identity, `peers[0].health` = platform's full status
+  (`role`/`overall_state`/`n_routes`/etc.), `presence: PRESENCE_ALIVE`.
+- WebSocket: bound a fresh connection, SIGKILLed the platform router, and the push arrived
+  ~2s later showing `presence: "PRESENCE_STALE"` and an advanced `last_seen_delta_ms` — a
+  real, live D75 presence transition observed end to end, not just a static snapshot.
+- No pcap/log noise, no stray processes or `/dev/shm` segments after cleanup.
+- **Not independently verified in this pass:** actual in-browser rendering (`vis-network`
+  drawing the graph, live node/edge updates on screen). No browser or browser-automation
+  tool (playwright, headless chromium) is available in this environment — the REST/WebSocket
+  data path and the `vis-network` `DataSet`/`Network` API calls used were checked against
+  vis-data's own docs (`.update()` upsert semantics, `.length`, filtered `.get()`), but the
+  page has not been visually confirmed rendering in a real browser. Flagged explicitly
+  rather than claimed.
+
+**Two real bugs found and fixed while building this** (both worth remembering for any
+future WIS config work on a different topic):
+
+1. **`register_type` alias must match the real type name, not just `type_ref` at it.** An
+   earlier WAN-targeting draft gave `register_type` a distinct local alias
+   (`RouterHealthType`) to dodge an XML-DOM `addChild` collision with the topic's own name.
+   That silently broke SEDP type matching — the reader advertised type name
+   `RouterHealthType`, the real writer advertised `RouterHealth`, logged only at
+   `-verbosity 4` as `type names ... do not match`, otherwise completely silent (REST/WS
+   just return empty forever). `ActRouterMeshStatus`'s topic name already differs from its
+   struct name (`RouterMeshStatus`), so no alias — and no instance of this bug class — was
+   needed in the shipped config.
+2. **A VOLATILE reader never receives a TRANSIENT_LOCAL writer's already-written history.**
+   `ActRouterMeshStatus` is change-driven only (no periodic republish, unlike `RouterHealth`'s
+   1 Hz heartbeat, which had been quietly papering over the same gap in the retired WAN
+   draft). WIS's default reader QoS is VOLATILE. SEDP discovery completed correctly
+   (`control_lan`'s log showed `subscription_discovered topic=ActRouterMeshStatus` for
+   WIS's GUID), yet REST returned `[]` indefinitely — confirmed via `ask_connext_question`
+   and direct observation: a VOLATILE reader only receives samples written *after* it
+   matches, never a TRANSIENT_LOCAL writer's stored late-joiner history, regardless of RxO
+   compatibility. Fixed by giving `MeshStatusReader` explicit `TRANSIENT_LOCAL` durability
+   (+ `RELIABLE`, matching the writer) in the shipped config.
+
+### Roadmap beyond v1 (not designed yet — user-stated intent, confirmed 2026-07-21)
+
+Two follow-on items were named as "next" right after v1, not yet scoped as their own phase:
+
+- **Network isolation — confirmed: visualize D83's team-partition mechanism on the
+  graph itself**, not network-level fault injection. Group/color nodes by team; a
+  deliberately-isolated pair (disjoint `participant_partition`, Phase 10/D83) renders with
+  no edge between them, same as the graph already shows for a genuinely-unreachable
+  router — the isolation and the "never discovered" case should look the same, since
+  that's the actual D73-confirmed behavior (non-overlapping partitions suppress SPDP-level
+  mutual visibility, not just data flow). Would likely reuse
+  `spikes/spdp2_partition_visibility/`/`spikes/dp_partition_monitor/` groundwork for
+  surfacing team membership. Not designed yet — v1 doesn't need to reserve any special
+  data-model hooks for this, since it's additive (an extra field/grouping on top of the
+  same node/edge model), not a restructuring.
+- **Simulate data loss** — very likely the **same experiment `link-health.md`'s "Deferred:
+  inference and the correlation experiment" already scoped** (D14): a netem/EMANE
+  link-degradation sweep, motivated now by the GUI wanting a real per-peer quality number
+  for Option C's minimal variant, not a separate new effort.
 
 ## Confidence-Increasing Investigations
 

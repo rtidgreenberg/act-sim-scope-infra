@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ACT Router Mesh — Node Graph</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #14181f; color: #e6e8eb;
+               font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #statusbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; padding: 8px 14px;
+               background: #1c222c; border-bottom: 1px solid #2c3542; font-size: 13px; }
+  #legend { position: fixed; top: 0; right: 0; z-index: 10; padding: 8px 14px;
+            background: #1c222c; border-bottom: 1px solid #2c3542; border-left: 1px solid #2c3542;
+            font-size: 12px; display: flex; gap: 14px; }
+  #legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #graph { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; }
+</style>
+</head>
+<body>
+<div id="statusbar">connecting…</div>
+<div id="legend">
+  <span><i style="background:#4a90d9"></i> router (heard directly)</span>
+  <span><i style="background:#888888"></i> router (only via a peer)</span>
+  <span><i style="background:#3aa655"></i> ALIVE</span>
+  <span><i style="background:#d9a441"></i> STALE</span>
+  <span><i style="background:#c0392b"></i> DEAD</span>
+</div>
+<div id="graph"></div>
+<script src="vendor/vis-network.min.js"></script>
+<script src="mesh_graph.js"></script>
+</body>
+</html>

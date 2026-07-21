@@ -1,15 +1,16 @@
 # Mesh GUI Visualization: Dynamic Node Graph over Web Integration Service
 
 > Investigation and architecture proposal for a browser-based dynamic node graph — routers
-> as nodes, WAN links as edges colored/weighted by connection state — driven off the mesh
-> topics the router already publishes. Status: **Option A spiked and PASSED
-> (2026-07-21, [spikes/wis_mesh_dashboard/](../../spikes/wis_mesh_dashboard/README.md))** —
-> not yet a design-decisions.md entry or a scheduled phase (would land after
-> [Phase 15](implementation-plan.md#phase-15-network-capture--debug-mode) as **Phase 16** if
-> adopted; front-end graph work not yet started). Drafted 2026-07-20 from the current repo
-> state (`router/admin/RouterAdminTypes.idl`, `PresenceMonitor`, `LinkStatsCollector`) plus a
-> scan of the installed `rtiwebintegrationservice` (Connext 7.7.0); updated 2026-07-21 with
-> spike results.
+> as nodes, edges colored by connection state — driven off the mesh topics the router
+> already publishes. Status: **v1 IMPLEMENTED 2026-07-21**
+> ([Phase 16](implementation-plan.md#phase-16-mesh-gui-v1--node-graph-over-web-integration-service),
+> `gui/mesh_dashboard/`), verified end to end against a real 2-router mesh (REST + a live
+> WebSocket presence-transition push). **Scope corrected mid-build: LAN-side
+> (`ActRouterMeshStatus`, colocated with the C2/control node), not the originally-planned
+> WAN-side `RouterHealth` (Option A below)** — see "Why Option A was retired" and Phase 16's
+> banner for the two real reasons (a WAN discovery restriction found independently, plus
+> user direction). Drafted 2026-07-20; updated 2026-07-21 twice — first with the WAN spike
+> results, then with the LAN-side pivot and final v1 evidence.
 
 ## Goal
 
@@ -35,14 +36,45 @@ a first cut. Source: `router/admin/RouterAdminTypes.idl` (see also
 | `ActRouterStatus` (`RouterStatus`) | LAN admin participant, per node | **per-node local** | Per-route operational/discovery state, matched counts, QoS warnings — the "why isn't this route forwarding" detail view |
 | `ActRouterControllerJournal` | LAN admin participant, per node | **per-node local** | Per-decision event stream (command received, endpoint discovered/lost, match changed) — a timeline/log feed, not graph state |
 
-**Key finding: the topology graph (nodes + presence edges) is already mesh-wide on one WAN
-domain.** `RouterHealth.peers_seen` means a single subscriber on domain `200` sees every
-router's heartbeat *and* every router's own roster edges — enough to reconstruct the full
-"who's alive, who sees whom" graph without touching any node's LAN. **Link-quality detail
-(RTT, loss) is NOT mesh-wide** — `RouterLinkStats` is explicitly LAN-only by design (D14),
-so edge *coloring by RTT/loss* requires either per-node local access or a future change to
-publish link stats onto the WAN (a real design decision, not a GUI concern — flagged as an
-open question below, not assumed).
+**Key finding (theoretical, at doc-drafting time): the topology graph could be mesh-wide on
+one WAN domain.** `RouterHealth.peers_seen` means a single subscriber on domain `200` sees
+every router's heartbeat *and* every router's own roster edges — enough in principle to
+reconstruct the full "who's alive, who sees whom" graph without touching any node's LAN.
+**This did not survive contact with the real production config** — see "Why Option A was
+retired" below; v1 reads `ActRouterMeshStatus` on one node's LAN instead. **Link-quality
+detail (RTT, loss) is NOT mesh-wide either way** — `RouterLinkStats` is explicitly LAN-only
+by design (D14), so edge *coloring by RTT/loss* requires either per-node local access or a
+future change to publish link stats onto the WAN (a real design decision, not a GUI concern
+— tracked as Option C below).
+
+### Why Option A (WAN `RouterHealth`) was retired
+
+Two independent reasons converged during Phase 16's build, 2026-07-21:
+
+1. **User direction** — WIS should read the LAN-side "full resolution" topic, not the WAN
+   presence heartbeat.
+2. **A real architectural blocker, found independently while building the WAN version
+   first:** `control_wan`/`platform_wan` use `wan_qos_lib.xml` QoS profiles with
+   `discovery.initial_peers` set to an explicit unicast peer list and
+   `multicast_receive_addresses` disabled. An arbitrary external subscriber like WIS is not
+   on that peer list, so it cannot passively discover WAN participants the way this doc
+   originally assumed — confirmed by standing up the real `control-platform.yaml` mesh plus
+   a WIS instance on domain `200` and observing REST return `[]` indefinitely despite
+   correct config, then wire-capturing domain-200 loopback traffic to see the actual cause.
+
+`ActRouterMeshStatus` sidesteps this entirely: `control_lan` (and `platform_lan`) carry
+**no custom QoS at all** in `control-platform.yaml` — plain default participant QoS, which
+means standard **multicast** discovery, no peer list, no restriction. This is not a
+tweak WIS needs to opt into; it's what the LAN admin participants already are. Confirmed
+directly while testing: both the control router's LAN participant and WIS's own LAN
+participant bound to port `12400` (domain 20's standard multicast discovery port), and
+that shared multicast group is exactly the mechanism that let them find each other — no
+`initial_peers` list, on either side, anywhere in this path. (The unicast-peer-list
+restriction above applies **only** to the retired WAN participants, `control_wan`/
+`platform_wan`/`team_wan` — never to `control_lan`/`platform_lan`.) `ActRouterMeshStatus`
+is also richer for the purpose anyway: each peer entry is that peer's **complete** last
+`RouterHealth` summary (not the WAN topic's trimmed `peers_seen` refs) — literally "full
+resolution," per the framing that drove the redirect.
 
 ## Web Integration Service: what it is, what it needs
 
@@ -79,29 +111,77 @@ this repo — no existing WIS config, no prior mention in `design-decisions.md`/
 
 ## Architecture options
 
-**Option A — mesh-wide topology view via `RouterHealth` only (WAN domain).** One WIS
-instance subscribes to `RouterHealth` on domain `200`. Nodes = distinct `router` identities
-seen; edges = each router's own `peers_seen` entries, colored by `presence`
-(ALIVE/STALE/DEAD). Cheapest to stand up, works from anywhere with WAN reachability (a
-natural fit for a C2-side "mesh health at a glance" view), but no link-quality edge
-weighting — presence only.
+**Option A — mesh-wide topology view via `RouterHealth` only (WAN domain). RETIRED,
+2026-07-21 — see above.** Would have been the cheapest to stand up and reachable from
+anywhere on the WAN, but the production WAN QoS profiles' unicast-peer-list discovery
+model made it unworkable for an arbitrary external subscriber without also editing every
+router's peer list. Superseded by what shipped (below).
 
-**Option B — per-node operational dashboard via LAN topics.** A WIS instance colocated with
-each node's LAN admin participant (domain `20` for control, `30` for platform) additionally
-pulls `RouterLinkStats` (RTT/loss → edge color/thickness) and `RouterStatus` (route detail
-on node click). Richer, but siloed per node — no single page shows the whole mesh's link
-quality, and it's `N` WIS instances/configs instead of one.
+**Shipped for v1 — `ActRouterMeshStatus`, colocated with the C2/control node's LAN.** One
+WIS instance reads `control_lan`'s `ActRouterMeshStatus`: nodes = the observer + every peer
+it knows about (full `RouterHealth` detail per peer, not just trimmed refs), edges = colored
+by `presence`, PLUS each peer's own embedded `peers_seen` roster reconstructs further edges
+— a fuller multi-hop graph than a star, from one LAN vantage point. This is closer to
+**Option B**'s shape (below) than Option A, but reads only `ActRouterMeshStatus`, not
+`RouterLinkStats`/`RouterStatus`, and runs one instance (at C2) rather than one per node.
 
-**Option C — A + a future WAN republish of link-stats summaries** (extending the Phase 9
-`LinkStatsCollector`/D14 design to also emit a compact WAN-safe rollup, mirroring how
-`RouterHealth` already carries roster edges mesh-wide). Gets a single mesh-wide graph with
-both presence *and* link-quality edges, but is a router-side design change, not just a GUI
-integration — its own D-numbered decision, out of scope for a first GUI cut.
+**Option B — per-node operational dashboard via LAN topics (not implemented; still a real
+next step).** A WIS instance colocated with each node's LAN admin participant (domain `20`
+for control, `30` for platform) additionally pulls `RouterLinkStats` (RTT/loss → edge
+color/thickness) and `RouterStatus` (route detail on node click). Richer, but siloed per
+node — no single page shows the whole mesh's link quality, and it's `N` WIS
+instances/configs instead of one. The shipped v1's data model doesn't need restructuring to
+add this later — it's additive.
 
-**Recommendation:** start with **Option A** as a spike (`spikes/wis_mesh_dashboard/`, per
-repo convention) — it needs zero router-side changes and already answers "is the node
-graph alive/updating." Layer Option B in once A is proven, if per-node link-quality detail
-is wanted in the same pass. Treat C as a separate, later design decision.
+**Option C — a future WAN republish of link-stats summaries** (extending the Phase 9
+`LinkStatsCollector`/D14 design to also emit a compact WAN-safe rollup). Direction set
+2026-07-21 (minimal variant — see sizing below), not implemented; blocked on defining the
+quality metric itself, and now also reads on the shipped LAN topic rather than the retired
+WAN one, so its design would need revisiting against what actually shipped.
+
+### Option C sizing (2026-07-21) — leaning toward pursuing this, minimal variant
+
+User direction: **likely go with Option C, minimal variant** — add per-peer link-quality
+fields directly to `RouterHealth`'s existing `RouterPeerRef` entries (no new WAN topic)
+rather than mirroring the full `RouterLinkStats` struct onto the WAN. Real wire numbers,
+measured (not estimated) by capturing loopback traffic from a live 2-router mesh and
+decoding a real `RouterHealth` sample byte-for-byte against the IDL:
+
+- **Current confirmed cost:** 248 bytes CDR payload / 326 bytes on the wire for one
+  `RouterHealth` heartbeat with one `peers_seen` entry, at the existing 1 Hz rate.
+- **Added cost per peer edge** (this scales with edges seen, not a flat per-message cost):
+  - Minimal (RTT + one loss/quality number, 2× `uint32`): **+8 bytes/peer** — CDR-computed
+    from the field widths, not independently wire-verified (no code changes yet).
+  - Full `RouterLinkStats` mirror (16× uint64 + 7× uint32 counters, for comparison only —
+    **not** the chosen direction): +156 bytes/peer.
+- **Mesh-wide, minimal variant, at 1 Hz:** ~160 bytes/sec for a 5-router mesh (20 edges),
+  ~720 bytes/sec for 10 routers (90 edges) — negligible in absolute bandwidth terms. The
+  real cost D14 was originally protecting against was continuous per-edge WAN traffic, not
+  raw bytes, and the minimal variant keeps that cost small enough that it's arguably not a
+  blocker anymore — but this is a router-side call, not a GUI one, and still needs its own
+  D-numbered decision before implementation.
+
+**Post-pivot simplification (2026-07-21):** this sizing was computed against the original
+WAN-wide plan. Since v1 now runs colocated with C2's own LAN, getting C2's own link-quality
+numbers needs **no WAN change and no new WAN bytes at all** — `ActRouterLinkStats` already
+exists on `control_lan` (Phase 9, LAN-only by design) and is just another topic the same WIS
+instance could subscribe to (this is Option B, not C). The WAN-rollup sizing above still
+matters only if a *mesh-wide* (not just C2's-view) quality graph becomes a real requirement
+later — worth re-confirming that's still wanted before pursuing it, now that the cheaper
+LAN-only path exists for C2's own view.
+
+**Open blocker — the quality metric itself is not yet defined.** This isn't a new gap: it's
+the **same open item as D14's "Deferred: inference and the correlation experiment"**
+([link-health.md](link-health.md#deferred-inference-and-the-correlation-experiment)) —
+nothing today maps raw protocol counters (NACKs, RTT, etc.) to a health/quality
+classification, because thresholds without the planned link-degradation correlation
+experiment (netem/EMANE sweep) would be guesses. Concretely for this WAN rollup: **which
+one or two numbers go in those 8 bytes** — raw `rtt_mean_us` alone (defers "is this good or
+bad" to the dashboard, no interpretation risk) vs. some derived loss/quality score (needs
+the correlation experiment first to mean anything) — is still unresolved. Recommend not
+blocking the minimal-variant router change on the full correlation experiment: ship
+`rtt_mean_us` (an honest raw number, matches D14's existing capture-first stance) now, add
+a real loss/quality figure later once the correlation experiment actually defines one.
 
 ## Proposed phasing
 
@@ -119,10 +199,20 @@ is wanted in the same pass. Treat C as a separate, later design decision.
      **this shape differs from the product manual's own documented example**, see the
      correction below).
    - No front-end HTML/graph-rendering code yet — library choice still open (see below).
-3. **Phase 16 candidate (if adopted):** productionize the WIS config alongside
-   `router/config/`, decide long-term hosting (colocated with a node vs. a standalone
-   dashboard host), build the actual graph-rendering page, fold in Option B's per-node
-   link-stats view.
+3. **Phase 16 — v1 IMPLEMENTED, 2026-07-21.** Full deliver/evidence list:
+   [implementation-plan.md#phase-16](implementation-plan.md#phase-16-mesh-gui-v1--node-graph-over-web-integration-service).
+   **Scope corrected mid-build to LAN-side** (`ActRouterMeshStatus` on `control_lan`, not
+   the WAN `RouterHealth` graph the spike above proved) — see "Why Option A was retired."
+   Verified against a real 2-router mesh: REST returns a real sample (`observer_node` =
+   the C2 node, `peers[0].health` = platform's full status); a SIGKILLed platform router
+   produced a live WebSocket push showing `presence: "PRESENCE_STALE"` ~2s later. Two real
+   bugs found and fixed in the process — a `register_type` alias breaking SEDP type
+   matching, and a VOLATILE reader never receiving a TRANSIENT_LOCAL writer's already-
+   written history on a change-driven (non-periodic) topic — both detailed in
+   `implementation-plan.md`'s Phase 16 section and `gui/mesh_dashboard/README.md`. Not
+   independently verified: actual in-browser rendering (no browser/automation tool
+   available in this environment) — the data path and the `vis-network` API calls used are
+   confirmed, but the page has not been visually observed rendering.
 
 ### Correction: WIS WebSocket API — manual/MCP claim vs. observed behavior (2026-07-21)
 
@@ -149,20 +239,30 @@ submodule commit/push step; flagging here so it isn't lost).
 
 ## Decisions (2026-07-21)
 
-- **Primary consumer: C2 operator** (mesh-wide health-at-a-glance). Ships **Option A**
-  first: one WIS instance on the WAN `RouterHealth` topic (domain `200`), no per-node LAN
-  access required for the first cut.
-- **Spiking now**: `spikes/wis_mesh_dashboard/` — verify the WIS type-registration question
-  (below) and get a real mesh's `RouterHealth` visible over WIS REST/WebSocket end to end.
+- **Primary consumer: C2 operator** (mesh-wide health-at-a-glance).
+- **Ships LAN-side, colocated with the C2/control node** (`control_lan`,
+  `ActRouterMeshStatus`) — superseded the original "Option A, WAN `RouterHealth`" decision
+  below it once building the WAN version surfaced the `initial_peers` discovery
+  restriction. Kept here, struck through, for the historical record rather than deleted:
+  ~~Ships **Option A** first: one WIS instance on the WAN `RouterHealth` topic (domain
+  `200`), no per-node LAN access required for the first cut.~~
+- **Front-end graph library: `vis-network`**, vendored locally (pinned 9.1.13). Implemented,
+  not just decided.
+- **WIS hosting: standalone process**, colocated with (or reachable to) the C2/control
+  node's LAN. Implemented.
 
 ## Open questions (still need a decision — not guessed at here)
 
-- **Front-end graph library:** no preference recorded anywhere in the repo. Candidates for a
-  live-updating force-directed graph: `vis-network`, `cytoscape.js`, `d3-force`. Worth
-  picking before the spike's HTML page is written, not during.
-- **Where does WIS run long-term?** Colocated with each router process (simplest for a
-  future Option B/LAN access) vs. a separate dashboard host with WAN-only reach (matches how
-  a C2 node already only expects WAN-side topics — fine for the Option A spike either way).
-- **Is Option C (WAN-safe link-stats rollup) worth pursuing later?**, i.e., is a mesh-wide
-  *quality*-weighted graph a real requirement, or is per-node link detail (Option B) enough
-  once an operator has clicked into a node from the Option A overview?
+- **Is Option B (per-node `RouterLinkStats`/`RouterStatus`) worth adding next?** Now cheaper
+  than originally scoped for at least C2's own view — `ActRouterLinkStats` is already on
+  the same `control_lan` this WIS instance reads, so it's just another topic subscription,
+  not a new instance/config. Still an open scope question, not a technical blocker.
+- ~~Is Option C worth pursuing later?~~ **Direction set 2026-07-21: likely yes, minimal
+  variant** (see sizing above) — narrowed to one concrete open item: **what the per-peer
+  quality number actually is**, which is D14's already-deferred inference/correlation-
+  experiment question, not a new one. Blocks implementation, not the direction decision.
+  Note the post-pivot simplification above: this only matters for a *mesh-wide* quality
+  view now, not for getting C2 its own link-quality numbers (Option B covers that cheaply).
+- **Should a per-node (not just C2-colocated) deployment be built too?** i.e., is Option B's
+  "one WIS instance per node" shape wanted, or is C2's single vantage point sufficient for
+  the program's actual operational need?
