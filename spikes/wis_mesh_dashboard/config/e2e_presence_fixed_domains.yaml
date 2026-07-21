@@ -1,0 +1,63 @@
+# e2e_presence_fixed_domains.yaml — router/config/e2e_presence.yaml with the
+# __DOMAIN_CONTROL_LAN__/__DOMAIN_WAN__/__DOMAIN_PLATFORM_LAN__ placeholders replaced by
+# FIXED domain ids (spikes/wis_mesh_dashboard/PLAN.md step 1), so a WIS config can point at
+# a known domain without any templating step at spike-run time (unlike the pytest e2e
+# harness, which picks a fresh triplet per test — see router/test_e2e/conftest.py's
+# unique_domains fixture).
+#
+# Domain ids are low-thousands per the repo's documented port-mapping ceiling
+# (.github/copilot-instructions.md: ids above ~5900-6000 can hit the default port-mapping
+# ceiling and fail with RTIOsapiSocket_bindWithIP: Permission denied). Checked nothing else
+# in this repo/session was bound to 1201-1203 before picking them (ps aux + no stray
+# /dev/shm RTI*/dds* segments at spike-build time).
+#
+# Otherwise byte-for-byte the same fixture as router/config/e2e_presence.yaml — see that
+# file's header comment for the two-role/presence_participant shape explanation.
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role
+
+router:
+  name: e2e-presence
+  admin_participant: platform_lan   # control-role process overrides via CLI
+  presence_participant:
+    platform: platform_wan
+    control: control_wan
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: 1201
+  control_wan:
+    role: control
+    domain: 1202
+  platform_lan:
+    role: platform
+    domain: 1203
+  platform_wan:
+    role: platform
+    domain: 1202
+
+routes:
+  - name: presence_route
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformPrimaryStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: default
+    destination_side:
+      input:
+        participant: control_wan
+      output:
+        participant: control_lan

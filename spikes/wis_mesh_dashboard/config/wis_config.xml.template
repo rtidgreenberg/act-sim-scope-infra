@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<!--
+    wis_config.xml.template — RTI Web Integration Service config for the mesh-dashboard
+    spike (spikes/wis_mesh_dashboard/PLAN.md step 2).
+
+    Modeled on $NDDSHOME/resource/xml/RTI_WEB_INTEGRATION_SERVICE.xml's ShapesDemo
+    <web_integration_service> shape (application/domain_participant/subscriber/data_reader
+    nesting) and on
+    $NDDSHOME/resource/template/rti_workspace/examples/web_integration_service/rest/simple_shapes_demo
+    (domain_library + register_type + topic, referenced by the participant via domain_ref).
+
+    The placeholder line below this comment (a single all-caps token, substituted verbatim
+    by run_spike.sh's splice step — NOT repeated here literally, so a naive str.replace over
+    the whole file can't also match this description of it) is replaced at spike-run time
+    with the types block produced by:
+        rtiddsgen -convertToXml -d <tmp> router/admin/RouterAdminTypes.idl
+    which — verified by hand, 2026-07-21 — emits a flat (no IDL module wrapper) list of
+    <enum>/<struct> elements including <struct name="RouterHealth"> with a plain string
+    "router" @key member and a "peers_seen" sequence of RouterPeerRef, matching the IDL in
+    router/admin/RouterAdminTypes.idl exactly. That whole block (including the outer
+    <types> and </types> tags) gets substituted in as-is, unmodified.
+
+    Domain: 1202, the WAN domain fixed in
+    config/e2e_presence_fixed_domains.yaml (the "control_wan"/"platform_wan"
+    participants both live there — see that file). RouterHealth heartbeats from both
+    router_main roles land in this one domain.
+
+    No custom QoS here: PresenceMonitor's health_qos (router/src/core/PresenceMonitor.cxx)
+    writes RouterHealth as RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1) + DEADLINE 2s +
+    AUTOMATIC liveliness (3s lease). WIS's default DataReader QoS (BEST_EFFORT, VOLATILE,
+    no deadline) is RxO-compatible with that writer (a reader may always request less than
+    what's offered), so nothing needs to be added here for the match to succeed.
+-->
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="/home/rti/rti_connext_dds-7.7.0/resource/schema/rti_web_integration_service.xsd">
+
+    __ROUTER_ADMIN_TYPES__
+
+    <domain_library name="RouterAdminDomainLibrary">
+        <domain name="MeshWanDomain" domain_id="1202">
+            <!-- register_type's own "name" lives in the same per-domain XML-DOM
+                 namespace as topic's "name", so giving both "RouterHealth" collided
+                 (RTIXMLObject_addChild: "...::RouterHealth" already exists, WIS refused
+                 to parse). type_ref="RouterHealth" still points at the real struct name
+                 from the spliced types block; only this local registration alias
+                 differs. The topic name itself MUST stay "RouterHealth", since it has to
+                 match the actual DDS topic name router_main/PresenceMonitor.cxx
+                 publishes on (default "RouterHealth", see PresenceMonitor.hpp). -->
+            <register_type name="RouterHealthType" type_ref="RouterHealth" />
+            <topic name="RouterHealth" register_type_ref="RouterHealthType" />
+        </domain>
+    </domain_library>
+
+    <web_integration_service name="mesh_dashboard">
+        <application name="MeshDashboardApp">
+            <domain_participant name="MeshParticipant"
+                    domain_ref="RouterAdminDomainLibrary::MeshWanDomain">
+                <subscriber name="MeshSubscriber">
+                    <data_reader name="RouterHealthReader" topic_ref="RouterHealth" />
+                </subscriber>
+            </domain_participant>
+        </application>
+    </web_integration_service>
+</dds>
