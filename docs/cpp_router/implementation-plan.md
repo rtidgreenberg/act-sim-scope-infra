@@ -1189,21 +1189,30 @@ future WIS config work on a different topic):
    compatibility. Fixed by giving `MeshStatusReader` explicit `TRANSIENT_LOCAL` durability
    (+ `RELIABLE`, matching the writer) in the shipped config.
 
+**Follow-on shipped same day (D93): team-membership ring**, plus front-end interactivity
+(a click-for-detail node panel and clickable team-filter legend chips — pure client-side
+over the same samples, `gui/mesh_dashboard/README.md` "Interactivity"). See the "Network
+isolation" roadmap bullet below for what the ring shipped vs. what it originally proposed.
+
 ### Roadmap beyond v1 (not designed yet — user-stated intent, confirmed 2026-07-21)
 
 Two follow-on items were named as "next" right after v1, not yet scoped as their own phase:
 
-- **Network isolation — confirmed: visualize D83's team-partition mechanism on the
-  graph itself**, not network-level fault injection. Group/color nodes by team; a
-  deliberately-isolated pair (disjoint `participant_partition`, Phase 10/D83) renders with
-  no edge between them, same as the graph already shows for a genuinely-unreachable
-  router — the isolation and the "never discovered" case should look the same, since
-  that's the actual D73-confirmed behavior (non-overlapping partitions suppress SPDP-level
-  mutual visibility, not just data flow). Would likely reuse
-  `spikes/spdp2_partition_visibility/`/`spikes/dp_partition_monitor/` groundwork for
-  surfacing team membership. Not designed yet — v1 doesn't need to reserve any special
-  data-model hooks for this, since it's additive (an extra field/grouping on top of the
-  same node/edge model), not a restructuring.
+- **Network isolation — IMPLEMENTED 2026-07-21 (D93), narrower than this bullet
+  originally proposed.** What shipped: a colored ring per node derived from a new
+  `RouterHealth.team_partition` field (team_wan's live participant-partition set),
+  classified client-side in `mesh_graph.js` against the mesh's own known node identities.
+  **What did NOT ship, and isn't the same thing:** this bullet's original idea of
+  disjoint-team pairs rendering with **no edge between them** (mirroring D73's real
+  SPDP-level mutual invisibility). That's not achievable from `RouterHealth`/
+  `ActRouterMeshStatus` alone — presence rides `control_wan`/`platform_wan`, which stay
+  unconditionally matched regardless of team (D87 Finding 3), so every platform is a node
+  with a presence edge to C2 no matter its team. Team-level SEDP invisibility is a
+  `team_wan`-only phenomenon this data source structurally can't see (that's exactly D89's
+  problem, and why D93 deliberately avoided depending on `team_wan`'s own gated
+  discovery). Showing *actual* discovery-level isolation as missing edges would need a
+  `team_wan`-scoped data source (Task 4's `mesh_participants`, still unbuilt) layered on
+  top of, not instead of, today's ring. Not scheduled.
 - **Simulate data loss** — very likely the **same experiment `link-health.md`'s "Deferred:
   inference and the correlation experiment" already scoped** (D14): a netem/EMANE
   link-degradation sweep, motivated now by the GUI wanting a real per-peer quality number

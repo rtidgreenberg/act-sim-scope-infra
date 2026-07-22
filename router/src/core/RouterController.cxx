@@ -787,6 +787,12 @@ void RouterController::apply_presence_tick() {
     hb.overall_state = (error > 0) ? RouterOverallState::ROUTER_ERROR
                      : (degraded > 0) ? RouterOverallState::ROUTER_DEGRADED
                                       : RouterOverallState::ROUTER_OK;
+    // team_partition is deliberately NOT filled in here. Unlike every other field above
+    // (derived from state_, the controller's own config-mirrored copy), team_partition is
+    // polled live off the real DomainParticipantQos.partition by PresenceMonitor itself,
+    // the same place peers_seen is filled (D77) — ground truth off the actual DDS entity,
+    // not a state mirror that could in principle drift from it. See PresenceMonitor::
+    // publish_heartbeat.
     presence_->publish_heartbeat(hb);
 }
 

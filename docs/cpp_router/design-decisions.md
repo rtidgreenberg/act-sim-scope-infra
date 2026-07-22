@@ -4563,3 +4563,84 @@ unverified), but the *policy* this entry pins — standard by default, verify do
 router-status-mesh-live-awareness-task.md` (Task 4) and D89's framing should be read
 alongside this entry: the "structurally GUID-only" language there describes the
 steady-state/post-boot case, not the boot-time census this entry now makes standard.
+
+## D93 — `RouterHealth` gains `team_partition` (team_wan's raw partition set) so the mesh dashboard can visualize team membership; classification into "which entry is the actual team" happens client-side, not on the wire (2026-07-21, accepted; implements gui/mesh_dashboard's team-grouping follow-on to Phase 16 v1)
+
+**Context.** Phase 16 v1 shipped presence-only (`gui-visualization-wis-spike` follow-up
+request): the graph had no way to show D83's team/participant-partition isolation, since
+neither `ActRouterMeshStatus` nor `RouterHealth` carried any partition data at all —
+`participant_partition` only ever existed on `RouterStatus` (per-node, not the mesh
+roster), and D88 is actively moving to *retire* that field in favor of `mesh_participants`
+(Task 4), which is itself blocked on D89's harder GUID-only-for-cross-team problem. Two
+paths were weighed: build on Task 4 (correctly scoped to the isolation model, but unbuilt
+and structurally incomplete for cross-team peers) vs. add the data straight to
+`RouterHealth` (simple, works today, but broadcasts every platform's team assignment
+mesh-wide since `RouterHealth` already rides the unconditionally-matched `control_wan`/
+`platform_wan`, D87 Finding 3). User chose the latter, with an explicit correction: the
+new field must be named/scoped as *team_wan's* set specifically, not a generic
+"participant partition" blob — since D83's single add/remove mechanism means that set
+inherently mixes the node's own protected identity, an optional team name, and any
+ad-hoc direct-peer-tap names with no structural tag telling them apart.
+
+**Decision.**
+
+- **`RouterHealth` gains `sequence<string, 16> team_partition`** — populated by
+  `PresenceMonitor` from a **live poll** of the `team_wan` participant's actual
+  `DomainParticipantQos.partition` (`qos().policy<Partition>().name()`), read fresh on
+  every heartbeat, never cached and never copied from the controller's config-mirrored
+  `ParticipantState` — ground truth off the real entity, no drift risk (same rationale as
+  `peers_seen`, D77, filled in the same place). Bound mirrors
+  `RouterParticipantStatus.participant_partition`'s `kMaxParticipantPartitionEntries` (16).
+- **`team_wan` is looked up DIRECTLY by its config-convention name**, not via the `is_wan`
+  flag. An earlier draft summed every `is_wan` participant's set (generic over the D83
+  class); the user rejected it after we established that `is_wan` is a **conflated,
+  misleadingly-named flag** — it fuses D83 team-scoping (team_wan only) with Phase 9
+  link-stats WAN-leg detection (which wants platform_wan *and* team_wan), under a name that
+  reads as "on the WAN" when every `*_wan` participant is. Rather than untangle a
+  separately load-bearing flag inside a GUI feature, this feature keys off the participant
+  name directly (`router_main` looks up `"team_wan"` in `registry.names()`; absent ⇒
+  `dds::core::null` ⇒ empty `team_partition`, correct for a control node). **Accepted
+  tradeoff:** hardcoding `"team_wan"` couples to the config's naming convention — rename the
+  participant and `team_partition` silently goes empty. The `is_wan` decomposition is
+  captured as its own hand-off task (`docs/cpp_router/is-wan-flag-decomposition-task.md`),
+  which also flags a suspected real consequence of the conflation: since D87 unset
+  `platform_wan`'s `is_wan`, that participant's data-route legs may no longer be
+  link-stats-covered (verify-first, not yet confirmed).
+- **No wire-level distinction between "team name" and "ad-hoc direct-peer-tap name" or
+  the protected identity entry** — that would require reopening D83's deliberate
+  single-mechanism simplicity call (explicitly rejected: "no separate mechanism for
+  'team' vs. direct peer tap"), which this entry does NOT do. Classification instead
+  happens entirely client-side, in `gui/mesh_dashboard/static/mesh_graph.js`: subtract
+  every node identity already known mesh-wide (every `RouterHealth.router`'s node-name
+  half) from the set; whatever's left is treated as team name(s) to color by. **Accepted
+  edge case:** a team named identically to a real node's own identity string
+  misclassifies as "no team" — flagged in both the IDL comment and the JS, not solved.
+- **This is deliberately NOT Task 4's `mesh_participants` mechanism** and does not
+  supersede or block it — different consumer, different scope. `mesh_participants` (once
+  built) will give C2 a structured, named, per-peer participant inventory correctly
+  scoped to the isolation model; this entry gives any `RouterHealth` consumer (the
+  dashboard today) a cheap, always-reachable, coarser signal for visualization. Both can
+  coexist; nothing here should be read as walking back D88/D89's constraints for that
+  separate task.
+
+**Evidence:** new `router/config/e2e_presence_team.yaml` + `test_mesh_team_partition.py`
+(3 processes: 1 control + 2 platform, sharing one WAN domain per production topology) —
+before any team is assigned, `team_partition` on the wire is exactly the protected-identity
+singleton on both platforms; after `ADD_PARTICIPANT_PARTITION team_wan=TEAM_A` on both,
+it becomes `{identity, "TEAM_A"}`, readable both directly off `RouterHealth` (control_wan/
+platform_wan, no `team_wan`-level discovery needed) and off the control node's own
+`ActRouterMeshStatus` aggregate (proving the field survives `PresenceMonitor`'s
+roster-copy path unmodified). New test stable 3/3, full e2e suite 25/25, ctest 4/4.
+**Not verified this pass:** actual in-browser rendering of the new team-colored ring (same
+standing v1 limitation — no browser in this environment); the classification/rendering JS
+was checked by hand-reading against `vis-network`'s documented API, not by observation.
+
+**Docs changed:** `RouterAdminTypes.idl` (`RouterHealth.team_partition` + rationale
+comment), `RouterController.cxx` (`apply_presence_tick` no longer fills team_partition —
+comment points to PresenceMonitor), `PresenceMonitor.{hpp,cxx}` (live poll of the
+`team_wan_participant` handle), `router_main.cxx` (direct `"team_wan"` name lookup),
+`gui/mesh_dashboard/static/{index.html,mesh_graph.js}` (ring rendering + dynamic team
+legend), `gui/mesh_dashboard/README.md` ("Team-membership ring" section replaces the old
+"no team grouping yet" known-limitation line), `implementation-plan.md` Phase 16 section,
+new `docs/cpp_router/is-wan-flag-decomposition-task.md` (+ its README index entry), this
+entry.

@@ -92,10 +92,59 @@ so exact-name matching silently misses both).
   instance per node (reading each node's own admin LAN participant) is the natural next step
   if per-node siloed views are wanted instead of/alongside this one.
 - Presence only — no RTT/loss edge coloring (Option C, separately tracked).
-- No team-membership grouping/coloring on the graph yet (the "network isolation"
-  visualization item in the implementation-plan.md roadmap section — not designed yet).
 - A router only known via another router's own roster (not the observer's direct peer list)
   renders as a gray placeholder node.
+
+## Team-membership ring (follow-on, 2026-07-21)
+
+Each known node now renders with a colored ring (border) whose fill color is unchanged
+(still known-directly-blue vs. placeholder-gray) — the ring encodes team membership,
+derived from a new `RouterHealth.team_partition` field (`team_wan`'s live
+participant-partition set, D83/D87). Since `RouterHealth` rides `control_wan`/
+`platform_wan` (unconditional match, D87), this reaches the dashboard with no dependency
+on `team_wan`'s own gated discovery — sidesteps D89's GUID-only-for-cross-team problem
+entirely for this specific consumer.
+
+**Classification, not a wire-level tag.** `team_partition` is the RAW partition set —
+D83's single-mechanism design means it mixes the node's own protected identity, an
+optional team name, and any ad-hoc direct-peer-tap names with no structural marker
+distinguishing them. `mesh_graph.js` classifies client-side: it subtracts every node
+identity it already knows about (its own + every peer's, from `RouterHealth.router`)
+from the set; whatever's left is treated as the team name(s) to color by. **Known,
+accepted edge case:** a team named identically to a real node's own identity string
+misclassifies as "no team" — not solved here, flagged in both the IDL comment and the JS.
+
+Verified end-to-end (real 3-process mesh: 1 control + 2 platform, `test_mesh_team_partition.py`,
+stable 3/3 + the full e2e suite 25/25): before any team is assigned, `team_partition` on
+the wire is exactly the protected-identity singleton; after `ADD_PARTICIPANT_PARTITION
+team_wan=TEAM_A` on both platforms, it becomes `{identity, "TEAM_A"}` on both
+`RouterHealth` directly and on the control node's own `ActRouterMeshStatus` aggregate —
+proving the field survives `PresenceMonitor`'s roster-copy path unmodified. **Not
+independently re-verified through WIS/the browser this pass** (same standing limitation
+as v1 — no browser in this environment); the classification logic and ring rendering were
+checked by hand-reading `mesh_graph.js`, not by watching a real page.
+
+## Interactivity (follow-on, 2026-07-21)
+
+Two additions, both pure front-end over the same `ActRouterMeshStatus` samples — no new
+subscription, no wire change:
+
+- **Node detail panel** — click any node for a side panel with its full `RouterHealth`:
+  role, overall state, presence, last-seen delta, route counts (routes / degraded / error),
+  derived team, the raw `team_partition` set, heartbeat seq, and a truncated `config_hash`.
+  Placeholder nodes (known only via a peer's roster) and the observer node show an
+  explanatory note instead. An open panel live-refreshes in place as new samples arrive.
+  All fields are read back from the `vis-network` `DataSet` (stashed on each node at ingest),
+  not re-parsed off the wire.
+- **Team filter** — the team legend chips are clickable: click one (or several) to
+  highlight only those teams' nodes and dim the rest; click again to remove; empty = show
+  all. The observer node stays full-opacity regardless (it's your own vantage point).
+
+**Same verification caveat as the ring:** no browser exists in this environment, so the
+panel/filter interactions have not been watched render. The logic (`vis-network`
+`DataSet.update({opacity})`, `Network` `selectNode`/`deselectNode` events, per-node stashed
+fields) was checked against vis-network's documented API and by hand-reading, and a naive
+brace/paren balance check passes — but it has not been exercised in a real browser.
 
 ## A real bug this scope change caught
 

@@ -1,0 +1,83 @@
+# e2e_presence_team.yaml — verifies RouterHealth.team_partition (the mesh-dashboard
+# team-grouping follow-on to Phase 16 v1, gui/mesh_dashboard/): does team_wan's live
+# participant_partition set (D83) actually ride the WAN heartbeat (control_wan/
+# platform_wan, unconditional match, D87) and flow untouched through PresenceMonitor's
+# roster copy into the ActRouterMeshStatus aggregate, for a real
+# ADD_PARTICIPANT_PARTITION-driven team assignment.
+#
+# Three-process shape sharing this one file: one control-role process (--role control)
+# plus two platform-role processes (--role platform, --node-name Platform_30 /
+# Platform_31) on distinct platform_lan domains (own app-LAN traffic never crosses) but
+# the SAME control_wan/platform_wan/team_wan WAN domain — one physical network, matching
+# control-platform.yaml's real topology (D85: team_wan stays its own participant,
+# separate from platform_wan).
+#
+# Domain placeholders substituted by test_mesh_team_partition.py's own render helper
+# (this fixture needs one more placeholder than conftest's generic render_config knows,
+# since two DIFFERENT renders of platform_lan are needed for the two platform processes —
+# same pattern as e2e_team_partition.yaml).
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role/--node-name
+
+router:
+  name: e2e-presence-team
+  admin_participant: platform_lan   # control-role process overrides via --admin-participant
+  presence_participant:
+    platform: platform_wan
+    control: control_wan
+
+types:
+  xml: harness/act/node_sim/datamodel/act_types.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: __DOMAIN_CONTROL_LAN__
+  control_wan:
+    role: control
+    domain: __DOMAIN_WAN__
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  platform_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+  team_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+    wan: true
+    # participant_partition omitted: defaults to the protected {"${node.name}"} entry
+    # alone (D83) — team membership starts disjoint, assigned at runtime by the test.
+
+routes:
+  - name: platform_team_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: default
+      output:
+        participant: team_wan
+        writer_qos: default
+    topics:
+      - name: PlatformData
+
+  - name: wan_team_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    source_side:
+      input:
+        participant: team_wan
+        reader_qos: default
+      output:
+        participant: platform_lan
+        writer_qos: default
+    topics:
+      - name: PlatformData

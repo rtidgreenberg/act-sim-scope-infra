@@ -395,11 +395,29 @@ int main(int argc, char **argv) {
         // (WAN) participant, ActRouterMeshStatus aggregate on the admin (LAN)
         // participant. Optional: no presence_participant in the config = no presence.
         // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
+        //
+        // D93 (mesh-dashboard team-grouping follow-on): the team-scoped WAN participant
+        // is handed to PresenceMonitor, which polls its LIVE DomainParticipantQos.partition
+        // at every heartbeat for RouterHealth.team_partition. Looked up DIRECTLY by its
+        // config-convention name "team_wan" — deliberately NOT via the is_wan flag, which
+        // is separately load-bearing (D83 protected-identity default + link-stats WAN-leg
+        // detection) and misleadingly named (every _wan participant is on the WAN; is_wan
+        // actually means "team-partition-scoped"). Disentangling that flag is its own task
+        // (docs/cpp_router/is-wan-flag-decomposition-task.md); this feature sidesteps it.
+        // Absent on a control node or any config without a team_wan; then team_partition
+        // is simply never populated (dds::core::null).
+        dds::domain::DomainParticipant team_wan_participant = dds::core::null;
+        for (const std::string &pname : registry.names()) {
+            if (pname == "team_wan") {
+                team_wan_participant = registry.get(pname);
+                break;
+            }
+        }
         std::unique_ptr<PresenceMonitor> presence;
         if (!cfg.presence_participant.empty()) {
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
-                    cfg.node_name, cfg.router_name));
+                    cfg.node_name, cfg.router_name, team_wan_participant));
         }
 
         // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the

@@ -66,11 +66,23 @@ public:
     // participant) carries the ActRouterMeshStatus aggregate. Conditions attach to aws
     // here — construct BEFORE aws.start()/enable_all() like every other condition owner
     // (D52 edge-trigger ordering).
+    //
+    // team_wan_participant (D93, mesh-dashboard team-grouping follow-on): the team-scoped
+    // WAN participant (config-convention name "team_wan"), whose LIVE
+    // DomainParticipantQos.partition this router polls at each heartbeat and copies into
+    // RouterHealth.team_partition (see publish_heartbeat). Deliberately a live poll of the
+    // real entity, not a read of the controller's config-mirrored ParticipantState —
+    // ground truth, no risk of drift between the two. router_main looks it up directly by
+    // name (NOT via the is_wan flag — that flag is separately load-bearing and
+    // misleadingly named; see design-decisions.md D93). dds::core::null when this process
+    // has no team_wan participant (a control node, or any config without one) — then
+    // team_partition is always empty, same as "no team".
     PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                     dds::domain::DomainParticipant wan_participant,
                     dds::domain::DomainParticipant lan_participant,
                     const std::string &node_name,
                     const std::string &router_name,
+                    dds::domain::DomainParticipant team_wan_participant = dds::core::null,
                     const std::string &health_topic = "RouterHealth",
                     const std::string &mesh_topic = "ActRouterMeshStatus");
 
@@ -107,6 +119,10 @@ private:
     std::string node_name_;
     std::string router_name_;
     std::string identity_; // "<node>/<router>" — the D74/D79 name, our RouterHealth key
+    // D93: polled live (qos().policy<Partition>().name()) at each heartbeat, never
+    // cached — see the constructor comment and publish_heartbeat. dds::core::null if this
+    // process has no team_wan participant.
+    dds::domain::DomainParticipant team_wan_participant_;
 
     dds::pub::Publisher wan_publisher_;
     dds::sub::Subscriber wan_subscriber_;

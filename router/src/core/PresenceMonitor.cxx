@@ -51,12 +51,14 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  dds::domain::DomainParticipant lan_participant,
                                  const std::string &node_name,
                                  const std::string &router_name,
+                                 dds::domain::DomainParticipant team_wan_participant,
                                  const std::string &health_topic,
                                  const std::string &mesh_topic)
         : aws_(aws),
           node_name_(node_name),
           router_name_(router_name),
           identity_(node_name + "/" + router_name),
+          team_wan_participant_(team_wan_participant),
           wan_publisher_(wan_participant),
           wan_subscriber_(wan_participant),
           health_topic_(wan_participant, health_topic),
@@ -111,6 +113,21 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     // here, where the roster lives. DEAD entries are included deliberately — a DEAD
     // edge ("lost this peer") is information a missing edge ("never saw it") is not.
     RouterHealth out = hb;
+    // D93: team_partition is a LIVE poll of the team_wan participant's actual
+    // DomainParticipantQos.partition, taken fresh on every heartbeat — never cached, never
+    // read from the controller's config-mirrored state. No lock needed: DDS entities are
+    // internally thread-safe for concurrent QoS reads, and team_wan_participant_ is set
+    // once at construction and never mutated after. null when there's no team_wan.
+    if (team_wan_participant_ != dds::core::null) {
+        dds::core::StringSeq names =
+                team_wan_participant_.qos().policy<dds::core::policy::Partition>().name();
+        for (const std::string &n : names) {
+            if (out.team_partition.size() == out.team_partition.max_size()) {
+                break; // same bounded-sequence cap as participant_partition itself
+            }
+            out.team_partition.push_back(n);
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         for (const auto &entry : roster_) {
