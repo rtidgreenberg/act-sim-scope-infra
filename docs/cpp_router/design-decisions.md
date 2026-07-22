@@ -4938,3 +4938,46 @@ best-effort status route (`PlatformPrimaryStatus`/`wan_status`) and a reliable e
 control-side consumer, and E1b asserts the summed per-peer `pushed_samples` clears the
 bellwether-only floor. The loop waits for that coverage (bounded by a 30 s deadline) so it
 cannot pass on early bellwether-only intervals before the legs attribute.
+## D96 — `platform_primary_status` is keyed by `msg.source`; `base_type` and every other route stay unkeyed (2026-07-22, accepted; user-directed, found while scaling the mesh dashboard demo to 3 platforms)
+
+**Context.** Scaling `gui/mesh_dashboard`'s demo mesh from 1 to 3 real `platform_sim.py`
+processes surfaced that `PlatformPrimaryStatus` collapses all platforms into one DDS
+instance: reading it on `control_lan` showed `matched_publications: 1` and exactly one
+visible value at a time, each platform's update overwriting the last, regardless of how
+many platforms were actively publishing. Root cause: `platform_primary_status` (like every
+other route's payload type — `control_command`, `platform_status`,
+`platform_detail_status`, `platform_data`, `contact_report`) wraps a shared `base_type`
+envelope (`harness_v2/datamodel/act_types.xml`) with no `@key`/`key="true"` anywhere, so
+every sample of every one of those types is, to DDS, the same single unkeyed instance.
+
+**Decision.** Key `platform_primary_status` specifically by `msg.source` (the publishing
+platform's own identity string, already present on every message) — narrow, matching what
+was asked; the other `base_type`-wrapped routes are untouched and stay unkeyed.
+
+**Implementation.** Two-level annotation, confirmed necessary by direct empirical test
+(a standalone XML + `rti.connextdds` `QosProvider`/`StructType.is_keyed()` check) before
+touching the real file — marking only the nested field is NOT sufficient in RTI's DDS-XML
+dialect:
+1. `base_type.source` gets `key="true"` (the actual key field; reusable — doesn't make
+   *any* containing struct keyed by itself).
+2. `platform_primary_status`'s `msg` member (the aggregate) ALSO gets `key="true"`, which
+   is what actually propagates `base_type`'s key into `platform_primary_status`'s own key.
+   Every other struct's `msg` member stays without `key`, so they remain unkeyed exactly
+   as before — confirmed via the same empirical check (`platform_primary_status.is_keyed()
+   == True`, `platform_status.is_keyed() == control_command.is_keyed() == False`).
+
+No router-side (C++) or route-config change needed — the route forwards this type in
+`dynamic_data` mode (generic `DynamicData` pass-through), so DDS's own per-key instance
+management does all the work transparently.
+
+**Verification.** Live: killed and relaunched the full 4-node demo mesh (Control_20 +
+Platform_30/31/32, each its own `router_main`) plus all 3 `platform_sim.py` processes so
+they'd load the updated type (a running process doesn't hot-reload its XML). Reading
+`PlatformPrimaryStatus` on `control_lan` afterward: 3 samples, `sources seen:
+{Platform_30, Platform_31, Platform_32}` — all three coexist, still via the same single
+matched publication (control's one re-publishing writer), confirming the fix is purely
+about DDS instance keying, not about needing multiple writers.
+
+**Not done (out of scope, unrequested):** the same fix for the other `base_type`-wrapped
+routes, which have the identical multi-source collapse risk in a real multi-platform
+deployment. Flagged in `gui/mesh_dashboard/README.md`; revisit if/when asked.

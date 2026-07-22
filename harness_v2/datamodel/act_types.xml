@@ -15,7 +15,12 @@ to use the software.
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.3.0/rti_routing_service.xsd" version="7.3.0">
     <types>
       <struct name="base_type">
-        <member name="source" type="string" stringMaxLength="100" />
+        <!-- `source` is `key="true"` so a struct can opt into being keyed by it (a
+             containing member must ALSO mark key="true" to propagate, see
+             platform_primary_status below); base_type itself stays reusable as-is for
+             every other struct, which don't mark their own `msg` member as a key and so
+             stay unkeyed exactly as before. -->
+        <member name="source" type="string" stringMaxLength="100" key="true" />
         <member name="source_type" type="string" stringMaxLength="100"/>
         <member name="destination" type="string" stringMaxLength="100" />
         <member name="session" type="byte" arrayDimensions="16"/>
@@ -31,7 +36,13 @@ to use the software.
         <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
       </struct>
       <struct name="platform_primary_status">
-        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+        <!-- Keyed by msg.source (D96): each platform's status is its own DDS instance
+             instead of all platforms colliding into one KEEP_LAST(1) value on
+             control_lan. `key="true"` here on the aggregate member propagates
+             base_type's key member (`source`) into this struct's key; confirmed
+             empirically (member-level key alone on base_type is NOT enough; RTI's XML
+             dialect requires this containing-member key annotation too). -->
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" key="true" />
       </struct>
       <struct name="platform_detail_status">
         <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
