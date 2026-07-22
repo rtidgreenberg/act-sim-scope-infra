@@ -4,7 +4,7 @@ Python port of the mechanism spikes/qos_alias/qos_alias_spike.py proved standalo
 driven through the real router_main binary (config/e2e_qos_alias.yaml): ONE router, route
 qos_alias_r1, named XML aliases on BOTH legs — reader_qos: wan_status / writer_qos:
 wan_event — plus both wan_*_udpv4_qos participant profiles applied to wan_in/wan_out. Uses
-the real production QoS libraries (harness/act/config/qos/{lan,wan}_qos_lib.xml,
+the real production QoS libraries (harness_v2/qos/{lan,wan}_qos_lib.xml,
 relay/qos_isc.xml) and real alias names, not a synthetic stand-in.
 
 Asserts the plan's E1/E2 evidence:
@@ -36,8 +36,8 @@ TYPE = "ExampleCommand"
 ROUTE = "qos_alias_r1"
 EXAMPLE_TYPES_XML = "router/config/example_types.xml"
 WAN_QOS_LIB_FILES = [
-    "harness/act/config/qos/lan_qos_lib.xml",
-    "harness/act/config/qos/wan_qos_lib.xml",
+    "harness_v2/qos/lan_qos_lib.xml",
+    "harness_v2/qos/wan_qos_lib.xml",
     "relay/qos_isc.xml",
 ]
 

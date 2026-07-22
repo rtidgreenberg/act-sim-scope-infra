@@ -25,7 +25,7 @@ router:
     control: control_wan
 
 types:
-  xml: harness/act/node_sim/datamodel/act_types.xml
+  xml: harness_v2/datamodel/act_types.xml
 
 participants:
   control_lan:

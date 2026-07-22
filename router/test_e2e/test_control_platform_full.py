@@ -48,8 +48,8 @@ PLATFORM_LAN_DOMAIN = 30
 PLATFORM_NODE = "Platform_30"  # config node.name; the control_command CFT parameter
 
 QOS_LIB_FILES = [
-    "harness/act/config/qos/lan_qos_lib.xml",
-    "harness/act/config/qos/wan_qos_lib.xml",
+    "harness_v2/qos/lan_qos_lib.xml",
+    "harness_v2/qos/wan_qos_lib.xml",
     "relay/qos_isc.xml",
 ]
 

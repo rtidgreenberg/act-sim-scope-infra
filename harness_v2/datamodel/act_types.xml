@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- 
+(c) Copyright, Real-Time Innovations, 2025.  All rights reserved.
+RTI grants Licensee a license to use, modify, compile, and create derivative
+works of the software solely for use with RTI Connext DDS. Licensee may
+redistribute copies of the software provided that all such copies are subject
+to this license. The software is provided "as is", with no warranty of any
+type, including any warranty for fitness for any purpose. RTI is under no
+obligation to maintain or support the software. RTI shall not be liable for
+any incidental or consequential damages arising out of the use or inability
+to use the software.
+-->
+
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.3.0/rti_routing_service.xsd" version="7.3.0">
+    <types>
+      <struct name="base_type">
+        <member name="source" type="string" stringMaxLength="100" />
+        <member name="source_type" type="string" stringMaxLength="100"/>
+        <member name="destination" type="string" stringMaxLength="100" />
+        <member name="session" type="byte" arrayDimensions="16"/>
+        <member name="payload" type="byte" sequenceMaxLength="100"/>
+      </struct>
+      <struct name="control_command">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="control_command_ack">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="platform_status">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="platform_primary_status">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="platform_detail_status">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="platform_data">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+      <struct name="contact_report">
+        <member name="msg" type="nonBasic" nonBasicTypeName="base_type" />
+      </struct>
+    </types>
+
+</dds>

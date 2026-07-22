@@ -38,11 +38,11 @@ control:
   target_router: platform-30-control-platform
 
 types:
-  xml: harness/act/node_sim/datamodel/act_types.xml
+  xml: harness_v2/datamodel/act_types.xml
 
 qos_libraries:
-  - harness/act/config/qos/lan_qos_lib.xml
-  - harness/act/config/qos/wan_qos_lib.xml
+  - harness_v2/qos/lan_qos_lib.xml
+  - harness_v2/qos/wan_qos_lib.xml
   - relay/qos_isc.xml
 
 qos_profiles:

@@ -27,7 +27,7 @@ TMP_ROOT = Path("/tmp/router_e2e")
 os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
 os.environ.setdefault("RTI_LICENSE_FILE", os.path.join(os.environ["NDDSHOME"], "rti_license.dat"))
 
-# The production qos_libraries: files (harness/act/config/qos/*.xml) are templated with
+# The production qos_libraries: files (harness_v2/qos/*.xml) are templated with
 # 14 env vars (peer locators + WAN tuning) and fail to parse without them. Loopback/test
 # values, validated by spikes/qos_alias/ (WAN_TIMEOUT_SEC must be > the hardcoded 30s
 # participant_liveliness_assert_period in wan_qos_lib.xml — D60/D65). Tests that load
