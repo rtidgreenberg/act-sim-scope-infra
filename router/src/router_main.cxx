@@ -295,6 +295,7 @@ int main(int argc, char **argv) {
             pc.domain = p.domain;
             pc.participant_name = router_identity;
             pc.is_wan = p.is_wan;
+            pc.use_spdp2 = p.use_spdp2;
             pc.partition_names = p.participant_partition;
             if (!p.qos_profile_alias.empty()) {
                 auto it = cfg.qos_profiles.find(p.qos_profile_alias);

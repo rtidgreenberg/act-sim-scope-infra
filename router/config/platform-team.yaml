@@ -35,7 +35,8 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    wan: true
+    wan: true      # D83: team-scoped protected-identity partition.
+    spdp2: true    # D78 (reinstated, D92 CORRECTION): SPDP2|SEDP for this WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (team disabled by default, D83) — team membership is added at runtime via
     # ADD_PARTICIPANT_PARTITION.

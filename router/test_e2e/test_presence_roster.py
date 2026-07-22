@@ -209,7 +209,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
         # --- E-R2 extension (D77): the heartbeats themselves carry the who-sees-who
         # edges (by name), so a single WAN observer (C2) can draw the node map — both
         # directions of the control<->platform edge visible from one topic.
-        wan_probe = Probe(wan)
+        wan_probe = Probe(wan, spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
         health_view = health_reader(wan_probe, provider)
         edges = wait_edges(
             health_view,
@@ -233,7 +233,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
 
         # --- E-P3 first (needs the platform router still alive as a bystander): a
         # heartbeat-withholding probe goes STALE, never DEAD, nothing torn down ---
-        stale_probe = Probe(wan)
+        stale_probe = Probe(wan, spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
         health_qos = dds.DataWriterQos()
         health_qos.reliability = dds.Reliability(kind=dds.ReliabilityKind.RELIABLE)
         health_qos.durability = dds.Durability(
@@ -348,7 +348,7 @@ def test_config_hash_drift(
     drift_hash = sha256_of(drift_path)
     assert drift_hash != expected
 
-    wan_probe = Probe(unique_domains["wan"])
+    wan_probe = Probe(unique_domains["wan"], spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
     drifter = None
     try:
         health_view = health_reader(wan_probe, provider)

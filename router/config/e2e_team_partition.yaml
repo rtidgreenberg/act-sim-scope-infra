@@ -35,6 +35,7 @@ participants:
     role: platform
     domain: __DOMAIN_WAN__
     wan: true
+    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
   - name: platform_team_to_wan

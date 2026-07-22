@@ -60,6 +60,9 @@ participants:
     role: control
     domain: 200
     qos: control_wan_udpv4_qos
+    spdp2: true  # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
+                 # Decoupled from `wan:` — SPDP2 for every WAN participant; `wan:` (D83
+                 # protected-identity partition) stays team_wan-only.
     # No wan: true here (deliberately, D87): control_wan/platform_wan are NOT
     # participant-partition-scoped — they stay on the default partition so
     # control<->platform matching is unconditional, exactly as Phase 7 shipped it.
@@ -76,6 +79,7 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
+    spdp2: true  # D78 (reinstated): SPDP2|SEDP for this WAN participant.
   # D85: a distinct WAN participant from platform_wan — separate participant
   # partitions mean team_wan and platform_wan exchange zero SEDP endpoint discovery
   # with each other (D18/D73/D85), unlike a merged shared participant would.
@@ -83,7 +87,8 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    wan: true
+    wan: true      # D83: team-scoped protected-identity partition (team_wan-only).
+    spdp2: true    # D78 (reinstated): SPDP2|SEDP — same as every WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (D83 — "team disabled by default" falls out of the shared config itself).
     # Team membership / direct-peer taps are added at runtime via

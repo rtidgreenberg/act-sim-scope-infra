@@ -138,7 +138,7 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
     alive = lambda: (control_proc.is_alive() and proc_a.is_alive()  # noqa: E731
                      and proc_b.is_alive())
 
-    wan_probe = Probe(domains["wan"])
+    wan_probe = Probe(domains["wan"], spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
     control_lan_probe = Probe(domains["control_lan"])
     lan_a = Probe(unique_domains["platform_lan"])
     lan_b = Probe(unique_domains["platform_lan"] + 1000)

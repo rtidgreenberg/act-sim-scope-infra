@@ -30,18 +30,35 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
         // D83: initial partition name set (protected identity + optional team entries).
         qos << dds::core::policy::Partition(cfg.partition_names);
     }
-    // D78's SPDP2|SEDP proposal for WAN participants is NOT applied here — retracted by
-    // D87 (empirical finding): SPDP2 combined with this registry's disabled-then-
-    // delayed-enable startup sequence (D52; every real participant goes through it)
-    // produces asymmetric, non-retrying discovery failure — the second-enabled
-    // participant never discovers the first, reproducible 3/3 against a raw
-    // rti.connextdds repro of the same create-disabled/enable-later sequence, on a
-    // domain where immediate-enable SPDP2 (no D52 delay) discovers symmetrically every
-    // time. D78's spikes only ever exercised SPDP2 with immediate-enable participants,
-    // so this interaction was never covered. WAN participants stay on plain SPDP
-    // (cfg.is_wan is still used for the D83 protected-identity-partition default) until
-    // the root cause is understood — see docs/connext-ai-issues/connext-ai-issues.md
-    // and design-decisions.md D87.
+    if (cfg.use_spdp2) {
+        // D78 (reinstated): WAN participants use SPDP2 | SEDP. D87 had retracted this,
+        // blaming a disabled-then-delayed-enable (D52) discovery failure — but the D92
+        // CORRECTION (2026-07-22, design-decisions.md) shows that failure was a
+        // rig/measurement artifact, not an SPDP2 defect: loopback has no multicast and the
+        // captures were lo-only, the "failure" was largely a fragile success metric, and a
+        // controlled cross-process harness discovers 66/66. A clean wire capture also
+        // confirms SPDP2 periodically re-announces to unmatched peers (writer 0x00010082 at
+        // participant_announcement_period) — i.e. it self-heals. D78's measured wins stand
+        // (~30x faster retarget, lower idle bandwidth than plain SPDP). The one real
+        // residual is SPDP2's probabilistic post-match settle window (D78's accepted
+        // residual) — absorbed by D91's verification-gated (never timing-gated) route
+        // enablement, not assumed away here. Not yet validated over a genuine multi-host WAN
+        // (all evidence to date is single-host/loopback) — see design-decisions.md D92.
+        //
+        // Gated on `use_spdp2` (YAML `spdp2: true`), NOT `is_wan`: `is_wan` is the D83
+        // protected-identity-partition flag and is team_wan-only (D87 deliberately did not
+        // set it on control_wan/platform_wan). The two concerns are independent — every WAN
+        // participant selects SPDP2, but only team-scoped ones take the D83 partition.
+        rti::core::policy::DiscoveryConfig discovery =
+            qos.policy<rti::core::policy::DiscoveryConfig>();
+        discovery.builtin_discovery_plugins(
+            rti::core::policy::DiscoveryConfigBuiltinPluginKindMask::SPDP2() |
+            rti::core::policy::DiscoveryConfigBuiltinPluginKindMask::SEDP());
+        qos << discovery;
+    }
+    // Participants without `spdp2: true` stay on the default plain SPDP (D78): LAN
+    // participants never retarget partition (D20), so there is no reason to take on SPDP2's
+    // settle-time risk there.
     return qos;
 }
 

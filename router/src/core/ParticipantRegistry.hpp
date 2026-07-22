@@ -52,15 +52,18 @@ public:
         // entry + optional config-seeded team entries), applied to
         // DomainParticipantQos.partition at creation. Empty = default (unpartitioned).
         std::vector<std::string> partition_names;
-        // D78/D83: true for a WAN-facing participant — gates the protected-identity
+        // D83: true for a team-scoped WAN participant — gates the protected-identity
         // partition default and is queried back via is_wan() for WAN-leg flagging
-        // (RouteEntityFactory's link-stats registration). D78's proposed
-        // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP for this class is NOT
-        // applied by make_participant_qos() — retracted by D87 pending a fix for its
-        // interaction with the disabled-startup sequence (D52); still the target once
-        // that's resolved (see spikes/spdp2_partition_visibility/, design-decisions.md
-        // D87). LAN participants stay plain SPDP regardless.
+        // (RouteEntityFactory's link-stats registration). team_wan-only in current configs
+        // (D87: setting it on control_wan/platform_wan broke their default-partition match).
+        // NOTE: this does NOT select SPDP2 — that is `use_spdp2` below (decoupled).
         bool is_wan = false;
+        // D78 (reinstated; D87 retraction reversed by the D92 CORRECTION 2026-07-22): select
+        // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP in make_participant_qos().
+        // Set for every WAN-facing participant (control_wan/platform_wan/team_wan) via YAML
+        // `spdp2: true`. Independent of is_wan so all WAN participants get SPDP2 while only
+        // team-scoped ones take the D83 partition. LAN participants leave it false (plain SPDP).
+        bool use_spdp2 = false;
     };
 
     // autoenable=false creates participants disabled for the D52 disabled-startup

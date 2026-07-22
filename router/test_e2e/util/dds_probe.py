@@ -24,9 +24,18 @@ def _types():
 class Probe:
     """One UDPv4-only DomainParticipant on `domain`, for app-side pub/sub in a test."""
 
-    def __init__(self, domain, participant_name=None, role_name=None):
+    def __init__(self, domain, participant_name=None, role_name=None, spdp2=False):
         qos = dds.DomainParticipant.default_participant_qos
         qos.transport_builtin = dds.TransportBuiltin.udpv4
+        # A probe that shares a domain with a router WAN participant must run the SAME
+        # discovery protocol: SPDP2 and plain SPDP do not interoperate (D78/D94). Router
+        # WAN participants use SPDP2|SEDP (D94), so a WAN-domain probe sets spdp2=True.
+        if spdp2:
+            dc = qos.discovery_config
+            dc.builtin_discovery_plugins = (
+                dds.DiscoveryConfigBuiltinPluginKindMask.SPDP2
+                | dds.DiscoveryConfigBuiltinPluginKindMask.SEDP)
+            qos.discovery_config = dc
         # participant_name/role_name (EntityName, D74) let a probe pose as a router
         # (name="<node>/<router>", role_name="act.router") so the D15 same-node-ignore
         # path can be exercised off the new identity field. The old user_data tag is

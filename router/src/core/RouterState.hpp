@@ -111,14 +111,16 @@ struct ParticipantState {
     // place via set_qos thereafter.
     std::vector<std::string> participant_partition;
     std::string qos_profile_alias;
-    // YAML participants.<name>.wan (D78/D83): true for a WAN-facing participant — gates
+    // YAML participants.<name>.wan (D83): true for a team-scoped WAN participant — gates
     // the protected-identity partition default and WAN-leg flagging for link-stats
-    // (RouteEntityFactory). D78's SPDP2|SEDP discovery-plugin selection for WAN
-    // participants is proposed but NOT applied yet — retracted by D87 pending a root-cause
-    // fix for its interaction with the D52 disabled-startup sequence; still the target for
-    // this participant class once that lands (see spikes/spdp2_partition_visibility/ and
-    // design-decisions.md D87). Explicit, not name-sniffed.
+    // (RouteEntityFactory). team_wan-only in current configs (D87). Explicit, not
+    // name-sniffed. Does NOT select SPDP2 — see use_spdp2.
     bool is_wan = false;
+    // YAML participants.<name>.spdp2 (D78, reinstated; D87 retraction reversed by the D92
+    // CORRECTION 2026-07-22): select SPDP2|SEDP discovery for this participant. Set on every
+    // WAN-facing participant (control_wan/platform_wan/team_wan). Decoupled from is_wan so
+    // all WAN participants use SPDP2 while only team-scoped ones take the D83 partition.
+    bool use_spdp2 = false;
 };
 
 // Mirrors RouterAdminTypes.idl's RouterParticipantStatus.participant_partition bound

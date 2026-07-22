@@ -206,6 +206,9 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             ps.role = get_str(p, "role");
             ps.qos_profile_alias = get_str(p, "qos");
             ps.is_wan = p["wan"] && p["wan"].as<bool>();
+            // D78 (reinstated): SPDP2 discovery for WAN participants, decoupled from `wan`
+            // (is_wan is the D83 team-scope flag; SPDP2 applies to every WAN participant).
+            ps.use_spdp2 = p["spdp2"] && p["spdp2"].as<bool>();
 
             // participant_partition (D83): a sequence of names, or a single scalar name
             // for convenience — either way the ${node.name} token is substituted (same

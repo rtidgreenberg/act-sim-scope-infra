@@ -31,12 +31,14 @@ participants:
   control_wan:
     role: control
     domain: __DOMAIN_WAN__
+    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
   platform_wan:
     role: platform
     domain: __DOMAIN_WAN__
+    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
   - name: platform_primary_status

@@ -4644,3 +4644,193 @@ legend), `gui/mesh_dashboard/README.md` ("Team-membership ring" section replaces
 "no team grouping yet" known-limitation line), `implementation-plan.md` Phase 16 section,
 new `docs/cpp_router/is-wan-flag-decomposition-task.md` (+ its README index entry), this
 entry.
+
+## D92 — D87's SPDP2 delayed-enable failure does not reproduce in isolation; the real risk is a cold-start peer-discovery race shared by plain SPDP and SPDP2, not an SPDP2-specific defect (2026-07-21, accepted; answers `spdp2-and-boot-init-tasks.md` Task 1, does not reverse D87)
+
+**Context.** D87 retracted D78's SPDP2 proposal on an unsaved "minimal repro" claiming a
+deterministic, always-one-direction, never-self-healing discovery failure when one of two
+SPDP2 participants is created disabled then `enable()`d after a delay (D52's real
+`ParticipantRegistry` sequence). Task 1 of `spdp2-and-boot-init-tasks.md` asked for a fresh,
+saved repro, a wire-level root cause, and a go/no-go before Task 2 assumed SPDP2's timing
+model. `spikes/spdp2_delayed_enable/` is that repro.
+
+**Finding 1 — D87's claim does not reproduce with two participants in one process, and its
+core causal attribution (the D52 disabled-then-enable sequence) is wrong.** 27/27 in-process
+trials (delays 20ms-45s, plus a 90s extended hold) discovered symmetrically and quickly. To
+isolate whether the disabled-then-`enable()` dance is the cause, the cross-process runner
+was re-run with `enable_mode=immediate` (create the participant already autoenabled after
+the stagger, never touching `ManuallyEnable`/`enable()`): the failure persisted at a
+comparable rate (SPDP2 6/8, plain SPDP 4/8) — so the disabled-then-enable mechanism is
+exonerated. D87's "immediate autoenable discovers symmetrically every time" was almost
+certainly an in-process measurement (the case that never fails here); the variable it missed
+is the **process boundary**, not the enable mode.
+
+**Finding 2 — a real, intermittent, non-self-healing failure DOES appear once the two
+participants are genuinely separate OS processes (matching real router deployment), at a
+statistically indistinguishable combined rate under SPDP2 (10/18 reps, ~56%, across two
+batches) and plain SPDP (10/18 reps, ~56%, across two batches).** Because plain SPDP failed
+at the same rate, this is **not an SPDP2-specific protocol defect** — D73's "plain SPDP
+self-heals in ~30s" measurement was of an *already-discovered* peer's ongoing announcement
+resuming after a partition retarget, not of two participants finding each other cold for the
+first time. Cold-start discovery, confirmed by wire capture, uses the same unicast-only,
+fixed-candidate-port bootstrap mechanism for both plain SPDP and SPDP2 on this build (no
+multicast traffic was observed at all) — that shared mechanism, not either protocol's
+periodic-resend policy, is where the race lives. A candidate workaround
+(`participant_announcement_period=2s` instead of AUTO/30s) did not reduce the failure rate,
+consistent with the race being about the initial bootstrap window, not the retry cadence.
+
+**Finding 3 — a host-load confound was found mid-run and then specifically re-tested: the
+failure rate held up across a ~10x load swing, weakening (not eliminating) the theory that
+it's purely a shared-VM artifact.** Batch 1 ran while this VM had 6 concurrent `claude`
+processes plus an unrelated `pytest` run active, load average 18-22 on 10 cores. Batch 2
+was a direct re-run of both protocols requested afterward specifically to test that theory;
+load had dropped to ~9-13 at its start and fell to ~2-6 by its end as other sessions'
+work finished (logged per-rep). **Failures occurred at every load level observed, including
+the two lowest-load reps in the whole spike (load 2.12 and 4.20, both plain SPDP, both
+failed)** — the failure rate did not visibly track the load drop. This VM has no truly idle
+baseline available (multiple Claude Code sessions run here as steady state, not just during
+batch 1), so a single-tenant-host control was never possible, and the sample (18 reps/
+protocol) isn't large enough to fully rule out a residual load effect — but the persistence
+across a 10x load range is evidence this is closer to a real, load-largely-independent
+cold-start discovery race than a pure contention artifact.
+
+**Decision.** SPDP2 stays retracted (D87's `ParticipantRegistry.cxx` decision is
+unchanged) — nothing here shows SPDP2 is safe to re-adopt. But the reasoning updates: the
+risk is not "SPDP2's handshake breaks under delayed enable," it's "cold-start peer
+discovery between two independently-booting processes can race and fail to converge at
+all, for either discovery protocol, and does not obviously self-heal within the timescales
+tested." This is directly relevant to Task 2 and to D91: D91's decision to gate
+`team_wan` route enablement on a **positive verification signal instead of elapsed time**
+is reinforced by this finding, not contradicted by it — a timing-margin heuristic would
+have been exactly the wrong bet given how unpredictable cold-start convergence turns out to
+be. Task 2's still-open boot-storm-shape measurement should account for host
+process-scheduling sensitivity, not just wire bandwidth.
+
+**Consequences.** No code changes — `ParticipantRegistry.cxx` already reflects D87's SPDP2
+retraction and is untouched. `docs/product-gaps.md` is deliberately NOT updated yet: even
+though the re-run (Finding 3) weakens the pure-load explanation, this VM never provided a
+true single-tenant control, so the ~56% number is still not cleanly attributable to an RTI
+behavior gap versus residual environmental noise. Follow-ups, not yet scheduled: (a) if a
+genuinely idle/dedicated host becomes available, one more confirmation run would let this
+become a `docs/product-gaps.md` entry (cold-start discovery has no positive-confirmation
+API, only best-effort timing) and would directly inform Task 2's verification-gate design
+(D91) with a concrete "how long can this actually take" number instead of an assumed
+plain-SPDP ~30s ceiling; (b) the Connext MCP's claim that SPDP2 periodically resends
+bootstrap announcements to unmatched peers at
+`participant_announcement_period` did not hold in these captures — pending one more clean
+run to rule out Finding 3 suppressing an expected resend, log to
+`docs/connext-ai-issues/connext-ai-issues.md`.
+
+### D92 CORRECTION (2026-07-22, controlled re-run) — the ~56% cross-process failure does NOT reproduce; it was a rig/measurement artifact, and follow-up (b) is resolved the OTHER way (MCP was right)
+
+A controlled re-run this session materially corrects Findings 2 and 3 and resolves both
+follow-ups. **Findings 1 (in-process 27/27) is unchanged and reconfirmed.** New runner:
+`spikes/spdp2_delayed_enable/xproc_index_probe.py` (subprocess-launched, **fresh domain per
+rep**, logs each participant's assigned `participant_id` and per-rep load).
+
+- **66/66 cross-process reps discovered bidirectionally** (SPDP2 announce=2s: 10+12+32
+  across quiet and 4-way-concurrent batches; plain SPDP default: 12), load 0.24–4.76.
+  **Zero failures.** D92's ~56% (Finding 2) did not reproduce even at load comparable to
+  D92's own lowest failing reps.
+- **Three rig problems explain the original number, none of them a discovery defect:**
+  1. **Metric fragility.** The first instrumented run read 10/10 "FAIL" purely because both
+     workers held `hold_s` from their *own* enable, so A (delay 0) closed ~5 s before B
+     (delay 5) and B's *final* participant read saw A already gone. The raw first-sighting
+     data showed both sides *had* discovered (A@~5000 ms when B came up, B@~50 ms after its
+     own enable). The original `cross_process_participant.py` avoided this by breaking on
+     first sight ("ever-seen"); switching back to that metric flipped 10/10 "FAIL" → pass.
+  2. **Unrepresentative discovery path.** The spike runs over `lo`, which is **not
+     multicast-capable on this VM** (`ip link` flags `0x9`, no `IFF_MULTICAST`; only
+     `enp0s3`/`docker0` carry it), with **no `initial_peers`** — so discovery falls back to
+     the default localhost descriptor `builtin.udpv4://127.0.0.1` probing participant IDs
+     **0..4** (confirmed with the Connext MCP). That is neither production path (LAN
+     multicast, or WAN routers with explicit `initial_peers`). Assigned indices were always
+     0/1, so the "index > 4 outside the default probe range" structural artifact is ruled
+     out — but the path itself is a fallback production wouldn't rely on.
+  3. **Capture-location bias.** "No multicast observed at all" (Finding 2) came from
+     capturing **only `lo`**; multicast to `239.255.0.1` egresses `enp0s3`/`docker0` and can
+     never appear in a `lo` capture. The absence was a measurement artifact, not evidence
+     that discovery was unicast-only.
+- **Best explanation for the original ~56%:** batch-1 extreme load (18–22) **plus**
+  uncontrolled manual orchestration (domain/port reuse across hand-run reps, launch-order
+  jitter) **plus** metric fragility. *Caveat:* load 18–22 could not be faithfully
+  reproduced here without an external CPU stressor (avoided on this shared VM), so extreme
+  load is not fully exonerated as a contributor — but it is clearly not *sufficient*, since
+  controlled reps pass at every load level reached.
+- **Follow-up (b) RESOLVED — the opposite way. Do NOT log the MCP as wrong; the prior
+  "no periodic resend" wire finding was the error.** A clean `lo` capture of a lonely SPDP2
+  participant (`announce_period=2s`, 20 s hold, dumpcap) shows the SPDP2 participant writer
+  (`0x00010082`) emitting a dense initial burst (t+0–2 s) followed by a **steady ~9 packets
+  every 2 s through the full window** — i.e., SPDP2 *does* periodically resend participant
+  announcements to unmatched configured peers at `participant_announcement_period`, exactly
+  as the MCP stated. The earlier "bootstrap burst is bounded and never resumes" finding is
+  refuted; it was a `lo`-only capture, likely at the default 30 s announce period where a
+  short hold shows only the initial burst. (Plain SPDP emitted 0 RTPS on `lo` in the same
+  setup — consistent with classic SPDP using multicast, off-`lo`, for the not-yet-discovered
+  case; not chased further.)
+- **Follow-up (a):** no longer blocked on an idle host — controlled orchestration, not a
+  single-tenant baseline, was the missing control.
+
+**What stands unchanged:** the go/no-go is unaffected — **SPDP2 stays retracted** here on
+the D78/D87 grounds; this correction shows the *test* was unsound, not that SPDP2 is being
+re-adopted. **D91** (verification-gated, never timing-gated, route enablement) is likewise
+unaffected — still the right design. **What weakens:** the technical case *against* SPDP2 is
+now thinner still (delayed-enable bug exonerated in D92; periodic self-heal now positively
+confirmed) — but re-adopting SPDP2 is a separate decision with its own D78/D87 history and is
+explicitly **not** made here. `docs/product-gaps.md` remains un-updated (correct call):
+there is no reproducible cold-start gap to record.
+
+## D94 — SPDP2 re-adopted for WAN participants (reverses D87, reinstates D78); selection moved to an explicit `spdp2` flag decoupled from the D83 `wan:`/is_wan flag (2026-07-22, accepted; user-directed, follows the D92 CORRECTION)
+
+**Context.** The D92 CORRECTION (2026-07-22) cleared the technical grounds D87 used to
+retract D78's "WAN participants use SPDP2 | SEDP" decision: the disabled-then-delayed-enable
+failure was exonerated in D92, the ~56% cross-process failure did not reproduce under a
+controlled harness (66/66), and a clean wire capture confirmed SPDP2 periodically
+re-announces to unmatched peers (self-heals). With the blocker gone and D78's measured wins
+intact (~30x faster retarget, lower idle bandwidth than plain SPDP), SPDP2 is re-adopted.
+
+**Decision.** WAN participants use `SPDP2 | SEDP`; LAN participants stay on plain SPDP.
+Applied to **all** WAN participants — `control_wan`, `platform_wan`, and `team_wan` — per
+D78 (not just the partition-retargeting `team_wan`), so WAN domain 200 runs a single
+discovery protocol rather than a mix (D78's non-interoperability note: SPDP2 and plain SPDP
+do not interoperate, so participants that must discover each other run the same one).
+
+**Implementation.** SPDP2 selection is a **new explicit `spdp2: true` participant flag**
+(`ParticipantState::use_spdp2` / `ParticipantRegistry::Config::use_spdp2`), parsed in
+`RouteConfigParser`, threaded through `router_main`, applied in
+`ParticipantRegistry::make_participant_qos()` via
+`discovery_config.builtin_discovery_plugins = SPDP2() | SEDP()`. It is **deliberately
+decoupled from `is_wan`/YAML `wan:`**, which remains the D83 team-scoped
+protected-identity-partition flag (team_wan-only; D87 showed setting it on
+control_wan/platform_wan breaks their default-partition match). The two concerns are now
+independent: every WAN participant selects SPDP2; only team-scoped ones take the D83
+partition. Config: `spdp2: true` added to the WAN participants in `control-platform.yaml`
+and `platform-team.yaml`.
+
+**Verification.** Build clean; the 4 registered ctest suites and the standalone discovery
+smoke test pass. A live `router_main` run (minimal fixture, `platform_lan` plain +
+`platform_wan spdp2: true`, wire capture on `lo`) confirmed the full chain end-to-end:
+`platform_wan` emits the SPDP2 participant writer `0x00010082` on the WAN domain (202) while
+`platform_lan` emits the plain-SPDP writer `0x000100c2` on the LAN domain (31) — 54 packets
+each, same process.
+
+**Standing caveats (unchanged from D92).** (1) Not yet validated over a genuine multi-host
+WAN — all evidence to date is single-host/loopback. (2) SPDP2's probabilistic post-match
+settle window (D78's accepted residual) is real; it is absorbed by D91's verification-gated
+(never timing-gated) route enablement, not assumed away.
+
+**Follow-up #1 (e2e fixtures) — DONE (2026-07-22).** The two-router, production-shaped e2e
+fixtures now run SPDP2 on their WAN participants: `spdp2: true` added to `control_wan`/
+`platform_wan`/`team_wan` in `e2e_control_command`, `e2e_link_stats`, `e2e_platform_status`,
+`e2e_presence`, `e2e_presence_team`, and `e2e_team_partition`. Because SPDP2 and plain SPDP
+do not interoperate, the Python **probes that share the WAN domain** were switched to SPDP2
+too — `util/dds_probe.py::Probe` gained an `spdp2=` flag, set on the WAN-domain probes in
+`test_presence_roster` and `test_mesh_team_partition`. Full e2e suite: **25 passed in 163.5s,
+identical to the pre-change baseline (25 passed, 163.2s)** — so SPDP2's settle window does
+**not** destabilize e2e timing. (Those SPDP2-only WAN probes are also a positive check that
+the router WAN participants are genuinely SPDP2: a plain-SPDP router would be invisible to
+them and the tests would fail.) **Deliberately NOT flipped:** the synthetic `wan_in`/
+`wan_out` single-process fixtures (`e2e_partition`/`test_wan_partition`, `e2e_admin_commands`,
+`e2e_auto_qos`, `e2e_platform_events`, `e2e_qos_alias`, `e2e_same_node_ignore`) — those are
+router↔Python-probe forwarding tests, not the production WAN router↔router topology, so
+flipping them would only add non-interop bookkeeping with no production-fidelity gain.
