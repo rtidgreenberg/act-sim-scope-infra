@@ -52,12 +52,13 @@ public:
         // entry + optional config-seeded team entries), applied to
         // DomainParticipantQos.partition at creation. Empty = default (unpartitioned).
         std::vector<std::string> partition_names;
-        // D83: true for a team-scoped WAN participant — gates the protected-identity
-        // partition default and is queried back via is_wan() for WAN-leg flagging
-        // (RouteEntityFactory's link-stats registration). team_wan-only in current configs
-        // (D87: setting it on control_wan/platform_wan broke their default-partition match).
+        // on_wan (is_wan decomposition, 2026-07-22): true for a participant whose route legs
+        // are on the WAN. Queried back via on_wan() for WAN-leg flagging (RouteEntityFactory's
+        // link-stats registration). Set on EVERY WAN participant (control_wan/platform_wan/
+        // team_wan). The registry does NOT carry the team_scoped flag — that concept
+        // (protected-identity partition) lives on ParticipantState and never reaches here.
         // NOTE: this does NOT select SPDP2 — that is `use_spdp2` below (decoupled).
-        bool is_wan = false;
+        bool on_wan = false;
         // D78 (reinstated; D87 retraction reversed by the D92 CORRECTION 2026-07-22): select
         // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP in make_participant_qos().
         // Set for every WAN-facing participant (control_wan/platform_wan/team_wan) via YAML
@@ -80,12 +81,12 @@ public:
 
     const std::vector<std::string> &names() const { return names_; }
 
-    // The Config::is_wan this participant was created with (false for an unknown name).
+    // The Config::on_wan this participant was created with (false for an unknown name).
     // Lets a consumer (e.g. RouteEntityFactory's WAN-leg flagging for link-stats
-    // registration) recognize EVERY WAN-facing participant — not just one distinguished
-    // "the WAN participant" — now that a node can have more than one (platform_wan and
-    // team_wan, D85).
-    bool is_wan(const std::string &name) const;
+    // registration) recognize EVERY WAN participant — not just one distinguished
+    // "the WAN participant" — now that a node can have more than one (control_wan,
+    // platform_wan and team_wan, D85).
+    bool on_wan(const std::string &name) const;
 
     // Enables every participant and, recursively, its builtin readers plus any child
     // entities created while disabled. Safe to call once after conditions are attached
@@ -95,7 +96,7 @@ public:
 private:
     std::vector<std::string> names_;
     std::map<std::string, dds::domain::DomainParticipant> participants_;
-    std::map<std::string, bool> is_wan_;
+    std::map<std::string, bool> on_wan_;
 };
 
 } // namespace router

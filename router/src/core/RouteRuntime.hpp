@@ -95,7 +95,7 @@ public:
     // invoked from AsyncWaitSet worker threads and must be thread-safe (they post to the
     // controller's MPSC queue). manual_liveliness enables upstream-liveliness
     // propagation (derived MANUAL kind, D42).
-    // reader_is_wan/writer_is_wan (Phase 9, D81): set by the factory when the endpoint's
+    // reader_on_wan/writer_on_wan (Phase 9, D81): set by the factory when the endpoint's
     // participant is the WAN participant — collect_wan_stats then polls that leg's
     // per-matched-endpoint protocol statuses. Both false = never registered (no WAN leg).
     RouteTopicRuntime(dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
@@ -106,7 +106,7 @@ public:
                       bool manual_liveliness = false,
                       std::function<void(bool, std::int32_t)> on_match
                               = std::function<void(bool, std::int32_t)>(),
-                      bool reader_is_wan = false, bool writer_is_wan = false)
+                      bool reader_on_wan = false, bool writer_on_wan = false)
         : reader_(reader),
           writer_(writer),
           publisher_(publisher),
@@ -120,8 +120,8 @@ public:
           on_qos_warning_(on_qos_warning),
           manual_liveliness_(manual_liveliness),
           on_match_(on_match),
-          reader_is_wan_(reader_is_wan),
-          writer_is_wan_(writer_is_wan) {
+          reader_on_wan_(reader_on_wan),
+          writer_on_wan_(writer_on_wan) {
         using dds::core::status::StatusMask;
         StatusMask reader_mask = StatusMask::requested_incompatible_qos()
                 | StatusMask::subscription_matched();
@@ -135,7 +135,7 @@ public:
         writer_status_->handler([this]() { on_writer_status(); });
     }
 
-    bool has_wan_leg() const override { return reader_is_wan_ || writer_is_wan_; }
+    bool has_wan_leg() const override { return reader_on_wan_ || writer_on_wan_; }
 
     // Poll the WAN leg(s)' per-matched-endpoint reliable-protocol statuses, resolve each
     // peer via the middleware discovery DB (D81 item 1 — no roster), self-compute interval
@@ -144,10 +144,10 @@ public:
     // dispatcher's attach/detach, so the baseline maps need no lock. The pump handler on
     // the AWS worker never touches them.
     void collect_wan_stats(LinkStatsSink &sink) override {
-        if (writer_is_wan_) {
+        if (writer_on_wan_) {
             poll_writer_wan_stats(writer_, writer_prev_, sink);
         }
-        if (reader_is_wan_) {
+        if (reader_on_wan_) {
             poll_reader_wan_stats(reader_, reader_prev_, sink);
         }
     }
@@ -297,8 +297,8 @@ private:
 
     // Phase 9 (D81): which leg is on the WAN participant, and the delta baselines. Touched
     // only by collect_wan_stats on the controller strand.
-    bool reader_is_wan_ = false;
-    bool writer_is_wan_ = false;
+    bool reader_on_wan_ = false;
+    bool writer_on_wan_ = false;
     std::map<std::string, WriterTotals> writer_prev_;
     std::map<std::string, ReaderTotals> reader_prev_;
 };

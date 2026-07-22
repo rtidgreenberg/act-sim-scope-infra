@@ -227,16 +227,16 @@ struct Fixture {
         v.push_back(p);
         return v;
     }
-    // D83: a WAN participant already carrying its protected node-identity entry, exactly
-    // as RouteConfigParser would seed it — used only by the participant-partition tests
-    // so the default participants() (and its participants.size()==1 assertion) stays
+    // D83: a team-scoped participant already carrying its protected node-identity entry,
+    // exactly as RouteConfigParser would seed it — used only by the participant-partition
+    // tests so the default participants() (and its participants.size()==1 assertion) stays
     // untouched for every other test.
     static std::vector<ParticipantState> participants_with_team_wan() {
         std::vector<ParticipantState> v = participants();
         ParticipantState wan;
         wan.name = "team_wan";
         wan.domain = 200;
-        wan.is_wan = true;
+        wan.team_scoped = true;
         wan.participant_partition.push_back(identity().node_name); // protected identity
         v.push_back(wan);
         return v;

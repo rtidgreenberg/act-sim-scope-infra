@@ -45,10 +45,11 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
         // enablement, not assumed away here. Not yet validated over a genuine multi-host WAN
         // (all evidence to date is single-host/loopback) — see design-decisions.md D92.
         //
-        // Gated on `use_spdp2` (YAML `spdp2: true`), NOT `is_wan`: `is_wan` is the D83
-        // protected-identity-partition flag and is team_wan-only (D87 deliberately did not
-        // set it on control_wan/platform_wan). The two concerns are independent — every WAN
-        // participant selects SPDP2, but only team-scoped ones take the D83 partition.
+        // Gated on `use_spdp2` (YAML `spdp2: true`), independent of team_scoped and on_wan:
+        // team_scoped is the D83 protected-identity-partition flag (team_wan-only); on_wan is
+        // the link-stats WAN-leg flag (every WAN participant). SPDP2 tracks the same set as
+        // on_wan today, but the choice of discovery protocol and the link-stats concern stay
+        // separate flags so neither silently changes when the other is retuned.
         rti::core::policy::DiscoveryConfig discovery =
             qos.policy<rti::core::policy::DiscoveryConfig>();
         discovery.builtin_discovery_plugins(
@@ -85,7 +86,7 @@ ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
             dds::domain::DomainParticipant dp(cfg.domain, make_participant_qos(cfg, provider));
             participants_.emplace(cfg.name, dp);
             names_.push_back(cfg.name);
-            is_wan_.emplace(cfg.name, cfg.is_wan);
+            on_wan_.emplace(cfg.name, cfg.on_wan);
             Log::info("participant_created",
                       {{"name", cfg.name},
                        {"domain", std::to_string(cfg.domain)},
@@ -110,9 +111,9 @@ dds::domain::DomainParticipant ParticipantRegistry::get(const std::string &name)
     return participants_.at(name);
 }
 
-bool ParticipantRegistry::is_wan(const std::string &name) const {
-    std::map<std::string, bool>::const_iterator it = is_wan_.find(name);
-    return it != is_wan_.end() && it->second;
+bool ParticipantRegistry::on_wan(const std::string &name) const {
+    std::map<std::string, bool>::const_iterator it = on_wan_.find(name);
+    return it != on_wan_.end() && it->second;
 }
 
 void ParticipantRegistry::enable_all() {

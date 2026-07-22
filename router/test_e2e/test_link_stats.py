@@ -38,9 +38,15 @@ import rti.connextdds as dds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import (  # noqa: E402
-    render_config, start_router, wait_for_mutual_discovery)
+    render_config, set_wan_qos_env, start_router, wait_for_mutual_discovery)
 from util.dds_probe import (  # noqa: E402
     Probe, reader_qos, read_status_revision)
+
+# e2e_link_stats.yaml loads harness_v2/qos/wan_qos_lib.xml (for the wan_status/wan_event route
+# endpoint aliases); its participant profiles are env-templated, so set loopback defaults for
+# the router_main subprocesses that inherit this env. (The in-process probes below use plain
+# default QoS and never load the WAN lib, so this only needs to run before the routers launch.)
+set_wan_qos_env()
 
 # Default RTPS port mapping (7.7): a domain D uses UDP ports [PB + DG*D, PB + DG*D + DG).
 RTPS_PORT_BASE = 7400
@@ -48,6 +54,10 @@ RTPS_DOMAIN_GAIN = 250
 
 TYPE_NAME = "platform_primary_status"
 TOPIC_NAME = "PlatformPrimaryStatus"
+# The reliable event leg (production platform_events uses wan_event) — same platform_wan
+# participant as the best-effort status leg, so the node carries both QoS classes (D95).
+EVENT_TYPE_NAME = "contact_report"
+EVENT_TOPIC_NAME = "ContactReport"
 LINK_STATS_TOPIC = "ActRouterLinkStats"
 THIS_NODE = "Platform_30"
 
@@ -108,21 +118,31 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
 
         writer = platform_app.writer(TOPIC_NAME, TYPE_NAME)
         control_reader = control_app.reader(TOPIC_NAME, TYPE_NAME)
+        # Reliable event leg (wan_event route): drive it too, with a control-side consumer, so
+        # the platform_wan participant carries both a best-effort and a reliable WAN data leg
+        # to the CONTROL peer. The consumer matters — a route writer's per-endpoint stats only
+        # attribute when the full chain has a live reader draining the forwarded stream (D95).
+        event_writer = platform_app.writer(EVENT_TOPIC_NAME, EVENT_TYPE_NAME)
+        control_event_reader = control_app.reader(EVENT_TOPIC_NAME, EVENT_TYPE_NAME)
 
         plat_acc, ctrl_acc = [], []
         forwarded = False
-        # Drive steady route traffic (~10 Hz for up to ~12 s) while draining both stats
-        # streams; stop early once we have enough intervals on both sides + RTT + a
-        # rediscovery-stamped interval + end-to-end forwarding confirmed.
-        deadline = time.monotonic() + 20.0
+        # Drive steady route traffic (~10 Hz) while draining both stats streams; stop early
+        # once we have enough intervals on both sides + RTT + a rediscovery-stamped interval +
+        # end-to-end forwarding + the platform_wan legs attributed (have_coverage). Deadline is
+        # generous (30 s) because route-leg attribution can lag discovery by several intervals.
+        deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
             assert alive(), (f"a router exited early; control={control.log_path} "
                              f"platform={platform.log_path}")
             writer.write(platform_app.sample(
                 TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
+            event_writer.write(platform_app.sample(
+                EVENT_TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
             for s in control_reader.take():
                 if s.info.valid and str(s.data["msg.source"]) == THIS_NODE:
                     forwarded = True
+            control_event_reader.take()  # drain the reliable leg's forwarded stream (consumer)
             drain_into(plat_stats, plat_acc)
             drain_into(ctrl_stats, ctrl_acc)
 
@@ -134,8 +154,13 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
             have_recv = any(f["samples_received"] > 0 for f in ctrl_pp)
             have_rtt = any(f["rtt_count"] > 0 for f in plat_cp + ctrl_pp)
             have_rediscovery = any(f["rediscovery"] for f in plat_cp + ctrl_pp)
+            # Don't exit until the platform_wan data legs have actually attributed to the peer
+            # (E1b) — otherwise the loop can break on the first few bellwether-only intervals,
+            # before the route legs' per-endpoint stats resolve (attribution lags discovery,
+            # D95). The 20 s deadline still bounds a genuine regression.
+            have_coverage = max((f["pushed_samples"] for f in plat_cp), default=0) >= 5
             if (forwarded and have_push and have_recv and have_rtt
-                    and have_rediscovery and len(plat_cp) >= 3):
+                    and have_rediscovery and have_coverage and len(plat_cp) >= 3):
                 break
             time.sleep(0.1)
 
@@ -162,6 +187,30 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
         assert max(f["samples_received"] for f in ctrl_pp) > 0, \
             (f"control<-platform samples_received never advanced; samples={ctrl_pp}; "
              f"log {control.log_path}")
+
+        # (E1b) platform_wan DATA-leg coverage — regression for the is_wan ->
+        # {team_scoped, on_wan} decomposition (design-decisions.md 2026-07-22; task
+        # docs/cpp_router/is-wan-flag-decomposition-task.md). Both route writers to CONTROL
+        # (the best-effort status leg + the reliable event leg) live on platform_wan, which is
+        # on_wan but NOT team_scoped. Before the decomposition, WAN-leg link-stats registration
+        # keyed off the single conflated flag (team_wan-only since D87), so platform_wan data
+        # legs were never polled and this peer's per-interval pushed_samples reflected ONLY the
+        # ~1 Hz RouterHealth bellwether (router_main registers that unconditionally). Once the
+        # legs are polled, the platform_wan route writers add their forwarded traffic (driven
+        # above at ~10 Hz each) on top of the
+        # bellwether. This assertion lives HERE (not a standalone probe) on purpose: the route
+        # writer's per-matched-endpoint stats only attribute when the full chain has a live
+        # consumer draining the forwarded stream — a bare high-rate publisher with no consumer
+        # never attributes the route writer (its matched-subscription participant data doesn't
+        # resolve). max over intervals also absorbs intermittent discovery-data attribution.
+        # A ceiling of 5 sits well above any bellwether-only interval (~1) and below the route
+        # rate. Fails before the decomposition (bellwether-only ~1), passes after.
+        assert max(f["pushed_samples"] for f in plat_cp) >= 5, (
+            f"platform_wan route-leg link stats not covered: max per-interval pushed_samples "
+            f"to {CONTROL} was {max(f['pushed_samples'] for f in plat_cp)}, consistent with "
+            f"the ~1 Hz RouterHealth bellwether alone — the platform_wan data leg is not "
+            f"being polled (is_wan/on_wan decomposition regression); samples={plat_cp}; "
+            f"log {platform.log_path}")
 
         # (E3) RTT from the app-ack probe.
         assert any(f["rtt_count"] > 0 for f in plat_cp + ctrl_pp), \

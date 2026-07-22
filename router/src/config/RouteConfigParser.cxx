@@ -205,9 +205,16 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             }
             ps.role = get_str(p, "role");
             ps.qos_profile_alias = get_str(p, "qos");
-            ps.is_wan = p["wan"] && p["wan"].as<bool>();
-            // D78 (reinstated): SPDP2 discovery for WAN participants, decoupled from `wan`
-            // (is_wan is the D83 team-scope flag; SPDP2 applies to every WAN participant).
+            // Three orthogonal per-participant flags (the is_wan decomposition, 2026-07-22):
+            //   team_scoped (D83) — protected-identity partition default + non-removable
+            //     protection. team_wan-only. Was the old conflated `wan:` key.
+            //   on_wan       — this participant's route legs are on the WAN; drives link-stats
+            //     WAN-leg detection (RouteEntityFactory). EVERY WAN participant.
+            //   spdp2 (D78)  — SPDP2|SEDP discovery. EVERY WAN participant.
+            // on_wan and spdp2 mark the same set today but stay separate: one is a link-stats
+            // concern, the other a discovery-protocol choice.
+            ps.team_scoped = p["team_scoped"] && p["team_scoped"].as<bool>();
+            ps.on_wan = p["on_wan"] && p["on_wan"].as<bool>();
             ps.use_spdp2 = p["spdp2"] && p["spdp2"].as<bool>();
 
             // participant_partition (D83): a sequence of names, or a single scalar name
@@ -234,9 +241,9 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
                     ps.participant_partition.push_back(substitute_node_name(v, out.node_name));
                 }
             }
-            // Every WAN-facing participant's set always contains its own protected
+            // Every team_scoped participant's set always contains its own protected
             // identity entry (D83), config-time only — never removable by command.
-            if (ps.is_wan) {
+            if (ps.team_scoped) {
                 if (!has_protected_partition_entry(ps, out.node_name)) {
                     ps.participant_partition.insert(ps.participant_partition.begin(),
                                                     out.node_name);

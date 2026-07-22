@@ -198,10 +198,23 @@ int main() {
         }
         CHECK(team_wan != nullptr);
         if (team_wan) {
-            CHECK(team_wan->is_wan);
+            // is_wan decomposition: team_wan is BOTH team-partition-scoped and on the WAN.
+            CHECK(team_wan->team_scoped);
+            CHECK(team_wan->on_wan);
             CHECK(team_wan->participant_partition.size() == 1);
             if (team_wan->participant_partition.size() == 1) {
                 CHECK(team_wan->participant_partition.at(0) == "Platform_30"); // ${node.name}
+            }
+        }
+        // is_wan decomposition: platform_wan/control_wan are on the WAN (on_wan → their data
+        // legs are link-stats-covered) but NOT team-partition-scoped (no protected-identity
+        // partition). This is the split D87 could not express with the single conflated flag.
+        for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
+            const ParticipantState &p = cfg.participants[i];
+            if (p.name == "platform_wan" || p.name == "control_wan") {
+                CHECK(p.on_wan);
+                CHECK(!p.team_scoped);
+                CHECK(p.participant_partition.empty());
             }
         }
         const RouterRouteSpec *t1 = find_route(cfg, "platform_team_to_wan");
@@ -216,11 +229,12 @@ int main() {
             CHECK(t2->input.participant == "team_wan");
             CHECK(t2->output.participant == "platform_lan");
         }
-        // LAN participants are never flagged wan (D78).
+        // LAN participants are neither team-scoped nor on the WAN.
         for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
             if (cfg.participants[i].name == "platform_lan"
                 || cfg.participants[i].name == "control_lan") {
-                CHECK(!cfg.participants[i].is_wan);
+                CHECK(!cfg.participants[i].team_scoped);
+                CHECK(!cfg.participants[i].on_wan);
             }
         }
     }
@@ -280,7 +294,7 @@ int main() {
             f << "node:\n  name: Platform_31\n  role: platform\n"
               << "participants:\n"
               << "  team_wan:\n"
-              << "    role: platform\n    domain: 1\n    wan: true\n"
+              << "    role: platform\n    domain: 1\n    team_scoped: true\n"
               << "    participant_partition: [\"TEAM_A\", \"${node.name}\"]\n";
         }
         RouteConfig cfg;
@@ -308,7 +322,7 @@ int main() {
             f << "node:\n  name: Platform_30\n  role: platform\n"
               << "participants:\n"
               << "  team_wan:\n"
-              << "    role: platform\n    domain: 1\n    wan: true\n"
+              << "    role: platform\n    domain: 1\n    team_scoped: true\n"
               << "    participant_partition: [";
             for (int i = 0; i < 16; ++i) { // 17 explicit entries + the auto-added
                 f << "\"TEAM_" << i << "\", ";               // protected "${node.name}"

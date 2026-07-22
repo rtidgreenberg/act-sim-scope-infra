@@ -73,8 +73,8 @@ public:
     // RouterHealth.team_partition (see publish_heartbeat). Deliberately a live poll of the
     // real entity, not a read of the controller's config-mirrored ParticipantState —
     // ground truth, no risk of drift between the two. router_main looks it up directly by
-    // name (NOT via the is_wan flag — that flag is separately load-bearing and
-    // misleadingly named; see design-decisions.md D93). dds::core::null when this process
+    // name; the old is_wan flag it once sidestepped is now split into team_scoped + on_wan
+    // (see design-decisions.md D93 and the is_wan-decomposition entry). dds::core::null when this process
     // has no team_wan participant (a control node, or any config without one) — then
     // team_partition is always empty, same as "no team".
     PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,

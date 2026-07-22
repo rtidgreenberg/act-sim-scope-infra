@@ -111,11 +111,21 @@ struct ParticipantState {
     // place via set_qos thereafter.
     std::vector<std::string> participant_partition;
     std::string qos_profile_alias;
-    // YAML participants.<name>.wan (D83): true for a team-scoped WAN participant — gates
-    // the protected-identity partition default and WAN-leg flagging for link-stats
-    // (RouteEntityFactory). team_wan-only in current configs (D87). Explicit, not
-    // name-sniffed. Does NOT select SPDP2 — see use_spdp2.
-    bool is_wan = false;
+    // YAML participants.<name>.team_scoped (D83; renamed from `wan` in the is_wan
+    // decomposition, 2026-07-22): true for a team-partition-scoped participant — gates ONLY
+    // the protected-identity partition default (RouteConfigParser) and the non-removable
+    // protection (is_protected_partition_name). team_wan-only in current configs (D87).
+    // Explicit, not name-sniffed. Does NOT drive link-stats WAN-leg detection (that is
+    // on_wan) and does NOT select SPDP2 (that is use_spdp2) — all three are decoupled.
+    bool team_scoped = false;
+    // YAML participants.<name>.on_wan (link-stats decomposition, 2026-07-22): true for a
+    // participant whose route legs live on the WAN — drives WAN-leg flagging so the
+    // LinkStatsCollector polls each leg's per-matched-endpoint protocol statuses
+    // (RouteEntityFactory / ParticipantRegistry::on_wan). Set on EVERY WAN participant
+    // (control_wan/platform_wan/team_wan), unlike team_scoped (team_wan-only). This is the
+    // concept D87 accidentally dropped from platform_wan/control_wan when it cleared their
+    // `wan: true` for a partition-matching reason, silently un-covering their data legs.
+    bool on_wan = false;
     // YAML participants.<name>.spdp2 (D78, reinstated; D87 retraction reversed by the D92
     // CORRECTION 2026-07-22): select SPDP2|SEDP discovery for this participant. Set on every
     // WAN-facing participant (control_wan/platform_wan/team_wan). Decoupled from is_wan so
@@ -129,14 +139,14 @@ struct ParticipantState {
 // path (build_snapshot), where it would otherwise throw uncaught.
 constexpr std::size_t kMaxParticipantPartitionEntries = 16;
 
-// D83: the protected node-identity partition entry — every WAN-facing participant's set
+// D83: the protected node-identity partition entry — every team_scoped participant's set
 // always contains its own name, seeded at config time (RouteConfigParser) and never
 // removable by command (RouterController::handle_remove_participant_partition). One
 // predicate shared by both so "what counts as protected" can't drift between the two.
 inline bool is_protected_partition_name(const ParticipantState &ps,
                                         const std::string &node_name,
                                         const std::string &candidate) {
-    return ps.is_wan && candidate == node_name;
+    return ps.team_scoped && candidate == node_name;
 }
 
 inline bool has_protected_partition_entry(const ParticipantState &ps,

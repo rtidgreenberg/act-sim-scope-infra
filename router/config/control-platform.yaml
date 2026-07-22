@@ -60,18 +60,19 @@ participants:
     role: control
     domain: 200
     qos: control_wan_udpv4_qos
-    spdp2: true  # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
-                 # Decoupled from `wan:` — SPDP2 for every WAN participant; `wan:` (D83
-                 # protected-identity partition) stays team_wan-only.
-    # No wan: true here (deliberately, D87): control_wan/platform_wan are NOT
+    on_wan: true   # link-stats WAN-leg coverage: this participant's route legs are on the
+                   # WAN, so the LinkStatsCollector polls them (is_wan decomposition).
+    spdp2: true    # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
+    # No team_scoped: true here (deliberately, D87): control_wan/platform_wan are NOT
     # participant-partition-scoped — they stay on the default partition so
     # control<->platform matching is unconditional, exactly as Phase 7 shipped it.
-    # The wan: true / protected-identity-partition mechanism (D83) is team_wan-only —
-    # it's how team scoping and direct-peer taps work, not a blanket "every WAN
-    # participant" flag. Marking control_wan/platform_wan wan: true was tried and
-    # reverted: it gave them different per-node identity partitions ("Control_20" vs
-    # "Platform_30") that no longer intersect, breaking their default-partition match
-    # entirely (see design-decisions.md D87).
+    # team_scoped (the D83 protected-identity-partition mechanism) is team_wan-only — it's
+    # how team scoping and direct-peer taps work, not a blanket "every WAN participant"
+    # flag. That is what on_wan is for (link-stats), and the two are now separate keys:
+    # marking control_wan/platform_wan team-scoped was tried and reverted because it gave
+    # them different per-node identity partitions ("Control_20" vs "Platform_30") that no
+    # longer intersect, breaking their default-partition match (see design-decisions.md
+    # D87). on_wan carries no such partition side effect, so it is safe here.
   platform_lan:
     role: platform
     domain: 30
@@ -79,7 +80,9 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    spdp2: true  # D78 (reinstated): SPDP2|SEDP for this WAN participant.
+    on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition) — carries the
+                   # platform<->C2 status/event/command data legs.
+    spdp2: true    # D78 (reinstated): SPDP2|SEDP for this WAN participant.
   # D85: a distinct WAN participant from platform_wan — separate participant
   # partitions mean team_wan and platform_wan exchange zero SEDP endpoint discovery
   # with each other (D18/D73/D85), unlike a merged shared participant would.
@@ -87,8 +90,10 @@ participants:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    wan: true      # D83: team-scoped protected-identity partition (team_wan-only).
-    spdp2: true    # D78 (reinstated): SPDP2|SEDP — same as every WAN participant.
+    team_scoped: true  # D83: protected-identity partition + non-removable protection
+                       # (team_wan-only). Renamed from `wan:` in the is_wan decomposition.
+    on_wan: true       # link-stats WAN-leg coverage — every WAN participant.
+    spdp2: true        # D78 (reinstated): SPDP2|SEDP — same as every WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (D83 — "team disabled by default" falls out of the shared config itself).
     # Team membership / direct-peer taps are added at runtime via

@@ -4834,3 +4834,107 @@ them and the tests would fail.) **Deliberately NOT flipped:** the synthetic `wan
 `e2e_auto_qos`, `e2e_platform_events`, `e2e_qos_alias`, `e2e_same_node_ignore`) — those are
 router↔Python-probe forwarding tests, not the production WAN router↔router topology, so
 flipping them would only add non-interop bookkeeping with no production-fidelity gain.
+
+## D95 — the conflated `is_wan` participant flag is decomposed into two orthogonal flags: `team_scoped` (D83 protected-identity partition) and `on_wan` (link-stats WAN-leg coverage); this restores link-stats coverage of the `platform_wan`/`control_wan` data legs that D87 silently dropped (2026-07-22, accepted; implements docs/cpp_router/is-wan-flag-decomposition-task.md; amends D14/D81/D82/D83/D87/D93)
+
+**Problem.** One flag, `ParticipantState::is_wan` (YAML `wan:`), did two unrelated jobs read
+in three places: (1+2) the **D83 team-scoping** job — seed a participant's protected
+node-identity partition (`RouteConfigParser`) and make it non-removable
+(`is_protected_partition_name`, used by `RouterController`'s REMOVE_PARTICIPANT_PARTITION
+path); and (3) the **Phase 9 link-stats WAN-leg** job — `RouteEntityFactory` calls
+`registry_.is_wan()` on both route endpoints to decide whether a leg is a WAN leg whose
+per-matched-endpoint protocol statuses `RouteTopicRuntime` should poll (D81). Jobs 1+2 want
+`team_wan` **only**; job 3 wants **every** WAN participant. A single flag cannot serve both,
+and the name misleads: `control_wan`/`platform_wan`/`team_wan` are all on WAN domain 200, so
+"is_wan" reads as "is on the WAN", but after D87 cleared `wan:` from control_wan/platform_wan
+(for a partition-matching reason) the flag actually meant "is team-partition-scoped".
+
+**Part A finding — the coverage gap was real and empirically confirmed.** Because D87 left
+`is_wan` true for `team_wan` only, `registry_.is_wan("platform_wan")` returned false, so every
+route leg on `platform_wan` got `has_wan_leg() == false` and **its per-peer link stats were
+never polled** — the entire platform↔C2 traffic family (`control_command`,
+`platform_primary_status`, `platform_events`, `platform_detail_status`). The
+`PresenceMonitor` `RouterHealth` bellwether pair (registered unconditionally by `router_main`,
+not via the flag) still covered the peer, so *some* WAN stats existed and the gap was
+invisible in aggregate. Confirmed live on a 2-process `e2e_link_stats` run: with the leg
+unregistered, the platform observer's per-interval `pushed_samples` to the CONTROL peer held
+at **1** (the 1 Hz bellwether) despite route traffic driven far above that; with the leg
+registered, the reliable `platform_wan` route writer is attributed and `pushed_samples` rises
+to the route rate (~10/interval on top of the bellwether). D87's revert introduced the gap as
+a side effect — it was a *partition-matching* fix, not a link-stats decision. The pre-existing
+`test_link_stats` was **blind** to it: its `pushed_samples > 0` assertion is satisfied by the
+bellwether alone, and its fixture had no `wan:`-flagged participant at all.
+
+**Decision / policy.** Split into two explicit, accurately-named per-participant flags:
+- **`team_scoped`** (YAML `team_scoped:`, renamed from `wan:`) — jobs 1+2 only. `team_wan`
+  only. Lives on `ParticipantState`; read by `RouteConfigParser` seeding and
+  `is_protected_partition_name`. The `ParticipantRegistry` does **not** carry it (the
+  protected-identity concept never reaches the registry).
+- **`on_wan`** (YAML `on_wan:`) — job 3 only. **Every** WAN participant: `control_wan`,
+  `platform_wan`, `team_wan` (product-owner decision: all real WAN links deserve link-stats;
+  control_wan carries the C2-side command leg). Threaded to
+  `ParticipantRegistry::Config::on_wan` / the `on_wan_` map / `ParticipantRegistry::on_wan()`,
+  read only by `RouteEntityFactory`'s WAN-leg detection.
+
+These two, plus the D94 `spdp2` flag, are three independent flags. `on_wan` and `spdp2` mark
+the same set of participants today, but stay separate keys: one is a link-stats concern, the
+other a discovery-protocol choice, and neither should silently change when the other is
+retuned.
+
+**Implementation.** `ParticipantState::is_wan` → `team_scoped`, plus a new
+`ParticipantState::on_wan`. `ParticipantRegistry`'s `is_wan` Config field / `is_wan_` map /
+`is_wan()` accessor → `on_wan` throughout (its only consumer was job 3). `RouteEntityFactory`
+now reads `registry_.on_wan()`; its internal `reader_is_wan_`/`writer_is_wan_` members
+(`RouteRuntime`) were renamed `reader_on_wan_`/`writer_on_wan_` so no misleading `is_wan`
+identifier survives. `router_main` threads only `on_wan` into the registry Config.
+`RouteConfigParser` parses both `team_scoped:` and `on_wan:`. All **eight** in-repo configs
+migrated to the new keys, `wan:` removed: `control-platform.yaml`, `platform-team.yaml`, and
+the six two-router e2e fixtures — `team_scoped: true` on `team_wan` only, `on_wan: true` on
+every WAN participant. The D93 mesh-dashboard `team_wan`-by-name lookup in `router_main` is
+left as-is (it could now filter the registry by `team_scoped`, but the direct name lookup
+reads more plainly for a single well-known participant — non-goal per the task).
+
+**Verification.** Build clean; ctest 4/4 (`route_config` strengthened to assert the split
+directly: `team_wan` is both `team_scoped` and `on_wan`; `platform_wan`/`control_wan` are
+`on_wan` but not `team_scoped` and carry no protected partition; LAN participants neither).
+`test_link_stats` gained assertion **E1b**: the platform observer's max per-interval
+`pushed_samples` to the CONTROL peer must exceed a bellwether-only ceiling (≥5), proving the
+`platform_wan` data leg is polled and not just the 1 Hz bellwether. Verified **fail-before**
+(neuter `on_wan` in the fixture → `assert 1 >= 5`, i.e. bellwether-only) and **pass-after**.
+Full e2e suite green.
+
+**Implementation note — route-writer attribution needs a live full-chain consumer (a Phase 9
+follow-up, orthogonal to this change).** Building the E1b assertion surfaced that the route
+writer's per-matched-endpoint stats only attribute to their peer when the full route chain has
+a **live consumer** draining the forwarded stream. A bare high-rate publisher with no consumer
+never attributed the route writer — its matched-subscription participant data would not resolve
+(`get_matched_subscription_participant_data` returns nothing / logs `Failed to get
+discovered_participant_data`), so `poll_writer_wan_stats` skipped it and the peer showed only
+the bellwether. With the full chain driven (as `test_link_stats` does), the route writer
+attributes at the route rate. That is why E1b lives inside `test_link_stats` and takes the
+**max over intervals** (to also absorb the intermittent attribution). The leg registers
+correctly regardless of this (verified via `has_wan_leg()`), so the decomposition itself is
+sound; the attribution fragility is a pre-existing Phase 9 characteristic, noted here, not
+fixed in this change. NOTE (corrected after an isolation test): an earlier draft attributed
+the masking to a reliable-writer↔best-effort-reader QoS mismatch and briefly made the fixture
+route reliable end-to-end. That was **wrong and reverted** — `pushed_sample_count` advances for
+the route writer even with a best-effort matched reader; the reader QoS was never the factor,
+the live consumer was.
+
+**On QoS and protocol-stat availability in production (why best-effort legs are not a
+concern).** Per node, `on_wan` participants always carry a QoS mix: `wan_status` →
+`status_qos` is BEST_EFFORT (periodic status routes — `platform_primary_status`,
+`platform_detail_status`), while `wan_event` → `event_qos` is RELIABLE (`control_command`,
+`platform_events`), plus the reliable RouterHealth bellwether and RouterLinkProbe pair. Because
+the collector rolls stats up **per peer, summed across all of that peer's legs**, the
+reliability-specific counters (`heartbeats_sent`, `nacks_received`, retransmits) are always
+sourced from the reliable event leg + bellwether, and `pushed_samples`/bytes accumulate from
+every leg (best-effort included). So there is always a reliable route per node to draw
+meaningful reliable protocol stats from — a best-effort status leg contributing zero
+heartbeats/nacks never leaves a peer uncovered. To exercise exactly this, the
+`e2e_link_stats` fixture was given **two** platform_wan data legs mirroring production: a
+best-effort status route (`PlatformPrimaryStatus`/`wan_status`) and a reliable event route
+(`ContactReport`/`wan_event`), using the real WAN-lib alias names; both are driven with a live
+control-side consumer, and E1b asserts the summed per-peer `pushed_samples` clears the
+bellwether-only floor. The loop waits for that coverage (bounded by a 30 s deadline) so it
+cannot pass on early bellwether-only intervals before the legs attribute.

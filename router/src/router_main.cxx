@@ -294,7 +294,9 @@ int main(int argc, char **argv) {
             pc.name = p.name;
             pc.domain = p.domain;
             pc.participant_name = router_identity;
-            pc.is_wan = p.is_wan;
+            // Only on_wan reaches the registry (WAN-leg link-stats detection); team_scoped is
+            // consumed on ParticipantState (protected-identity partition) and never needed here.
+            pc.on_wan = p.on_wan;
             pc.use_spdp2 = p.use_spdp2;
             pc.partition_names = p.participant_partition;
             if (!p.qos_profile_alias.empty()) {
@@ -400,11 +402,11 @@ int main(int argc, char **argv) {
         // D93 (mesh-dashboard team-grouping follow-on): the team-scoped WAN participant
         // is handed to PresenceMonitor, which polls its LIVE DomainParticipantQos.partition
         // at every heartbeat for RouterHealth.team_partition. Looked up DIRECTLY by its
-        // config-convention name "team_wan" — deliberately NOT via the is_wan flag, which
-        // is separately load-bearing (D83 protected-identity default + link-stats WAN-leg
-        // detection) and misleadingly named (every _wan participant is on the WAN; is_wan
-        // actually means "team-partition-scoped"). Disentangling that flag is its own task
-        // (docs/cpp_router/is-wan-flag-decomposition-task.md); this feature sidesteps it.
+        // config-convention name "team_wan". The is_wan flag it originally sidestepped has
+        // since been decomposed into team_scoped (D83 partition) + on_wan (link-stats WAN-leg)
+        // — team_scoped now names exactly this set (team_wan-only), so this could filter the
+        // registry by team_scoped instead; kept as a direct name lookup because it reads more
+        // plainly and needs no registry accessor for a single well-known participant.
         // Absent on a control node or any config without a team_wan; then team_partition
         // is simply never populated (dds::core::null).
         dds::domain::DomainParticipant team_wan_participant = dds::core::null;
@@ -427,7 +429,7 @@ int main(int argc, char **argv) {
         // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
         // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
         // dispatcher registers each route's WAN leg — the factory flags a leg as WAN via
-        // registry.is_wan(participant_name) (any Config::is_wan participant, e.g.
+        // registry.on_wan(participant_name) (any Config::on_wan participant, i.e. control_wan,
         // platform_wan AND team_wan under D85, not only this presence participant).
         // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
         std::unique_ptr<LinkStatsCollector> link_stats;

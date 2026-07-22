@@ -34,7 +34,8 @@ participants:
   team_wan:
     role: platform
     domain: __DOMAIN_WAN__
-    wan: true
+    team_scoped: true  # D83: protected-identity partition (renamed from `wan:`)
+    on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:

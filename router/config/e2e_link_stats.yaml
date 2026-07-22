@@ -29,6 +29,19 @@ router:
 types:
   xml: harness_v2/datamodel/act_types.xml
 
+# Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_status is
+# BEST_EFFORT (periodic status), wan_event is RELIABLE (events). Loading only the WAN lib —
+# its profiles reference only WAN_QOS_LIB::/BuiltinQosLib:: internally. Endpoint profiles only;
+# participants stay on default QoS so the two-process multicast discovery is unchanged. The
+# lib's participant profiles are env-templated, so test_link_stats.py calls set_wan_qos_env()
+# (loopback defaults) before launching the routers.
+qos_libraries:
+  - harness_v2/qos/wan_qos_lib.xml
+
+qos_profiles:
+  wan_status: WAN_QOS_LIB::status_qos
+  wan_event: WAN_QOS_LIB::event_qos
+
 participants:
   control_lan:
     role: control
@@ -36,6 +49,7 @@ participants:
   control_wan:
     role: control
     domain: __DOMAIN_WAN__
+    on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
@@ -43,9 +57,12 @@ participants:
   platform_wan:
     role: platform
     domain: __DOMAIN_WAN__
+    on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
+  # STATUS leg — BEST_EFFORT (production platform_primary_status uses wan_status). A
+  # platform_wan data leg that is on_wan but not team_scoped.
   - name: link_stats_route
     enabled: true
     forwarding_mode: dynamic_data
@@ -58,9 +75,34 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: default
+        writer_qos: wan_status
     destination_side:
       input:
         participant: control_wan
+        reader_qos: wan_status
+      output:
+        participant: control_lan
+
+  # EVENT leg — RELIABLE (production platform_events uses wan_event). Same platform_wan
+  # participant as the status leg, so a node's WAN participant carries BOTH a best-effort and
+  # a reliable route (D95): the reliability-protocol counters always have a reliable leg to
+  # source from, while pushed_samples accumulate from both.
+  - name: link_stats_event_route
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: ContactReport
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: wan_event
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_event
       output:
         participant: control_lan

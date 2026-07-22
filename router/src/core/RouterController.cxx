@@ -543,7 +543,7 @@ void RouterController::handle_participant_partition_membership(const RouterComma
         names.push_back(cmd.partition_name);
     } else {
         // The protected node-identity entry is never removable by command (D83) —
-        // config-time only. is_wan participants always carry it; a non-WAN participant
+        // config-time only. team_scoped participants always carry it; a non-team-scoped one
         // has no protected entry at all, so this check is a no-op reject only where the
         // identity was actually seeded.
         if (is_protected_partition_name(ps, state_.node_name, cmd.partition_name)) {
