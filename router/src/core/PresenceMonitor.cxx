@@ -129,6 +129,7 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         }
     }
     {
+        const auto now = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lk(roster_mutex_);
         for (const auto &entry : roster_) {
             // peers_seen is a codegen bounded_sequence (unbounded IDL -> cap 100);
@@ -147,6 +148,12 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             RouterPeerRef ref;
             ref.router = entry.first;
             ref.presence = entry.second.presence;
+            // D97: same "now - last heartbeat receipt" math as
+            // build_mesh_locked()'s last_seen_delta_ms, off this router's own
+            // steady_clock — relative, so it stays meaningful once relayed onto
+            // another router's mesh aggregate without needing clock sync.
+            ref.last_seen_delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - entry.second.last_seen).count();
             out.peers_seen.push_back(ref);
         }
         if (out.peers_seen.size() < out.peers_seen.max_size()) {
@@ -162,6 +169,13 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     } catch (const std::exception &e) {
         Log::warn("heartbeat_publish_failed", {{"error", e.what()}});
     }
+    // Full-rate mesh publish for GUI consumers (mesh dashboard): every PresenceTick
+    // republishes ActRouterMeshStatus unconditionally, on top of the existing
+    // on-change publishes in on_health_data/on_health_reader_status (which still fire
+    // immediately on a transition rather than waiting up to kHeartbeatPeriodMs for the
+    // next tick). roster_mutex_ is already released by this point, so no lock-order
+    // conflict with publish_mesh()'s own mesh_write_mutex_ -> roster_mutex_ order.
+    publish_mesh();
 }
 
 void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
@@ -251,10 +265,14 @@ void PresenceMonitor::on_health_data() {
                 }
                 e.presence = RouterPresenceState::PRESENCE_ALIVE;
                 e.last_summary = ev.hb;
-                // Summary-only rule: the peer's own edge list is never re-shipped in
-                // the mesh aggregate — that nesting is the redundant O(N^2) D77
-                // explicitly rejected (edges belong to RouterHealth alone).
-                e.last_summary.peers_seen.clear();
+                // D97: last_summary.peers_seen is kept (not stripped) so
+                // build_mesh_locked() can re-embed it into RouterMeshPeer.health —
+                // the mesh-dashboard's transitive/second-hand edges (mesh_graph.js)
+                // read exactly this field. D77 originally stripped it here to avoid
+                // "redundant" nesting, but that rationale was about WAN frugality;
+                // ActRouterMeshStatus is LAN-only and each entry stays bounded by
+                // peers_seen's existing 100-cap, so keeping it costs nothing D77 was
+                // guarding against.
                 e.last_seen = std::chrono::steady_clock::now();
             } else {
                 // Liveliness lost or participant purged -> DEAD (the roster passes

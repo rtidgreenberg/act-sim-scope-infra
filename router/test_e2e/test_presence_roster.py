@@ -95,6 +95,19 @@ def latest_health(reader):
     return edges
 
 
+def latest_health_edge_deltas(reader):
+    """{router_name: {peer_router_name: last_seen_delta_ms}} — D97's freshness field on
+    RouterPeerRef, same peers_seen samples as latest_health."""
+    edges = {}
+    for sample in reader.read():
+        if not sample.info.valid:
+            continue
+        edges[str(sample.data["router"])] = {
+            str(ref["router"]): int(ref["last_seen_delta_ms"])
+            for ref in sample.data["peers_seen"]}
+    return edges
+
+
 def latest_health_fields(reader):
     """{router_name: {field: value}} for the non-edge payload of the newest RouterHealth
     sample per router (config_hash for E-R3, heartbeat_seq, ...)."""
@@ -220,6 +233,14 @@ def test_presence_roster_mesh_dead_and_rejoin(
             and edges.get(PLATFORM, {}).get(CONTROL) == ALIVE, (
             f"heartbeat peers_seen never showed the bidirectional edge (D77): {edges}; "
             f"logs {control.log_path} {platform.log_path}")
+
+        # --- D97: RouterPeerRef now carries last_seen_delta_ms too (relative, node-local
+        # -- see RouterAdminTypes.idl) so a WAN-only observer of peers_seen edges (or a
+        # LAN mesh-dashboard consumer re-embedding another router's peers_seen, see
+        # mesh_graph.js) can tell how fresh each edge is, not just its presence.
+        edge_deltas = latest_health_edge_deltas(health_view)
+        assert 0 <= edge_deltas.get(CONTROL, {}).get(PLATFORM, -1) < 5000, edge_deltas
+        assert 0 <= edge_deltas.get(PLATFORM, {}).get(CONTROL, -1) < 5000, edge_deltas
 
         # --- E-R1: the RouterHealth key IS the D74 participant_name — every name seen
         # as a heartbeat key on the WAN also appears as a discovered participant's

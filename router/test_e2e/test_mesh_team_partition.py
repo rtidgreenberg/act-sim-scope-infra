@@ -105,6 +105,22 @@ def latest_mesh_team_partitions(reader):
     return out
 
 
+def latest_mesh_peers_seen(reader):
+    """{peer_router_name: set(router names in that peer's own embedded peers_seen)} from
+    the newest mesh sample -- D97: build_mesh_locked() no longer strips this, so
+    mesh_graph.js's transitive/second-hand edges (and this assertion) can see it."""
+    out = None
+    for sample in reader.read():
+        if not sample.info.valid:
+            continue
+        peers = {}
+        for peer in sample.data["peers"]:
+            peers[str(peer["health.router"])] = {
+                str(ref["router"]) for ref in peer["health.peers_seen"]}
+        out = peers
+    return out
+
+
 def _wait(fn, predicate, timeout_s, check_alive, poll_s=0.2):
     deadline = time.monotonic() + timeout_s
     value = None
@@ -207,6 +223,27 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
         assert mesh_parts.get(f"{NODE_B}/{ROUTER_NAME}") == expect_b, (
             f"control's mesh aggregate did not carry node B's team_partition through "
             f"unmodified; got {mesh_parts}")
+
+        # --- D97: node A and node B are both control's DIRECT WAN peers here (no true
+        # multi-hop fixture in this suite), but they also see each other directly on the
+        # shared WAN domain -- so each one's own embedded health.peers_seen (re-embedded,
+        # unmodified, into control's mesh aggregate) should include the other. Before
+        # D97 this was always stripped to {} at PresenceMonitor.cxx's roster-cache step,
+        # so this specifically proves the un-stripping reached the wire.
+        node_a_id = f"{NODE_A}/{ROUTER_NAME}"
+        node_b_id = f"{NODE_B}/{ROUTER_NAME}"
+        mesh_edges = _wait(
+            lambda: latest_mesh_peers_seen(mesh),
+            lambda p: p is not None
+                      and node_b_id in p.get(node_a_id, set())
+                      and node_a_id in p.get(node_b_id, set()),
+            timeout_s=15.0, check_alive=alive)
+        assert mesh_edges is not None and node_b_id in mesh_edges.get(node_a_id, set()), (
+            f"control's mesh aggregate did not carry node A's own peers_seen edge to "
+            f"node B (D97 un-stripping); got {mesh_edges}")
+        assert node_a_id in mesh_edges.get(node_b_id, set()), (
+            f"control's mesh aggregate did not carry node B's own peers_seen edge to "
+            f"node A (D97 un-stripping); got {mesh_edges}")
     finally:
         wan_probe.close()
         control_lan_probe.close()

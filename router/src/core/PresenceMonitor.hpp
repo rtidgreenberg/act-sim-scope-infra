@@ -4,7 +4,11 @@
 // Publishes this router's compact RouterHealth heartbeat on the WAN participant (the ONE
 // liveliness-bearing WAN topic), subscribes to peers', maintains the ALIVE/STALE/DEAD
 // roster, and republishes the aggregated connected-router list on the LAN participant as
-// ActRouterMeshStatus whenever the roster changes.
+// ActRouterMeshStatus. Mesh publish happens twice over: unconditionally on every
+// PresenceTick (full heartbeat-rate ticking, for GUI/mesh-dashboard consumers that want
+// a steady live feed rather than waiting on an event) AND immediately on a roster
+// change (peer appears, presence transition, or state_revision advance), so a
+// transition is never stuck behind the tick period.
 //
 // Identity (D79): the D74 participant name "<node>/<router>" is the ONLY router
 // identity — RouterHealth is keyed by it, the roster maps it, and peers_seen edges carry

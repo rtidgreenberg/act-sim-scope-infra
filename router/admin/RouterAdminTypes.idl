@@ -216,13 +216,20 @@ enum RouterPresenceState {
 
 // D77: one adjacency edge in the who-sees-who map — which peers this router's roster
 // currently tracks, and in what presence state. Compact by design (WAN-frugal, the
-// summary-only rule): identity + presence, never the peer's own summary (a WAN
-// consumer, e.g. C2, already receives every router's own RouterHealth directly —
-// nodes come from the heartbeats, edges from peers_seen; a DEAD edge means "lost this
-// peer", no edge means "never saw it").
+// summary-only rule): identity + presence (+ freshness, D97), never the peer's own
+// summary (a WAN consumer, e.g. C2, already receives every router's own RouterHealth
+// directly — nodes come from the heartbeats, edges from peers_seen; a DEAD edge means
+// "lost this peer", no edge means "never saw it").
 struct RouterPeerRef {
     string router;         // "<node>/<router>" (name-only identity, D79)
     RouterPresenceState presence;
+    // D97: relative, node-local — same "now - last heartbeat receipt, at publish time"
+    // convention as RouterMeshPeer.last_seen_delta_ms, computed off the observing
+    // router's own steady_clock (PresenceMonitor::PeerEntry.last_seen). Deliberately NOT
+    // an absolute epoch timestamp: this edge is relayed transitively (any router's
+    // peers_seen can be re-embedded in another router's mesh aggregate, D97), so a
+    // duration sidesteps cross-node clock sync in a way an epoch value would not.
+    int64 last_seen_delta_ms;
 };
 
 struct RouterHealth {
@@ -255,7 +262,13 @@ struct RouterHealth {
     // apply here). Bound mirrors RouterParticipantStatus.participant_partition
     // (kMaxParticipantPartitionEntries, RouterState.hpp).
     sequence<string, 16> team_partition;
-    sequence<RouterPeerRef> peers_seen;  // this router's roster edges (D77)
+    // This router's roster edges (D77). D97: no longer stripped when a peer's
+    // RouterHealth is cached and re-embedded into RouterMeshStatus.peers[i].health (see
+    // PresenceMonitor::build_mesh_locked) — the LAN mesh-dashboard consumer needs these
+    // transitive edges to draw second-hand adjacency, and this aggregate is LAN-only
+    // (control_lan), so D77's WAN-frugality argument for stripping it doesn't apply
+    // here; each entry is bounded by the existing peers_seen cap (100) regardless.
+    sequence<RouterPeerRef> peers_seen;
 };
 
 struct RouterMeshPeer {

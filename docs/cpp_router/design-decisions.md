@@ -4981,3 +4981,53 @@ about DDS instance keying, not about needing multiple writers.
 **Not done (out of scope, unrequested):** the same fix for the other `base_type`-wrapped
 routes, which have the identical multi-source collapse risk in a real multi-platform
 deployment. Flagged in `gui/mesh_dashboard/README.md`; revisit if/when asked.
+
+## D97 — `RouterPeerRef` (the `peers_seen` WAN edge type) gains `last_seen_delta_ms`; `PresenceMonitor` stops stripping `peers_seen` before re-embedding a peer's `RouterHealth` into `RouterMeshStatus.peers[i].health` (2026-07-23, accepted; user-directed, mesh-dashboard full-rate/freshness follow-on)
+
+**Context.** The mesh dashboard's own direct-peer edges (`RouterMeshPeer.last_seen_delta_ms`,
+D76) already carry a freshness value, but `RouterPeerRef` — the compact edge type nested in
+`RouterHealth.peers_seen` (D77/D79) — never did; it was deliberately just `{router,
+presence}`. `mesh_graph.js`'s "peers_seen" edge class (drawn from a peer's own embedded
+roster, one hop further out than the observer's direct peers) had no timestamp to anchor
+edge-decay against and fell back to local receipt time as an approximation.
+
+Tracing the embed path surfaced a second, unrelated issue: `PresenceMonitor::on_health_data`
+cleared `peers_seen` on the roster's cached `last_summary` immediately after storing it
+(originally D77's "summary-only rule", to avoid redundant nesting), and
+`build_mesh_locked()` copies that same cleared `last_summary` into
+`RouterMeshPeer.health`. So `RouterMeshStatus.peers[i].health.peers_seen` was **always**
+empty on the wire — `mesh_graph.js`'s "peers_seen" edge rendering (present since Phase 16
+v1) had never actually drawn a transitive/second-hand edge; it was dead code.
+
+**Decision.**
+1. Add `int64 last_seen_delta_ms` to `RouterPeerRef` (`router/admin/RouterAdminTypes.idl`),
+   same "now - last heartbeat receipt, at publish time" convention as
+   `RouterMeshPeer.last_seen_delta_ms` — a relative duration off the observing router's own
+   `steady_clock`, not an absolute epoch timestamp, since this edge can be relayed
+   transitively (re-embedded in another router's mesh aggregate) and a duration sidesteps
+   cross-node clock sync in a way an epoch value would not. Populated in
+   `PresenceMonitor::publish_heartbeat()` from `PeerEntry::last_seen`, the same source
+   `build_mesh_locked()` already reads for `RouterMeshPeer.last_seen_delta_ms`.
+2. Stop clearing `peers_seen` in `on_health_data()`. D77's WAN-frugality rationale for
+   stripping it doesn't apply to `RouterMeshStatus` — that aggregate is LAN-only
+   (`control_lan`), and each entry stays bounded by `peers_seen`'s existing 100-cap
+   regardless (adding a field, or un-stripping it, changes per-sample byte cost, not the
+   sequence's cap math). No other code path reads `last_summary.peers_seen` expecting it
+   empty. Nothing else in `router/src/**` depends on the old stripped state.
+
+**Wire cost.** Per-entry cost grows by 8 bytes (`int64`), same class of increase as D79's
+name-keying and D93's `team_partition` addition — logged here per the same convention, not
+because anything blocks it. Un-stripping `peers_seen` itself is not a NEW cost category:
+each embedded `RouterHealth.peers_seen` was already implicitly present in every router's own
+direct WAN broadcast; this only makes it visible one more hop, on a LAN-only topic.
+
+**Verification.** `ctest` 4/4; full `router/test_e2e` suite 25/25, including new assertions
+in `test_presence_roster.py` (RouterHealth.peers_seen carries a sane `last_seen_delta_ms`)
+and `test_mesh_team_partition.py` (the mesh aggregate's re-embedded `health.peers_seen` now
+contains the other platform, proving the un-stripping reached the wire — this specific
+assertion would have failed against the pre-D97 code). Live: 3-router mesh
+(Control_20 + Platform_30/31) + WIS + Playwright, captured actual WebSocket frames showing
+`health.peers_seen` populated (previously always `[]`) with `last_seen_delta_ms` ticking
+across frames (943 → 1030 → 12 → 1026 → 951 ms), and the rendered graph showing
+`peers_seen`-sourced edges directly between the two platforms (not just via the observer) —
+the exact transitive path D77's stripping had made unreachable. Zero browser console errors.
