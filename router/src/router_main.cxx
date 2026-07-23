@@ -491,11 +491,16 @@ int main(int argc, char **argv) {
         // Phase 9 (D14/D81): a third tick, the config-fixed link-metrics poll, active only
         // when the collector is (presence configured). Independent knob so its cadence
         // never couples to the refresh/heartbeat ticks.
+        // D98: a fourth tick, the LAN mesh-dashboard republish, active only when presence
+        // is (PresenceMonitor owns the mesh aggregate). Independent knob (kMeshPublishPeriodMs,
+        // 0.5s) so retuning the WAN heartbeat can never silently change the GUI refresh rate.
         DrainThread drain(ctrl, std::chrono::milliseconds(1000),
                           std::chrono::milliseconds(
                                   presence ? kHeartbeatPeriodMs : 0),
                           std::chrono::milliseconds(
-                                  link_stats ? cfg.link_stats_period_ms : 0));
+                                  link_stats ? cfg.link_stats_period_ms : 0),
+                          std::chrono::milliseconds(
+                                  presence ? kMeshPublishPeriodMs : 0));
 
         Log::info("router.start.ok",
                   {{"admin_participant", admin_participant_name},

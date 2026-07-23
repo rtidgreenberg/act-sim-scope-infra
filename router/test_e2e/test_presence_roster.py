@@ -66,11 +66,16 @@ def sha256_of(path):
 
 
 def mesh_reader(probe, provider):
-    """RELIABLE+TRANSIENT_LOCAL reader for the mesh aggregate (KEEP_LAST(1) state topic,
-    same shape as ActRouterStatus)."""
+    """BEST_EFFORT+VOLATILE reader for the mesh aggregate (KEEP_LAST(1) state topic).
+    D98: the writer moved to BEST_EFFORT (steady periodic MeshTick republish means a
+    dropped sample self-heals on the next tick, so RELIABLE's blocking-risk retry/ack
+    machinery buys nothing). D100: TRANSIENT_LOCAL dropped too -- under BEST_EFFORT its
+    late-joiner replay isn't guaranteed anyway (RTI docs: only guaranteed effective paired
+    with RELIABLE), so a late-joining reader just waits for the next MeshTick (~0.5s)
+    instead. Both reliability and durability are RxO, so this reader must match both."""
     return probe.reader(
         MESH_TOPIC, "RouterMeshStatus",
-        qos=reader_qos(reliability="reliable", durability="transient_local"),
+        qos=reader_qos(reliability="best_effort", durability="volatile"),
         dtype=provider.type("RouterMeshStatus"))
 
 
@@ -209,8 +214,9 @@ def test_presence_roster_mesh_dead_and_rejoin(
             f"control mesh never showed platform ({PLATFORM}) ALIVE: {peers}; "
             f"log {control.log_path}")
         assert peers[PLATFORM]["n_routes"] == 1, peers  # the config's one route
-        # The delta is stamped at mesh write time; the aggregate republishes on roster
-        # change, so the retained sample's delta reflects a recent heartbeat.
+        # The delta is stamped at mesh write time; the aggregate republishes on its own
+        # MeshTick (D98, every 0.5s) as well as immediately on roster change, so the
+        # retained sample's delta reflects a recent heartbeat.
         assert peers[PLATFORM]["last_seen_delta_ms"] < 5000, peers
         peers_p = wait_mesh(platform_view,
                             lambda p: p.get(CONTROL, {}).get("presence") == ALIVE,

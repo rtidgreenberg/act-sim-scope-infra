@@ -4,6 +4,7 @@
 #include "Log.hpp"
 
 #include <dds/sub/ddssub.hpp>
+#include <rti/core/policy/CorePolicy.hpp> // D101: PublishMode::Asynchronous (mesh_writer_qos)
 
 #include <sstream>
 
@@ -27,11 +28,38 @@ QosT health_qos(QosT qos) {
 }
 
 dds::pub::qos::DataWriterQos mesh_writer_qos(const dds::pub::Publisher &publisher) {
-    // LAN state topic, same shape as ActRouterStatus (D26).
+    // LAN state topic. BEST_EFFORT + VOLATILE (D100): ActRouterMeshStatus republishes on
+    // its own periodic MeshTick (kMeshPublishPeriodMs, 0.5s) regardless of change, so an
+    // occasionally-dropped sample self-heals on the next tick — RELIABLE's retry/ack
+    // machinery (and its blocking potential on this writer under backpressure) buys
+    // nothing here. TRANSIENT_LOCAL was dropped too (D98 kept it, D100 removes it): under
+    // BEST_EFFORT, TRANSIENT_LOCAL's late-joiner replay burst is itself just another
+    // best-effort sample with no retry/repair if lost -- RTI's own docs are explicit that
+    // TRANSIENT_LOCAL's replay is only GUARANTEED effective paired with RELIABLE. Keeping
+    // it would have offered a repair mechanism that doesn't actually repair anything,
+    // while still paying its retained-sample bookkeeping cost. A late-joining reader now
+    // just waits for the next periodic MeshTick (worst case ~0.5s) instead of an
+    // unreliable "instant" replay attempt -- simpler, and no less correct in practice.
+    // The WIS reader profile (wis_config.xml.template) and both e2e mesh_reader() test
+    // helpers must match: BEST_EFFORT + VOLATILE (RxO: both policies must independently
+    // satisfy offered >= requested).
+    //
+    // D101: ASYNCHRONOUS publish mode. mesh_writer_.write() (publish_mesh()) is called
+    // from publish_mesh_tick(), which — like publish_heartbeat() — runs on the controller
+    // strand (MeshTick, D98); that strand must never block behind a DDS send (see
+    // PresenceMonitor.hpp's threading doc, and Interfaces.hpp's IPresencePublisher
+    // contract). BEST_EFFORT already removes the ack-wait blocking a RELIABLE writer could
+    // hit; ASYNCHRONOUS additionally moves the actual network send itself off the calling
+    // thread onto Connext's own async-publish thread (confirmed via ask_connext_question,
+    // 7.7.0: the send happens on an RTI Publisher-owned thread, shared by every
+    // asynchronous writer on this Publisher — lan_publisher_ carries only this one writer,
+    // so no contention with another topic). Cheap insurance against any remaining local
+    // resource-limit stall, on top of (not instead of) BEST_EFFORT.
     dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::TransientLocal();
+    qos << dds::core::policy::Reliability::BestEffort();
+    qos << dds::core::policy::Durability::Volatile();
     qos << dds::core::policy::History::KeepLast(1);
+    qos << rti::core::policy::PublishMode::Asynchronous();
     return qos;
 }
 
@@ -169,12 +197,16 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     } catch (const std::exception &e) {
         Log::warn("heartbeat_publish_failed", {{"error", e.what()}});
     }
-    // Full-rate mesh publish for GUI consumers (mesh dashboard): every PresenceTick
-    // republishes ActRouterMeshStatus unconditionally, on top of the existing
-    // on-change publishes in on_health_data/on_health_reader_status (which still fire
-    // immediately on a transition rather than waiting up to kHeartbeatPeriodMs for the
-    // next tick). roster_mutex_ is already released by this point, so no lock-order
-    // conflict with publish_mesh()'s own mesh_write_mutex_ -> roster_mutex_ order.
+}
+
+// D98: the full-rate mesh publish for GUI consumers (mesh dashboard) used to happen
+// unconditionally at the end of publish_heartbeat() above, coupling the LAN dashboard's
+// refresh rate to the WAN heartbeat cadence and putting a synchronous LAN DDS write on
+// the controller strand's WAN-heartbeat path. It now runs on its own MeshTick
+// (kMeshPublishPeriodMs), on top of the existing on-change publishes in
+// on_health_data/on_health_reader_status (which still fire immediately on a transition
+// rather than waiting on either tick's period).
+void PresenceMonitor::publish_mesh_tick() {
     publish_mesh();
 }
 
@@ -290,6 +322,16 @@ void PresenceMonitor::on_health_data() {
                 }
             }
         }
+        // D99: bump the mesh generation counter here — once per batch, still under
+        // roster_mutex_ — rather than in build_mesh_locked() (which now just reads it).
+        // build_mesh_locked() runs unconditionally on every MeshTick (D98) regardless of
+        // whether anything changed, so it can no longer be the one deciding "did the
+        // roster change" — this `changed` flag is that decision, computed once per
+        // batch (not per peer), matching RouterAdminTypes.idl's documented contract for
+        // RouterMeshStatus.state_revision ("bumps when the roster changes").
+        if (changed) {
+            ++mesh_revision_;
+        }
     }
     if (changed) {
         publish_mesh();
@@ -341,6 +383,10 @@ void PresenceMonitor::on_health_reader_status() {
                 mark_stale(entry.first, entry.second);
             }
         }
+        // D99: same once-per-batch bump as on_health_data() — see its comment.
+        if (changed) {
+            ++mesh_revision_;
+        }
     }
     if (changed) {
         publish_mesh();
@@ -351,7 +397,11 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
     RouterMeshStatus mesh;
     mesh.observer_node = node_name_;
     mesh.observer_router = router_name_;
-    mesh.state_revision = ++mesh_revision_;
+    // D99: read only — on_health_data()/on_health_reader_status() own the increment
+    // (once per real change, under the same roster_mutex_ this function is always
+    // called under). This function runs on every MeshTick regardless of whether the
+    // roster changed, so it can no longer be the one bumping the counter.
+    mesh.state_revision = mesh_revision_;
     const auto now = std::chrono::steady_clock::now();
     for (const auto &entry : roster_) {
         // Same bounded_sequence cap as peers_seen (unbounded IDL -> 100): overflowing
@@ -370,6 +420,42 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
         peer.presence = entry.second.presence;
         peer.last_seen_delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - entry.second.last_seen).count();
+        // D102: bound + refresh the transitive (second-hand) edges re-embedded from this
+        // peer's own cached peers_seen (D97 stopped stripping it). Two problems fixed at
+        // once, both from the same root cause -- these nested refs are frozen at whatever
+        // the peer itself reported at ITS last heartbeat, never touched again until a
+        // fresh one arrives:
+        //   1. O(N*M) growth: peers_seen is independently capped at 100 same as
+        //      mesh.peers, so an uncapped re-embed can put up to 100*100 RouterPeerRef
+        //      entries in one sample. A STALE/DEAD nested edge is stale telemetry about a
+        //      peer WE don't even watch directly -- low value for the mesh-dashboard's
+        //      transitive view -- so keep ALIVE-only, which bounds the realistic case to
+        //      however many peers are actually up, not the worst-case cap.
+        //   2. Frozen freshness: mesh_graph.js recomputes asOfMs = Date.now() -
+        //      last_seen_delta_ms on every ingest; since this nested delta was never
+        //      updated relative to OUR "now", a transitive edge visually "freshened" every
+        //      MeshTick even while the underlying data went stale. Fix: age each kept
+        //      edge's delta forward by peer.last_seen_delta_ms (how long OUR OWN view of
+        //      this peer has sat since we last heard from it) -- the peer stamped its
+        //      delta relative to its own "now" at heartbeat time, so from our perspective
+        //      as of right now that edge is (peer's reported delta + our own staleness on
+        //      this peer) old.
+        {
+            const auto reported = peer.health.peers_seen;
+            peer.health.peers_seen.clear();
+            for (const auto &sub : reported) {
+                if (sub.presence != RouterPresenceState::PRESENCE_ALIVE) {
+                    continue;
+                }
+                if (peer.health.peers_seen.size() == peer.health.peers_seen.max_size()) {
+                    break; // defensive only -- an ALIVE-only subset of an already-capped
+                            // list can't actually exceed the same cap
+                }
+                RouterPeerRef aged = sub;
+                aged.last_seen_delta_ms += peer.last_seen_delta_ms;
+                peer.health.peers_seen.push_back(aged);
+            }
+        }
         mesh.peers.push_back(peer);
         Log::debug("presence_mesh_peer",
                    {{"router", entry.first},

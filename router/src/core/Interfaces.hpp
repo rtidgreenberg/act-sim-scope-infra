@@ -83,9 +83,17 @@ struct IStatusPublisher {
 // without a presence participant, and every pre-Phase-8 test, are unaffected.
 // Telemetry only: publish_heartbeat() must never block route control and never touches
 // controller state (D5 — heartbeats do not bump state_revision).
+//
+// publish_mesh_tick() (D98) is the same seam for the controller's separate MeshTick
+// handler: it tells PresenceMonitor to republish its LAN ActRouterMeshStatus aggregate at
+// MeshTick's own independent cadence, decoupled from publish_heartbeat's WAN-heartbeat
+// cadence (D97 originally coupled them by calling the mesh publish unconditionally from
+// inside publish_heartbeat() itself). Also telemetry only, same never-bump/never-journal
+// contract.
 struct IPresencePublisher {
     virtual ~IPresencePublisher() {}
     virtual void publish_heartbeat(const RouterHealth &hb) = 0;
+    virtual void publish_mesh_tick() = 0;
 };
 
 // Debug-analysis journal seam (Phase 6 slice 6b, D55). The controller invokes record()

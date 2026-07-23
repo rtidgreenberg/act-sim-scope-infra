@@ -4,11 +4,56 @@
 // Publishes this router's compact RouterHealth heartbeat on the WAN participant (the ONE
 // liveliness-bearing WAN topic), subscribes to peers', maintains the ALIVE/STALE/DEAD
 // roster, and republishes the aggregated connected-router list on the LAN participant as
-// ActRouterMeshStatus. Mesh publish happens twice over: unconditionally on every
-// PresenceTick (full heartbeat-rate ticking, for GUI/mesh-dashboard consumers that want
-// a steady live feed rather than waiting on an event) AND immediately on a roster
-// change (peer appears, presence transition, or state_revision advance), so a
+// ActRouterMeshStatus. Mesh publish happens twice over: unconditionally on every MeshTick
+// (its own independent cadence, kMeshPublishPeriodMs, for GUI/mesh-dashboard consumers
+// that want a steady live feed rather than waiting on an event) AND immediately on a
+// roster change (peer appears, presence transition, or state_revision advance), so a
 // transition is never stuck behind the tick period.
+//
+// D98: MeshTick is deliberately a SEPARATE controller tick from PresenceTick (the WAN
+// heartbeat) — D97 originally called publish_mesh() unconditionally from inside
+// publish_heartbeat() itself, which coupled the LAN dashboard's refresh rate to the WAN
+// heartbeat's tuning (kHeartbeatPeriodMs) with no independent knob, AND put a synchronous
+// LAN DDS write on the controller strand's WAN-heartbeat path. MeshTick gives the LAN
+// refresh its own period, the same way LinkStatsTick already has its own independent of
+// PresenceTick's (see DrainThread.hpp). ActRouterMeshStatus is BEST_EFFORT (see
+// mesh_writer_qos): with a steady periodic republish, an occasional dropped sample
+// self-heals on the next tick, so RELIABLE's retry/ack machinery (and its blocking
+// potential under backpressure) buys nothing here.
+//
+// D99: RouterMeshStatus.state_revision (mesh_revision_) is owned entirely by this class
+// and is unrelated to RouterController's own D5 state_revision (echoed in RouterHealth,
+// journaled via ControllerJournalRecord) -- it's this router's OWN generation counter for
+// its aggregated view of its peer roster. Once MeshTick made build_mesh_locked() run
+// unconditionally every tick, it could no longer be the one deciding "did the roster
+// change" by simply incrementing on every call -- on_health_data()/on_health_reader_status()
+// own the increment now (once per real change, under roster_mutex_, at their existing
+// `changed` check), and build_mesh_locked() just reads the current value. This restores
+// RouterAdminTypes.idl's documented contract ("bumps when the roster changes") which
+// D98's unconditional per-tick build_mesh_locked() call had silently broken.
+//
+// D100: ActRouterMeshStatus dropped TRANSIENT_LOCAL too (D98 had kept it alongside
+// BEST_EFFORT). Under BEST_EFFORT, TRANSIENT_LOCAL's late-joiner replay burst is itself
+// just another best-effort sample -- no retry/repair if it's lost on the wire, and RTI's
+// own docs are explicit that the replay is only GUARANTEED effective paired with
+// RELIABLE. Keeping it bought a "repair mechanism" that wasn't actually repairing
+// anything, while still paying the writer's retained-sample bookkeeping. VOLATILE is
+// simpler and no less correct here: a late-joining reader just waits for the next
+// periodic MeshTick (worst case ~0.5s) for its first sample, instead of an unreliable
+// "instant" replay attempt. See mesh_writer_qos (PresenceMonitor.cxx).
+//
+// D101: mesh_writer_ also uses ASYNCHRONOUS publish mode, moving the actual network send
+// off the controller strand entirely (onto Connext's own async-publish thread) — residual
+// insurance against the strand ever blocking on this write, on top of (not instead of)
+// D100's BEST_EFFORT. See mesh_writer_qos (PresenceMonitor.cxx).
+//
+// D102: build_mesh_locked() bounds and refreshes the transitive (second-hand) peers_seen
+// it re-embeds from each peer's own cached RouterHealth (D97 stopped stripping this) —
+// ALIVE-only (bounds the O(N*M) growth to the realistic alive-peer count, not the 100x100
+// worst case) and with each kept edge's delta aged forward by how long our own view of
+// that peer has sat since its last heartbeat (fixes mesh_graph.js's transitive edges
+// visually "freshening" every MeshTick even though the underlying data never changed).
+// See build_mesh_locked() (PresenceMonitor.cxx).
 //
 // Identity (D79): the D74 participant name "<node>/<router>" is the ONLY router
 // identity — RouterHealth is keyed by it, the roster maps it, and peers_seen edges carry
@@ -30,11 +75,15 @@
 // than kLivelinessLease — the participant lease comes from the WAN participant profile,
 // so record both knobs when retuning): heartbeat 1 s (router_main passes
 // kHeartbeatPeriodMs to DrainThread), DEADLINE 2 s, AUTOMATIC liveliness lease 3 s.
+// MeshTick (D98) is a separate 0.5 s knob (kMeshPublishPeriodMs, also passed to
+// DrainThread) — independent of the heartbeat/DEADLINE/lease numbers above.
 //
 // Threading: the ReadCondition/StatusCondition handlers run on AsyncWaitSet worker
-// threads; publish_heartbeat() runs on the controller strand (PresenceTick). The roster
-// is mutex-guarded; the DDS writers are internally thread-safe. shutdown() detaches the
-// conditions (D32 blocking barriers) before destruction.
+// threads; publish_heartbeat() runs on the controller strand (PresenceTick) and
+// publish_mesh_tick() also runs on the controller strand (MeshTick) — both ticks are
+// posted by the same single-threaded DrainThread strand, just on independent periods.
+// The roster is mutex-guarded; the DDS writers are internally thread-safe. shutdown()
+// detaches the conditions (D32 blocking barriers) before destruction.
 
 #pragma once
 
@@ -59,6 +108,9 @@ namespace router {
 const int kHeartbeatPeriodMs = 1000;
 const int kHealthDeadlineMs = 2000;       // 2x heartbeat period
 const int kHealthLivelinessLeaseMs = 3000; // 3x heartbeat period (AUTOMATIC)
+// D98: the LAN mesh-dashboard republish cadence — independent of the WAN heartbeat
+// numbers above (see MeshTick in RouterEvents.hpp / DrainThread.hpp).
+const int kMeshPublishPeriodMs = 500;
 
 // Also an IWanStatsSource (Phase 9, D81): the RouterHealth writer/reader pair is the
 // mandatory idle-mesh bellwether — a known-rate WAN pair the LinkStatsCollector polls so
@@ -94,6 +146,11 @@ public:
 
     // IPresencePublisher — called from the controller strand on each PresenceTick.
     void publish_heartbeat(const RouterHealth &hb) override;
+
+    // IPresencePublisher (D98) — called from the controller strand on each MeshTick, its
+    // own independent cadence (kMeshPublishPeriodMs). Just republishes the mesh; on-change
+    // publishes from on_health_data/on_health_reader_status are unaffected.
+    void publish_mesh_tick() override;
 
     // IWanStatsSource — poll the RouterHealth pair's per-matched-endpoint protocol
     // statuses (Phase 9, D81). Called on the controller strand (the LinkStatsTick),
@@ -148,7 +205,9 @@ private:
     bool heartbeat_peers_truncated_ = false;
     bool mesh_peers_truncated_ = false;
     // Serializes build+write of the mesh aggregate (see publish_mesh()). Always taken
-    // BEFORE roster_mutex_; publish_heartbeat takes only roster_mutex_.
+    // BEFORE roster_mutex_; publish_heartbeat takes only roster_mutex_ and never touches
+    // this one (D98: the mesh publish moved to its own MeshTick / publish_mesh_tick(),
+    // no longer called from publish_heartbeat).
     std::mutex mesh_write_mutex_;
 
     std::vector<dds::core::cond::Condition> conditions_;

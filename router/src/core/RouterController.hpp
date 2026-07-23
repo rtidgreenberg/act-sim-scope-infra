@@ -105,6 +105,7 @@ private:
     void apply_refresh_counters();
     void apply_presence_tick();
     void apply_link_stats_tick();
+    void apply_mesh_tick();
 
     // Tighten a FORWARDING build's writer deadline in place when the derivation over
     // the current matched readers is stricter than the offer (D39/D45).

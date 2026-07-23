@@ -28,21 +28,30 @@ public:
     // THIRD independent knob so the config-fixed link-metrics cadence (experiment sweeps
     // must stay comparable) is never coupled to the refresh or heartbeat cadence. Default
     // 0 = no tick (no collector / unit tests).
+    // mesh_publish_period (D98): same tick pattern, posting MeshTick — a FOURTH independent
+    // knob so the LAN mesh-dashboard refresh cadence is never coupled to the WAN heartbeat
+    // (D97 originally published the mesh from inside the heartbeat tick itself; this
+    // knob replaces that coupling). Default 0 = no tick (no presence / unit tests).
     explicit DrainThread(RouterController &ctrl,
                          std::chrono::milliseconds refresh_period
                                  = std::chrono::milliseconds(0),
                          std::chrono::milliseconds heartbeat_period
                                  = std::chrono::milliseconds(0),
                          std::chrono::milliseconds link_stats_period
+                                 = std::chrono::milliseconds(0),
+                         std::chrono::milliseconds mesh_publish_period
                                  = std::chrono::milliseconds(0))
             : ctrl_(ctrl), running_(true) {
         thread_ = std::thread([this, refresh_period, heartbeat_period,
-                               link_stats_period]() {
+                               link_stats_period, mesh_publish_period]() {
             auto next_refresh = std::chrono::steady_clock::now() + refresh_period;
             auto next_heartbeat = std::chrono::steady_clock::now(); // first beat now:
             // the roster side (PresenceMonitor) marks a peer ALIVE only on a heartbeat,
             // so the first one should not wait a full period after startup.
             auto next_link_stats = std::chrono::steady_clock::now() + link_stats_period;
+            auto next_mesh_publish = std::chrono::steady_clock::now(); // mesh first too:
+            // same reasoning as heartbeat — a fresh dashboard shouldn't wait a full
+            // period after startup for its first live sample.
             while (running_.load(std::memory_order_relaxed)) {
                 if (refresh_period.count() > 0
                     && std::chrono::steady_clock::now() >= next_refresh) {
@@ -69,6 +78,13 @@ public:
                     do { // same catch-up resync
                         next_link_stats += link_stats_period;
                     } while (next_link_stats <= std::chrono::steady_clock::now());
+                }
+                if (mesh_publish_period.count() > 0
+                    && std::chrono::steady_clock::now() >= next_mesh_publish) {
+                    ctrl_.post(ControllerEvent::mesh_tick());
+                    do { // same catch-up resync
+                        next_mesh_publish += mesh_publish_period;
+                    } while (next_mesh_publish <= std::chrono::steady_clock::now());
                 }
                 ctrl_.wait_and_drain(std::chrono::milliseconds(100));
             }

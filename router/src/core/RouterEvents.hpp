@@ -75,10 +75,19 @@ enum class ControllerEventKind {
                             // the presence publisher; telemetry only, never bumps
                             // state_revision and is never journaled (same skip-path as
                             // RefreshCounters, D71)
-    LinkStatsTick           // periodic link-metrics tick (Phase 9, D14/D81): tell the
+    LinkStatsTick,          // periodic link-metrics tick (Phase 9, D14/D81): tell the
                             // collector to poll WAN protocol statuses + probe app-acks and
                             // publish per-peer ActRouterLinkStats on the LAN; telemetry
                             // only, same never-bump/never-journal skip-path as the others
+    MeshTick                // periodic LAN mesh-dashboard publish (D98): tell
+                            // PresenceMonitor to republish ActRouterMeshStatus at its own
+                            // independent cadence, decoupled from PresenceTick's WAN-
+                            // heartbeat cadence (D97 had coupled them by publishing the
+                            // mesh unconditionally from inside publish_heartbeat() itself
+                            // -- this tick replaces that). On-change publishes from
+                            // on_health_data/on_health_reader_status are unaffected and
+                            // still fire immediately on a real roster transition;
+                            // telemetry only, same never-bump/never-journal skip-path
 };
 
 // One flat event struct (POC-simple; only the fields for the given kind are meaningful).
@@ -187,6 +196,11 @@ struct ControllerEvent {
         ControllerEvent e;
         e.kind = ControllerEventKind::LinkStatsTick;
         return e; // no payload: the handler tells the collector to poll + publish
+    }
+    static ControllerEvent mesh_tick() {
+        ControllerEvent e;
+        e.kind = ControllerEventKind::MeshTick;
+        return e; // no payload: the handler tells PresenceMonitor to republish the mesh
     }
     static ControllerEvent topic_match_changed(const std::string &route,
                                                const std::string &topic,

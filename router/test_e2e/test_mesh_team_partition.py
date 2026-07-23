@@ -73,9 +73,11 @@ def health_reader(probe, provider):
 
 
 def mesh_reader(probe, provider):
+    # D100: BEST_EFFORT + VOLATILE, matching mesh_writer_qos (PresenceMonitor.cxx) --
+    # both are RxO policies, so this reader must match on each independently.
     return probe.reader(
         MESH_TOPIC, "RouterMeshStatus",
-        qos=reader_qos(reliability="reliable", durability="transient_local"),
+        qos=reader_qos(reliability="best_effort", durability="volatile"),
         dtype=provider.type("RouterMeshStatus"))
 
 

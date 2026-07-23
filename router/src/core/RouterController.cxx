@@ -51,7 +51,8 @@ ControllerJournalEventKind journal_kind(ControllerEventKind kind) {
     case ControllerEventKind::RefreshCounters:
     case ControllerEventKind::PresenceTick:
     case ControllerEventKind::LinkStatsTick:
-        break; // never journaled (D63/D71/D75/D81 — process_one skips the ticks)
+    case ControllerEventKind::MeshTick:
+        break; // never journaled (D63/D71/D75/D81/D98 — process_one skips the ticks)
     }
     return ControllerJournalEventKind::JOURNAL_COMMAND_RECEIVED; // unreachable
 }
@@ -160,6 +161,13 @@ void RouterController::process_one(const ControllerEvent &event) {
         apply_link_stats_tick();
         return;
     }
+    // The MeshTick (D98) is the same shape: pure telemetry, PresenceMonitor owns its own
+    // (revision-less) mesh publish, never journaled. Separate cadence from PresenceTick —
+    // see RouterEvents.hpp / DrainThread.hpp.
+    if (event.kind == ControllerEventKind::MeshTick) {
+        apply_mesh_tick();
+        return;
+    }
     // Only the two participant-partition commands can change a participant's
     // fingerprint (D83) — every other event kind, including the high-frequency discovery
     // ones, skips that O(participants) scan entirely.
@@ -214,7 +222,8 @@ void RouterController::process(const ControllerEvent &event) {
     case ControllerEventKind::RefreshCounters:
     case ControllerEventKind::PresenceTick:
     case ControllerEventKind::LinkStatsTick:
-        break; // handled directly by process_one() before here (D63/D71/D75/D81)
+    case ControllerEventKind::MeshTick:
+        break; // handled directly by process_one() before here (D63/D71/D75/D81/D98)
     }
 }
 
@@ -292,7 +301,9 @@ ControllerJournalRecord RouterController::build_journal_record(
         break;
     case ControllerEventKind::RefreshCounters:
     case ControllerEventKind::PresenceTick:
-        break; // unreachable — process_one never journals the ticks (D63/D71/D75)
+    case ControllerEventKind::LinkStatsTick:
+    case ControllerEventKind::MeshTick:
+        break; // unreachable — process_one never journals the ticks (D63/D71/D75/D81/D98)
     }
 
     // Status is published iff externally-visible state changed (publish_if_changed) — so
@@ -804,6 +815,16 @@ void RouterController::apply_link_stats_tick() {
         return;
     }
     link_stats_->on_link_stats_tick();
+}
+
+void RouterController::apply_mesh_tick() {
+    // D98: telemetry only, same shape as apply_link_stats_tick(). Reuses presence_ (the
+    // same IPresencePublisher the WAN heartbeat uses) rather than a new member, since
+    // PresenceMonitor is the sole owner of both the heartbeat and the mesh aggregate.
+    if (presence_ == nullptr) {
+        return;
+    }
+    presence_->publish_mesh_tick();
 }
 
 // --- Entity operation completions (D21), stale-stamp discard (D23) ---
