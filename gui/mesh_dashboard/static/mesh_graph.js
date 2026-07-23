@@ -38,14 +38,65 @@
   // docs/connext-ai-issues/connext-ai-issues.md (2026-07-21).
   const WS_CONTENT_TYPE = "application/dds-web+json";
 
-  const PRESENCE_COLOR = {
-    PRESENCE_ALIVE: "#3aa655",
-    PRESENCE_STALE: "#d9a441",
-    PRESENCE_DEAD: "#c0392b",
+  // Edge color encodes source, not presence (2026-07-23) -- green for a direct mesh_status
+  // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
+  // reported roster, one hop further out). Presence still surfaces via decay/opacity, the
+  // edge label/title, and the node detail panel -- it just no longer has its own hue.
+  // peers_seen's blue is deliberately NOT KNOWN_NODE_COLOR (also blue, below) -- reusing
+  // that exact shade would make a relayed *edge* look like it means "heard directly", the
+  // opposite of what KNOWN_NODE_COLOR means for a *node*.
+  const EDGE_SOURCE_COLOR = {
+    mesh_status: "#3aa655",
+    peers_seen: "#3a7bd9",
   };
   const KNOWN_NODE_COLOR = "#4a90d9";
   const PLACEHOLDER_NODE_COLOR = "#888888";
   const RECONNECT_DELAY_MS = 3000;
+
+  // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
+  // at EDGE_DECAY_WINDOW_MS -- deliberately the same 3s window as the AUTOMATIC liveliness
+  // lease (D75), so a fully-faded edge lines up with when presence itself would flip to
+  // STALE/DEAD. asOfMs is the wall-clock point the edge's data was last known-current, not
+  // "when the browser happened to receive a message" -- see the two upsertEdge call sites.
+  const EDGE_DECAY_WINDOW_MS = 3000;
+  const EDGE_MIN_OPACITY = 0.15;
+  const EDGE_DECAY_TICK_MS = 300;
+
+  // Pin the C2/control node at a fixed spot above the force-directed layout, per the
+  // user's "simplify the GUI" ask -- a minimal anchor rather than switching the whole
+  // graph to vis's hierarchical layout (which would misrepresent this mesh's peer-to-peer
+  // edges as parent/child ranks). The observer node IS the C2/control node here, always --
+  // wis_config.xml.template hardcodes this dashboard to control_lan (domain 20), so
+  // whichever router's admin LAN participant WIS subscribes to is definitionally the
+  // control node (see that template's header comment). RouterHealth.role ("control" vs
+  // "platform", RouterAdminTypes.idl) is also checked on peers as a defense-in-depth
+  // fallback, though in this dashboard's fixed control_lan deployment a peer can never
+  // legitimately carry role "control" -- only the observer can. x for the peer-role case
+  // is a deterministic hash of the node id (same technique as colorForTeam) so multiple
+  // control-role nodes don't land on top of each other.
+  const C2_PIN_X = 0;
+  const C2_PIN_Y = -400;
+  const C2_PIN_X_SLOTS = 5;
+  const C2_PIN_X_SPACING = 220;
+  const OBSERVER_PIN_FIELDS = { x: C2_PIN_X, y: C2_PIN_Y, fixed: { x: true, y: true } };
+
+  function c2PinFields(health) {
+    if (!health || health.role !== "control") return null;
+    const id = health.router;
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+    const slot = (hash % C2_PIN_X_SLOTS) - Math.floor(C2_PIN_X_SLOTS / 2);
+    return { x: slot * C2_PIN_X_SPACING, y: C2_PIN_Y, fixed: { x: true, y: true } };
+  }
+
+  // Two-tier hierarchy (2026-07-23, "C2 on top, platforms below"): pin every non-control
+  // node's y into a fixed band below C2, same anchor-not-engine approach as C2_PIN_Y above
+  // and for the same reason -- vis's real hierarchical layout mode derives rank from edge
+  // direction, which would misrepresent a platform-to-platform peers_seen edge as a
+  // parent/child relationship instead of a peer one. Only y is fixed; x stays physics-driven
+  // (barnesHut) so nodes still spread out and settle within the row instead of stacking.
+  const PLATFORM_PIN_Y = 200;
+  const PLATFORM_PIN_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: false, y: true } };
 
   // Team-membership ring (follow-on to v1's presence-only graph, 2026-07-21). RouterHealth
   // now carries team_partition -- team_wan's raw participant-partition set (D83's
@@ -154,7 +205,10 @@
     { nodes, edges },
     {
       nodes: { shape: "dot", size: 16, font: { color: "#e6e8eb" } },
-      edges: { width: 2, smooth: { type: "continuous" } },
+      edges: {
+        width: 2, smooth: { type: "continuous" },
+        font: { size: 9, color: "#9aa0a8", strokeWidth: 0, align: "top" },
+      },
       physics: { stabilization: false, barnesHut: { springLength: 160 } },
       interaction: { hover: true },
     }
@@ -224,10 +278,21 @@
            (extra ? `\n${extra}` : "");
   }
 
-  function upsertEdge(fromId, toId, presence, title) {
+  // opts.source labels which relationship produced this edge, drives both the label (shown
+  // on the graph, not just on hover) and the color (EDGE_SOURCE_COLOR) -- "mesh_status"
+  // (observer's own direct peers list) vs "peers_seen" (a peer's own embedded roster, one
+  // hop further out). opts.asOfMs anchors decay, derived the same way for both: the wire's
+  // own last_seen_delta_ms (D97 added this to RouterPeerRef too -- a duration, not a
+  // timestamp, so no clock-sync assumption either way).
+  function upsertEdge(fromId, toId, presence, opts) {
+    opts = opts || {};
+    const baseColor = EDGE_SOURCE_COLOR[opts.source] || "#999999";
     edges.update({
       id: `${fromId}->${toId}`, from: fromId, to: toId, arrows: "to",
-      color: { color: PRESENCE_COLOR[presence] || "#999999" }, title: title || presence,
+      label: opts.source || "",
+      color: { color: baseColor, opacity: 1 },
+      baseColor, asOfMs: opts.asOfMs != null ? opts.asOfMs : Date.now(),
+      title: opts.title || presence,
     });
   }
 
@@ -237,13 +302,29 @@
     });
   }
 
+  // Runs independently of sample ingest -- a roster that's gone quiet (no new sample, so no
+  // upsertEdge call) still needs its edges to visibly age between updates, not just jump
+  // stale the instant the next sample finally arrives.
+  function tickEdgeDecay() {
+    const now = Date.now();
+    const updates = [];
+    edges.get().forEach((e) => {
+      if (e.asOfMs == null || !e.baseColor) return;
+      const frac = Math.max(0, Math.min(1, (now - e.asOfMs) / EDGE_DECAY_WINDOW_MS));
+      updates.push({ id: e.id, color: { color: e.baseColor, opacity: 1 - frac * (1 - EDGE_MIN_OPACITY) } });
+    });
+    if (updates.length) edges.update(updates);
+  }
+  setInterval(tickEdgeDecay, EDGE_DECAY_TICK_MS);
+
   // data is one ActRouterMeshStatus sample: {observer_node, observer_router, state_revision,
   // peers: [{health: <full RouterHealth>, presence, last_seen_delta_ms}, ...]}.
   function upsertMeshStatusSample(data) {
     if (!data || !data.observer_node || !data.observer_router) return;
     const observerId = `${data.observer_node}/${data.observer_router}`;
     nodes.update({ id: observerId, label: observerId, color: KNOWN_NODE_COLOR,
-                   title: "(this dashboard's own vantage point)", kind: "observer" });
+                   title: "(this dashboard's own vantage point -- the C2/control node)",
+                   kind: "observer", ...OBSERVER_PIN_FIELDS });
 
     const directPeers = new Set();
     const sampleNodeNames = new Set(
@@ -271,9 +352,14 @@
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
+        ...PLATFORM_PIN_FIELDS,
+        ...(c2PinFields(health) || {}),
       });
-      upsertEdge(observerId, peerId, peerEntry.presence,
-                 `${peerEntry.presence}, last_seen ${peerEntry.last_seen_delta_ms} ms ago`);
+      upsertEdge(observerId, peerId, peerEntry.presence, {
+        title: `${peerEntry.presence}, last_seen ${peerEntry.last_seen_delta_ms} ms ago`,
+        source: "mesh_status",
+        asOfMs: Date.now() - (peerEntry.last_seen_delta_ms || 0),
+      });
 
       // Bonus: each peer's own embedded heartbeat (health) carries ITS OWN peers_seen
       // roster -- reconstructs the fuller multi-hop mesh graph from one LAN vantage point,
@@ -285,9 +371,13 @@
         if (!nodes.get(subPeer.router)) {
           nodes.add({ id: subPeer.router, label: subPeer.router, color: PLACEHOLDER_NODE_COLOR,
                        title: "(only known via another router's own roster, not directly)",
-                       kind: "placeholder", knownVia: peerId });
+                       kind: "placeholder", knownVia: peerId, ...PLATFORM_PIN_FIELDS });
         }
-        upsertEdge(peerId, subPeer.router, subPeer.presence);
+        upsertEdge(peerId, subPeer.router, subPeer.presence, {
+          title: `${subPeer.presence}, last_seen (from ${peerId}): ${subPeer.last_seen_delta_ms} ms ago`,
+          source: "peers_seen",
+          asOfMs: Date.now() - (subPeer.last_seen_delta_ms || 0),
+        });
       });
       pruneStaleEdgesFrom(peerId, subPeers);
     });
