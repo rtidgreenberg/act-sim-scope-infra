@@ -1,5 +1,6 @@
 {
     "C_Cpp.files.exclude": {
         "${workspaceFolder}/references/**": true
-    }
+    },
+    "cmake.sourceDirectory": "${workspaceFolder}/router"
 }
