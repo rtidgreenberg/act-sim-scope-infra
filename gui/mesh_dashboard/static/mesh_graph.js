@@ -54,6 +54,7 @@
   // mesh_status edge), blue always means "relayed/secondhand" (only known via another peer's
   // embedded peers_seen roster, same as a peers_seen edge) -- one consistent color language
   // across nodes and edges instead of two unrelated palettes.
+  const OBSERVER_NODE_COLOR = "#e0b84d";
   const KNOWN_NODE_COLOR = EDGE_SOURCE_COLOR.mesh_status;
   const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
@@ -155,13 +156,37 @@
   ];
   const teamColors = new Map(); // team name -> assigned palette color
   const teamLegendEl = document.getElementById("team-legend");
+  const directLinksToggle = document.getElementById("toggle-direct-links");
+  const relayedLinksToggle = document.getElementById("toggle-relayed-links");
 
   // Team filter (interactivity, 2026-07-21): click a team's legend chip to highlight only
   // that team's nodes (others dimmed). Multi-select — click several to widen the set;
   // click an active one to remove it; empty set = show everything. Filtering is a pure
   // client-side view over the same samples — it never changes what's subscribed.
   const activeTeamFilter = new Set();
+  let selectedId = null;
   const DIM_OPACITY = 0.2;
+  const HIGHLIGHT_DIM_OPACITY = 0.18;
+
+  function edgeVisibleBySource(edge) {
+    if (edge.source === "mesh_status") return directLinksToggle.checked;
+    if (edge.source === "peers_seen") return relayedLinksToggle.checked;
+    return true;
+  }
+
+  function selectedNeighborhood() {
+    if (!selectedId) return null;
+    const nodeIds = new Set([selectedId]);
+    const edgeIds = new Set();
+    edges.get().forEach((e) => {
+      if (e.from === selectedId || e.to === selectedId) {
+        nodeIds.add(e.from);
+        nodeIds.add(e.to);
+        edgeIds.add(e.id);
+      }
+    });
+    return { nodeIds, edgeIds };
+  }
 
   function colorForTeam(team) {
     if (teamColors.has(team)) return teamColors.get(team);
@@ -174,7 +199,6 @@
     const span = document.createElement("span");
     span.innerHTML = `<i style="background:${color}"></i> ${team}`;
     span.style.cursor = "pointer";
-    span.title = "click to filter the graph to this team";
     span.addEventListener("click", () => {
       if (activeTeamFilter.has(team)) {
         activeTeamFilter.delete(team);
@@ -183,7 +207,7 @@
         activeTeamFilter.add(team);
         span.classList.add("active");
       }
-      applyTeamFilter();
+      applyViewFilters();
     });
     teamLegendEl.appendChild(span);
     return color;
@@ -193,17 +217,30 @@
   // (this vantage point) is always kept full — it's "you", relevant regardless of filter.
   // Empty filter = everything full. Called after every ingest so newly-arrived nodes
   // respect the current filter too.
-  function applyTeamFilter() {
-    const updates = [];
+  function applyViewFilters() {
+    const nodeUpdates = [];
+    const edgeUpdates = [];
+    const neighborhood = selectedNeighborhood();
     nodes.get().forEach((n) => {
       let full = true;
       if (activeTeamFilter.size > 0 && n.kind !== "observer") {
         const teams = n.teamNames || [];
         full = teams.some((t) => activeTeamFilter.has(t));
       }
-      updates.push({ id: n.id, opacity: full ? 1 : DIM_OPACITY });
+      if (neighborhood && !neighborhood.nodeIds.has(n.id)) full = false;
+      nodeUpdates.push({ id: n.id, opacity: full ? 1 : (neighborhood ? HIGHLIGHT_DIM_OPACITY : DIM_OPACITY) });
     });
-    if (updates.length) nodes.update(updates);
+    edges.get().forEach((e) => {
+      const sourceVisible = edgeVisibleBySource(e);
+      const selectedVisible = !neighborhood || neighborhood.edgeIds.has(e.id);
+      edgeUpdates.push({
+        id: e.id,
+        hidden: !(sourceVisible && selectedVisible),
+        color: { color: e.baseColor, opacity: sourceVisible && selectedVisible ? e.currentOpacity || 1 : HIGHLIGHT_DIM_OPACITY },
+      });
+    });
+    if (nodeUpdates.length) nodes.update(nodeUpdates);
+    if (edgeUpdates.length) edges.update(edgeUpdates);
   }
 
   // The wire's RouterHealth.router / observer_node+observer_router carry the full D79
@@ -216,6 +253,10 @@
   function nodeNameOf(routerId) {
     const slash = String(routerId).indexOf("/");
     return slash > 0 ? routerId.slice(0, slash) : String(routerId);
+  }
+
+  function routerLabel(id) {
+    return String(id);
   }
 
   // Every node id in the graph is now just the node name (nodeNameOf, above) -- which is
@@ -254,10 +295,10 @@
     document.getElementById("graph"),
     { nodes, edges },
     {
-      nodes: { shape: "dot", size: 16, font: { size: 0 } },
+      nodes: { shape: "dot", size: 16, font: { size: 13, color: "#e6e8eb" } },
       edges: { width: 2, smooth: { enabled: false } },
       physics: { enabled: false },
-      interaction: { hover: true },
+      interaction: { hover: false },
     }
   );
 
@@ -266,7 +307,6 @@
   // node object (stashed in upsertMeshStatusSample), so this reads the DataSet, not the
   // wire. selectedId lets an in-place sample update refresh the open panel live.
   const detailEl = document.getElementById("detail");
-  let selectedId = null;
 
   function detailRow(k, v) {
     return `<div class="detail-row"><span class="k">${k}</span>` +
@@ -310,20 +350,19 @@
   function hideDetail() {
     detailEl.style.display = "none";
     selectedId = null;
+    applyViewFilters();
   }
 
-  network.on("selectNode", (p) => { if (p.nodes.length) renderDetail(p.nodes[0]); });
+  network.on("selectNode", (p) => {
+    if (p.nodes.length) {
+      renderDetail(p.nodes[0]);
+      applyViewFilters();
+    }
+  });
   network.on("deselectNode", () => hideDetail());
 
-  function healthTitle(health, teamNames, extra) {
-    const rawPartition = (health.team_partition || []).join(", ") || "(none)";
-    const team = teamNames.length ? teamNames.join(", ") : "(no team assigned)";
-    return `role: ${health.role}\noverall_state: ${health.overall_state}\n` +
-           `n_routes: ${health.n_routes}  n_degraded: ${health.n_degraded}  n_error: ${health.n_error}\n` +
-           `heartbeat_seq: ${health.heartbeat_seq}\n` +
-           `team: ${team}  (raw team_partition: [${rawPartition}])` +
-           (extra ? `\n${extra}` : "");
-  }
+  directLinksToggle.addEventListener("change", applyViewFilters);
+  relayedLinksToggle.addEventListener("change", applyViewFilters);
 
   // reporterId is whichever node's roster produced this entry (the observer's own
   // mesh_status peers list, or a peer's embedded peers_seen roster); subjectId is the node
@@ -343,21 +382,23 @@
   // straight-only per the arrow-direction fix above), so labels ended up left/right of the
   // line inconsistently or floating disconnected from any visible edge. Color + the legend
   // already convey source; opts.source is folded into the hover title instead, so the
-  // information isn't lost, just no longer fighting for on-canvas placement.
+  // source remains internal edge metadata instead of fighting for on-canvas placement.
   // opts.asOfMs anchors decay, derived the same way for both: the wire's own
   // last_seen_delta_ms (D97 added this to RouterPeerRef too -- a duration, not a timestamp,
   // so no clock-sync assumption either way).
   function upsertEdge(reporterId, subjectId, presence, opts) {
     opts = opts || {};
     const baseColor = EDGE_SOURCE_COLOR[opts.source] || "#999999";
-    const sourceTitle = opts.source === "mesh_status" ? "direct" :
-                        opts.source === "peers_seen" ? "relayed" : opts.source;
+    const isRelayed = opts.source === "peers_seen";
     edges.update({
       id: `${reporterId}->${subjectId}`, from: subjectId, to: reporterId, arrows: "to",
       label: "",
+      dashes: isRelayed ? [8, 6] : false,
+      source: opts.source,
       color: { color: baseColor, opacity: 1 },
+      hidden: opts.source ? !edgeVisibleBySource({ source: opts.source }) : false,
       baseColor, asOfMs: opts.asOfMs != null ? opts.asOfMs : Date.now(),
-      title: `${sourceTitle ? sourceTitle + ": " : ""}${opts.title || presence}`,
+      currentOpacity: 1,
     });
     refreshParallelEdges(subjectId, reporterId);
   }
@@ -407,9 +448,14 @@
     edges.get().forEach((e) => {
       if (e.asOfMs == null || !e.baseColor) return;
       const frac = Math.max(0, Math.min(1, (now - e.asOfMs) / EDGE_DECAY_WINDOW_MS));
-      updates.push({ id: e.id, color: { color: e.baseColor, opacity: 1 - frac * (1 - EDGE_MIN_OPACITY) } });
+      updates.push({
+        id: e.id,
+        currentOpacity: 1 - frac * (1 - EDGE_MIN_OPACITY),
+        color: { color: e.baseColor, opacity: 1 - frac * (1 - EDGE_MIN_OPACITY) },
+      });
     });
     if (updates.length) edges.update(updates);
+    applyViewFilters();
   }
   setInterval(tickEdgeDecay, EDGE_DECAY_TICK_MS);
 
@@ -418,8 +464,7 @@
   function upsertMeshStatusSample(data) {
     if (!data || !data.observer_node || !data.observer_router) return;
     const observerId = data.observer_node; // already just the node name (RouterMeshStatus)
-    nodes.update({ id: observerId, label: "", color: KNOWN_NODE_COLOR,
-                   title: "(this dashboard's own vantage point -- the C2/control node)",
+    nodes.update({ id: observerId, label: routerLabel(observerId), color: OBSERVER_NODE_COLOR,
                    kind: "observer", ...OBSERVER_PIN_FIELDS });
 
     const directPeers = new Set();
@@ -439,11 +484,9 @@
       // WAN RouterHealth topic's trimmed peers_seen refs don't.
       const teamNames = deriveTeamNames(health, sampleNodeNames);
       nodes.update({
-        id: peerId, label: "",
+        id: peerId, label: routerLabel(peerId),
         color: { background: KNOWN_NODE_COLOR, border: teamBorder(teamNames) },
         borderWidth: 4,
-        title: healthTitle(health, teamNames,
-                            `last_seen (from ${observerId}): ${peerEntry.last_seen_delta_ms} ms ago`),
         // Stashed for the detail panel (interactivity) + team filter — read back from the
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
@@ -452,7 +495,6 @@
         ...(c2PinFields(health) || {}),
       });
       upsertEdge(observerId, peerId, peerEntry.presence, {
-        title: `${peerEntry.presence}, last_seen ${peerEntry.last_seen_delta_ms} ms ago`,
         source: "mesh_status",
         asOfMs: Date.now() - (peerEntry.last_seen_delta_ms || 0),
       });
@@ -466,12 +508,10 @@
         const subId = nodeNameOf(subPeer.router);
         subPeers.add(subId);
         if (!nodes.get(subId)) {
-          nodes.add({ id: subId, label: "", color: PLACEHOLDER_NODE_COLOR,
-                       title: "(only known via another router's own roster, not directly)",
+          nodes.add({ id: subId, label: routerLabel(subId), color: PLACEHOLDER_NODE_COLOR,
                        kind: "placeholder", knownVia: peerId, ...PLATFORM_ROW_Y_FIELDS });
         }
         upsertEdge(peerId, subId, subPeer.presence, {
-          title: `${subPeer.presence}, last_seen (from ${peerId}): ${subPeer.last_seen_delta_ms} ms ago`,
           source: "peers_seen",
           asOfMs: Date.now() - (subPeer.last_seen_delta_ms || 0),
         });
@@ -480,6 +520,16 @@
     });
     pruneStaleEdgesFrom(observerId, directPeers);
     relayoutPlatformRow();
+    updateTopologyStatus(data);
+  }
+
+  function updateTopologyStatus(data) {
+    const directCount = (data.peers || []).length;
+    const aliveCount = (data.peers || []).filter((p) => p && p.presence === "PRESENCE_ALIVE").length;
+    const relayedCount = edges.get({ filter: (e) => e.source === "peers_seen" }).length;
+    const revision = data.state_revision != null ? ` · rev ${data.state_revision}` : "";
+    setStatus(`View from ${data.observer_node} · control_lan · ${aliveCount}/${directCount} direct alive · ` +
+          `${relayedCount} relayed${revision}`);
   }
 
   function ingestSampleArray(samples) {
@@ -492,7 +542,7 @@
       }
     });
     if (n) {
-      applyTeamFilter();                       // new nodes respect the active filter
+      applyViewFilters();                      // new nodes respect active filters/highlight
       if (selectedId) renderDetail(selectedId); // live-refresh an open panel in place
     }
     return n;
@@ -562,8 +612,8 @@
       }
       if (msg && msg.kind === "b_push" && msg.body && Array.isArray(msg.body.read_sample_seq)) {
         ingestSampleArray(msg.body.read_sample_seq);
-        setStatus(`Live — last update ${new Date().toLocaleTimeString()}, ` +
-                  `${nodes.length} node(s), ${edges.length} edge(s)`);
+        setStatus(`${statusEl.textContent} · ${new Date().toLocaleTimeString()} · ` +
+            `${nodes.length} nodes / ${edges.length} edges`);
       }
     };
 

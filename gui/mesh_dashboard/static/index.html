@@ -6,15 +6,21 @@
 <style>
   html, body { margin: 0; padding: 0; min-height: 900px; height: 100%; background: #14181f; color: #e6e8eb;
                font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
-  #statusbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; padding: 8px 14px;
-               background: #1c222c; border-bottom: 1px solid #2c3542; font-size: 13px; }
+  #statusbar { position: fixed; top: 0; left: 0; right: 46%; z-index: 10; padding: 8px 14px;
+               background: #1c222c; border-bottom: 1px solid #2c3542; font-size: 13px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #legend, #team-legend { position: fixed; right: 0; z-index: 10; padding: 8px 14px;
             background: #1c222c; border-bottom: 1px solid #2c3542; border-left: 1px solid #2c3542;
             font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40%; }
   #legend { top: 0; }
   #team-legend { top: 37px; }
+  #topology-controls { position: fixed; left: 0; top: 37px; z-index: 10; padding: 8px 14px;
+            background: #1c222c; border-right: 1px solid #2c3542; border-bottom: 1px solid #2c3542;
+            font-size: 12px; display: flex; gap: 14px; align-items: center; }
   #legend span, #team-legend span { display: inline-flex; align-items: center; gap: 6px; }
   #legend i, #team-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #topology-controls label { display: inline-flex; align-items: center; gap: 6px; color: #d5d9df; }
+  #topology-controls input { margin: 0; accent-color: #3aa655; }
   /* team chips are clickable filters; the active ones get a pill highlight */
   #team-legend span:hover { color: #fff; }
   #team-legend span.active { background: #2c3542; border-radius: 10px; padding: 1px 8px;
@@ -40,11 +46,16 @@
 </head>
 <body>
 <div id="statusbar">connecting…</div>
+<div id="topology-controls">
+  <label><input id="toggle-direct-links" type="checkbox" checked> direct links</label>
+  <label><input id="toggle-relayed-links" type="checkbox" checked> relayed links</label>
+</div>
 <div id="legend">
+  <span><i style="background:#e0b84d"></i> observer router</span>
   <span><i style="background:#3aa655"></i> router (heard directly)</span>
   <span><i style="background:#3a7bd9"></i> router (only via a peer)</span>
   <span><i style="background:#3aa655"></i> direct link</span>
-  <span><i style="background:#3a7bd9"></i> relayed link</span>
+  <span><i style="background:#3a7bd9"></i> dashed relayed link</span>
   <span><i style="background:#3a3f4a"></i> ring = team (fill color unchanged)</span>
   <span>· click a node for detail · click a team below to filter</span>
 </div>
@@ -52,6 +63,6 @@
 <div id="detail"></div>
 <div id="graph"></div>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js"></script>
+<script src="mesh_graph.js?v=20260723-topology-clarity-3"></script>
 </body>
 </html>
