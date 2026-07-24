@@ -2,7 +2,10 @@
 // design: docs/cpp_router/gui-visualization.md). Renders the router mesh as seen from ONE
 // node's admin LAN participant (colocated deployment, control_lan by default): one node per
 // router identity ("<node>/<router>"), edges from the "who reports whom" relationships in
-// ActRouterMeshStatus. Trusts presence/overall_state as authoritative -- never recomputes
+// ActRouterMeshStatus, arrows drawn in the direction the underlying RouterHealth/heartbeat
+// traffic actually flows -- reporter <- subject, i.e. into whichever node received/"heard"
+// it (2026-07-23; see upsertEdge's comment) -- not observer -> peer as a query/ownership
+// arrow would read. Trusts presence/overall_state as authoritative -- never recomputes
 // liveliness timing client-side (Tenet 9).
 //
 // LAN-side, not WAN (scope correction, 2026-07-21 -- see wis_config.xml.template's header
@@ -42,15 +45,17 @@
   // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
   // reported roster, one hop further out). Presence still surfaces via decay/opacity, the
   // edge label/title, and the node detail panel -- it just no longer has its own hue.
-  // peers_seen's blue is deliberately NOT KNOWN_NODE_COLOR (also blue, below) -- reusing
-  // that exact shade would make a relayed *edge* look like it means "heard directly", the
-  // opposite of what KNOWN_NODE_COLOR means for a *node*.
   const EDGE_SOURCE_COLOR = {
     mesh_status: "#3aa655",
     peers_seen: "#3a7bd9",
   };
-  const KNOWN_NODE_COLOR = "#4a90d9";
-  const PLACEHOLDER_NODE_COLOR = "#888888";
+  // Node color reuses the exact same hue mapping as edge color (2026-07-23, user ask): green
+  // always means "direct" (this dashboard has the node's own RouterHealth, same as a
+  // mesh_status edge), blue always means "relayed/secondhand" (only known via another peer's
+  // embedded peers_seen roster, same as a peers_seen edge) -- one consistent color language
+  // across nodes and edges instead of two unrelated palettes.
+  const KNOWN_NODE_COLOR = EDGE_SOURCE_COLOR.mesh_status;
+  const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
 
   // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
@@ -75,7 +80,7 @@
   // is a deterministic hash of the node id (same technique as colorForTeam) so multiple
   // control-role nodes don't land on top of each other.
   const C2_PIN_X = 0;
-  const C2_PIN_Y = -400;
+  const C2_PIN_Y = -45;
   const C2_PIN_X_SLOTS = 5;
   const C2_PIN_X_SPACING = 220;
   const OBSERVER_PIN_FIELDS = { x: C2_PIN_X, y: C2_PIN_Y, fixed: { x: true, y: true } };
@@ -93,10 +98,46 @@
   // node's y into a fixed band below C2, same anchor-not-engine approach as C2_PIN_Y above
   // and for the same reason -- vis's real hierarchical layout mode derives rank from edge
   // direction, which would misrepresent a platform-to-platform peers_seen edge as a
-  // parent/child relationship instead of a peer one. Only y is fixed; x stays physics-driven
-  // (barnesHut) so nodes still spread out and settle within the row instead of stacking.
-  const PLATFORM_PIN_Y = 200;
-  const PLATFORM_PIN_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: false, y: true } };
+  // parent/child relationship instead of a peer one.
+  //
+  // x used to be left physics-driven (barnesHut) so nodes would spread out within the row,
+  // but with physics running continuously that meant nodes visibly jittered back and forth
+  // forever hunting for equilibrium (reported 2026-07-23). Physics is now fully disabled
+  // (see the `physics: { enabled: false }` network option below) and x is instead pinned
+  // explicitly.
+  //
+  // First tried a center-out INSERTION-order scheme (2026-07-23, user ask: "start center,
+  // left right alternate") -- 1st node seen at x=0, 2nd one slot right, 3rd one slot left,
+  // etc. Reverted same day (user report: "not center aligned") -- that scheme is only
+  // symmetric for an ODD node count; caught mid-discovery (or with an even final count) it's
+  // off by exactly one slot, biased right, because "start at center" for node #1 leaves
+  // nothing placed on the left until node #3 arrives. Sorting by id and recomputing every
+  // node's x from scratch on every ingest (relayoutPlatformRow) instead guarantees a row
+  // that's symmetric around C2's x=0 at ANY node count, not just odd ones, and it's
+  // deterministic (same node set -> same layout) rather than dependent on discovery-order
+  // timing. Nodes are never removed from the DataSet once seen (no nodes.remove() anywhere
+  // in this file) -- the row only ever grows, so relayouting on every ingest is cheap and
+  // simply idempotent when the set hasn't changed.
+  const PLATFORM_PIN_Y = 35;
+  const PLATFORM_PIN_X_SPACING = 210; // 140 * 1.5 (2026-07-23, user ask: widen 50%)
+  const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
+
+  function relayoutPlatformRow() {
+    const rowIds = nodes
+      .get({ filter: (n) => n.kind === "peer" || n.kind === "placeholder" })
+      .map((n) => n.id)
+      .sort();
+    const n = rowIds.length;
+    if (!n) return;
+    nodes.update(
+      rowIds.map((id, i) => ({
+        id,
+        x: (i - (n - 1) / 2) * PLATFORM_PIN_X_SPACING,
+        y: PLATFORM_PIN_Y,
+        fixed: { x: true, y: true },
+      }))
+    );
+  }
 
   // Team-membership ring (follow-on to v1's presence-only graph, 2026-07-21). RouterHealth
   // now carries team_partition -- team_wan's raw participant-partition set (D83's
@@ -165,15 +206,24 @@
     if (updates.length) nodes.update(updates);
   }
 
-  // Every node id in the graph is "<node>/<router>" -- the node-name half is what
-  // team_partition's protected/direct-tap entries actually contain (D83: "${node.name}",
-  // not the full router identity).
+  // The wire's RouterHealth.router / observer_node+observer_router carry the full D79
+  // "<node>/<router>" name-only identity, but this dashboard's graph nodes are keyed on just
+  // the node half (2026-07-23, user ask: "only use node name as unique identifier -- we don't
+  // need router name as well") -- valid here because this deployment is one router per node
+  // (D79), so the node half alone is already unique. nodeNameOf() is the one place that split
+  // happens, applied wherever a wire router-identity string becomes (or is looked up as) a
+  // graph node id.
+  function nodeNameOf(routerId) {
+    const slash = String(routerId).indexOf("/");
+    return slash > 0 ? routerId.slice(0, slash) : String(routerId);
+  }
+
+  // Every node id in the graph is now just the node name (nodeNameOf, above) -- which is
+  // exactly what team_partition's protected/direct-tap entries contain too (D83:
+  // "${node.name}"), so this is just "every id currently in the DataSet", no splitting needed.
   function knownNodeNames() {
     const names = new Set();
-    nodes.get().forEach((n) => {
-      const slash = String(n.id).indexOf("/");
-      if (slash > 0) names.add(n.id.slice(0, slash));
-    });
+    nodes.get().forEach((n) => names.add(String(n.id)));
     return names;
   }
 
@@ -204,12 +254,9 @@
     document.getElementById("graph"),
     { nodes, edges },
     {
-      nodes: { shape: "dot", size: 16, font: { color: "#e6e8eb" } },
-      edges: {
-        width: 2, smooth: { type: "continuous" },
-        font: { size: 9, color: "#9aa0a8", strokeWidth: 0, align: "top" },
-      },
-      physics: { stabilization: false, barnesHut: { springLength: 160 } },
+      nodes: { shape: "dot", size: 16, font: { size: 0 } },
+      edges: { width: 2, smooth: { enabled: false } },
+      physics: { enabled: false },
       interaction: { hover: true },
     }
   );
@@ -278,27 +325,76 @@
            (extra ? `\n${extra}` : "");
   }
 
-  // opts.source labels which relationship produced this edge, drives both the label (shown
-  // on the graph, not just on hover) and the color (EDGE_SOURCE_COLOR) -- "mesh_status"
-  // (observer's own direct peers list) vs "peers_seen" (a peer's own embedded roster, one
-  // hop further out). opts.asOfMs anchors decay, derived the same way for both: the wire's
-  // own last_seen_delta_ms (D97 added this to RouterPeerRef too -- a duration, not a
-  // timestamp, so no clock-sync assumption either way).
-  function upsertEdge(fromId, toId, presence, opts) {
+  // reporterId is whichever node's roster produced this entry (the observer's own
+  // mesh_status peers list, or a peer's embedded peers_seen roster); subjectId is the node
+  // that roster entry is ABOUT. reporterId only learns subjectId's presence because
+  // subjectId's RouterHealth/heartbeat traffic actually reached it -- the arrow (2026-07-23,
+  // "point the way the message actually flows, not who's asking about whom") is drawn
+  // subjectId -> reporterId to show that: reporterId "hears"/receives from subjectId. The
+  // edge id/pruning key stays reporterId->subjectId (unchanged from before this fix) --
+  // only the DataSet's visual from/to swap relative to that key, everything else (decay,
+  // color, id-based upsert) is unaffected by which end the arrowhead is drawn at.
+  //
+  // opts.source labels which relationship produced this edge, drives the color
+  // (EDGE_SOURCE_COLOR) -- "mesh_status" (observer's own direct peers list) vs "peers_seen"
+  // (a peer's own embedded roster, one hop further out). No persistent on-canvas text label
+  // (2026-07-23, dropped a prior attempt) -- vis has no reliable way to offset two edges'
+  // labels apart when they overlap (the common reciprocal mesh_status/peers_seen case,
+  // straight-only per the arrow-direction fix above), so labels ended up left/right of the
+  // line inconsistently or floating disconnected from any visible edge. Color + the legend
+  // already convey source; opts.source is folded into the hover title instead, so the
+  // information isn't lost, just no longer fighting for on-canvas placement.
+  // opts.asOfMs anchors decay, derived the same way for both: the wire's own
+  // last_seen_delta_ms (D97 added this to RouterPeerRef too -- a duration, not a timestamp,
+  // so no clock-sync assumption either way).
+  function upsertEdge(reporterId, subjectId, presence, opts) {
     opts = opts || {};
     const baseColor = EDGE_SOURCE_COLOR[opts.source] || "#999999";
+    const sourceTitle = opts.source === "mesh_status" ? "direct" :
+                        opts.source === "peers_seen" ? "relayed" : opts.source;
     edges.update({
-      id: `${fromId}->${toId}`, from: fromId, to: toId, arrows: "to",
-      label: opts.source || "",
+      id: `${reporterId}->${subjectId}`, from: subjectId, to: reporterId, arrows: "to",
+      label: "",
       color: { color: baseColor, opacity: 1 },
       baseColor, asOfMs: opts.asOfMs != null ? opts.asOfMs : Date.now(),
-      title: opts.title || presence,
+      title: `${sourceTitle ? sourceTitle + ": " : ""}${opts.title || presence}`,
     });
+    refreshParallelEdges(subjectId, reporterId);
   }
 
-  function pruneStaleEdgesFrom(fromId, currentTargets) {
-    edges.get({ filter: (e) => e.from === fromId }).forEach((e) => {
-      if (!currentTargets.has(e.to)) edges.remove(e.id);
+  // Tried curvedCW/CCW here (2026-07-23) to fan the reciprocal mesh_status/peers_seen pair
+  // between the same two routers apart instead of one drawing on top of the other -- reverted
+  // same day (user ask: straight point-to-point edges only). Also found empirically that
+  // vis's curvedCW/CCW rendering put the arrowhead at the wrong end relative to the DataSet's
+  // own from/to/arrows:"to" (confirmed via a debug dump of the live edge data: `to` was
+  // correctly the receiving node, but the visual arrow tip rendered at the *other* end) -- so
+  // straight edges aren't just simpler here, they're the correct choice. A reciprocal pair
+  // between the same two nodes goes back to drawing as one overlapping line (both edges still
+  // present/correct in the DataSet, reachable via hover/click) -- a known tradeoff of
+  // straight-only, not a bug. Undirected key so it groups a pair regardless of which one is
+  // `from`/`to`.
+  function undirectedPairKey(a, b) {
+    return a < b ? `${a} ${b}` : `${b} ${a}`;
+  }
+
+  function refreshParallelEdges(a, b) {
+    const key = undirectedPairKey(a, b);
+    const siblings = edges.get({ filter: (e) => undirectedPairKey(e.from, e.to) === key });
+    edges.update(siblings.map((e) => ({ id: e.id, smooth: { enabled: false } })));
+  }
+
+  // reporterId here matches upsertEdge's reporterId (id/pruning key); the visual `to` field
+  // (not `from`) is what now holds it, per the arrow-direction swap above.
+  function pruneStaleEdgesFrom(reporterId, currentTargets) {
+    edges.get({ filter: (e) => e.to === reporterId }).forEach((e) => {
+      if (!currentTargets.has(e.from)) {
+        const other = e.from;
+        edges.remove(e.id);
+        // Reflow whatever's left in that pair back toward straight (refreshParallelEdges'
+        // n<=1 case) instead of leaving a lone survivor still bowed from when it had a
+        // sibling.
+        refreshParallelEdges(other, reporterId);
+      }
     });
   }
 
@@ -321,8 +417,8 @@
   // peers: [{health: <full RouterHealth>, presence, last_seen_delta_ms}, ...]}.
   function upsertMeshStatusSample(data) {
     if (!data || !data.observer_node || !data.observer_router) return;
-    const observerId = `${data.observer_node}/${data.observer_router}`;
-    nodes.update({ id: observerId, label: observerId, color: KNOWN_NODE_COLOR,
+    const observerId = data.observer_node; // already just the node name (RouterMeshStatus)
+    nodes.update({ id: observerId, label: "", color: KNOWN_NODE_COLOR,
                    title: "(this dashboard's own vantage point -- the C2/control node)",
                    kind: "observer", ...OBSERVER_PIN_FIELDS });
 
@@ -336,14 +432,14 @@
     (data.peers || []).forEach((peerEntry) => {
       const health = peerEntry && peerEntry.health;
       if (!health || !health.router) return;
-      const peerId = health.router;
+      const peerId = nodeNameOf(health.router);
       directPeers.add(peerId);
 
       // Full per-peer detail -- the "full resolution" ActRouterMeshStatus carries that the
       // WAN RouterHealth topic's trimmed peers_seen refs don't.
       const teamNames = deriveTeamNames(health, sampleNodeNames);
       nodes.update({
-        id: peerId, label: peerId,
+        id: peerId, label: "",
         color: { background: KNOWN_NODE_COLOR, border: teamBorder(teamNames) },
         borderWidth: 4,
         title: healthTitle(health, teamNames,
@@ -352,7 +448,7 @@
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
-        ...PLATFORM_PIN_FIELDS,
+        ...PLATFORM_ROW_Y_FIELDS,
         ...(c2PinFields(health) || {}),
       });
       upsertEdge(observerId, peerId, peerEntry.presence, {
@@ -367,13 +463,14 @@
       const subPeers = new Set();
       (health.peers_seen || []).forEach((subPeer) => {
         if (!subPeer || !subPeer.router) return;
-        subPeers.add(subPeer.router);
-        if (!nodes.get(subPeer.router)) {
-          nodes.add({ id: subPeer.router, label: subPeer.router, color: PLACEHOLDER_NODE_COLOR,
+        const subId = nodeNameOf(subPeer.router);
+        subPeers.add(subId);
+        if (!nodes.get(subId)) {
+          nodes.add({ id: subId, label: "", color: PLACEHOLDER_NODE_COLOR,
                        title: "(only known via another router's own roster, not directly)",
-                       kind: "placeholder", knownVia: peerId, ...PLATFORM_PIN_FIELDS });
+                       kind: "placeholder", knownVia: peerId, ...PLATFORM_ROW_Y_FIELDS });
         }
-        upsertEdge(peerId, subPeer.router, subPeer.presence, {
+        upsertEdge(peerId, subId, subPeer.presence, {
           title: `${subPeer.presence}, last_seen (from ${peerId}): ${subPeer.last_seen_delta_ms} ms ago`,
           source: "peers_seen",
           asOfMs: Date.now() - (subPeer.last_seen_delta_ms || 0),
@@ -382,6 +479,7 @@
       pruneStaleEdgesFrom(peerId, subPeers);
     });
     pruneStaleEdgesFrom(observerId, directPeers);
+    relayoutPlatformRow();
   }
 
   function ingestSampleArray(samples) {

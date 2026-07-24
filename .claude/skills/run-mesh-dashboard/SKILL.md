@@ -15,6 +15,37 @@ Design/background: `gui/mesh_dashboard/README.md` (production config, known limi
 prior bugs found). This skill is the "make it actually render and prove it" recipe on top
 of that doc's "Running it against a real mesh" section.
 
+## Fast path: `harness_v2/scripts/run_mesh.sh` (use this — don't hand-run steps 1-3/5c/6)
+
+Wraps steps 1-3, 5c, and 6 below into one script: builds the control node + N platform
+routers (each on its own `platform_lan` domain per step 5c's convention) + N matching
+`platform_sim`s, generates the WIS config, and launches the dashboard — all runtime
+artifacts under one `--workdir` on local disk, all launched PIDs tracked in its
+`pids.txt` for a precise teardown (never a name-based `pkill`, see step 6's warning).
+
+```bash
+cd /home/rti/act-sim-scope-infra
+export NDDSHOME=/home/rti/rti_connext_dds-7.7.0
+[[ -x router/build/router_main ]] || cmake --build router/build   # build once if missing
+
+./harness_v2/scripts/run_mesh.sh up --platforms 5 --with-dashboard
+# ^ prints "WORKDIR=<path>" on its last line — capture it, `down` needs the SAME one
+```
+
+Dashboard: `http://localhost:8080/`. Still do step 5 (Playwright) for an actual render +
+console-error check — a 200 response doesn't prove the canvas drew anything.
+
+Teardown (swap in the `WORKDIR` your `up` printed):
+
+```bash
+./harness_v2/scripts/run_mesh.sh down --workdir /tmp/act_mesh_run.XXXXXX
+```
+
+`--help` on the script prints the full flag reference (`--platforms` 1-70, `--workdir`,
+`--verbosity`, `--dashboard-port`). Reach for the manual steps below only when this script
+doesn't fit — a non-default topology, driving the admin channel directly (step 5b), or
+debugging why the script itself failed.
+
 ## 0. One-time: get a headless browser in this env
 
 Already done as of 2026-07-22 (persists in `~/.local` and `~/.cache` across sessions) —

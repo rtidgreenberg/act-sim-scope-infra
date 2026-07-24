@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>ACT Router Mesh — Node Graph</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #14181f; color: #e6e8eb;
+  html, body { margin: 0; padding: 0; min-height: 900px; height: 100%; background: #14181f; color: #e6e8eb;
                font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
   #statusbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; padding: 8px 14px;
                background: #1c222c; border-bottom: 1px solid #2c3542; font-size: 13px; }
@@ -19,7 +19,8 @@
   #team-legend span:hover { color: #fff; }
   #team-legend span.active { background: #2c3542; border-radius: 10px; padding: 1px 8px;
                              font-weight: 600; }
-  #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; }
+  /* Taller viewport for the shallow 2-row control/platform layout. */
+  #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; min-height: 760px; }
   /* node detail panel (click a node) */
   #detail { position: fixed; top: 84px; left: 12px; z-index: 11; width: 300px;
             max-height: calc(100% - 100px); overflow-y: auto; display: none;
@@ -40,10 +41,10 @@
 <body>
 <div id="statusbar">connecting…</div>
 <div id="legend">
-  <span><i style="background:#4a90d9"></i> router (heard directly)</span>
-  <span><i style="background:#888888"></i> router (only via a peer)</span>
-  <span><i style="background:#3aa655"></i> edge: mesh_status (direct)</span>
-  <span><i style="background:#3a7bd9"></i> edge: peers_seen (relayed)</span>
+  <span><i style="background:#3aa655"></i> router (heard directly)</span>
+  <span><i style="background:#3a7bd9"></i> router (only via a peer)</span>
+  <span><i style="background:#3aa655"></i> direct link</span>
+  <span><i style="background:#3a7bd9"></i> relayed link</span>
   <span><i style="background:#3a3f4a"></i> ring = team (fill color unchanged)</span>
   <span>· click a node for detail · click a team below to filter</span>
 </div>
