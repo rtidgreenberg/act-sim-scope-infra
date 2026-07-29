@@ -130,3 +130,40 @@ real interface (not `lo`) will pick up unrelated host traffic and run forever.
 Experimental proofs live in their own folder (e.g. `relay/`, `spikes/isc_recovery/`) with a
 `PLAN.md`, sources, QoS, a runner, and a `README.md`. Runners must place working dirs on a
 local fs per the rules above.
+
+## Test harnesses
+
+Two test harnesses are available for debugging and verification:
+
+- **C++ unit tests** (`router/test/`): in-process controller/state-machine tests with fakes
+  for all DDS seams. Run via `ctest --test-dir router/build --output-on-failure`. Fast,
+  no DDS entities created.
+
+- **Python e2e suite** (`router/test_e2e/`): launches real `router_main` subprocess pairs
+  (control-role + platform-role) and drives DDS traffic through them from Python using
+  `router/test_e2e/util/dds_probe.py`. Uses `conftest.py` fixtures (`router_pair`,
+  `unique_domains`, `admin_types_xml`, etc.) and per-test YAML configs under
+  `router/config/e2e_*.yaml` with domain-placeholder isolation. Run via
+  `pytest router/test_e2e/ -v` from the repo root. Covers: route forwarding (every route),
+  admin command/ack/status loop, QoS alias resolution, auto-QoS, content-filter drop,
+  same-node ignore, presence/health/mesh, team partitions, link stats, discovery startup.
+  Key utility: `dds_probe.Probe` (UDPv4-only participant), `AdminChannel` (status reader +
+  command writer + ack collector), `write_until_seen` (poll-with-timeout).
+
+- **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
+  (control + platform routers + platform sims + platform_control processes) with optional
+  WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
+  `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
+  `run_mesh.sh down`.
+
+## Data model
+
+All DDS types (application payload + router admin/status/presence) are defined in a single
+IDL source of truth: `harness_v2/datamodel/ActTypes.idl`. The generated XML
+(`harness_v2/datamodel/gen/ActTypes.xml`) is committed alongside and must be regenerated
+after any IDL change:
+```
+$NDDSHOME/bin/rtiddsgen -convertToXml -d harness_v2/datamodel/gen harness_v2/datamodel/ActTypes.idl
+```
+The router's C++ codegen (`router/CMakeLists.txt`) generates from the same IDL at build
+time. All YAML configs, Python scripts, and WIS reference the generated XML.
