@@ -114,6 +114,7 @@
   <member name="name" stringMaxLength="255" type="string"/>
   <member name="discovery_state" type="nonBasic"  nonBasicTypeName= "RouterRouteDiscoveryState"/>
   <member name="topic_state" type="nonBasic"  nonBasicTypeName= "RouterRouteTopicState"/>
+  <member name="type_resolved" type="boolean"/>
   <member name="samples_forwarded" type="uint64"/>
   <member name="lifecycle_events_forwarded" type="uint64"/>
   <member name="last_error" stringMaxLength="255" type="string"/>

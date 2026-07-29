@@ -1103,6 +1103,7 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
             ts.name = spec.name;
             ts.discovery_state = derive_topic_discovery(t->second, route.desired);
             ts.topic_state = t->second.topic_state;
+            ts.type_resolved = t->second.type_available;
             ts.samples_forwarded = t->second.samples_forwarded;
             ts.lifecycle_events_forwarded = t->second.lifecycle_events_forwarded;
             ts.last_error = t->second.last_error;

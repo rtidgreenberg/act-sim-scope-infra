@@ -247,6 +247,7 @@ def read_route_facts(status_reader, route_name):
                 row = {
                     "topic_state": TOPIC_STATE.get(
                         int(data[f"{base}.topic_state"]), "?"),
+                    "type_resolved": bool(data[f"{base}.type_resolved"]),
                     "reader_summary": data.get_string(f"{base}.reader_qos_summary"),
                     "writer_summary": data.get_string(f"{base}.writer_qos_summary"),
                     "qos_warning": data.get_string(f"{base}.qos_warning"),

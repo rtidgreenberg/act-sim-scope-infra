@@ -24,9 +24,9 @@
 // spike-proven, spikes/type_discovery/) and registers it in the TypeResolver per topic
 // (first-learned-wins, D66), posting TypeResolved so the controller can build gated
 // topics. Ignored same-node router publications never teach types. An endpoint whose
-// type object is NOT inline draws a once-per-topic `type_not_inline` warning — the
-// request_types_filter fallback (C++-only on this install) is wired only when a real
-// type needs it (D66).
+// type object is NOT inline draws a once-per-(topic, endpoint) `type_not_inline` warning
+// — the request_types_filter fallback (C++-only on this install) is wired only when a
+// real type needs it (D66).
 
 #pragma once
 
@@ -108,7 +108,7 @@ private:
 
     // 7c (D70): register an endpoint's inline type object for its topic
     // (first-learned-wins) and post TypeResolved on the first registration; warn once
-    // per topic when the type object is not inline.
+    // per (topic, endpoint) when the type object is not inline.
     void maybe_learn_type(
             const std::string &topic_name,
             const dds::core::optional<dds::core::xtypes::DynamicType> &type,
@@ -135,7 +135,9 @@ private:
     std::map<std::string, EndpointIdentity> pub_handle_guid_;
     std::map<std::string, EndpointIdentity> sub_handle_guid_;
 
-    // Topics already warned for a missing inline type object (once-per-topic, D70).
+    // (topic, endpoint GUID) pairs already warned for a missing inline type object —
+    // once per endpoint, not once per topic (debug-tooling-and-missing-tests.md #4), so
+    // a later untyped endpoint on an already-warned topic still draws its own warning.
     std::set<std::string> type_not_inline_warned_;
 
     // Held ReadConditions (type-erased) — keep alive while attached to the AWS.

@@ -290,12 +290,16 @@ void DiscoveryDispatcher::maybe_learn_type(
         const std::string &endpoint_guid) {
     if (!type.is_set()) {
         // Not inline (TypeObject above the SEDP threshold, or a non-XTypes peer): warn
-        // once per topic. The request_types_filter fallback is wired only when a real
-        // type needs it (D66/D70).
+        // once per (topic, endpoint) rather than once per topic (debug-tooling-and-
+        // missing-tests.md #4) — a per-topic key meant that once ANY endpoint on a
+        // topic (e.g. an app subscription) drew the warning, a later untyped
+        // publication on that SAME topic (e.g. a WIS writer — the type that actually
+        // matters for TypeResolved) was silently swallowed. The request_types_filter
+        // fallback is wired only when a real type needs it (D66/D70).
         bool first;
         {
             std::lock_guard<std::mutex> lk(table_mutex_);
-            first = type_not_inline_warned_.insert(topic_name).second;
+            first = type_not_inline_warned_.insert(topic_name + "/" + endpoint_guid).second;
         }
         if (first && !types_.has_topic_type(topic_name)) {
             Log::warn("type_not_inline",

@@ -170,6 +170,7 @@ struct RouterRouteTopicStatus {
     string name;
     RouterRouteDiscoveryState discovery_state;
     RouterRouteTopicState topic_state;
+    boolean type_resolved;
     uint64 samples_forwarded;
     uint64 lifecycle_events_forwarded;
     string last_error;
