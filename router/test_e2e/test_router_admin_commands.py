@@ -185,3 +185,52 @@ def test_admin_command_control_loop(
     finally:
         probe.close()
         router.stop()
+
+
+def test_update_route_rejected(
+        router_binary, admin_types_xml, e2e_tmp_dir, unique_domains):
+    """UPDATE_ROUTE (RouterCommandKind ordinal 2) is explicitly unsupported —
+    RouterController::handle_command rejects it with "UPDATE_ROUTE unsupported in this
+    build" (docs/cpp_router/debug-tooling-and-missing-tests.md #2b) — and, being a
+    rejected command, must not bump state_revision (D2/D4)."""
+    config_path = render_config("e2e_admin_commands.yaml", unique_domains, e2e_tmp_dir)
+    router = start_router(router_binary, config_path, "platform", e2e_tmp_dir,
+                          admin_participant="wan_in")
+    admin_domain = unique_domains["control_lan"]
+
+    provider = dds.QosProvider(str(admin_types_xml))
+    cmd_type = provider.type("RouterCommand")
+
+    probe = Probe(admin_domain)
+    alive = lambda: router.is_alive()  # noqa: E731
+    try:
+        admin = AdminChannel(probe, provider)
+        status_reader, cmd_writer, acks = admin.status, admin.cmd_writer, admin.acks
+
+        # Wait for the route's first status sample (like E1 in the other test) before
+        # reading state_revision — otherwise read_status_revision races the router's
+        # startup status publish and sees no sample yet.
+        assert wait_for_route(status_reader, ROUTE, lambda f: True, check_alive=alive) \
+            is not None, f"route {ROUTE} never appeared; log {router.log_path}"
+
+        rev_before = read_status_revision(status_reader)
+        assert rev_before is not None, \
+            f"no state_revision in startup status; log {router.log_path}"
+
+        cmd_writer.write(_command(cmd_type, "UPDATE_ROUTE", ROUTE, "update-1",
+                                  NODE, ROUTER))
+        ack = acks.wait("update-1", check_alive=alive)
+        assert ack is not None, f"no ack for UPDATE_ROUTE; log {router.log_path}"
+        assert not ack["accepted"], \
+            f"UPDATE_ROUTE should be rejected, got accepted ack {ack}; " \
+            f"log {router.log_path}"
+        assert "unsupported" in ack["message"].lower(), \
+            f"unexpected rejection message {ack['message']!r}; log {router.log_path}"
+
+        rev_after = read_status_revision(status_reader)
+        assert rev_after == rev_before, \
+            f"rejected UPDATE_ROUTE should not bump state_revision " \
+            f"({rev_before} -> {rev_after}); log {router.log_path}"
+    finally:
+        probe.close()
+        router.stop()
