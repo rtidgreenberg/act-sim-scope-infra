@@ -52,23 +52,14 @@ _domain_counter = itertools.count()
 
 @pytest.fixture(scope="session")
 def admin_types_xml():
-    """Generate an XML type description of the router admin types (RouterStatus et al.)
-    from admin/RouterAdminTypes.idl via rtiddsgen -convertToXml, so the Python e2e suite
-    can subscribe to ActRouterStatus as DynamicData. Generated at test time into a local
-    tmp dir (the repo keeps no committed generated code — see router/CMakeLists.txt)."""
-    ndds = os.environ["NDDSHOME"]
-    rtiddsgen = Path(ndds) / "bin" / "rtiddsgen"
-    idl = REPO_ROOT / "router" / "admin" / "RouterAdminTypes.idl"
-    if not rtiddsgen.exists() or not idl.exists():
-        pytest.skip(f"rtiddsgen or RouterAdminTypes.idl not found "
-                    f"(rtiddsgen={rtiddsgen}, idl={idl})")
-    out_dir = TMP_ROOT / "admin_types"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(rtiddsgen), "-convertToXml", str(idl), "-d", str(out_dir)],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    xml = out_dir / "RouterAdminTypes.xml"
+    """Return the committed generated XML type description (ActTypes.xml) containing
+    all system types — application payload types + router admin types. Generated from
+    harness_v2/datamodel/ActTypes.idl via rtiddsgen -convertToXml."""
+    xml = REPO_ROOT / "harness_v2" / "datamodel" / "gen" / "ActTypes.xml"
     if not xml.exists():
-        pytest.skip(f"rtiddsgen did not produce {xml}")
+        pytest.skip(f"ActTypes.xml not found at {xml} — run: "
+                    f"rtiddsgen -convertToXml -d harness_v2/datamodel/gen "
+                    f"harness_v2/datamodel/ActTypes.idl")
     return xml
 
 

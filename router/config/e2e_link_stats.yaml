@@ -27,7 +27,7 @@ router:
   link_stats_period_ms: 1000        # config-fixed poll cadence (D14/D81; the default)
 
 types:
-  xml: harness_v2/datamodel/act_types.xml
+  xml: harness_v2/datamodel/gen/ActTypes.xml
 
 # Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_status is
 # BEST_EFFORT (periodic status), wan_event is RELIABLE (events). Loading only the WAN lib —

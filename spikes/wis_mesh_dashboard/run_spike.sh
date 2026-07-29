@@ -34,7 +34,7 @@ WS_PATH="/dds/websocket/${WS_CONN_NAME}"
 TMPDIR_SPIKE="$(mktemp -d /tmp/wis_mesh_dashboard.XXXXXX)"
 echo "[run_spike] local tmp working dir: $TMPDIR_SPIKE"
 
-TYPES_XML="$TMPDIR_SPIKE/RouterAdminTypes.xml"
+TYPES_XML="$TMPDIR_SPIKE/ActTypes.xml"
 WIS_CONFIG="$TMPDIR_SPIKE/wis_config.xml"
 CONTROL_LOG="$TMPDIR_SPIKE/router_control.log"
 PLATFORM_LOG="$TMPDIR_SPIKE/router_platform.log"
@@ -108,9 +108,9 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Step 1: rtiddsgen -convertToXml (into the LOCAL tmp dir, never the share) ---
-echo "[run_spike] generating RouterAdminTypes.xml via rtiddsgen -convertToXml..."
+echo "[run_spike] generating ActTypes.xml via rtiddsgen -convertToXml..."
 if ! "$RTIDDSGEN" -convertToXml -d "$TMPDIR_SPIKE" \
-        "$REPO_ROOT/router/admin/RouterAdminTypes.idl" \
+        "$REPO_ROOT/harness_v2/datamodel/ActTypes.idl" \
         > "$TMPDIR_SPIKE/rtiddsgen.log" 2>&1; then
     echo "[run_spike] FAIL: rtiddsgen -convertToXml failed; see $TMPDIR_SPIKE/rtiddsgen.log"
     exit 1

@@ -22,11 +22,12 @@ tmp/
 # RTI
 rti_license.dat
 
-# rtiddsgen-generated code (router/CMakeLists.txt generates these at build time into
-# a build/ dir via connextdds_rtiddsgen_run; RouterAdminTypes.idl is the only source of
-# truth — never commit a stray manual `rtiddsgen` run's output alongside it)
-router/admin/RouterAdminTypes*.cxx
-router/admin/RouterAdminTypes*.h
+# rtiddsgen-generated C++ code (router/CMakeLists.txt generates these at build time into
+# a build/ dir via connextdds_rtiddsgen_run; harness_v2/datamodel/ActTypes.idl is the
+# single source of truth — never commit stray manual `rtiddsgen` C++ output).
+# The XML conversion (harness_v2/datamodel/gen/ActTypes.xml) IS committed.
+harness_v2/datamodel/ActTypes*.cxx
+harness_v2/datamodel/ActTypes*.h
 
 # Editor / OS
 .vscode/

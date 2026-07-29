@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:////home/rti/rti_connext_dds-7.7.0/bin/../resource/app/app_support/rtiddsgen/schema/rti_dds_profiles.xsd">
+<types>
+<struct name= "base_type">
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="source_type" stringMaxLength="100" type="string"/>
+  <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="session" type="byte" arrayDimensions="16"/>
+  <member name="payload" sequenceMaxLength="100" type="byte"/>
+</struct>
+<struct name= "control_command">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "control_command_ack">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_primary_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type" key="true"/>
+</struct>
+<struct name= "platform_detail_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_data">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "contact_report">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<enum name="RouterCommandKind">
+  <enumerator name="ENABLE_ROUTE"/>
+  <enumerator name="DISABLE_ROUTE"/>
+  <enumerator name="UPDATE_ROUTE"/>
+  <enumerator name="ADD_PARTICIPANT_PARTITION"/>
+  <enumerator name="REMOVE_PARTICIPANT_PARTITION"/>
+  <enumerator name="SET_ROUTE_PARTITION"/>
+</enum> 
+<enum name="ControllerJournalEventKind">
+  <enumerator name="JOURNAL_COMMAND_RECEIVED"/>
+  <enumerator name="JOURNAL_PUBLICATION_DISCOVERED"/>
+  <enumerator name="JOURNAL_SUBSCRIPTION_DISCOVERED"/>
+  <enumerator name="JOURNAL_ENDPOINT_LOST"/>
+  <enumerator name="JOURNAL_TOPIC_ENTITIES_READY"/>
+  <enumerator name="JOURNAL_TOPIC_TEARDOWN_COMPLETE"/>
+  <enumerator name="JOURNAL_ROUTE_ENTITY_ERROR"/>
+  <enumerator name="JOURNAL_TOPIC_QOS_WARNING"/>
+  <enumerator name="JOURNAL_TOPIC_MATCH_CHANGED"/>
+  <enumerator name="JOURNAL_TYPE_RESOLVED"/>
+</enum> 
+<enum name="RouterRouteOperationalState">
+  <enumerator name="ROUTE_DISABLED"/>
+  <enumerator name="ROUTE_WAITING_FOR_DISCOVERY"/>
+  <enumerator name="ROUTE_RESOLVING"/>
+  <enumerator name="ROUTE_ENABLED"/>
+  <enumerator name="ROUTE_DEGRADED"/>
+  <enumerator name="ROUTE_ERROR"/>
+</enum> 
+<enum name="RouterRouteDiscoveryState">
+  <enumerator name="DISCOVERY_NONE"/>
+  <enumerator name="DISCOVERY_PARTIAL"/>
+  <enumerator name="DISCOVERY_READY"/>
+</enum> 
+<enum name="RouterRouteTopicState">
+  <enumerator name="TOPIC_IDLE"/>
+  <enumerator name="TOPIC_CREATING"/>
+  <enumerator name="TOPIC_FORWARDING"/>
+  <enumerator name="TOPIC_TEARING_DOWN"/>
+  <enumerator name="TOPIC_ERROR"/>
+</enum> 
+<struct name= "RouterRouteTopicSpec">
+  <member name="name" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterRouteEndpointSpec">
+  <member name="participant" stringMaxLength="255" type="string"/>
+  <member name="subscriber_partition" stringMaxLength="255" type="string"/>
+  <member name="publisher_partition" stringMaxLength="255" type="string"/>
+  <member name="reader_qos" stringMaxLength="255" type="string"/>
+  <member name="writer_qos" stringMaxLength="255" type="string"/>
+  <member name="filter_expression" stringMaxLength="255" type="string"/>
+  <member name="filter_parameters" sequenceMaxLength="100" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterRouteSpec">
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="desired_enabled" type="boolean"/>
+  <member name="forwarding_mode" stringMaxLength="255" type="string"/>
+  <member name="input" type="nonBasic"  nonBasicTypeName= "RouterRouteEndpointSpec"/>
+  <member name="output" type="nonBasic"  nonBasicTypeName= "RouterRouteEndpointSpec"/>
+  <member name="topics" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteTopicSpec"/>
+  <member name="mirror_instance_state" type="boolean"/>
+  <member name="key_fields" sequenceMaxLength="100" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterCommand">
+  <member name="target_node" stringMaxLength="255" type="string"/>
+  <member name="target_router" stringMaxLength="255" type="string"/>
+  <member name="command_id" stringMaxLength="255" type="string"/>
+  <member name="kind" type="nonBasic"  nonBasicTypeName= "RouterCommandKind"/>
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="route" type="nonBasic"  nonBasicTypeName= "RouterRouteSpec"/>
+  <member name="participant_name" stringMaxLength="255" type="string"/>
+  <member name="partition_name" stringMaxLength="255" type="string"/>
+  <member name="payload_json" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterCommandAck">
+  <member name="target_node" stringMaxLength="255" type="string"/>
+  <member name="target_router" stringMaxLength="255" type="string"/>
+  <member name="command_id" stringMaxLength="255" type="string"/>
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="accepted" type="boolean"/>
+  <member name="message" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterRouteTopicStatus">
+  <member name="name" stringMaxLength="255" type="string"/>
+  <member name="discovery_state" type="nonBasic"  nonBasicTypeName= "RouterRouteDiscoveryState"/>
+  <member name="topic_state" type="nonBasic"  nonBasicTypeName= "RouterRouteTopicState"/>
+  <member name="samples_forwarded" type="uint64"/>
+  <member name="lifecycle_events_forwarded" type="uint64"/>
+  <member name="last_error" stringMaxLength="255" type="string"/>
+  <member name="reader_qos_summary" stringMaxLength="255" type="string"/>
+  <member name="writer_qos_summary" stringMaxLength="255" type="string"/>
+  <member name="qos_warning" stringMaxLength="255" type="string"/>
+  <member name="input_matched" type="uint32"/>
+  <member name="output_matched" type="uint32"/>
+  <member name="match_reason" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterRouteStatus">
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="desired" type="nonBasic"  nonBasicTypeName= "RouterRouteSpec"/>
+  <member name="state" type="nonBasic"  nonBasicTypeName= "RouterRouteOperationalState"/>
+  <member name="discovery_state" type="nonBasic"  nonBasicTypeName= "RouterRouteDiscoveryState"/>
+  <member name="topic_status" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteTopicStatus"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="caused_by_command_id" stringMaxLength="255" type="string"/>
+  <member name="samples_forwarded" type="uint64"/>
+  <member name="lifecycle_events_forwarded" type="uint64"/>
+  <member name="last_error" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterParticipantStatus">
+  <member name="name" stringMaxLength="255" type="string"/>
+  <member name="domain" type="int32"/>
+  <member name="participant_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
+  <member name="qos_profile_alias" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterStatus">
+  <member name="target_node" stringMaxLength="255" type="string" key="true"/>
+  <member name="target_router" stringMaxLength="255" type="string" key="true"/>
+  <member name="status_id" stringMaxLength="255" type="string"/>
+  <member name="caused_by_command_id" stringMaxLength="255" type="string"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="participants" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterParticipantStatus"/>
+  <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteStatus"/>
+</struct>
+<enum name="RouterOverallState">
+  <enumerator name="ROUTER_OK"/>
+  <enumerator name="ROUTER_DEGRADED"/>
+  <enumerator name="ROUTER_ERROR"/>
+</enum> 
+<enum name="RouterPresenceState">
+  <enumerator name="PRESENCE_ALIVE"/>
+  <enumerator name="PRESENCE_STALE"/>
+  <enumerator name="PRESENCE_DEAD"/>
+</enum> 
+<struct name= "RouterPeerRef">
+  <member name="router" stringMaxLength="255" type="string"/>
+  <member name="presence" type="nonBasic"  nonBasicTypeName= "RouterPresenceState"/>
+  <member name="last_seen_delta_ms" type="int64"/>
+</struct>
+<struct name= "RouterHealth">
+  <member name="router" stringMaxLength="255" type="string" key="true"/>
+  <member name="role" stringMaxLength="255" type="string"/>
+  <member name="config_hash" stringMaxLength="255" type="string"/>
+  <member name="heartbeat_seq" type="uint64"/>
+  <member name="send_timestamp" type="int64"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="n_routes" type="uint32"/>
+  <member name="n_degraded" type="uint32"/>
+  <member name="n_error" type="uint32"/>
+  <member name="overall_state" type="nonBasic"  nonBasicTypeName= "RouterOverallState"/>
+  <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
+  <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
+</struct>
+<struct name= "RouterMeshPeer">
+  <member name="health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>
+  <member name="presence" type="nonBasic"  nonBasicTypeName= "RouterPresenceState"/>
+  <member name="last_seen_delta_ms" type="int64"/>
+</struct>
+<struct name= "RouterMeshStatus">
+  <member name="observer_node" stringMaxLength="255" type="string" key="true"/>
+  <member name="observer_router" stringMaxLength="255" type="string" key="true"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="peers" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterMeshPeer"/>
+</struct>
+<struct name= "TeamAssignment">
+  <member name="platform_node" stringMaxLength="255" type="string" key="true"/>
+  <member name="team_name" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "ControllerJournalRecord">
+  <member name="target_node" stringMaxLength="255" type="string" key="true"/>
+  <member name="target_router" stringMaxLength="255" type="string" key="true"/>
+  <member name="status_id" stringMaxLength="255" type="string"/>
+  <member name="event_sequence" type="uint64"/>
+  <member name="timestamp_unix_nanos" type="int64"/>
+  <member name="event_kind" type="nonBasic"  nonBasicTypeName= "ControllerJournalEventKind"/>
+  <member name="pre_state_revision" type="uint64"/>
+  <member name="post_state_revision" type="uint64"/>
+  <member name="state_changed" type="boolean"/>
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="topic_name" stringMaxLength="255" type="string"/>
+  <member name="command_id" stringMaxLength="255" type="string"/>
+  <member name="endpoint_guid" stringMaxLength="255" type="string"/>
+  <member name="entity_generation" type="uint64"/>
+  <member name="decision" stringMaxLength="255" type="string"/>
+  <member name="reason" stringMaxLength="255" type="string"/>
+  <member name="action" stringMaxLength="255" type="string"/>
+  <member name="payload_json" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "RouterLinkProbe">
+  <member name="router" stringMaxLength="255" type="string" key="true"/>
+  <member name="probe_seq" type="uint64"/>
+  <member name="send_timestamp" type="int64"/>
+</struct>
+<struct name= "RouterLinkStats">
+  <member name="observer_router" stringMaxLength="255" type="string" key="true"/>
+  <member name="peer_router" stringMaxLength="255" type="string" key="true"/>
+  <member name="network" stringMaxLength="255" type="string"/>
+  <member name="capture_seq" type="uint64"/>
+  <member name="capture_timestamp" type="int64"/>
+  <member name="interval_ms" type="uint32"/>
+  <member name="rediscovery_in_interval" type="boolean"/>
+  <member name="pushed_samples" type="uint64"/>
+  <member name="pushed_fragment_bytes" type="uint64"/>
+  <member name="pulled_samples" type="uint64"/>
+  <member name="pulled_fragment_bytes" type="uint64"/>
+  <member name="nacks_received" type="uint64"/>
+  <member name="nack_frags_received" type="uint64"/>
+  <member name="heartbeats_sent" type="uint64"/>
+  <member name="samples_rejected_remote" type="uint64"/>
+  <member name="samples_received" type="uint64"/>
+  <member name="duplicates_received" type="uint64"/>
+  <member name="heartbeats_received" type="uint64"/>
+  <member name="nacks_sent" type="uint64"/>
+  <member name="out_of_range_rejected" type="uint64"/>
+  <member name="samples_rejected_local" type="uint64"/>
+  <member name="uncommitted_samples" type="uint32"/>
+  <member name="rtt_count" type="uint32"/>
+  <member name="rtt_min_us" type="uint32"/>
+  <member name="rtt_mean_us" type="uint32"/>
+  <member name="rtt_max_us" type="uint32"/>
+</struct>
+</types>
+</dds>

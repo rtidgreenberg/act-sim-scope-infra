@@ -9,7 +9,7 @@ import time
 
 import rti.connextdds as dds
 
-ACT_TYPES_XML = "harness_v2/datamodel/act_types.xml"
+ACT_TYPES_XML = "harness_v2/datamodel/gen/ActTypes.xml"
 
 _provider = None
 

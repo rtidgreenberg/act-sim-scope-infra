@@ -12,8 +12,8 @@
 # DDS integration tests (discovery smoke, forwarding, auto-QoS) live in Python under
 # router/test_e2e/ — see that dir's README and D52.
 #
-# Modeled on the proven relay/cpp/CMakeLists.txt. rtiddsgen generates RouterAdminTypes
-# from admin/RouterAdminTypes.idl at configure/build time (no committed generated code).
+# Modeled on the proven relay/cpp/CMakeLists.txt. rtiddsgen generates C++11 type support
+# from harness_v2/datamodel/ActTypes.idl at configure/build time (no committed generated code).
 
 cmake_minimum_required(VERSION 3.11)
 project(act_router_cpp LANGUAGES CXX)
@@ -48,7 +48,7 @@ FetchContent_MakeAvailable(yaml-cpp)
 # Generate the admin command/status type support (C++11 == "Modern C++").
 # Sets RouterAdminTypes_CXX11_GENERATED_SOURCES and the generated/ include dir.
 connextdds_rtiddsgen_run(
-    IDL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/admin/RouterAdminTypes.idl"
+    IDL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../harness_v2/datamodel/ActTypes.idl"
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated"
     LANG "C++11"
     VAR RouterAdminTypes

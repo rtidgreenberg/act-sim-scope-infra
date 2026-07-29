@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# generate_wis_config.sh — regenerates the WIS config from RouterAdminTypes.idl.
+# generate_wis_config.sh — regenerates the WIS config from ActTypes.idl.
 #
-# RouterAdminTypes.idl stays the single source of truth for the wire types; this script
-# is the only place the DDS-XML type dialect WIS needs gets produced, via
-# `rtiddsgen -convertToXml` (proven by spikes/wis_mesh_dashboard/, PASSED 2026-07-21) —
-# never hand-transcribed. Run this every time before starting rtiwebintegrationservice, or
-# whenever RouterAdminTypes.idl changes.
+# ActTypes.idl (harness_v2/datamodel/) is the single source of truth for all wire types;
+# this script produces the DDS-XML type dialect WIS needs via `rtiddsgen -convertToXml`
+# (proven by spikes/wis_mesh_dashboard/, PASSED 2026-07-21) — never hand-transcribed.
+# Run this every time before starting rtiwebintegrationservice, or whenever ActTypes.idl
+# changes.
 #
 # Usage: gui/mesh_dashboard/config/generate_wis_config.sh <output-dir>
-#   Writes <output-dir>/RouterAdminTypes.xml and <output-dir>/wis_config.xml.
+#   Writes <output-dir>/ActTypes.xml and <output-dir>/wis_config.xml.
 #
 # Filesystem-safety rule (repo CLAUDE.md): <output-dir> must be a local filesystem, never
 # this repo's vboxsf share, if the share is in use — generated config + WIS's own runtime
@@ -28,11 +28,11 @@ export NDDSHOME="${NDDSHOME:-/home/rti/rti_connext_dds-7.7.0}"
 RTIDDSGEN="$NDDSHOME/bin/rtiddsgen"
 TEMPLATE="$DASHBOARD_DIR/config/wis_config.xml.template"
 
-TYPES_XML="$OUT_DIR/RouterAdminTypes.xml"
+TYPES_XML="$OUT_DIR/ActTypes.xml"
 WIS_CONFIG="$OUT_DIR/wis_config.xml"
 
 echo "[generate_wis_config] generating $TYPES_XML via rtiddsgen -convertToXml..."
-"$RTIDDSGEN" -convertToXml -d "$OUT_DIR" "$REPO_ROOT/router/admin/RouterAdminTypes.idl" \
+"$RTIDDSGEN" -convertToXml -d "$OUT_DIR" "$REPO_ROOT/harness_v2/datamodel/ActTypes.idl" \
     > "$OUT_DIR/rtiddsgen.log" 2>&1
 if [[ ! -f "$TYPES_XML" ]]; then
     echo "[generate_wis_config] FAIL: rtiddsgen did not produce $TYPES_XML; see $OUT_DIR/rtiddsgen.log" >&2
