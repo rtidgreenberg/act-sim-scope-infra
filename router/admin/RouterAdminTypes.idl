@@ -289,6 +289,23 @@ struct RouterMeshStatus {
     sequence<RouterMeshPeer> peers;
 };
 
+// ---- Team Control (team-control-topic-plan.md) ----
+//
+// TeamAssignment is the declarative, data-driven team assignment topic. Published by the
+// operator via WIS on control_lan (domain 20), relayed through the control_event route
+// (control_lan -> control_wan -> platform_wan -> platform_lan), and consumed by a
+// platform control process that translates it into ADD/REMOVE_PARTICIPANT_PARTITION
+// commands on the local router.
+//
+// Keyed by platform_node: one instance per platform, last-writer-wins. VOLATILE + RELIABLE
+// (wan_event QoS) — a restarted platform comes up with no team (clean partition set) and
+// must be explicitly re-assigned by the operator; no late-joiner replay needed.
+struct TeamAssignment {
+    @key
+    string platform_node;       // "Platform_30" — which platform this assignment targets
+    string team_name;           // non-empty = assign to team; "" = remove from team
+};
+
 // Keyed by (target_node, target_router) like RouterStatus: each router is one instance
 // on ActRouterControllerJournal, so a recorder subscribed to several routers keeps
 // per-router reader caches (one router's record burst cannot evict another's). Within a

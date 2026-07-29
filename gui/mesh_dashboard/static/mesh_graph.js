@@ -28,8 +28,12 @@
   const WIS_PARTICIPANT = "MeshParticipant";
   const WIS_SUBSCRIBER = "MeshSubscriber";
   const WIS_READER = "MeshStatusReader";
+  const WIS_PUBLISHER = "MeshPublisher";
+  const WIS_WRITER = "TeamAssignmentWriter";
   const READER_URI = `/dds/rest1/applications/${WIS_APP}/domain_participants/${WIS_PARTICIPANT}` +
                       `/subscribers/${WIS_SUBSCRIBER}/data_readers/${WIS_READER}`;
+  const WRITER_URI = `/dds/rest1/applications/${WIS_APP}/domain_participants/${WIS_PARTICIPANT}` +
+                      `/publishers/${WIS_PUBLISHER}/data_writers/${WIS_WRITER}`;
 
   const HTTP_ORIGIN = `${location.protocol}//${location.host}`;
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
@@ -302,6 +306,9 @@
       interaction: { hover: false },
     }
   );
+  // Expose for headless Playwright e2e tests (test_team_assignment_e2e.py) — lets
+  // page.evaluate() call network.getPositions() / canvasToDOM() to find node coords.
+  window.__network = network;
 
   // --- Detail panel (interactivity, 2026-07-21) ---------------------------------------
   // Click a node -> side panel with its full RouterHealth. All fields already live on the
@@ -626,6 +633,75 @@
       setStatus("WebSocket error — reconnecting…");
     };
   }
+
+  // --- Team assignment (team-control-topic-plan.md §4) ----------------------------
+  // Right-click a platform node → modal prompt → PUT TeamAssignment to WIS. The
+  // partition change propagates through the mesh; the node's RouterHealth.team_partition
+  // updates within ~1-2 heartbeat cycles and the existing ring rendering recolours
+  // automatically — no new subscription needed.
+  const ASSIGN_URL = `${HTTP_ORIGIN}${WRITER_URI}`;
+
+  function publishTeamAssignment(platformNode, teamName) {
+    const sample = { platform_node: platformNode, team_name: teamName };
+    return fetch(ASSIGN_URL, {
+      method: "PUT",
+      headers: { "Content-Type": WS_CONTENT_TYPE },
+      body: JSON.stringify(sample),
+    }).then((resp) => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setStatus(`Assigned ${platformNode} → ${teamName || "(no team)"}`);
+    }).catch((err) => {
+      setStatus(`Team assignment failed: ${err}`);
+    });
+  }
+
+  // Context menu (right-click on a node). Vis.js fires "oncontext" but doesn't expose
+  // a built-in context menu, so we position a small custom one at the pointer and let
+  // the user pick "Assign to team" or "Remove from team".
+  const ctxMenu = document.createElement("div");
+  ctxMenu.id = "ctx-menu";
+  ctxMenu.style.cssText = "display:none;position:absolute;z-index:1000;" +
+    "background:#1e2028;border:1px solid #3a3f4a;border-radius:4px;padding:2px 0;" +
+    "font:13px/1.6 sans-serif;color:#e6e8eb;min-width:160px;box-shadow:0 4px 12px rgba(0,0,0,.4);";
+  document.body.appendChild(ctxMenu);
+  let ctxNodeId = null;
+
+  function hideCtxMenu() { ctxMenu.style.display = "none"; ctxNodeId = null; }
+  document.addEventListener("click", hideCtxMenu);
+  document.addEventListener("contextmenu", (e) => {
+    // Let only the vis canvas handler show the menu; hide on any other right-click.
+    if (!e.target.closest("#graph")) hideCtxMenu();
+  });
+
+  function ctxItem(label, fn) {
+    const el = document.createElement("div");
+    el.textContent = label;
+    el.style.cssText = "padding:4px 14px;cursor:pointer;";
+    el.addEventListener("mouseenter", () => { el.style.background = "#2a2d38"; });
+    el.addEventListener("mouseleave", () => { el.style.background = ""; });
+    el.addEventListener("click", (e) => { e.stopPropagation(); hideCtxMenu(); fn(); });
+    return el;
+  }
+
+  network.on("oncontext", (params) => {
+    params.event.preventDefault();
+    const nodeId = network.getNodeAt(params.pointer.DOM);
+    if (!nodeId) { hideCtxMenu(); return; }
+    const n = nodes.get(nodeId);
+    if (!n || n.kind === "observer") { hideCtxMenu(); return; }
+    ctxNodeId = nodeId;
+    ctxMenu.innerHTML = "";
+    ctxMenu.appendChild(ctxItem("Assign to team…", () => {
+      const team = prompt(`Team name for ${ctxNodeId}:`, "");
+      if (team != null) publishTeamAssignment(ctxNodeId, team);
+    }));
+    ctxMenu.appendChild(ctxItem("Remove from team", () => {
+      publishTeamAssignment(ctxNodeId, "");
+    }));
+    ctxMenu.style.left = params.event.pageX + "px";
+    ctxMenu.style.top = params.event.pageY + "px";
+    ctxMenu.style.display = "block";
+  });
 
   seedFromRest().then(connectWebSocket);
 })();

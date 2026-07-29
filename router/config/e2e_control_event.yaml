@@ -1,0 +1,68 @@
+# e2e_control_event.yaml — router_main-runnable fixture for the Python e2e suite
+# (router/test_e2e/test_control_event_route.py). Same shape as control-platform.yaml's
+# control_event route: unfiltered control→platform broadcast via WAN with CONTROL
+# partition on both WAN legs.
+#
+# The control_event route is the unfiltered counterpart to control_command: every platform
+# receives every sample (no CFT). Used for broadcast control topics like TeamAssignment.
+#
+# Type: TeamAssignment (from RouterAdminTypes.idl, wire-learned via D70). The test writes
+# TeamAssignment on the control_lan side; the router forwards it through control_wan →
+# platform_wan → platform_lan; the test reads it on the platform_lan side.
+#
+# Both WAN legs use CONTROL partition (publisher_partition / subscriber_partition) to
+# mirror the production config. The test's WAN probes must also join CONTROL to observe
+# WAN-side matching.
+#
+# Domain placeholders substituted per test run — see router/test_e2e/conftest.py.
+
+node:
+  name: Platform_30
+  role: platform   # overridden per-process by --role
+
+router:
+  name: e2e-control-event
+  admin_participant: platform_lan
+
+types:
+  xml: harness_v2/datamodel/gen/ActTypes.xml
+
+participants:
+  control_lan:
+    role: control
+    domain: __DOMAIN_CONTROL_LAN__
+  control_wan:
+    role: control
+    domain: __DOMAIN_WAN__
+    on_wan: true
+    spdp2: true
+  platform_lan:
+    role: platform
+    domain: __DOMAIN_PLATFORM_LAN__
+  platform_wan:
+    role: platform
+    domain: __DOMAIN_WAN__
+    on_wan: true
+    spdp2: true
+
+routes:
+  - name: control_event
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: control
+    destination: platform
+    topics:
+      - name: ActTeamAssignment
+    source_side:
+      input:
+        participant: control_lan
+      output:
+        participant: control_wan
+        writer_qos: default
+        publisher_partition: CONTROL
+    destination_side:
+      input:
+        participant: platform_wan
+        subscriber_partition: CONTROL
+      output:
+        participant: platform_lan

@@ -95,12 +95,27 @@
                 </reliability>
             </datareader_qos>
         </qos_profile>
+        <!-- TeamAssignment writer: RELIABLE + VOLATILE to match the control_event route's
+             wan_event QoS. The operator publishes one sample per team assignment action;
+             the route delivers it RELIABLY across the WAN to every platform. -->
+        <qos_profile name="TeamAssignmentWriterQos">
+            <datawriter_qos>
+                <durability>
+                    <kind>VOLATILE_DURABILITY_QOS</kind>
+                </durability>
+                <reliability>
+                    <kind>RELIABLE_RELIABILITY_QOS</kind>
+                </reliability>
+            </datawriter_qos>
+        </qos_profile>
     </qos_library>
 
     <domain_library name="RouterAdminDomainLibrary">
         <domain name="ControlLanDomain" domain_id="20">
             <register_type name="RouterMeshStatus" type_ref="RouterMeshStatus" />
+            <register_type name="TeamAssignment" type_ref="TeamAssignment" />
             <topic name="ActRouterMeshStatus" register_type_ref="RouterMeshStatus" />
+            <topic name="ActTeamAssignment" register_type_ref="TeamAssignment" />
         </domain>
     </domain_library>
 
@@ -113,6 +128,11 @@
                         <datareader_qos base_name="MeshDashboardQosLib::MeshStatusReaderQos" />
                     </data_reader>
                 </subscriber>
+                <publisher name="MeshPublisher">
+                    <data_writer name="TeamAssignmentWriter" topic_ref="ActTeamAssignment">
+                        <datawriter_qos base_name="MeshDashboardQosLib::TeamAssignmentWriterQos" />
+                    </data_writer>
+                </publisher>
             </domain_participant>
         </application>
     </web_integration_service>

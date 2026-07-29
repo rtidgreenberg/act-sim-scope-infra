@@ -39,7 +39,7 @@ control:
   target_router: platform-30-control-platform
 
 types:
-  xml: harness_v2/datamodel/act_types.xml
+  xml: harness_v2/datamodel/gen/ActTypes.xml
 
 qos_libraries:
   - harness_v2/qos/lan_qos_lib.xml
@@ -126,6 +126,32 @@ routes:
         filter:
           expression: "msg.destination = %0"
           parameters: ["${node.name}"]
+      output:
+        participant: platform_lan
+
+  # Unfiltered control→platform event route (team-control-topic-plan.md). Same shape as
+  # control_command but NO CFT filter — all platforms receive all samples. Used for
+  # broadcast control topics like TeamAssignment where every platform needs every sample
+  # and the platform control process filters locally.
+  - name: control_event
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: control
+    destination: platform
+    topics:
+      - name: ActTeamAssignment
+    source_side:
+      input:
+        participant: control_lan
+      output:
+        participant: control_wan
+        writer_qos: wan_event
+        publisher_partition: CONTROL
+    destination_side:
+      input:
+        participant: platform_wan
+        reader_qos: wan_event
+        subscriber_partition: CONTROL
       output:
         participant: platform_lan
 
