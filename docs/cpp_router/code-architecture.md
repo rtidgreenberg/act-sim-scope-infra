@@ -143,13 +143,17 @@ RouterInstance
 - `PresenceMonitor` (shipped, Phase 8/D76) publishes this router's compact `RouterHealth`
   summary over the WAN (the controller's `PresenceTick` handler builds it from state on
   the strand — the writer QoS is the D75 pinned set) and subscribes to peers', maintaining
-  the `router name → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary}` roster (D79
-  name-only identity) off the
+  the `router name → {ALIVE/STALE/DEAD, last-seen, participant GUID, summary, delivery_ratio}`
+  roster (D79 name-only identity) off the
   designed signals (valid sample → ALIVE; `REQUESTED_DEADLINE_MISSED` → STALE; instance
-  `NOT_ALIVE_NO_WRITERS` → DEAD). It republishes the aggregated connected-router list over
-  the LAN (admin participant) on `ActRouterMeshStatus` on every roster change. The heartbeat
-  also carries the roster as a compact `peers_seen` edge list (D77) — who-sees-who is
-  observable from any single WAN point (the C2 node map). The
+  `NOT_ALIVE_NO_WRITERS` → DEAD). It computes an **ETX-style delivery ratio** per peer from
+  `heartbeat_seq` gap analysis (OLSR link-quality model — see
+  [mesh-presence-approaches.md](mesh-presence-approaches.md) "Mesh Protocol Lineage") and
+  publishes this in `peers_seen[P].delivery_ratio`. It republishes the aggregated
+  connected-router list over the LAN (admin participant) on `ActRouterMeshStatus` on every
+  roster change. The heartbeat also carries the roster as a compact `peers_seen` edge list
+  (D77) — who-sees-who + per-link quality is observable from any single WAN point (the C2
+  node map). The
   presence-reset action (peer `DEAD` → unregister that peer's forwarded instances) is
   deferred to Phase 12 with the keyed-lifecycle machinery (D72 scope split). Only the
   compact summary crosses the WAN — never liveliness on data topics, never the full route

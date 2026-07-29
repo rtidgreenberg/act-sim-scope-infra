@@ -89,7 +89,9 @@ build a mesh view:
 
 ```
 peer[router_name] = { node, role, last_seq, last_heartbeat_ts, state,
-                    state_revision, n_routes, n_degraded, n_error, overall_state }
+                    state_revision, n_routes, n_degraded, n_error, overall_state,
+                    samples_received_this_window, expected_this_window,
+                    delivery_ratio }
 state ∈ { ALIVE, STALE, DEAD }
   ALIVE  heartbeats fresh, liveliness ok
   STALE  liveliness ok but heartbeat delta > staleness threshold  (deadline missed)
@@ -99,10 +101,45 @@ state ∈ { ALIVE, STALE, DEAD }
 Each peer entry keeps the last **compact summary** heard on `RouterHealth` (identity + presence
 + the rollup) — not the peer's full route table.
 
+### ETX-style delivery ratio (OLSR link-quality model)
+
+Each router computes a **forward delivery ratio** per peer from the existing `heartbeat_seq`:
+
+```
+// On receiving RouterHealth from peer P:
+uint32_t expected = P.heartbeat_seq - last_recorded_seq_from[P];
+uint32_t received = samples_received_this_window_from[P];
+float delivery_ratio = (float)received / (float)expected;  // 0.0–1.0
+```
+
+This ratio is published in `peers_seen[P].delivery_ratio` on this router's next heartbeat.
+Any observer (C2, dashboard) can then compute bidirectional ETX for every link:
+
+```
+ETX(A→B) = 1 / (A.peers_seen[B].delivery_ratio × B.peers_seen[A].delivery_ratio)
+```
+
+Derived metrics (zero additional WAN traffic):
+
+| Metric | Derivation |
+|--------|-----------|
+| Per-link loss rate | `1 - delivery_ratio` |
+| Per-link jitter | Stddev of `RouterHealth` inter-arrival times within window |
+| Asymmetric failure | `ratio(A→B) ≠ ratio(B→A)` |
+| Liveliness | `delivery_ratio == 0` for a full window → DEAD |
+| Link quality (ETX) | `1 / (forward_ratio × reverse_ratio)` — expected transmissions for one successful delivery |
+
+This follows the OLSR ETX model (RFC 3626 §14 + OLSRv2 RFC 7181 link metrics), adapted
+for DDS. See [mesh-presence-approaches.md](mesh-presence-approaches.md) "Mesh Protocol
+Lineage" section for the full rationale and alternatives analysis.
+
+### Roster edges and mesh graph
+
 The roster is also echoed outward as **edges on the router's own heartbeat** (`peers_seen`,
 D77): who-sees-who is observable from any single point on the WAN — C2 draws the mesh node
 map from `RouterHealth` alone, and an asymmetric link (A hears B, B lost A) shows up as an
-asymmetric edge pair.
+asymmetric edge pair. The `delivery_ratio` field per edge gives link quality without any
+additional probe traffic.
 
 - `on_liveliness_changed` / instance `NOT_ALIVE_NO_WRITERS` → mark `DEAD`.
 - `on_requested_deadline_missed` / `now - last_heartbeat_ts > threshold` → mark `STALE`.
@@ -264,11 +301,13 @@ deviation from the sketch below: `state_revision` is `uint64`, not `string` —
 enum RouterOverallState { ROUTER_OK, ROUTER_DEGRADED, ROUTER_ERROR };
 enum RouterPresenceState { PRESENCE_ALIVE, PRESENCE_STALE, PRESENCE_DEAD };
 
-// D77: one adjacency edge of the who-sees-who map. Identity + presence only — never
-// the peer's own summary (a WAN observer already gets each router's RouterHealth).
+// D77: one adjacency edge of the who-sees-who map. Identity + presence + delivery ratio
+// (OLSR ETX-style link quality from heartbeat loss counting — see
+// mesh-presence-approaches.md "Mesh Protocol Lineage" section for rationale).
 struct RouterPeerRef {
     string router;              // "<node>/<router>" (name-only identity, D79)
     RouterPresenceState presence;
+    float  delivery_ratio;      // fraction of peer's heartbeats received this window (0.0–1.0)
 };
 
 // WAN: one compact, liveliness-bearing summary per router. Small on purpose.
