@@ -143,3 +143,73 @@ assert rev_after == rev_before, "rejected UPDATE_ROUTE should not bump state_rev
 **Alternative:** If adding to the existing test is too interleaved, create a small
 standalone test function `test_update_route_rejected` in the same file, using the same
 config and setup pattern.
+
+---
+
+## 4. Improve `type_not_inline` Log Deduplication
+
+### Problem
+
+The `type_not_inline` warning is deduplicated **per topic** via the
+`type_not_inline_warned_` set. When the first subscription on a topic lacks an inline
+TypeObject, the warning fires. When the WIS *publication* on that same topic also lacks
+it, the warning is silently suppressed — so we never see that the publisher (the one
+that matters for TypeResolved) is also missing the type.
+
+### Improvement
+
+Change the deduplication key from topic name to **(topic, endpoint GUID)** — or at
+minimum log a summary after discovery quiesces: "type still not available after N
+endpoints discovered on topic X." The per-endpoint approach is simpler and more
+immediately useful.
+
+**In `DiscoveryDispatcher`:**
+- Change `type_not_inline_warned_` from `std::set<std::string>` (topic name) to
+  `std::set<std::string>` keyed on `"<topic>/<guid_prefix>"`.
+- Or: keep per-topic dedup but add a periodic/count-based escalation: after the Nth
+  endpoint on a topic still has no inline type, log at WARN level again with the count.
+
+This is a small, low-risk change that would have caught the WIS issue immediately.
+
+## 5. Add `type_resolved` to `RouterRouteTopicStatus`
+
+### Problem
+
+`RouterRouteTopicStatus` reports `topic_state` as `TOPIC_IDLE` / `TOPIC_ACTIVE`, but
+`TOPIC_IDLE` is ambiguous — it could mean:
+- (a) The type isn't known yet (no TypeObject received), so the route can't even
+  create its DDS entities.
+- (b) The type IS known and entities are created, but no endpoints have matched yet.
+- (c) The route is configured but hasn't started discovery yet.
+
+During the WIS debugging, we saw `TOPIC_IDLE` + `input_matched=0` and couldn't tell
+whether the type was the blocker or something else.
+
+### Improvement
+
+Add a `type_resolved` boolean field to `RouterRouteTopicStatus` (in
+`harness_v2/datamodel/ActTypes.idl`):
+
+```idl
+struct RouterRouteTopicStatus {
+    @key string route_name;
+    string topic_name;
+    string type_name;
+    RouterTopicState topic_state;
+    boolean type_resolved;   // <-- NEW: true once TypeResolved fired for this topic
+    long input_matched;
+    long output_matched;
+};
+```
+
+When the dashboard / status reader sees `topic_state=TOPIC_IDLE, type_resolved=false`,
+the diagnosis is immediate: "type not yet available." When `type_resolved=true` but
+still `TOPIC_IDLE`, the problem is elsewhere (no matching endpoints, partition mismatch,
+etc.).
+
+**Implementation:**
+- Add the field to the IDL struct and regenerate.
+- In `RouteSlot` or wherever `TopicState` is tracked, set `type_resolved = true` when
+  `TypeResolved` callback fires for that route's topic.
+- Populate it in the status publisher alongside the existing fields.
+- Update the mesh dashboard (`mesh_graph.js`) to display the flag when a route is idle.
