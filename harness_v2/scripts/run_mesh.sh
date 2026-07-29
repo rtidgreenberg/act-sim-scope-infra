@@ -7,12 +7,11 @@
 # Usage:
 #   ./run_mesh.sh up --platforms <N> [--workdir <dir>] [--verbosity <0-3>] \
 #                    [--with-dashboard] [--dashboard-port <port>]
-#   ./run_mesh.sh down --workdir <dir>
+#   ./run_mesh.sh down [--workdir <dir>]
 #
-# `up` prints "WORKDIR=<path>" on its last line -- capture it, you MUST pass the same
-# --workdir to `down` (this VM runs concurrent Claude sessions; there is deliberately no
-# shared "last run" pointer file, so teardown only ever kills PIDs this invocation started
-# -- see repo CLAUDE.md's DDS runtime hygiene + memory's "no blanket pkill" guidance).
+# Both `up` and `down` default to a fixed WORKDIR (/tmp/act_mesh_run) -- `up` deletes and
+# recreates it each time, so `down` (with no args) always knows where to look. Override
+# with --workdir <dir> if you need a custom path.
 #
 # --with-dashboard also generates the WIS config (gui/mesh_dashboard/config/
 # generate_wis_config.sh) and launches rtiwebintegrationservice serving the mesh dashboard
@@ -21,8 +20,8 @@
 # wrapper script; killing only it leaves the port bound, gui/mesh_dashboard/README.md) --
 # are added to the same pids.txt, so a single `down` tears down routers + sims + dashboard.
 #
-# All runtime artifacts (logs, generated per-platform yaml) go under --workdir, which MUST
-# be on a local filesystem (default: mktemp under /tmp) -- never point it at this repo's
+# All runtime artifacts (logs, generated per-platform yaml) go under --workdir (default:
+# /tmp/act_mesh_run), which MUST be on a local filesystem -- never point it at this repo's
 # vboxsf share (repo CLAUDE.md filesystem-safety rule).
 
 set -euo pipefail
@@ -35,9 +34,9 @@ ACTION="${1:-}"
 [[ $# -gt 0 ]] && shift
 
 PLATFORMS=""
-WORKDIR=""
+WORKDIR="/tmp/act_mesh_run"
 VERBOSITY=2
-WITH_DASHBOARD=false
+WITH_DASHBOARD=true
 DASHBOARD_PORT=8080
 
 while [[ $# -gt 0 ]]; do
@@ -62,14 +61,15 @@ do_up() {
     fi
 
     if [[ -z "$WORKDIR" ]]; then
-        WORKDIR="$(mktemp -d /tmp/act_mesh_run.XXXXXX)"
-    else
-        mkdir -p "$WORKDIR"
-        # filesystem-safety guard: prove $WORKDIR is a real local fs, not the vboxsf share.
-        if ! (mkfifo "$WORKDIR/.probe" 2>/dev/null && rm -f "$WORKDIR/.probe"); then
-            echo "Error: $WORKDIR failed the mkfifo probe -- refusing to use a vboxsf/non-local path" >&2
-            exit 1
-        fi
+        echo "Error: --workdir cannot be empty" >&2; exit 1
+    fi
+    # Wipe and recreate -- ensures a clean slate each run.
+    rm -rf "$WORKDIR"
+    mkdir -p "$WORKDIR"
+    # filesystem-safety guard: prove $WORKDIR is a real local fs, not the vboxsf share.
+    if ! (mkfifo "$WORKDIR/.probe" 2>/dev/null && rm -f "$WORKDIR/.probe"); then
+        echo "Error: $WORKDIR failed the mkfifo probe -- refusing to use a vboxsf/non-local path" >&2
+        exit 1
     fi
     : > "$WORKDIR/pids.txt"
 
@@ -93,8 +93,23 @@ do_up() {
 
     export NDDSHOME="${NDDSHOME:-/home/rti/rti_connext_dds-7.7.0}"
     export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
-    export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 CONTROL_WAN_PEER1=127.0.0.1
-    export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1 PLATFORM_WAN_PEER1=127.0.0.1
+    # CONTROL_WAN_PEER1/PLATFORM_WAN_PEER1 seed discovery on domain 200 (platform_wan +
+    # control_wan -- team_wan retired, its role folded into platform_wan, D103), which
+    # every platform shares -- a bare "127.0.0.1" peer descriptor implies Connext's
+    # default max participant id of 4 (probes ids 0..4 only, confirmed against RTI's
+    # KB). Each platform contributes 1 domain-200 participant post-D103 (was 2 before
+    # team_wan's retirement), so ids climb past 4 as --platforms grows, just half as
+    # fast as before. Two platforms that BOTH land with every one of their domain-200
+    # participants above id 4 go mutually invisible -- reproduced live pre-D103: a
+    # 5-platform run (2 domain-200 participants/platform then) put Platform_32 (ids
+    # 9,10) and Platform_33 (ids 5,6) outside the window and they never discovered each
+    # other, while every other pair (each having at least one participant inside 0..4)
+    # was fine. "10@127.0.0.1" raises the probed range to ids 0..10 (11 slots) -- covers
+    # control_wan (1) + up to 10 platforms x 1 domain-200 participant each post-D103
+    # (was up to 5 platforms x 2 before); kept at 10 rather than shrunk since a larger
+    # window is harmless headroom, not a tightness requirement.
+    export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 CONTROL_WAN_PEER1=10@127.0.0.1
+    export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1 PLATFORM_WAN_PEER1=10@127.0.0.1
     export WAN_HB_PERIOD_SEC=1 WAN_HB_RETRIES=10 WAN_MAX_BLOCKING_SEC=1
     export WAN_TIMEOUT_SEC=100 WAN_TTL=1 WAN_RECEIVE_MULTICAST=0
 
@@ -196,11 +211,8 @@ do_up() {
 }
 
 do_down() {
-    if [[ -z "$WORKDIR" ]]; then
-        echo "Error: --workdir <dir> is required for 'down'" >&2; exit 1
-    fi
     if [[ ! -f "$WORKDIR/pids.txt" ]]; then
-        echo "Error: $WORKDIR/pids.txt not found -- wrong --workdir?" >&2; exit 1
+        echo "Error: $WORKDIR/pids.txt not found -- wrong --workdir or no prior 'up'?" >&2; exit 1
     fi
 
     echo "[run_mesh down] killing tracked PIDs from $WORKDIR/pids.txt..."
@@ -234,6 +246,6 @@ do_down() {
 case "$ACTION" in
     up) do_up ;;
     down) do_down ;;
-    *) echo "Usage: $0 {up --platforms <N> [--workdir <dir>] [--verbosity <0-3>] [--with-dashboard] [--dashboard-port <port>] | down --workdir <dir>}" >&2
+    *) echo "Usage: $0 {up --platforms <N> [--workdir <dir>] [--verbosity <0-3>] [--with-dashboard] [--dashboard-port <port>] | down [--workdir <dir>]}" >&2
        exit 1 ;;
 esac
