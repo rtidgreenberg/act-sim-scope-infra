@@ -141,8 +141,9 @@
   }
 
   // Team-membership ring (follow-on to v1's presence-only graph, 2026-07-21). RouterHealth
-  // now carries team_partition -- team_wan's raw participant-partition set (D83's
-  // single-mechanism design means it mixes the node's own protected identity, an optional
+  // now carries team_partition -- platform_wan's raw participant-partition set (D83's
+  // single-mechanism design, absorbed from team_wan under D103, means it mixes the node's
+  // own protected identity, an optional
   // team name, and any ad-hoc direct-peer-tap names, with NO structural tag telling them
   // apart). Classification happens here, not on the wire: subtract every identity we know
   // to be a node's own ("<node>/<router>" split on "/") and whatever's left is treated as

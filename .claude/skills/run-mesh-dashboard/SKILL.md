@@ -196,7 +196,7 @@ def partition_cmd(node_name, router_name, command_id, partition_name):
     c["target_router"] = router_name
     c["command_id"] = command_id
     c["kind"] = COMMAND_KIND["ADD_PARTICIPANT_PARTITION"]
-    c["participant_name"] = "team_wan"
+    c["participant_name"] = "platform_wan"  # D103: team_wan retired, absorbed into platform_wan
     c["partition_name"] = partition_name
     return c
 
@@ -216,7 +216,7 @@ A page with an already-open WebSocket connection receives this live (confirmed:
 `control-platform.yaml` hardcodes `platform_lan: domain: 30` — fine for exactly one
 platform process, but N platform processes on one machine need N distinct `platform_lan`
 domains (they're meant to simulate physically separate LANs; reusing one domain would
-merge them into the same multicast group). `control_wan`/`platform_wan`/`team_wan` stay
+merge them into the same multicast group). `control_wan`/`platform_wan` stay
 domain 200 for all of them — that's the shared WAN, correctly common.
 
 ```bash

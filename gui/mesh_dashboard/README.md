@@ -111,7 +111,7 @@ both still only hand-read, not watched render.
 Added `Platform_31`/`Platform_32` (own `control-platform.yaml` copies with `platform_lan`
 bumped to domain 31/32, everything else identical/shared WAN) alongside the original
 `Platform_30`, all four mutually discovered. Assigned real team memberships over the
-live admin channel (`ADD_PARTICIPANT_PARTITION team_wan=<name>`, the same mechanism
+live admin channel (`ADD_PARTICIPANT_PARTITION platform_wan=<name>`, the same mechanism
 `test_mesh_team_partition.py` uses) — `Platform_30`+`Platform_31` → `TEAM_A`,
 `Platform_32` → `TEAM_B` (+`TEAM_C` later, to prove a peer can carry >1 non-identity
 partition and still classify correctly). Browser-confirmed: 4 nodes render, `TEAM_A`/
@@ -172,11 +172,12 @@ routers + 3 sims to pick up the new type, `control_lan` shows all three sources
 
 Each known node now renders with a colored ring (border) whose fill color is unchanged
 (still known-directly-blue vs. placeholder-gray) — the ring encodes team membership,
-derived from a new `RouterHealth.team_partition` field (`team_wan`'s live
-participant-partition set, D83/D87). Since `RouterHealth` rides `control_wan`/
-`platform_wan` (unconditional match, D87), this reaches the dashboard with no dependency
-on `team_wan`'s own gated discovery — sidesteps D89's GUID-only-for-cross-team problem
-entirely for this specific consumer.
+derived from a new `RouterHealth.team_partition` field (`platform_wan`'s live
+participant-partition set under D103, absorbed from `team_wan`; D83/D87). Since
+`RouterHealth` rides `control_wan`/`platform_wan` (matched via `control_wan`'s standing
+protected wildcard, D103), this reaches the dashboard with no dependency on a separate
+gated discovery mechanism — sidesteps D89's GUID-only-for-cross-team problem entirely for
+this specific consumer.
 
 **Classification, not a wire-level tag.** `team_partition` is the RAW partition set —
 D83's single-mechanism design means it mixes the node's own protected identity, an
@@ -190,7 +191,7 @@ misclassifies as "no team" — not solved here, flagged in both the IDL comment 
 Verified end-to-end (real 3-process mesh: 1 control + 2 platform, `test_mesh_team_partition.py`,
 stable 3/3 + the full e2e suite 25/25): before any team is assigned, `team_partition` on
 the wire is exactly the protected-identity singleton; after `ADD_PARTICIPANT_PARTITION
-team_wan=TEAM_A` on both platforms, it becomes `{identity, "TEAM_A"}` on both
+platform_wan=TEAM_A` on both platforms, it becomes `{identity, "TEAM_A"}` on both
 `RouterHealth` directly and on the control node's own `ActRouterMeshStatus` aggregate —
 proving the field survives `PresenceMonitor`'s roster-copy path unmodified.
 
