@@ -3,7 +3,7 @@
 #include "DdsStatusPublisher.hpp"
 #include "Log.hpp"
 
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 namespace router {
 

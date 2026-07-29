@@ -6,7 +6,7 @@
 // rtiddsgen generated these types as plain structs with public data members and
 // vector-like bounded_sequence fields, so access is by field, not fluent accessors.
 
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 #include <cstdio>
 #include <string>

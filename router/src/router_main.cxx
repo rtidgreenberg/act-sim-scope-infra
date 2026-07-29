@@ -37,7 +37,7 @@
 #include "core/RouterController.hpp"
 #include "core/TypeResolver.hpp"
 
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <rti/core/policy/CorePolicy.hpp>

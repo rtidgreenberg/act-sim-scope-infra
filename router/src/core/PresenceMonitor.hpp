@@ -90,7 +90,7 @@
 #include "Interfaces.hpp"
 #include "WanStatsPoll.hpp" // Phase 9: the RouterHealth pair is a WAN-stats source (D81)
 
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <dds/dds.hpp>

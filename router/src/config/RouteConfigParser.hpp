@@ -10,7 +10,7 @@
 #pragma once
 
 #include "core/RouterState.hpp" // ParticipantState
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 #include <map>
 #include <string>

@@ -12,7 +12,7 @@
 #pragma once
 
 #include "RouteView.hpp"
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 #include "RouterEvents.hpp" // EndpointRecord QoS PODs + DerivedWriterQos (D45)
 
 #include <algorithm>

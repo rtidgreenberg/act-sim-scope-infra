@@ -18,7 +18,7 @@
 
 #include "Interfaces.hpp"
 
-#include "RouterAdminTypes.hpp"
+#include "ActTypes.hpp"
 
 #include <rti/core/cond/AsyncWaitSet.hpp>
 #include <dds/dds.hpp>
