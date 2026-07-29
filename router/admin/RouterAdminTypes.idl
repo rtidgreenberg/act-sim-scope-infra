@@ -247,20 +247,23 @@ struct RouterHealth {
     uint32 n_error;
     RouterOverallState overall_state;
     // The router's own WAN-facing, participant-partition-scoped (D83) participant's live
-    // partition set — e.g. team_wan's, never platform_wan/control_wan's (D87: those stay
-    // unconditional, not team-scoped). Polled fresh off the real DomainParticipantQos.
-    // partition at every heartbeat (PresenceMonitor::publish_heartbeat) — ground truth off
-    // the live entity, not a copy of the controller's config-mirrored state, so it can
-    // never drift from what the participant is actually running. Raw set, NOT
-    // pre-classified: it mixes the node's own
-    // protected identity entry, an optional team name, and any ad-hoc direct-peer-tap
-    // entries with no structural tag distinguishing them (D83's single-mechanism design).
-    // A consumer wanting "just the team name" must subtract known node identities itself
-    // (see gui/mesh_dashboard's mesh_graph.js). Rides RouterHealth (control_wan/
-    // platform_wan, unconditional match) specifically so this reaches every mesh consumer
-    // without needing team_wan's own gated discovery (D89's GUID-only problem doesn't
-    // apply here). Bound mirrors RouterParticipantStatus.participant_partition
-    // (kMaxParticipantPartitionEntries, RouterState.hpp).
+    // partition set — platform_wan's on a platform node, under D103 (team_wan is retired;
+    // platform_wan absorbed its team_scoped role). Nothing on a control node (control_wan
+    // is not team_scoped — it instead carries a standing protected wildcard entry, D103,
+    // to keep matching platform_wan now that platform_wan is off the free default
+    // partition). Polled fresh off the real DomainParticipantQos.partition at every
+    // heartbeat (PresenceMonitor::publish_heartbeat) — ground truth off the live entity,
+    // not a copy of the controller's config-mirrored state, so it can never drift from
+    // what the participant is actually running. Raw set, NOT pre-classified: it mixes the
+    // node's own protected identity entry, an optional team name, and any ad-hoc
+    // direct-peer-tap entries with no structural tag distinguishing them (D83's
+    // single-mechanism design). A consumer wanting "just the team name" must subtract
+    // known node identities itself (see gui/mesh_dashboard's mesh_graph.js). Rides
+    // RouterHealth (control_wan/platform_wan) specifically so this reaches every mesh
+    // consumer via the same participant match that carries the heartbeat itself — no
+    // separate gated discovery needed (D89's GUID-only problem doesn't apply here). Bound
+    // mirrors RouterParticipantStatus.participant_partition (kMaxParticipantPartitionEntries,
+    // RouterState.hpp).
     sequence<string, 16> team_partition;
     // This router's roster edges (D77). D97: no longer stripped when a peer's
     // RouterHealth is cached and re-embedded into RouterMeshStatus.peers[i].health (see

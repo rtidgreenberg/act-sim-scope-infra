@@ -24,9 +24,19 @@ def _types():
 class Probe:
     """One UDPv4-only DomainParticipant on `domain`, for app-side pub/sub in a test."""
 
-    def __init__(self, domain, participant_name=None, role_name=None, spdp2=False):
+    def __init__(self, domain, participant_name=None, role_name=None, spdp2=False,
+                 participant_partition=None):
         qos = dds.DomainParticipant.default_participant_qos
         qos.transport_builtin = dds.TransportBuiltin.udpv4
+        # participant_partition (D83/D103): PARTICIPANT-level partition, the RTI
+        # extension that gates discovery itself (SPDP), not just endpoint (SEDP)
+        # matching -- same mechanism the router applies via ParticipantRegistry. A probe
+        # observing a team_scoped participant (e.g. platform_wan post-D103) from outside
+        # needs this, not just a partitioned Publisher/Subscriber, since the default ""
+        # participant partition does not intersect a concrete-only set (D84's finding) --
+        # setting a wildcard here mirrors what control_wan needs in production.
+        if participant_partition is not None:
+            qos.partition = dds.Partition(list(participant_partition))
         # A probe that shares a domain with a router WAN participant must run the SAME
         # discovery protocol: SPDP2 and plain SPDP do not interoperate (D78/D94). Router
         # WAN participants use SPDP2|SEDP (D94), so a WAN-domain probe sets spdp2=True.

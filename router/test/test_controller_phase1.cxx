@@ -241,6 +241,19 @@ struct Fixture {
         v.push_back(wan);
         return v;
     }
+    // D103: a participant carrying a protected_partition_entries wildcard, NOT
+    // team_scoped — mirrors control_wan's standing "*" post-D103, exercising the
+    // protected-entry path independently of D83's node-identity case.
+    static std::vector<ParticipantState> participants_with_protected_wildcard() {
+        std::vector<ParticipantState> v = participants();
+        ParticipantState wan;
+        wan.name = "control_wan";
+        wan.domain = 200;
+        wan.protected_partition_entries.push_back("*");
+        wan.participant_partition.push_back("*"); // as RouteConfigParser auto-seeds it
+        v.push_back(wan);
+        return v;
+    }
 
     void activate() { controller.activate(); }
     void post(const ControllerEvent &e) {
@@ -897,8 +910,7 @@ static void test_participant_partition_accept_path() {
     remove_protected.partition_name = "Platform_30";
     f.post(ControllerEvent::command_received(remove_protected));
     CHECK(!f.status.last_ack().accepted);
-    CHECK(f.status.last_ack().message
-          == "cannot remove the protected node-identity partition entry");
+    CHECK(f.status.last_ack().message == "cannot remove a protected partition entry");
     CHECK(f.revision() == rev + 1);
 
     // Unknown participant: rejected.
@@ -966,6 +978,49 @@ static void test_participant_partition_accept_path() {
     CHECK(f.status.last_ack().message == "partition set full (max 16)");
     CHECK(f.revision() == rev_before_fill + 15); // rejected: no state change
     CHECK(f.factory.participant_partition_applies.at("team_wan").size() == 16); // unchanged
+}
+
+// D103: protected_partition_entries protects a literal wildcard entry the same way D83
+// protects a team_scoped participant's node-identity entry — but on a participant that
+// is NOT team_scoped at all (mirrors control_wan's standing "*" post-D103), proving the
+// two protection paths are independent (RouterState.hpp::is_protected_partition_name).
+static void test_participant_partition_protected_wildcard() {
+    Fixture f(std::vector<RouterRouteSpec>(), Fixture::participants_with_protected_wildcard());
+    std::uint64_t rev = f.revision();
+
+    // REMOVE the protected wildcard: rejected, never a silent no-op.
+    RouterCommand remove_wildcard;
+    remove_wildcard.command_id = "ppw1";
+    remove_wildcard.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove_wildcard.participant_name = "control_wan";
+    remove_wildcard.partition_name = "*";
+    f.post(ControllerEvent::command_received(remove_wildcard));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.status.last_ack().message == "cannot remove a protected partition entry");
+    CHECK(f.revision() == rev);
+
+    // ADD a non-protected name: accepted, live-applied, revision bumps normally —
+    // protection is scoped to the wildcard entry alone, not the whole participant.
+    RouterCommand add;
+    add.command_id = "ppw2";
+    add.kind = RouterCommandKind::ADD_PARTICIPANT_PARTITION;
+    add.participant_name = "control_wan";
+    add.partition_name = "DIRECT_TAP";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.revision() == rev + 1);
+
+    // REMOVE that same non-protected name: accepted normally.
+    RouterCommand remove_ok;
+    remove_ok.command_id = "ppw3";
+    remove_ok.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove_ok.participant_name = "control_wan";
+    remove_ok.partition_name = "DIRECT_TAP";
+    f.post(ControllerEvent::command_received(remove_ok));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.revision() == rev + 2);
+    CHECK(f.factory.participant_partition_applies.at("control_wan").size() == 1);
+    CHECK(f.factory.participant_partition_applies.at("control_wan").at(0) == "*");
 }
 
 // The D63 counter path (7d): RefreshCounters pulls forwarded() into status and
@@ -1058,6 +1113,7 @@ int main() {
     RUN(test_disable_tears_down);
     RUN(test_set_route_partition);
     RUN(test_participant_partition_accept_path);
+    RUN(test_participant_partition_protected_wildcard);
     RUN(test_refresh_counters_republish_no_bump);
     RUN(test_history_fifo_eviction);
 

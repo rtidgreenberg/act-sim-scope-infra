@@ -53,14 +53,20 @@ For the POC, keep the rule simple:
 - Platform/control WAN routes set publisher and subscriber partitions independently. For
   example, platform command readers subscribe on `CONTROL`, while platform status writers
   publish on `PLATFORM`.
-- `team_wan` owns a participant-level partition for discovery and group-level scoping —
-  and per **D73 (2026-07-16)** it is the **only** team-scope mechanism: team route
-  endpoints use the default partition, and the `inherit_participant` sentinel is
-  **retired** (non-overlapping participant partitions already make the participants
-  mutually invisible and suppress WAN endpoint discovery; a second endpoint-level gate
-  added nothing). `SET_PARTICIPANT_PARTITION` updates the group in one place via
-  participant `set_qos`. The example below predates D73 and its `inherit_participant`
-  lines drop out when Phase 10 lands.
+- `platform_wan` owns a participant-level partition for discovery and group-level
+  scoping (D103: retires the separate `team_wan` participant, folding its role
+  directly into `platform_wan`; `team_scoped: true` is what marks it as carrying this
+  mechanism) — and per **D73 (2026-07-16)** it is the **only** team-scope mechanism:
+  team route endpoints use the default partition, and the `inherit_participant`
+  sentinel is **retired** (non-overlapping participant partitions already make the
+  participants mutually invisible and suppress WAN endpoint discovery; a second
+  endpoint-level gate added nothing). `ADD`/`REMOVE_PARTICIPANT_PARTITION` update the
+  group in one place via participant `set_qos` (`SET_PARTICIPANT_PARTITION` is itself
+  retired, D73). `control_wan` additionally carries a standing, protected wildcard
+  (`protected_partition_entries: ["*"]`, D103) to keep matching `platform_wan` now that
+  it's off the free default partition. The example below predates D73/D103 and its
+  `inherit_participant` lines and `team_wan` participant drop out when Phase 10/D103
+  land.
 - **WAN participants are never multi-homed (D18).** When a node has multiple physical
   networks (e.g. mesh radio + SATCOM), the config defines **one WAN participant per unique
   network**, each pinned to its interface via the UDPv4 builtin transport
@@ -135,8 +141,9 @@ so the fleet stays in sync by construction:
   (`node.role` vs `source`/`destination`); team routes are written platform↔platform. The
   old flat `input:`/`output:`-only form is retired — a route without a role pair is a hard
   parse error (it would otherwise materialize on every node, including C2).
-- **Per-node values use substitution**: e.g. `team_wan.participant_partition` defaults to
-  `"${node.name}"`, giving every platform a unique partition ("team disabled by default")
+- **Per-node values use substitution**: e.g. `platform_wan.participant_partition` (D103;
+  was `team_wan.participant_partition`) defaults to `"${node.name}"`, giving every
+  platform a unique partition ("team disabled by default")
   from one shared line.
 - **Config drift is observable**: at load, the router stamps a digest of the config file
   into its `RouterHealth` heartbeat (`config_hash`, D80) — C2 sees a stale or divergent
@@ -321,12 +328,16 @@ before the POC run.
 
 ## Platform/Team Config Example
 
-> **Predates D79/D80 — annotated, not yet rewritten.** These routes are in the flat
+> **Predates D79/D80/D103 — annotated, not yet rewritten.** These routes are in the flat
 > `input:`/`output:` form that D80 retires: under the single system-wide config they get
 > rewritten as role-pair routes (source `platform` ↔ destination `platform`), this file
 > merges into that config, `router.id` disappears (D79), and
 > `participant_partition: PLATFORM_30` becomes the shared-line default
-> `participant_partition: "${node.name}"`. The rewrite lands with Phase 10.
+> `participant_partition: "${node.name}"`. The rewrite lands with Phase 10. **Additionally,
+> D103 retires the `team_wan` participant below entirely — its role (`team_scoped: true`,
+> the protected-identity partition mechanism) folds directly into `platform_wan`; see
+> `router/config/control-platform.yaml` for the current shape, which has no `team_wan`
+> participant at all.**
 
 ```yaml
 node:
@@ -379,7 +390,8 @@ Partition QoS. For `output` endpoints, `publisher_partition` configures the rout
 Publisher Partition QoS. Omitted LAN endpoint QoS means `auto`, and omitted LAN endpoint
 partition means `*`. ~~Team routes use `inherit_participant` to resolve both endpoint
 partitions from the current `team_wan.participant_partition` value.~~ **Retired (D73):**
-team scope is carried by `team_wan.participant_partition` alone; team route endpoints use
+team scope is carried by the team-scoped participant's `participant_partition` alone
+(`platform_wan` post-D103; `team_wan` before it was retired); team route endpoints use
 the default partition, and unknown partition sentinels are a parse error once Phase 10
 lands.
 

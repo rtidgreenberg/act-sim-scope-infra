@@ -192,9 +192,13 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
         # {team_scoped, on_wan} decomposition (design-decisions.md 2026-07-22; task
         # docs/cpp_router/is-wan-flag-decomposition-task.md). Both route writers to CONTROL
         # (the best-effort status leg + the reliable event leg) live on platform_wan, which is
-        # on_wan but NOT team_scoped. Before the decomposition, WAN-leg link-stats registration
-        # keyed off the single conflated flag (team_wan-only since D87), so platform_wan data
-        # legs were never polled and this peer's per-interval pushed_samples reflected ONLY the
+        # on_wan regardless of team_scoped (this fixture's platform_wan is NOT team_scoped —
+        # see config/e2e_link_stats.yaml — but on_wan is what drives this coverage either
+        # way; the two flags are orthogonal, and platform_wan IS team_scoped too on the real
+        # control-platform.yaml topology post-D103). Before the decomposition, WAN-leg
+        # link-stats registration keyed off the single conflated flag (team_wan-only since
+        # D87, before D103 retired team_wan), so platform_wan data legs were never polled and
+        # this peer's per-interval pushed_samples reflected ONLY the
         # ~1 Hz RouterHealth bellwether (router_main registers that unconditionally). Once the
         # legs are polled, the platform_wan route writers add their forwarded traffic (driven
         # above at ~10 Hz each) on top of the

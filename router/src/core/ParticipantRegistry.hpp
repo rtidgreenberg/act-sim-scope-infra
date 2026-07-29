@@ -54,14 +54,15 @@ public:
         std::vector<std::string> partition_names;
         // on_wan (is_wan decomposition, 2026-07-22): true for a participant whose route legs
         // are on the WAN. Queried back via on_wan() for WAN-leg flagging (RouteEntityFactory's
-        // link-stats registration). Set on EVERY WAN participant (control_wan/platform_wan/
-        // team_wan). The registry does NOT carry the team_scoped flag — that concept
-        // (protected-identity partition) lives on ParticipantState and never reaches here.
+        // link-stats registration). Set on EVERY WAN participant (control_wan/platform_wan
+        // post-D103; team_wan before it was retired). The registry does NOT carry the
+        // team_scoped flag — that concept (protected-identity partition) lives on
+        // ParticipantState and never reaches here.
         // NOTE: this does NOT select SPDP2 — that is `use_spdp2` below (decoupled).
         bool on_wan = false;
         // D78 (reinstated; D87 retraction reversed by the D92 CORRECTION 2026-07-22): select
         // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP in make_participant_qos().
-        // Set for every WAN-facing participant (control_wan/platform_wan/team_wan) via YAML
+        // Set for every WAN-facing participant (control_wan/platform_wan post-D103) via YAML
         // `spdp2: true`. Independent of is_wan so all WAN participants get SPDP2 while only
         // team-scoped ones take the D83 partition. LAN participants leave it false (plain SPDP).
         bool use_spdp2 = false;
@@ -84,8 +85,8 @@ public:
     // The Config::on_wan this participant was created with (false for an unknown name).
     // Lets a consumer (e.g. RouteEntityFactory's WAN-leg flagging for link-stats
     // registration) recognize EVERY WAN participant — not just one distinguished
-    // "the WAN participant" — now that a node can have more than one (control_wan,
-    // platform_wan and team_wan, D85).
+    // "the WAN participant" — now that a node can have more than one (control_wan and
+    // platform_wan; historically also team_wan before D103 retired it).
     bool on_wan(const std::string &name) const;
 
     // Enables every participant and, recursively, its builtin readers plus any child

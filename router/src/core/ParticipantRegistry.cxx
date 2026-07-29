@@ -46,7 +46,8 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
         // (all evidence to date is single-host/loopback) — see design-decisions.md D92.
         //
         // Gated on `use_spdp2` (YAML `spdp2: true`), independent of team_scoped and on_wan:
-        // team_scoped is the D83 protected-identity-partition flag (team_wan-only); on_wan is
+        // team_scoped is the D83 protected-identity-partition flag (platform_wan-only post-
+        // D103; was team_wan-only before D103 retired it); on_wan is
         // the link-stats WAN-leg flag (every WAN participant). SPDP2 tracks the same set as
         // on_wan today, but the choice of discovery protocol and the link-stats concern stay
         // separate flags so neither silently changes when the other is retuned.

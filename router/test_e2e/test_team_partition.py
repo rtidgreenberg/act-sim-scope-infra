@@ -3,8 +3,8 @@
 
 TWO router_main processes (config/e2e_team_partition.yaml, role=platform), distinguished
 by --node-name Platform_30 / Platform_31. Each has its own platform_lan (so app-side test
-traffic never crosses between the two processes by accident) but both render team_wan
-onto the SAME WAN domain (production reality: one physical network). team_wan.
+traffic never crosses between the two processes by accident) but both render platform_wan
+onto the SAME WAN domain (production reality: one physical network). platform_wan.
 participant_partition is omitted in the fixture, so it defaults to the protected
 {"${node.name}"} entry alone per node (D83) — team membership starts disjoint.
 
@@ -13,15 +13,15 @@ Asserts:
   E-disabled  with disjoint partitions (each router's own identity only), PlatformData
               never crosses: held-zero matched count on the receiving side (D66), not
               silence-and-hope — AND no WAN endpoint discovery at all between the two
-              team_wan participants (the D73 SEDP-suppression claim, confirmed against
+              platform_wan participants (the D73 SEDP-suppression claim, confirmed against
               each process's own discovery log: no publication_discovered/
               subscription_discovered line for PlatformData naming the other's identity
               as origin).
-  E-team      ADD_PARTICIPANT_PARTITION team_wan=TEAM_A on both: acks accepted on apply
+  E-team      ADD_PARTICIPANT_PARTITION platform_wan=TEAM_A on both: acks accepted on apply
               (not on rematch — D83 item 4); PlatformData crosses; matched counts
               advance — allowing for SPDP2's probabilistic post-match settle window
               (D78), not a fixed bound.
-  E-remove    REMOVE_PARTICIPANT_PARTITION team_wan=TEAM_A on one platform: matched
+  E-remove    REMOVE_PARTICIPANT_PARTITION platform_wan=TEAM_A on one platform: matched
               counts regress to zero on live entities, forwarding stops, no entities are
               torn down (topic_state stays TOPIC_FORWARDING).
   E-direct    a direct peer tap without a shared team: Platform_30
@@ -74,7 +74,7 @@ def _partition_cmd(command_type, node_name, command_id, kind, partition_name):
     c["target_router"] = ROUTER_NAME
     c["command_id"] = command_id
     c["kind"] = KIND[kind]
-    c["participant_name"] = "team_wan"
+    c["participant_name"] = "platform_wan"
     c["partition_name"] = partition_name
     return c
 
@@ -117,7 +117,7 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
         adm_a = AdminChannel(lan_a, admin_provider)
         adm_b = AdminChannel(lan_b, admin_provider)
 
-        # Per-process readiness only — NOT wait_for_mutual_discovery. The two team_wan
+        # Per-process readiness only — NOT wait_for_mutual_discovery. The two platform_wan
         # participants share domain 41 but start in disjoint partitions (protected
         # identity only, D83): confirmed empirically (see the D87 finding) that a
         # participant-level partition mismatch suppresses mutual visibility at the SPDP
@@ -144,28 +144,28 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
             classify=lambda d: "got", stop_key="got", timeout_s=6.0, grace_s=1.0,
             check_alive=alive)
         assert not buckets.get("got"), (
-            "PlatformData crossed with disjoint team_wan partitions (team not "
+            "PlatformData crossed with disjoint platform_wan partitions (team not "
             f"assigned); logs: a={proc_a.log_path} b={proc_b.log_path}")
         facts_b = wait_for_route(adm_b.status, "wan_team_to_platform",
                                  lambda f: True, check_alive=alive)
         assert facts_b is not None and facts_b["input_matched"] == 0, (
-            f"node B's team_wan reader matched node A's writer despite disjoint "
+            f"node B's platform_wan reader matched node A's writer despite disjoint "
             f"partitions (held-zero expected, D66); facts={facts_b}")
 
         # D73 SEDP-suppression: neither process's discovery log shows the OTHER's
         # identity as the origin of a PlatformData endpoint — zero WAN endpoint
-        # discovery between disjoint-partition team_wan participants, not just a
+        # discovery between disjoint-partition platform_wan participants, not just a
         # data-level non-match.
         log_a = proc_a.log_path.read_text()
         log_b = proc_b.log_path.read_text()
         assert f"topic={TOPIC}" not in log_a or f"origin={NODE_B}/{ROUTER_NAME}" \
             not in log_a, f"node A's log shows a PlatformData endpoint from node B " \
-            f"despite disjoint team_wan partitions; log={proc_a.log_path}"
+            f"despite disjoint platform_wan partitions; log={proc_a.log_path}"
         assert f"topic={TOPIC}" not in log_b or f"origin={NODE_A}/{ROUTER_NAME}" \
             not in log_b, f"node B's log shows a PlatformData endpoint from node A " \
-            f"despite disjoint team_wan partitions; log={proc_b.log_path}"
+            f"despite disjoint platform_wan partitions; log={proc_b.log_path}"
 
-        # --- E-team: ADD_PARTICIPANT_PARTITION team_wan=TEAM_A on both ---
+        # --- E-team: ADD_PARTICIPANT_PARTITION platform_wan=TEAM_A on both ---
         adm_a.cmd_writer.write(
             _partition_cmd(cmd_type_admin, NODE_A, "t1", "ADD_PARTICIPANT_PARTITION",
                           "TEAM_A"))
@@ -183,7 +183,7 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
             adm_b.status, "wan_team_to_platform", lambda f: f["input_matched"] >= 1,
             timeout_s=30.0, check_alive=alive)  # SPDP2 post-match settle window (D78)
         assert matched_b is not None and matched_b["input_matched"] >= 1, (
-            f"node B's team_wan reader never matched after TEAM_A join; "
+            f"node B's platform_wan reader never matched after TEAM_A join; "
             f"facts={matched_b}; logs: a={proc_a.log_path} b={proc_b.log_path}")
 
         buckets = write_until_seen(
@@ -222,7 +222,7 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
             f"removing the protected node-identity partition entry must be rejected; "
             f"got {ack_protected}")
 
-        # --- E-remove: REMOVE_PARTICIPANT_PARTITION team_wan=TEAM_A on node B ---
+        # --- E-remove: REMOVE_PARTICIPANT_PARTITION platform_wan=TEAM_A on node B ---
         adm_b.cmd_writer.write(
             _partition_cmd(cmd_type_admin, NODE_B, "t3",
                           "REMOVE_PARTICIPANT_PARTITION", "TEAM_A"))
@@ -233,7 +233,7 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
             adm_b.status, "wan_team_to_platform", lambda f: f["input_matched"] == 0,
             timeout_s=15.0, check_alive=alive)
         assert unmatched_b is not None and unmatched_b["input_matched"] == 0, (
-            f"node B's team_wan reader still matched after TEAM_A removal; "
+            f"node B's platform_wan reader still matched after TEAM_A removal; "
             f"facts={unmatched_b}")
         assert unmatched_b["topic_state"] == "TOPIC_FORWARDING", (
             "partition membership change must never tear down live entities; "

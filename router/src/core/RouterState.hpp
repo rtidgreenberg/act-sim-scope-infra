@@ -15,6 +15,7 @@
 #include "RouterAdminTypes.hpp"
 #include "RouterEvents.hpp" // EndpointRecord QoS PODs + DerivedWriterQos (D45)
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -114,23 +115,33 @@ struct ParticipantState {
     // YAML participants.<name>.team_scoped (D83; renamed from `wan` in the is_wan
     // decomposition, 2026-07-22): true for a team-partition-scoped participant — gates ONLY
     // the protected-identity partition default (RouteConfigParser) and the non-removable
-    // protection (is_protected_partition_name). team_wan-only in current configs (D87).
-    // Explicit, not name-sniffed. Does NOT drive link-stats WAN-leg detection (that is
-    // on_wan) and does NOT select SPDP2 (that is use_spdp2) — all three are decoupled.
+    // protection (is_protected_partition_name). platform_wan-only in current configs
+    // post-D103 (was team_wan-only before D103 retired it). Explicit, not name-sniffed.
+    // Does NOT drive link-stats WAN-leg detection (that is on_wan) and does NOT select
+    // SPDP2 (that is use_spdp2) — all three are decoupled.
     bool team_scoped = false;
     // YAML participants.<name>.on_wan (link-stats decomposition, 2026-07-22): true for a
     // participant whose route legs live on the WAN — drives WAN-leg flagging so the
     // LinkStatsCollector polls each leg's per-matched-endpoint protocol statuses
     // (RouteEntityFactory / ParticipantRegistry::on_wan). Set on EVERY WAN participant
-    // (control_wan/platform_wan/team_wan), unlike team_scoped (team_wan-only). This is the
-    // concept D87 accidentally dropped from platform_wan/control_wan when it cleared their
-    // `wan: true` for a partition-matching reason, silently un-covering their data legs.
+    // (control_wan/platform_wan post-D103), unlike team_scoped (platform_wan-only). This
+    // is the concept D87 accidentally dropped from platform_wan/control_wan when it
+    // cleared their `wan: true` for a partition-matching reason, silently un-covering
+    // their data legs.
     bool on_wan = false;
     // YAML participants.<name>.spdp2 (D78, reinstated; D87 retraction reversed by the D92
     // CORRECTION 2026-07-22): select SPDP2|SEDP discovery for this participant. Set on every
-    // WAN-facing participant (control_wan/platform_wan/team_wan). Decoupled from is_wan so
+    // WAN-facing participant (control_wan/platform_wan post-D103). Decoupled from is_wan so
     // all WAN participants use SPDP2 while only team-scoped ones take the D83 partition.
     bool use_spdp2 = false;
+    // YAML participants.<name>.protected_partition_entries (D103): literal partition
+    // values that are auto-seeded into participant_partition at parse time (same
+    // auto-seed convention as team_scoped's ${node.name}) and non-removable via
+    // REMOVE_PARTICIPANT_PARTITION. Independent of team_scoped — a participant can be
+    // protected this way without being a team-identity participant (e.g. control_wan's
+    // standing "*" wildcard, needed post-D103 to keep matching platform_wan once
+    // platform_wan is no longer on the free default partition).
+    std::vector<std::string> protected_partition_entries;
 };
 
 // Mirrors RouterAdminTypes.idl's RouterParticipantStatus.participant_partition bound
@@ -141,22 +152,28 @@ constexpr std::size_t kMaxParticipantPartitionEntries = 16;
 
 // D83: the protected node-identity partition entry — every team_scoped participant's set
 // always contains its own name, seeded at config time (RouteConfigParser) and never
-// removable by command (RouterController::handle_remove_participant_partition). One
-// predicate shared by both so "what counts as protected" can't drift between the two.
+// removable by command (RouterController::handle_participant_partition_membership). D103
+// generalizes this: protected_partition_entries lists additional literal values
+// (independent of team_scoped) that are equally non-removable — e.g. control_wan's
+// standing "*" wildcard, which isn't a node-identity entry but must survive the same
+// REMOVE_PARTICIPANT_PARTITION guard.
+//
+// Deliberately two independent checks, not folded into one list at parse time: this
+// predicate must stay correct for ANY ParticipantState, regardless of how it was built
+// (RouteConfigParser, a unit-test fixture, or any future caller) — an earlier version of
+// this change folded team_scoped's identity entry into protected_partition_entries
+// inside RouteConfigParser and dropped the inline team_scoped check here, which silently
+// broke protection for every ParticipantState constructed by hand (a test fixture that
+// sets team_scoped directly without replicating the parser's seeding step caught this
+// immediately). Keeping the team_scoped check self-contained here means it can never be
+// forgotten by a caller that doesn't route through the parser.
 inline bool is_protected_partition_name(const ParticipantState &ps,
                                         const std::string &node_name,
                                         const std::string &candidate) {
-    return ps.team_scoped && candidate == node_name;
-}
-
-inline bool has_protected_partition_entry(const ParticipantState &ps,
-                                          const std::string &node_name) {
-    for (const std::string &v : ps.participant_partition) {
-        if (is_protected_partition_name(ps, node_name, v)) {
-            return true;
-        }
-    }
-    return false;
+    return (ps.team_scoped && candidate == node_name) ||
+           std::find(ps.protected_partition_entries.begin(),
+                    ps.protected_partition_entries.end(),
+                    candidate) != ps.protected_partition_entries.end();
 }
 
 struct MutableRouterState {

@@ -5031,3 +5031,111 @@ assertion would have failed against the pre-D97 code). Live: 3-router mesh
 across frames (943 → 1030 → 12 → 1026 → 951 ms), and the rendered graph showing
 `peers_seen`-sourced edges directly between the two platforms (not just via the observer) —
 the exact transitive path D77's stripping had made unreachable. Zero browser console errors.
+
+## D103 — `team_wan` retired; its role folds into `platform_wan` (`team_scoped: true`); `control_wan` gains a standing, protected wildcard `participant_partition: ["*"]` (2026-07-24, accepted; supersedes D84/D85's "keep separate WAN participants" specifically for `team_wan`/`platform_wan`, reverses D89's rejected wildcard-merge variant; D85's "C2 has nothing to merge" continues to hold — C2 still has exactly one WAN participant)
+
+**Context.** Two threads converged on this decision. First: `RouterHealth.peers_seen` (the
+who-sees-who roster, D77/D97) is built from a heartbeat topic that already rides
+`platform_wan`/`control_wan`, not `team_wan` — cross-team platforms currently show up in
+it regardless of team, because that heartbeat pair sits on the *unconditional* (default
+`""` partition) participant, per D87. Fixing this only requires `platform_wan` to carry
+real Partition QoS; no `PresenceMonitor` code change is needed once it does — a
+cross-team peer's heartbeat simply stops matching at the DDS level and never enters the
+existing `roster_`/DEADLINE/liveliness cascade (confirmed by re-reading
+`on_health_data`/`on_health_reader_status`/`build_mesh_locked` in full: none of it was
+ever gated by `team_wan`).
+
+Second, and the harder call: getting there means giving `platform_wan` itself D83's
+protected-identity/team partition — which is exactly what `team_wan` exists to carry
+separately today. D84 (2026-07-20) proposed merging `team_wan` into `platform_wan`/
+`control_wan` and was reverted same-day by D85: participant-level partition overlap is
+checked once per participant *pair*, not per topic, so merging trades away the "free"
+SEDP-level suppression that keeps `team_wan` and `platform_wan`/`control_wan` mutually
+invisible today — anyone who participant-matches the merged participant gets full SEDP
+metadata (existence, type, QoS, partition-name string) for *every* endpoint it hosts,
+including team-only topics, even though endpoint-level partition still blocks the actual
+data. D89 (2026-07-21) separately considered and rejected a **wildcard**-partition variant
+of the same merge, for the identical reason.
+
+This entry proceeds with the merge anyway, on a rationale D85/D89 didn't have: the SEDP
+exposure this time is bounded by **C2 node count** (expected 1, maybe 2), not
+team/platform count — the new exposure direction is specifically "C2 sees into every
+platform's team-only topics," not "platforms see into each other" (team-to-team isolation
+is untouched: different teams still carry disjoint concrete partitions on `platform_wan`,
+so they still exchange zero SEDP with each other). If C2 node count grows later, revisit
+toward the untried, documented alternative in `docs/cpp_router/wan-dp-consolidation-task.md`
+(extend `RouterHealth` with a `team_wan`-liveliness-style field instead of merging
+participants — zero SEDP exposure change, never prototyped).
+
+**Escalated stakes, worth recording plainly.** `control_wan`'s wildcard is not only a
+team-visibility nicety. Today `control_wan`/`platform_wan` match for free because both
+default to the empty `""` partition (D87). Once `platform_wan` becomes `team_scoped` (a
+real, non-empty partition set), that free match disappears for *everything* riding
+control↔platform — the `CONTROL`/`PLATFORM` endpoint-partitioned routes AND the
+unpartitioned `RouterHealth`/`RouterLinkProbe` WAN bellwether pair alike, since all of
+them need the participant-level gate open first (D73/D84's "AND of two gates" rule). So
+the wildcard is load-bearing for the entire control-plane, not an optional extra — which
+is why it is made protected/non-removable below, not a plain config value.
+
+**Decision.**
+- `team_wan` retired. `platform_wan` gains `team_scoped: true`, absorbing D83's
+  protected-identity + team + ad-hoc-tap partition mechanism onto the participant that
+  already carries control↔platform legs. The team routes (`platform_team_to_wan`/
+  `wan_team_to_platform`) retarget `participant: team_wan` → `platform_wan`; no
+  endpoint-level partition change — team isolation still rests entirely on the
+  participant-level gate, just relocated.
+- `control_wan` gains a new, generalized protection mechanism rather than a plain
+  removable value: **`protected_partition_entries`** (`ParticipantState`,
+  `RouterState.hpp`) — literal partition values auto-seeded into `participant_partition`
+  at parse time (`RouteConfigParser.cxx`, same convention as `team_scoped`'s
+  `${node.name}` auto-prepend) and never removable via `REMOVE_PARTICIPANT_PARTITION`
+  (`is_protected_partition_name` checks this list alongside D83's own node-identity
+  check — deliberately two independent checks, not folded into one: the team_scoped
+  check must stay self-contained off `ParticipantState` alone so it's correct for a
+  `ParticipantState` built by any caller, not only ones that route through the parser;
+  an attempted unification during this same change broke exactly that for a unit-test
+  fixture and was reverted). `control_wan` sets `protected_partition_entries: ["*"]`. It is deliberately
+  **not** `team_scoped` — that would incorrectly auto-seed `${node.name}` too and reopen
+  D87's exact "Control_20 vs Platform_30 disjoint identity" bug if the wildcard were ever
+  removed. `RouterController::handle_participant_partition_membership`'s reject message
+  generalizes from "cannot remove the protected node-identity partition entry" to "cannot
+  remove a protected partition entry" to cover both cases.
+- `peers_seen` needed no code change, as anticipated above — `PresenceMonitor`'s
+  `team_wan_participant_` becomes `team_scoped_participant_`, resolved in `router_main.cxx`
+  by filtering `filtered_participants` for `ParticipantState.team_scoped` (the "more
+  correct" alternative D93/D95 already flagged and deferred) rather than a fixed
+  `"team_wan"` name lookup, since a fixed name no longer identifies it.
+
+**Not independently verified, flagged for a targeted spike/e2e check:** the specific
+three-way composition — a wildcard participant (`control_wan`) that also hosts real
+matched production endpoints, alongside two other mutually-disjoint concrete-partition
+participants (different teams' `platform_wan`s) also hosting real endpoints, all on one
+domain — confirming the wildcard side gets full data+SEDP on both while the two concrete
+sides still see nothing of each other. Existing evidence strongly supports it (D83's
+`ask_connext_question` match-rule corroboration, D85's SEDP-all-or-nothing finding,
+`docs/connext-ai-issues/connext-ai-issues.md`'s 2026-07-20 wildcard-visibility entry,
+`spikes/dp_partition_monitor/`), but none of it is a byte-for-byte test of this exact
+shape.
+
+**Out of scope.** `harness/act/` (the older harness, including
+`routing_service_config.xml` and `remote_admin.cxx`'s hardcoded `team_wan` admin-tool
+target) is historical and untouched by this decision — only `harness_v2`-referencing
+config (this router's own `control-platform.yaml` et al.) is in scope.
+
+**Consequences.** `router/config/control-platform.yaml`, `platform-team.yaml`,
+`e2e_team_partition.yaml`, `e2e_presence_team.yaml`; `router/src/router_main.cxx`,
+`router/src/core/PresenceMonitor.{hpp,cxx}`, `RouterState.hpp`,
+`router/src/config/RouteConfigParser.cxx`, `router/src/core/RouterController.cxx`;
+`router/test/test_route_config.cxx`, `test_controller_phase1.cxx`;
+`router/test_e2e/test_team_partition.py`, `test_mesh_team_partition.py`;
+`router/admin/RouterAdminTypes.idl` (comments only, no wire-shape change).
+
+**Verification.** `ctest` (`test_route_config`, `test_controller_phase1`, including the
+new `test_participant_partition_protected_wildcard`); `router/test_e2e`
+(`test_team_partition.py`, `test_mesh_team_partition.py` retargeted to `platform_wan`;
+`test_presence_roster.py`/`test_link_stats.py` unaffected regression). A live
+two-platform-plus-C2 run should additionally confirm: same-team platforms match and
+exchange `PlatformData`/heartbeats; different-team platforms exchange zero SEDP
+(wire-capture per the repo's tshark/GuidPrefix convention); C2 still sees every
+platform's `RouterHealth`/status regardless of team; `REMOVE_PARTICIPANT_PARTITION
+control_wan=*` is rejected on a live process, not just in the unit-test fixture.

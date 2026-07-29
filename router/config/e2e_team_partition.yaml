@@ -5,11 +5,11 @@
 # TWO router_main processes, both --role platform, distinguished by --node-name
 # (Platform_30 / Platform_31 — see test_e2e/test_team_partition.py). Each gets its own
 # platform_lan (so the two processes' own app-side test traffic never cross), but BOTH
-# render team_wan onto the SAME domain (production reality: one physical WAN). Explicit
+# render platform_wan onto the SAME domain (production reality: one physical WAN). Explicit
 # "default" QoS (RELIABLE+TRANSIENT_LOCAL) on both route legs so partition membership is
 # the only matching variable under test (the same D67 lesson e2e_partition.yaml uses).
 #
-# team_wan.participant_partition is omitted: it defaults to the protected
+# platform_wan.participant_partition is omitted: it defaults to the protected
 # {"${node.name}"} entry alone (D83 — "team disabled by default" falls out of the shared
 # config itself, no per-file authoring needed).
 #
@@ -31,7 +31,7 @@ participants:
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
-  team_wan:
+  platform_wan:
     role: platform
     domain: __DOMAIN_WAN__
     team_scoped: true  # D83: protected-identity partition (renamed from `wan:`)
@@ -49,7 +49,7 @@ routes:
         participant: platform_lan
         reader_qos: default
       output:
-        participant: team_wan
+        participant: platform_wan
         writer_qos: default
     topics:
       - name: PlatformData
@@ -61,7 +61,7 @@ routes:
     destination: platform
     source_side:
       input:
-        participant: team_wan
+        participant: platform_wan
         reader_qos: default
       output:
         participant: platform_lan

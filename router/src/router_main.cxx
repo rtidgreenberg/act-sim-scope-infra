@@ -399,20 +399,21 @@ int main(int argc, char **argv) {
         // participant. Optional: no presence_participant in the config = no presence.
         // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
         //
-        // D93 (mesh-dashboard team-grouping follow-on): the team-scoped WAN participant
-        // is handed to PresenceMonitor, which polls its LIVE DomainParticipantQos.partition
-        // at every heartbeat for RouterHealth.team_partition. Looked up DIRECTLY by its
-        // config-convention name "team_wan". The is_wan flag it originally sidestepped has
-        // since been decomposed into team_scoped (D83 partition) + on_wan (link-stats WAN-leg)
-        // — team_scoped now names exactly this set (team_wan-only), so this could filter the
-        // registry by team_scoped instead; kept as a direct name lookup because it reads more
-        // plainly and needs no registry accessor for a single well-known participant.
-        // Absent on a control node or any config without a team_wan; then team_partition
-        // is simply never populated (dds::core::null).
-        dds::domain::DomainParticipant team_wan_participant = dds::core::null;
-        for (const std::string &pname : registry.names()) {
-            if (pname == "team_wan") {
-                team_wan_participant = registry.get(pname);
+        // D93 (mesh-dashboard team-grouping follow-on), retargeted by D103: the
+        // team-scoped WAN participant is handed to PresenceMonitor, which polls its LIVE
+        // DomainParticipantQos.partition at every heartbeat for RouterHealth.team_partition.
+        // D103 retired team_wan and folded its role into platform_wan, so a fixed
+        // config-convention name no longer identifies it — filter filtered_participants by
+        // ParticipantState.team_scoped instead (the "more correct" alternative D93/D95
+        // already flagged and deferred). At most one team_scoped participant exists per
+        // node — RouteConfigParser rejects a config declaring more than one at parse
+        // time, so this loop's first-match is safe, not just an unenforced assumption.
+        // None on a control node — then team_partition is simply never populated
+        // (dds::core::null).
+        dds::domain::DomainParticipant team_scoped_participant = dds::core::null;
+        for (const ParticipantState &p : filtered_participants) {
+            if (p.team_scoped) {
+                team_scoped_participant = registry.get(p.name);
                 break;
             }
         }
@@ -420,7 +421,7 @@ int main(int argc, char **argv) {
         if (!cfg.presence_participant.empty()) {
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
-                    cfg.node_name, cfg.router_name, team_wan_participant));
+                    cfg.node_name, cfg.router_name, team_scoped_participant));
         }
 
         // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the
@@ -429,8 +430,8 @@ int main(int argc, char **argv) {
         // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
         // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
         // dispatcher registers each route's WAN leg — the factory flags a leg as WAN via
-        // registry.on_wan(participant_name) (any Config::on_wan participant, i.e. control_wan,
-        // platform_wan AND team_wan under D85, not only this presence participant).
+        // registry.on_wan(participant_name) (any Config::on_wan participant, i.e.
+        // control_wan and platform_wan post-D103, not only this presence participant).
         // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
         std::unique_ptr<LinkStatsCollector> link_stats;
         if (presence) {

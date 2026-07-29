@@ -7,14 +7,15 @@
 # test/test_config_identity.cxx's Phase-0 identity reader (node.*/router.* only, never
 # routes:/participants:) uses it as a "distinct config_set" fixture; its routes: /
 # participants: below are historical and are not exercised by RouteConfigParser in any
-# test — see control-platform.yaml's team_wan participant + platform_team_to_wan /
+# test — see control-platform.yaml's platform_wan participant + platform_team_to_wan /
 # wan_team_to_platform routes for the real, currently-parsed shape.
 #
-# Team scope is set by team_wan.participant_partition, now a multi-valued set (D83): a
-# protected node-identity entry (default "${node.name}", never removable by command) +
-# optional team entries, mutated live via ADD_PARTICIPANT_PARTITION /
-# REMOVE_PARTICIPANT_PARTITION (SET_PARTICIPANT_PARTITION and the inherit_participant
-# sentinel are both retired — D73/D83).
+# Team scope is set by platform_wan.participant_partition (D103: team_wan is retired,
+# platform_wan absorbed its role), a multi-valued set (D83): a protected node-identity
+# entry (default "${node.name}", never removable by command) + optional team entries,
+# mutated live via ADD_PARTICIPANT_PARTITION / REMOVE_PARTICIPANT_PARTITION
+# (SET_PARTICIPANT_PARTITION and the inherit_participant sentinel are both retired —
+# D73/D83).
 #
 # Source: docs/cpp_router/configuration.md "Platform/Team Config Example" (authoritative).
 
@@ -31,12 +32,12 @@ participants:
   platform_lan:
     role: platform
     domain: 30
-  team_wan:
+  platform_wan:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    team_scoped: true  # D83: protected-identity partition (renamed from `wan:` in the
-                       # is_wan decomposition).
+    team_scoped: true  # D83/D103: protected-identity partition (renamed from `wan:` in
+                       # the is_wan decomposition; absorbed from team_wan under D103).
     on_wan: true       # link-stats WAN-leg coverage — every WAN participant.
     spdp2: true        # D78 (reinstated, D92 CORRECTION): SPDP2|SEDP for this WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
@@ -53,7 +54,7 @@ routes:
       input:
         participant: platform_lan
       output:
-        participant: team_wan
+        participant: platform_wan
         writer_qos: wan_status
     topics:
       - name: PlatformData
@@ -65,7 +66,7 @@ routes:
     destination: platform
     source_side:
       input:
-        participant: team_wan
+        participant: platform_wan
         reader_qos: wan_status
       output:
         participant: platform_lan

@@ -553,12 +553,14 @@ void RouterController::handle_participant_partition_membership(const RouterComma
         }
         names.push_back(cmd.partition_name);
     } else {
-        // The protected node-identity entry is never removable by command (D83) —
-        // config-time only. team_scoped participants always carry it; a non-team-scoped one
-        // has no protected entry at all, so this check is a no-op reject only where the
-        // identity was actually seeded.
+        // A protected partition entry is never removable by command — config-time only.
+        // Covers two independent cases (RouterState.hpp::is_protected_partition_name): the
+        // D83 node-identity entry (every team_scoped participant carries it) and the D103
+        // protected_partition_entries list (e.g. control_wan's standing "*" wildcard). A
+        // participant with neither has no protected entry at all, so this check is a
+        // no-op reject only where one was actually seeded.
         if (is_protected_partition_name(ps, state_.node_name, cmd.partition_name)) {
-            ack.message = "cannot remove the protected node-identity partition entry";
+            ack.message = "cannot remove a protected partition entry";
             return;
         }
         if (found == names.end()) {

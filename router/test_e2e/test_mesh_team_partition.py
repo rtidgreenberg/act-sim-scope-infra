@@ -5,15 +5,16 @@ that lets a mesh-wide observer (the dashboard) see team membership at all.
 
 Three router_main processes (config/e2e_presence_team.yaml): one control-role, two
 platform-role (Platform_30 / Platform_31, distinct platform_lan domains, shared WAN
-domain incl. team_wan -- production reality, one physical network).
+domain incl. platform_wan -- production reality, one physical network).
 
 Asserts:
 
   E-untagged  before any team is assigned, each platform's own RouterHealth carries
               team_partition == {its own protected identity} only -- readable off the
-              shared WAN domain directly (control_wan/platform_wan, unconditional match,
-              D87), with no team_wan-level discovery needed to see it.
-  E-tagged    after ADD_PARTICIPANT_PARTITION team_wan=TEAM_A on both platforms, each
+              shared WAN domain directly (control_wan matches platform_wan via
+              control_wan's standing protected wildcard, D103), with no separate gated
+              discovery needed to see it.
+  E-tagged    after ADD_PARTICIPANT_PARTITION platform_wan=TEAM_A on both platforms, each
               one's RouterHealth.team_partition becomes {its own identity, "TEAM_A"}.
   E-mesh      the control node's own ActRouterMeshStatus aggregate (what
               gui/mesh_dashboard actually reads) carries the SAME team_partition value
@@ -60,7 +61,7 @@ def _partition_cmd(command_type, node_name, command_id, kind, partition_name):
     c["target_router"] = ROUTER_NAME
     c["command_id"] = command_id
     c["kind"] = KIND[kind]
-    c["participant_name"] = "team_wan"
+    c["participant_name"] = "platform_wan"
     c["partition_name"] = partition_name
     return c
 
@@ -156,7 +157,15 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
     alive = lambda: (control_proc.is_alive() and proc_a.is_alive()  # noqa: E731
                      and proc_b.is_alive())
 
-    wan_probe = Probe(domains["wan"], spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
+    # D103: platform_wan is team_scoped now (a real, non-empty PARTICIPANT-level
+    # partition, the RTI extension gating discovery itself, D83/D85) -- a bystander no
+    # longer discovers it "for free" the way it discovered the old unconditional
+    # platform_wan/control_wan default partition. control_wan gets a standing wildcard
+    # for exactly this reason in production; this test observer needs the same wildcard
+    # at the PARTICIPANT level to discover every platform's heartbeat directly (the
+    # RouterHealth endpoints themselves never override Publisher/Subscriber partition,
+    # so once participant-level discovery succeeds, SEDP/data matching is unconditional).
+    wan_probe = Probe(domains["wan"], spdp2=True, participant_partition=["*"])
     control_lan_probe = Probe(domains["control_lan"])
     lan_a = Probe(unique_domains["platform_lan"])
     lan_b = Probe(unique_domains["platform_lan"] + 1000)
@@ -176,7 +185,7 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
             f"expected node B's team_partition == protected identity only before any "
             f"team assignment; got {parts}; logs: b={proc_b.log_path}")
 
-        # --- E-tagged: ADD_PARTICIPANT_PARTITION team_wan=TEAM_A on both ---
+        # --- E-tagged: ADD_PARTICIPANT_PARTITION platform_wan=TEAM_A on both ---
         admin_provider = provider
         cmd_type_admin = admin_provider.type("RouterCommand")
         adm_a = AdminChannel(lan_a, admin_provider)

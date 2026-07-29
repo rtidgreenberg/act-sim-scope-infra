@@ -185,37 +185,50 @@ int main() {
         }
     }
 
-    // --- D83: team_wan carries the protected node-identity partition entry by default,
-    // and the team routes (folded into control-platform.yaml by D80) parse in role-pair
-    // form and always resolve to source_side (same-role pair) ---
+    // --- D83/D103: platform_wan (team_wan's role absorbed under D103) carries the
+    // protected node-identity partition entry by default, control_wan carries a standing
+    // protected wildcard instead (needed to keep matching platform_wan now that it's off
+    // the free default partition), and the team routes (folded into control-platform.yaml
+    // by D80, retargeted to platform_wan by D103) parse in role-pair form and always
+    // resolve to source_side (same-role pair) ---
     {
         RouteConfig cfg;
         std::string err;
         CHECK(parse_route_config(path, cfg, err));
-        const ParticipantState *team_wan = nullptr;
+        const ParticipantState *platform_wan = nullptr;
+        const ParticipantState *control_wan = nullptr;
         for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
-            if (cfg.participants[i].name == "team_wan") team_wan = &cfg.participants[i];
+            if (cfg.participants[i].name == "platform_wan") platform_wan = &cfg.participants[i];
+            if (cfg.participants[i].name == "control_wan") control_wan = &cfg.participants[i];
         }
-        CHECK(team_wan != nullptr);
-        if (team_wan) {
-            // is_wan decomposition: team_wan is BOTH team-partition-scoped and on the WAN.
-            CHECK(team_wan->team_scoped);
-            CHECK(team_wan->on_wan);
-            CHECK(team_wan->participant_partition.size() == 1);
-            if (team_wan->participant_partition.size() == 1) {
-                CHECK(team_wan->participant_partition.at(0) == "Platform_30"); // ${node.name}
+        CHECK(platform_wan != nullptr);
+        if (platform_wan) {
+            // is_wan decomposition: platform_wan is BOTH team-partition-scoped and on the
+            // WAN (D103: absorbed team_wan's role).
+            CHECK(platform_wan->team_scoped);
+            CHECK(platform_wan->on_wan);
+            CHECK(platform_wan->participant_partition.size() == 1);
+            if (platform_wan->participant_partition.size() == 1) {
+                CHECK(platform_wan->participant_partition.at(0) == "Platform_30"); // ${node.name}
             }
         }
-        // is_wan decomposition: platform_wan/control_wan are on the WAN (on_wan → their data
-        // legs are link-stats-covered) but NOT team-partition-scoped (no protected-identity
-        // partition). This is the split D87 could not express with the single conflated flag.
-        for (std::size_t i = 0; i < cfg.participants.size(); ++i) {
-            const ParticipantState &p = cfg.participants[i];
-            if (p.name == "platform_wan" || p.name == "control_wan") {
-                CHECK(p.on_wan);
-                CHECK(!p.team_scoped);
-                CHECK(p.participant_partition.empty());
+        CHECK(control_wan != nullptr);
+        if (control_wan) {
+            // D103: control_wan is on the WAN, NOT team-partition-scoped, but carries a
+            // standing PROTECTED wildcard entry — required now that platform_wan is off
+            // the free default partition, and non-removable via REMOVE_PARTICIPANT_PARTITION
+            // (is_protected_partition_name checks protected_partition_entries too).
+            CHECK(control_wan->on_wan);
+            CHECK(!control_wan->team_scoped);
+            CHECK(control_wan->participant_partition.size() == 1);
+            if (control_wan->participant_partition.size() == 1) {
+                CHECK(control_wan->participant_partition.at(0) == "*");
             }
+            CHECK(control_wan->protected_partition_entries.size() == 1);
+            if (control_wan->protected_partition_entries.size() == 1) {
+                CHECK(control_wan->protected_partition_entries.at(0) == "*");
+            }
+            CHECK(is_protected_partition_name(*control_wan, cfg.node_name, "*"));
         }
         const RouterRouteSpec *t1 = find_route(cfg, "platform_team_to_wan");
         const RouterRouteSpec *t2 = find_route(cfg, "wan_team_to_platform");
@@ -223,10 +236,10 @@ int main() {
         CHECK(t2 != nullptr);
         if (t1) {
             CHECK(t1->input.participant == "platform_lan");
-            CHECK(t1->output.participant == "team_wan");
+            CHECK(t1->output.participant == "platform_wan");
         }
         if (t2) {
-            CHECK(t2->input.participant == "team_wan");
+            CHECK(t2->input.participant == "platform_wan");
             CHECK(t2->output.participant == "platform_lan");
         }
         // LAN participants are neither team-scoped nor on the WAN.

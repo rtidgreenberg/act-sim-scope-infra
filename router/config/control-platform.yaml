@@ -1,11 +1,12 @@
 # control-platform router config — the single system-wide config (D80): every node (C2
 # and every platform) loads THIS ONE file; node identity is injected per node
 # (--role/--node-name). It carries every route family — control<->platform AND
-# platform<->platform team (D85: team_wan stays a separate WAN participant from
-# platform_wan, not merged — see design-decisions.md D84/D85) — so a platform node runs
-# ONE router_main process for all of it (D79: one router per node). Each logical route is
-# defined once; the local node.role selects source_side vs destination_side (same-role
-# pairs, e.g. the team routes below, always resolve to source_side — D80).
+# platform<->platform team (D103: team_wan is retired, its role folded into
+# platform_wan/control_wan directly — see design-decisions.md D84/D85/D89/D103) — so a
+# platform node runs ONE router_main process for all of it (D79: one router per node).
+# Each logical route is defined once; the local node.role selects source_side vs
+# destination_side (same-role pairs, e.g. the team routes below, always resolve to
+# source_side — D80).
 #
 # Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
 # router_main parses the full route/participant shape below (RouteConfigParser), but the
@@ -63,41 +64,44 @@ participants:
     on_wan: true   # link-stats WAN-leg coverage: this participant's route legs are on the
                    # WAN, so the LinkStatsCollector polls them (is_wan decomposition).
     spdp2: true    # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
-    # No team_scoped: true here (deliberately, D87): control_wan/platform_wan are NOT
-    # participant-partition-scoped — they stay on the default partition so
-    # control<->platform matching is unconditional, exactly as Phase 7 shipped it.
-    # team_scoped (the D83 protected-identity-partition mechanism) is team_wan-only — it's
-    # how team scoping and direct-peer taps work, not a blanket "every WAN participant"
-    # flag. That is what on_wan is for (link-stats), and the two are now separate keys:
-    # marking control_wan/platform_wan team-scoped was tried and reverted because it gave
-    # them different per-node identity partitions ("Control_20" vs "Platform_30") that no
-    # longer intersect, breaking their default-partition match (see design-decisions.md
-    # D87). on_wan carries no such partition side effect, so it is safe here.
+    # D103: platform_wan is now team_scoped (see below), so it's no longer on the free
+    # default ("") partition D87 relied on for unconditional control<->platform matching.
+    # control_wan gets a standing, PROTECTED (non-removable) wildcard entry instead —
+    # protected_partition_entries auto-seeds "*" into participant_partition at parse time
+    # (RouteConfigParser) and REMOVE_PARTICIPANT_PARTITION rejects removing it
+    # (is_protected_partition_name, RouterState.hpp), the same non-removable treatment D83
+    # gives a team_scoped participant's own identity entry. Not team_scoped itself — a
+    # wildcard is not a node-identity entry, and marking control_wan team_scoped would
+    # reopen D87's exact "Control_20 vs Platform_30 disjoint identity" bug if the wildcard
+    # were ever removed. Accepted cost (design-decisions.md D103, revisiting D84/D85/D89):
+    # this wildcard gives control_wan full SEDP endpoint-metadata visibility into every
+    # platform_wan endpoint including former team-only ones — bounded by C2 node count
+    # (1-2 expected), not team/platform count.
+    protected_partition_entries: ["*"]
   platform_lan:
     role: platform
     domain: 30
+  # D103: team_wan is retired. Its D83 protected-identity + team + ad-hoc-tap partition
+  # mechanism now lives directly on platform_wan (team_scoped: true below) — see
+  # design-decisions.md D84 (proposed this merge) / D85 (reverted it) / D89 (rejected the
+  # wildcard variant again) / D103 (does it anyway, on a C2-node-count-bounded rationale
+  # D85/D89 didn't have). Team-to-team isolation is unchanged: different teams still carry
+  # disjoint concrete platform_wan partition sets, so they still exchange zero SEDP with
+  # each other — only C2's view (via control_wan's wildcard above) is now broader.
   platform_wan:
     role: platform
     domain: 200
     qos: platform_wan_udpv4_qos
-    on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition) — carries the
-                   # platform<->C2 status/event/command data legs.
-    spdp2: true    # D78 (reinstated): SPDP2|SEDP for this WAN participant.
-  # D85: a distinct WAN participant from platform_wan — separate participant
-  # partitions mean team_wan and platform_wan exchange zero SEDP endpoint discovery
-  # with each other (D18/D73/D85), unlike a merged shared participant would.
-  team_wan:
-    role: platform
-    domain: 200
-    qos: platform_wan_udpv4_qos
-    team_scoped: true  # D83: protected-identity partition + non-removable protection
-                       # (team_wan-only). Renamed from `wan:` in the is_wan decomposition.
-    on_wan: true       # link-stats WAN-leg coverage — every WAN participant.
-    spdp2: true        # D78 (reinstated): SPDP2|SEDP — same as every WAN participant.
+    team_scoped: true  # D83/D103: protected-identity partition + non-removable
+                       # protection, absorbed from team_wan.
+    on_wan: true       # link-stats WAN-leg coverage (is_wan decomposition) — carries the
+                       # platform<->C2 status/event/command data legs AND platform<->
+                       # platform team traffic (D103).
+    spdp2: true        # D78 (reinstated): SPDP2|SEDP for this WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (D83 — "team disabled by default" falls out of the shared config itself).
     # Team membership / direct-peer taps are added at runtime via
-    # ADD_PARTICIPANT_PARTITION team_wan=<name>.
+    # ADD_PARTICIPANT_PARTITION platform_wan=<name>.
 
 routes:
   - name: control_command
@@ -196,9 +200,9 @@ routes:
   # Platform<->platform team routes (D80/D83; historically platform-team.yaml's flat
   # form, now folded into this single system-wide config in role-pair form). Both
   # legs are role "platform", so each direction is its own route and both always
-  # resolve to source_side (D80). No endpoint-level partition here — team_wan's own
-  # participant-level partition set is the entire scoping mechanism (D73/D83); the
-  # retired inherit_participant sentinel is gone.
+  # resolve to source_side (D80). No endpoint-level partition here — platform_wan's own
+  # participant-level partition set is the entire scoping mechanism (D73/D83/D103,
+  # absorbing team_wan's former role); the retired inherit_participant sentinel is gone.
   - name: platform_team_to_wan
     enabled: true
     forwarding_mode: dynamic_data
@@ -208,7 +212,7 @@ routes:
       input:
         participant: platform_lan
       output:
-        participant: team_wan
+        participant: platform_wan
         writer_qos: wan_status
     topics:
       - name: PlatformData
@@ -220,7 +224,7 @@ routes:
     destination: platform
     source_side:
       input:
-        participant: team_wan
+        participant: platform_wan
         reader_qos: wan_status
       output:
         participant: platform_lan

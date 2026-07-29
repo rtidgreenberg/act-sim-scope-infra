@@ -168,15 +168,17 @@ public:
                 };
             }
 
-            // Phase 9 (D81), generalized for D85's two-WAN-participant topology: flag
-            // whichever leg lives on ANY WAN participant (registry_.on_wan(), Config::on_wan)
-            // so the runtime polls only its WAN-side matched-endpoint statuses (LAN legs match
-            // apps, not peer routers). Keys off on_wan — the link-stats WAN-leg concept — NOT
-            // team_scoped: a route on platform_wan/control_wan is just as much a WAN leg as one
-            // on team_wan, even though only team_wan is team-partition-scoped. (Before the
-            // is_wan decomposition this keyed off the conflated flag, which D87 left
-            // team_wan-only, so platform_wan/control_wan data legs went unpolled — see
-            // test_link_stats_platform_wan_data_leg_covered.)
+            // Phase 9 (D81), generalized for D85's two-WAN-participant topology (D103:
+            // team_wan retired, its role folded into platform_wan — a node can still have
+            // more than one WAN participant, control_wan + platform_wan): flag whichever
+            // leg lives on ANY WAN participant (registry_.on_wan(), Config::on_wan) so the
+            // runtime polls only its WAN-side matched-endpoint statuses (LAN legs match
+            // apps, not peer routers). Keys off on_wan — the link-stats WAN-leg concept —
+            // NOT team_scoped: on_wan and team_scoped are orthogonal flags that can both be
+            // true on the same participant (platform_wan, post-D103) or independently
+            // false/true. (Before the is_wan decomposition this keyed off the conflated
+            // flag, which D87 left team_wan-only, so platform_wan/control_wan data legs
+            // went unpolled — see test_link_stats_platform_wan_data_leg_covered.)
             const bool reader_on_wan = registry_.on_wan(view.spec.input.participant);
             const bool writer_on_wan = registry_.on_wan(view.spec.output.participant);
 

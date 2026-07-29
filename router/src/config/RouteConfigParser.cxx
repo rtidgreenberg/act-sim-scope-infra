@@ -6,6 +6,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -25,6 +26,19 @@ namespace {
 std::string get_str(const YAML::Node &n, const std::string &key,
                     const std::string &dflt = "") {
     return (n && n[key]) ? n[key].as<std::string>() : dflt;
+}
+
+// Normalize a YAML scalar-or-sequence value into a flat list of nodes — shared by
+// participant_partition and protected_partition_entries (D83/D103), both of which accept
+// either a single scalar name or a sequence for convenience.
+std::vector<YAML::Node> as_entry_list(const YAML::Node &n) {
+    std::vector<YAML::Node> entries;
+    if (n.IsSequence()) {
+        for (std::size_t i = 0; i < n.size(); ++i) entries.push_back(n[i]);
+    } else {
+        entries.push_back(n);
+    }
+    return entries;
 }
 
 // True for a plain SQL numeric literal: [+-]digits[.digits][(e|E)[+-]digits].
@@ -207,12 +221,16 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             ps.qos_profile_alias = get_str(p, "qos");
             // Three orthogonal per-participant flags (the is_wan decomposition, 2026-07-22):
             //   team_scoped (D83) — protected-identity partition default + non-removable
-            //     protection. team_wan-only. Was the old conflated `wan:` key.
+            //     protection. platform_wan-only post-D103 (team_wan retired). Was the old
+            //     conflated `wan:` key.
             //   on_wan       — this participant's route legs are on the WAN; drives link-stats
             //     WAN-leg detection (RouteEntityFactory). EVERY WAN participant.
             //   spdp2 (D78)  — SPDP2|SEDP discovery. EVERY WAN participant.
             // on_wan and spdp2 mark the same set today but stay separate: one is a link-stats
             // concern, the other a discovery-protocol choice.
+            // A fourth, independent flag (D103): protected_partition_entries — literal
+            // non-removable partition values (e.g. control_wan's standing "*" wildcard),
+            // parsed below alongside participant_partition.
             ps.team_scoped = p["team_scoped"] && p["team_scoped"].as<bool>();
             ps.on_wan = p["on_wan"] && p["on_wan"].as<bool>();
             ps.use_spdp2 = p["spdp2"] && p["spdp2"].as<bool>();
@@ -222,14 +240,7 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             // rule as filter parameters). An unknown sentinel (the retired
             // "inherit_participant") is a hard parse error (D73), not a silent no-op.
             if (p["participant_partition"]) {
-                const YAML::Node &pp = p["participant_partition"];
-                std::vector<YAML::Node> entries;
-                if (pp.IsSequence()) {
-                    for (std::size_t i = 0; i < pp.size(); ++i) entries.push_back(pp[i]);
-                } else {
-                    entries.push_back(pp);
-                }
-                for (const YAML::Node &entry : entries) {
+                for (const YAML::Node &entry : as_entry_list(p["participant_partition"])) {
                     std::string v = entry.as<std::string>();
                     if (v == "inherit_participant") {
                         error = "participant '" + ps.name + "' participant_partition: "
@@ -243,10 +254,32 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             }
             // Every team_scoped participant's set always contains its own protected
             // identity entry (D83), config-time only — never removable by command.
-            if (ps.team_scoped) {
-                if (!has_protected_partition_entry(ps, out.node_name)) {
-                    ps.participant_partition.insert(ps.participant_partition.begin(),
-                                                    out.node_name);
+            // Deliberately independent of protected_partition_entries below (not folded
+            // into it): is_protected_partition_name's team_scoped check is self-contained
+            // off ParticipantState alone, so it stays correct for a ParticipantState built
+            // by any caller, not just ones that route through this parser.
+            if (ps.team_scoped &&
+                std::find(ps.participant_partition.begin(), ps.participant_partition.end(),
+                         out.node_name) == ps.participant_partition.end()) {
+                ps.participant_partition.insert(ps.participant_partition.begin(),
+                                                out.node_name);
+            }
+            // protected_partition_entries (D103): literal partition values that are
+            // auto-seeded into participant_partition here (same convention as
+            // team_scoped's identity auto-prepend above) and never removable by command
+            // (is_protected_partition_name, RouterState.hpp) — independent of
+            // team_scoped, e.g. control_wan's standing "*" wildcard. Scalar-or-sequence,
+            // same shape as participant_partition; no ${node.name} substitution (a
+            // protected entry is a literal like "*", not an identity token).
+            if (p["protected_partition_entries"]) {
+                for (const YAML::Node &entry : as_entry_list(p["protected_partition_entries"])) {
+                    std::string v = entry.as<std::string>();
+                    ps.protected_partition_entries.push_back(v);
+                    if (std::find(ps.participant_partition.begin(),
+                                 ps.participant_partition.end(),
+                                 v) == ps.participant_partition.end()) {
+                        ps.participant_partition.push_back(v);
+                    }
                 }
             }
             // The wire status field is a bounded sequence<string, 16>
@@ -261,6 +294,30 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
                 return false;
             }
             out.participants.push_back(ps);
+        }
+        // D103: router_main resolves the team-scoped participant (PresenceMonitor's
+        // team_partition source) by filtering for team_scoped==true and taking the
+        // first match — that lookup has no way to detect a second one, so reject a
+        // config declaring more than one team_scoped participant here instead of
+        // letting it silently bind to whichever comes first in YAML order.
+        {
+            int team_scoped_count = 0;
+            std::string first_team_scoped_name;
+            for (const ParticipantState &ps : out.participants) {
+                if (ps.team_scoped) {
+                    if (team_scoped_count == 0) {
+                        first_team_scoped_name = ps.name;
+                    }
+                    ++team_scoped_count;
+                }
+            }
+            if (team_scoped_count > 1) {
+                error = "config declares " + std::to_string(team_scoped_count) +
+                        " team_scoped participants (first: '" + first_team_scoped_name +
+                        "') — at most one is supported per config (router_main resolves "
+                        "the team-scoped participant by this flag alone, D103)";
+                return false;
+            }
         }
 
         for (std::size_t r = 0; r < root["routes"].size(); ++r) {
