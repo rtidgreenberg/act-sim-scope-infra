@@ -150,6 +150,14 @@ Two test harnesses are available for debugging and verification:
   Key utility: `dds_probe.Probe` (UDPv4-only participant), `AdminChannel` (status reader +
   command writer + ack collector), `write_until_seen` (poll-with-timeout).
 
+- **Type probe** (`harness_v2/scripts/dds_type_probe.py`): standalone diagnostic —
+  `python3 harness_v2/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
+  [--wait 5]` — lists every discovered publication/subscription on a domain (topic, type,
+  owning participant, name) and whether its inline TypeObject resolved. Surfaces exactly
+  the fact `DiscoveryDispatcher.maybe_learn_type()` gates on, so a topic stuck in
+  `TOPIC_IDLE` because no publication propagates an inline TypeObject (e.g. WIS writers)
+  is immediately visible instead of requiring log-grepping.
+
 - **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
   (control + platform routers + platform sims + platform_control processes) with optional
   WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
