@@ -13,12 +13,12 @@
 # recreates it each time, so `down` (with no args) always knows where to look. Override
 # with --workdir <dir> if you need a custom path.
 #
-# --with-dashboard also generates the WIS config (gui/mesh_dashboard/config/
-# generate_wis_config.sh) and launches rtiwebintegrationservice serving the mesh dashboard
-# on --dashboard-port (default 8080, http://localhost:<port>/). Its PIDs -- both the shell
-# wrapper AND the actual app child that holds the port (rtiwebintegrationservice is a
-# wrapper script; killing only it leaves the port bound, gui/mesh_dashboard/README.md) --
-# are added to the same pids.txt, so a single `down` tears down routers + sims + dashboard.
+# --with-dashboard launches gui/mesh_dashboard/server/mesh_bridge.py (a small purpose-built
+# DDS<->HTTP/WebSocket bridge that replaced RTI Web Integration Service here -- see
+# docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md) serving the mesh dashboard
+# on --dashboard-port (default 8080, http://localhost:<port>/). It's a single Python
+# process (no shell-wrapper/child-process pair to track, unlike WIS) -- one PID goes in
+# the same pids.txt, so a single `down` tears down routers + sims + dashboard.
 #
 # All runtime artifacts (logs, generated per-platform yaml) go under --workdir (default:
 # /tmp/act_mesh_run), which MUST be on a local filesystem -- never point it at this repo's
@@ -80,10 +80,10 @@ do_up() {
 
     # Fail fast, before launching anything, if --dashboard-port is already bound -- this
     # VM runs concurrent sessions, and two `up --with-dashboard` runs defaulting to the
-    # same port (or a stray leftover WIS from a prior run) would otherwise let the
-    # WIS_APP_PID poll further down latch onto a PID this invocation never started, which
-    # `down` would later kill as if it were its own. Checked here (not just right before
-    # launching WIS) so a doomed run doesn't waste time standing up the mesh first.
+    # same port (or a stray leftover bridge/WIS process from a prior run) would otherwise
+    # let a later poll latch onto a PID this invocation never started, which `down` would
+    # later kill as if it were its own. Checked here (not just right before launching the
+    # bridge) so a doomed run doesn't waste time standing up the mesh first.
     if [[ "$WITH_DASHBOARD" == true ]] && ss -tln 2>/dev/null | grep -q ":${DASHBOARD_PORT} "; then
         echo "Error: --dashboard-port $DASHBOARD_PORT is already in use -- pick a" >&2
         echo "  different --dashboard-port, or find and stop whatever's using it" >&2
@@ -179,44 +179,11 @@ do_up() {
     done
 
     if [[ "$WITH_DASHBOARD" == true ]]; then
-        echo "[run_mesh up] generating WIS config..."
-        bash "$REPO_ROOT/gui/mesh_dashboard/config/generate_wis_config.sh" "$WORKDIR/wis" \
-            > "$WORKDIR/generate_wis_config.log" 2>&1
-
-        echo "[run_mesh up] launching dashboard (WIS) on port $DASHBOARD_PORT..."
-        nohup "$NDDSHOME/bin/rtiwebintegrationservice" \
-            -cfgFile "$WORKDIR/wis/wis_config.xml" -cfgName mesh_dashboard \
-            -listeningPorts "$DASHBOARD_PORT" -enableWebSockets \
-            -documentRoot "$REPO_ROOT/gui/mesh_dashboard/static" \
-            > "$WORKDIR/wis.log" 2>&1 &
-        WIS_WRAPPER_PID=$!
-        echo "wis_wrapper $WIS_WRAPPER_PID" >> "$WORKDIR/pids.txt"
-
-        # rtiwebintegrationservice is a shell wrapper around a second process
-        # (rtiwebintegrationserviceapp) that actually holds the port -- the wrapper's own
-        # PID alone isn't enough for `down` to free the port (gui/mesh_dashboard/README.md,
-        # confirmed manually testing this exact stack). `pgrep -P <wrapper>` is NOT reliable
-        # here -- it can catch a short-lived intermediate child that's already exited by the
-        # time `down` runs (found testing this script: the recorded "wis_app" pid was dead
-        # a few seconds later, while a DIFFERENT pid was the one `ss` showed actually bound
-        # to the port). Read the real pid straight off the listening socket instead -- that's
-        # the process that matters for freeing the port, however many hops of forking got it
-        # there. Poll rather than a fixed sleep, since binding can take a few seconds.
-        WIS_APP_PID=""
-        for _ in $(seq 1 15); do
-            # `|| true` -- under `set -e -o pipefail`, grep finding nothing (normal on early
-            # iterations, before WIS has bound the port yet) fails the whole command
-            # substitution and aborts the script; that's a poll-not-ready case, not an error.
-            WIS_APP_PID="$(ss -tlnp 2>/dev/null | grep ":${DASHBOARD_PORT} " | grep -oP 'pid=\K[0-9]+' | head -1 || true)"
-            [[ -n "$WIS_APP_PID" ]] && break
-            sleep 1
-        done
-        if [[ -n "$WIS_APP_PID" ]]; then
-            echo "wis_app $WIS_APP_PID" >> "$WORKDIR/pids.txt"
-        else
-            echo "  WARN: couldn't find the pid bound to port $DASHBOARD_PORT -- down may leave it bound" >&2
-        fi
-
+        echo "[run_mesh up] launching dashboard (mesh_bridge.py) on port $DASHBOARD_PORT..."
+        nohup python3 "$REPO_ROOT/gui/mesh_dashboard/server/mesh_bridge.py" \
+            --domain 20 --port "$DASHBOARD_PORT" \
+            > "$WORKDIR/mesh_bridge.log" 2>&1 &
+        echo "mesh_bridge $!" >> "$WORKDIR/pids.txt"
         echo "[run_mesh up] dashboard: http://localhost:${DASHBOARD_PORT}/"
     fi
 

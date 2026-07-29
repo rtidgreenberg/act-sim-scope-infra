@@ -8,42 +8,30 @@
 // arrow would read. Trusts presence/overall_state as authoritative -- never recomputes
 // liveliness timing client-side (Tenet 9).
 //
-// LAN-side, not WAN (scope correction, 2026-07-21 -- see wis_config.xml.template's header
-// comment for why): ActRouterMeshStatus is the LAN aggregate roster -- each entry is a
+// LAN-side, not WAN (scope correction, 2026-07-21 -- see docs/cpp_router/gui-visualization.md
+// for why): ActRouterMeshStatus is the LAN aggregate roster -- each entry is a
 // peer's COMPLETE last RouterHealth summary (not the WAN topic's trimmed peers_seen refs),
 // so this page gets "full resolution" per-node detail plus, as a bonus, each peer's own
 // embedded peers_seen roster -- enough to reconstruct the fuller multi-hop graph, not just
 // a star centered on the observing node, from a single LAN vantage point.
 //
-// Data source: RTI Web Integration Service, same REST + WebSocket protocol proven end to
-// end by spikes/wis_mesh_dashboard/ (PASSED 2026-07-21, against RouterHealth -- the
-// REST/WebSocket mechanics are identical for any topic/type, only the config's domain/topic
-// changed). Assumes this page is served by WIS's own -documentRoot (same-origin), so
+// Data source: gui/mesh_dashboard/server/mesh_bridge.py, a small purpose-built DDS<->HTTP
+// bridge that replaced RTI Web Integration Service (WIS) here -- see
+// docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md for why (three real WIS
+// bugs: an XML config-parser name collision, a REST seed that could silently return stale
+// empty data, and PUT/POST verb inconsistency). REST GET seed + WebSocket push, same as
+// before, but a plain `{"data": {...}}` envelope on both instead of WIS's REST1/bind-HELLO
+// protocol. Assumes this page is served by the bridge's own static handler (same-origin), so
 // host/port are read from window.location rather than hardcoded.
 
 (function () {
   "use strict";
 
-  const WIS_APP = "MeshDashboardApp";
-  const WIS_PARTICIPANT = "MeshParticipant";
-  const WIS_SUBSCRIBER = "MeshSubscriber";
-  const WIS_READER = "MeshStatusReader";
-  const WIS_PUBLISHER = "MeshPublisher";
-  const WIS_WRITER = "TeamAssignmentWriter";
-  const READER_URI = `/dds/rest1/applications/${WIS_APP}/domain_participants/${WIS_PARTICIPANT}` +
-                      `/subscribers/${WIS_SUBSCRIBER}/data_readers/${WIS_READER}`;
-  const WRITER_URI = `/dds/rest1/applications/${WIS_APP}/domain_participants/${WIS_PARTICIPANT}` +
-                      `/publishers/${WIS_PUBLISHER}/data_writers/${WIS_WRITER}`;
-
   const HTTP_ORIGIN = `${location.protocol}//${location.host}`;
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
-  const REST_URL = `${HTTP_ORIGIN}${READER_URI}?sampleFormat=json&removeFromReaderCache=false`;
-  const WS_CREATE_URL = `${HTTP_ORIGIN}/dds/v1/websocket_connections`;
-
-  // WIS's own manual documents `{"name": ...}` for this POST body; the real 7.7.0 service
-  // only accepts the array-wrapped form -- confirmed empirically, logged in
-  // docs/connext-ai-issues/connext-ai-issues.md (2026-07-21).
-  const WS_CONTENT_TYPE = "application/dds-web+json";
+  const REST_URL = `${HTTP_ORIGIN}/api/mesh_status`;
+  const WS_URL = `${WS_ORIGIN}/ws`;
+  const ASSIGN_URL = `${HTTP_ORIGIN}/api/team_assignment`;
 
   // Edge color encodes source, not presence (2026-07-23) -- green for a direct mesh_status
   // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
@@ -76,9 +64,9 @@
   // user's "simplify the GUI" ask -- a minimal anchor rather than switching the whole
   // graph to vis's hierarchical layout (which would misrepresent this mesh's peer-to-peer
   // edges as parent/child ranks). The observer node IS the C2/control node here, always --
-  // wis_config.xml.template hardcodes this dashboard to control_lan (domain 20), so
-  // whichever router's admin LAN participant WIS subscribes to is definitionally the
-  // control node (see that template's header comment). RouterHealth.role ("control" vs
+  // mesh_bridge.py defaults to control_lan (domain 20), so whichever router's admin LAN
+  // participant the bridge subscribes to is definitionally the control node (see
+  // mesh-dashboard-bridge-implementation-plan.md). RouterHealth.role ("control" vs
   // "platform", RouterAdminTypes.idl) is also checked on peers as a defense-in-depth
   // fallback, though in this dashboard's fixed control_lan deployment a peer can never
   // legitimately carry role "control" -- only the observer can. x for the peer-role case
@@ -570,56 +558,20 @@
     }
   }
 
+  // Single always-on push socket -- no connection-creation POST, no HELLO handshake, no
+  // bind_datareader frame (that was all WIS's own application-level protocol; the bridge
+  // just pushes {"data": {...}} directly, same envelope as the REST seed).
   function connectWebSocket() {
-    const connName = "MeshDashboardWs_" + Math.random().toString(36).slice(2, 10);
-    fetch(WS_CREATE_URL, {
-      method: "POST",
-      headers: { "Content-Type": WS_CONTENT_TYPE },
-      body: JSON.stringify([{ name: connName }]),
-    })
-      .then((resp) => {
-        if (resp.status !== 204) {
-          setStatus(`WebSocket connection creation failed: HTTP ${resp.status} — retrying…`);
-          setTimeout(connectWebSocket, RECONNECT_DELAY_MS);
-          return;
-        }
-        openSocket(connName);
-      })
-      .catch((err) => {
-        setStatus(`WebSocket connection creation error: ${err} — retrying…`);
-        setTimeout(connectWebSocket, RECONNECT_DELAY_MS);
-      });
-  }
-
-  function openSocket(connName) {
-    const ws = new WebSocket(`${WS_ORIGIN}/dds/websocket/${connName}`);
-
-    ws.onopen = () => {
-      // WIS's own application-level handshake (not part of RFC 6455 -- the browser already
-      // handled the real WS upgrade). Sequence + exact HELLO fields verified against the
-      // real running service by spikes/wis_mesh_dashboard/ws_probe.py (PASSED 2026-07-21);
-      // OMG-DDS-API-Key is mandatory even empty, or the server replies "HELLO FAIL".
-      ws.send(
-        "Content-Type:application/dds-web+json\r\n" +
-        "Accept:application/dds-web+json\r\n" +
-        "OMG-DDS-API-Key:\r\n" +
-        "Version:1\r\n\r\n"
-      );
-      ws.send(JSON.stringify({
-        kind: "bind",
-        body: [{ bind_kind: "bind_datareader", bind_id: WIS_READER, uri: READER_URI }],
-      }));
-    };
+    const ws = new WebSocket(WS_URL);
 
     ws.onmessage = (evt) => {
       let msg;
       try {
         msg = JSON.parse(evt.data);
       } catch (_err) {
-        return; // the plaintext "HELLO OK:..." reply isn't JSON -- ignore it
+        return;
       }
-      if (msg && msg.kind === "b_push" && msg.body && Array.isArray(msg.body.read_sample_seq)) {
-        ingestSampleArray(msg.body.read_sample_seq);
+      if (ingestSampleArray([msg])) {
         setStatus(`${statusEl.textContent} · ${new Date().toLocaleTimeString()} · ` +
             `${nodes.length} nodes / ${edges.length} edges`);
       }
@@ -635,17 +587,15 @@
   }
 
   // --- Team assignment (team-control-topic-plan.md §4) ----------------------------
-  // Right-click a platform node → modal prompt → PUT TeamAssignment to WIS. The
+  // Right-click a platform node → modal prompt → POST TeamAssignment to the bridge. The
   // partition change propagates through the mesh; the node's RouterHealth.team_partition
   // updates within ~1-2 heartbeat cycles and the existing ring rendering recolours
   // automatically — no new subscription needed.
-  const ASSIGN_URL = `${HTTP_ORIGIN}${WRITER_URI}`;
-
   function publishTeamAssignment(platformNode, teamName) {
     const sample = { platform_node: platformNode, team_name: teamName };
     return fetch(ASSIGN_URL, {
-      method: "PUT",
-      headers: { "Content-Type": WS_CONTENT_TYPE },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sample),
     }).then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

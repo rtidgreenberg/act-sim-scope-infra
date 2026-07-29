@@ -28,21 +28,35 @@ run-anywhere WAN-wide view.
 v1 is presence-only — no link-quality edge coloring. That's Option C, tracked separately
 (direction set, not implemented — see the design doc).
 
+**Data bridge replaced 2026-07-29: `server/mesh_bridge.py`, not RTI Web Integration
+Service (WIS).** WIS itself is no longer used by this dashboard. Three real, reproduced
+WIS problems motivated the replacement (the XML config-parser `base_type` collision, the
+"REST seed silently returns `[]`" black-box bug documented further down in this file, and
+a PUT/POST write-verb inconsistency) — see
+[docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md](../../docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md)
+for the full rationale and design. The sections below describing WIS's protocol and the
+bugs found against it are kept as historical record (they're real, reproduced findings),
+but are no longer how this dashboard actually runs — see "How it works" and "Running it
+against a real mesh" for the current mechanism.
+
 ## How it works
 
-RTI Web Integration Service (WIS) exposes `ActRouterMeshStatus` over REST + WebSocket. The
-page (`static/index.html` + `static/mesh_graph.js`) does a REST GET on load to seed the graph
-immediately, then opens a WebSocket for live push updates as the roster changes — same
-REST/WebSocket protocol mechanics proven end to end by
-[spikes/wis_mesh_dashboard/](../../spikes/wis_mesh_dashboard/README.md) (PASSED 2026-07-21,
-against `RouterHealth` — the wire protocol is identical for any topic/type, only the config's
-domain/topic changed for this LAN version). WIS serves the static page itself via
-`-documentRoot`, so there's no second web server.
+`server/mesh_bridge.py` is a small standalone Python process: one `DomainParticipant` on
+`control_lan` (domain `20`), one `DynamicData` reader on `ActRouterMeshStatus`, one
+`DynamicData` writer on `ActTeamAssignment` — built with the plain `rti.connextdds`
+Python binding (`QosProvider` against the real, unmodified
+`harness_v2/datamodel/gen/ActTypes.xml`, no WIS-style XML service-config parsing
+involved). It exposes:
 
-`RouterAdminTypes.idl` stays the single source of truth for the wire types —
-`config/generate_wis_config.sh` regenerates the DDS-XML type declarations WIS needs
-(`rtiddsgen -convertToXml`) and splices them into the WIS config at deploy time. Never hand-
-edit a parallel type description; re-run the generator instead.
+- `GET /api/mesh_status` — the current cached `ActRouterMeshStatus` samples (REST seed).
+- `GET /ws` — a WebSocket that pushes `{"data": {...}}` for every new sample.
+- `POST /api/team_assignment` — body `{"platform_node": ..., "team_name": ...}`, writes
+  one `ActTeamAssignment` sample.
+- The dashboard's own static files (`static/`) at `/`.
+
+`static/mesh_graph.js` talks to exactly this contract — a single always-on WebSocket, no
+HELLO/bind handshake, no connection-creation POST (that was all WIS's own
+application-level protocol on top of the real WS upgrade).
 
 ## Running it against a real mesh
 
@@ -50,38 +64,27 @@ edit a parallel type description; re-run the generator instead.
 # from the repo root
 export NDDSHOME=/home/rti/rti_connext_dds-7.7.0
 
-# 1. Generate the WIS config into a LOCAL working dir (never the vboxsf share --
-#    generated config + WIS's own runtime state are runtime artifacts, repo filesystem rule).
-OUT_DIR="$(mktemp -d /tmp/mesh_dashboard.XXXXXX)"
-gui/mesh_dashboard/config/generate_wis_config.sh "$OUT_DIR"
-
-# 2. Start WIS: -enableWebSockets is required (off by default, spike finding), and
-#    -documentRoot serves this directory's static/ so the page and the DDS bridge share
-#    one process/port.
-$NDDSHOME/bin/rtiwebintegrationservice \
-    -cfgFile "$OUT_DIR/wis_config.xml" -cfgName mesh_dashboard \
-    -listeningPorts 8080 -enableWebSockets \
-    -documentRoot gui/mesh_dashboard/static
-
-# 3. Start (or already have running) a router_main mesh whose control-role process uses
+# 1. Have (or already have running) a router_main mesh whose control-role process uses
 #    control_lan as its admin participant (control-platform.yaml's default for --role
 #    control with --admin-participant control_lan) -- this dashboard reads THAT process's
 #    ActRouterMeshStatus.
 
-# 4. Open http://localhost:8080/ in a browser.
+# 2. Start the bridge (serves the dashboard page itself too, no second web server):
+python3 gui/mesh_dashboard/server/mesh_bridge.py --domain 20 --port 8080
+
+# 3. Open http://localhost:8080/ in a browser.
 ```
 
-Cleanup note (same gotcha the spike found): `rtiwebintegrationservice` is a shell wrapper
-around a child process (`rtiwebintegrationserviceapp`) that actually holds the port — kill
-both, and don't rely on `pkill -x` against either name (Linux truncates `comm` to 15 bytes,
-so exact-name matching silently misses both).
+`harness_v2/scripts/run_mesh.sh up --with-dashboard` does exactly this (single process,
+tracked by one PID in `pids.txt` — no shell-wrapper/child-process pair to track or kill,
+unlike WIS).
 
 ## Directory layout
 
-- `config/wis_config.xml.template` — production WIS config (`control_lan` domain `20`, the
-  `ActRouterMeshStatus` topic), with `__ROUTER_ADMIN_TYPES__`/`__NDDSHOME__` placeholders.
-- `config/generate_wis_config.sh` — regenerates the types XML from the IDL and splices the
-  final config; the only place that DDS-XML type description is produced.
+- `server/mesh_bridge.py` — **current data bridge** (replaced WIS, 2026-07-29): a small
+  standalone `rti.connextdds` + `aiohttp` process serving the dashboard's REST/WebSocket
+  API and the static page itself. See "How it works" above and
+  [docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md](../../docs/cpp_router/mesh-dashboard-bridge-implementation-plan.md).
 - `static/index.html`, `static/mesh_graph.js` — the dashboard page.
 - `static/vendor/vis-network.min.js` — vendored (pinned 9.1.13, no CDN dependency at
   deploy time) graph-rendering library.
@@ -122,8 +125,10 @@ filter-chip feature. Screenshots + driver scripts: see the session's scratchpad 
 committed — ephemeral verification aids, not part of the shipped page).
 
 **Real finding — WIS REST seed can silently return nothing even with correct, current
-data sitting in the reader.** Reproduced repeatedly, not a one-off: after the mesh sits
-idle for a while (no roster/team change since the last one), a *fresh* browser load logs
+data sitting in the reader** (historical; this is one of the three bugs that motivated
+replacing WIS with `server/mesh_bridge.py` — see the note near the top of this file).
+Reproduced repeatedly, not a one-off: after the mesh sits idle for a while (no roster/team
+change since the last one), a *fresh* browser load logs
 `Seeded 0 sample(s) from REST`, and a **direct REST `GET` against the same reader
 resource also returns `[]`** — even right after **restarting WIS from scratch** (a brand
 new `MeshStatusReader` object, freshly matched). This is NOT the query-parameter/state-
