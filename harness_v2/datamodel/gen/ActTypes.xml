@@ -358,5 +358,17 @@
   <member name="rtt_mean_us" type="uint32"/>
   <member name="rtt_max_us" type="uint32"/>
 </struct>
+<struct name= "DomainTrafficStats">
+  <member name="domain_id" type="int32" key="true"/>
+  <member name="observer" stringMaxLength="128" type="string"/>
+  <member name="capture_timestamp" type="int64"/>
+  <member name="interval_ms" type="uint32"/>
+  <member name="discovery_packets" type="uint64"/>
+  <member name="discovery_bytes" type="uint64"/>
+  <member name="data_packets" type="uint64"/>
+  <member name="data_bytes" type="uint64"/>
+  <member name="total_packets" type="uint64"/>
+  <member name="total_bytes" type="uint64"/>
+</struct>
 </types>
 </dds>

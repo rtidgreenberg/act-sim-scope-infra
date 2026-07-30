@@ -469,3 +469,25 @@ struct RouterLinkStats {
     uint32 rtt_count;
     uint32 rtt_min_us;  uint32 rtt_mean_us;  uint32 rtt_max_us;
 };
+
+// ============================================================================
+// Domain Traffic Monitor (wire-level tshark capture stats)
+// ============================================================================
+
+struct DomainTrafficStats {
+    @key
+    int32  domain_id;
+    string<128> observer;
+    int64  capture_timestamp;
+    uint32 interval_ms;
+
+    // Discovery traffic (SPDP + SEDP, entity IDs ending 0xC2)
+    uint64 discovery_packets;
+    uint64 discovery_bytes;
+    // Application / user-data traffic (entity IDs ending 0x02/0x03)
+    uint64 data_packets;
+    uint64 data_bytes;
+    // Total (includes any other RTPS traffic not classified above)
+    uint64 total_packets;
+    uint64 total_bytes;
+};
