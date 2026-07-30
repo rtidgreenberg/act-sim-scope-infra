@@ -230,6 +230,29 @@ class DdsBridge:
         sample["request_id"] = f"ui-{int(time.time() * 1000)}"
         self.status_mode_writer.write(sample)
 
+        # Clear cached data for levels above the new resolution so the dashboard
+        # doesn't show stale higher-level data after switching back to a lower mode.
+        levels_to_clear = {
+            0: ["mission", "debug"],   # INIT: clear mission + debug
+            1: ["debug"],              # MISSION: clear debug
+            2: [],                     # DEBUG: clear nothing
+        }
+        with self.cache_lock:
+            entry = self.platform_cache.get(platform_node)
+            if entry:
+                for lvl in levels_to_clear.get(mode, []):
+                    entry[lvl] = {}
+                    entry[f"{lvl}_updated_at"] = 0
+                payload = {
+                    "type": "platform_status",
+                    "platform": platform_node,
+                    "data": json.loads(json.dumps(entry)),
+                }
+            else:
+                payload = None
+        if payload:
+            self._broadcast(payload)
+
     def close(self):
         self._stop.set()
         self.participant.close()
