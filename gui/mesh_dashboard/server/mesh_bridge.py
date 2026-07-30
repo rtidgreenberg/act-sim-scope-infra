@@ -55,13 +55,10 @@ DEBUG_STATUS_TOPICS = {
 def _qos_provider_for(types_xml: Path):
     """Avoid double-parsing types_xml's XML DOM in this process.
 
-    ActTypes.idl's global `struct base_type` collides with an RTI-internal reserved name
-    (`RTITypes::base_type`) if the SAME types XML gets parsed twice in one process --
-    RTIXMLObject_addChild: XML object with name '::RTITypes::base_type' already exists.
     run_mesh.sh exports NDDS_QOS_PROFILES including this exact file for
     platform_mesh_control.py's benefit; Connext auto-loads that at process init, so if this
-    process inherited that env var, loading the file again explicitly hits the collision.
-    Reuse QosProvider.default (which already has it loaded) instead, in that case only.
+    process inherited that env var, loading the file again explicitly hits a double-parse
+    error. Reuse QosProvider.default (which already has it loaded) instead, in that case only.
     """
     resolved = types_xml.resolve()
     for entry in os.environ.get("NDDS_QOS_PROFILES", "").split(";"):

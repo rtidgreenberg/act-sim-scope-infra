@@ -1,21 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:////home/rti/rti_connext_dds-7.7.0/bin/../resource/app/app_support/rtiddsgen/schema/rti_dds_profiles.xsd">
 <types>
-<struct name= "base_type">
-  <member name="source" stringMaxLength="100" type="string" key="true"/>
-  <member name="source_type" stringMaxLength="100" type="string"/>
-  <member name="destination" stringMaxLength="100" type="string"/>
-  <member name="session" type="byte" arrayDimensions="16"/>
-  <member name="payload" sequenceMaxLength="100" type="byte"/>
-</struct>
 <struct name= "control_command">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="command_id" stringMaxLength="64" type="string"/>
+  <member name="command_type" stringMaxLength="64" type="string"/>
+  <member name="payload" sequenceMaxLength="100" type="byte"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "control_command_ack">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="command_id" stringMaxLength="64" type="string"/>
+  <member name="accepted" type="boolean"/>
+  <member name="message" stringMaxLength="256" type="string"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="status_text" stringMaxLength="256" type="string"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_init_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
@@ -273,6 +278,7 @@
   <member name="overall_state" type="nonBasic"  nonBasicTypeName= "RouterOverallState"/>
   <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
+  <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteStatus"/>
 </struct>
 <struct name= "RouterMeshPeer">
   <member name="health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>

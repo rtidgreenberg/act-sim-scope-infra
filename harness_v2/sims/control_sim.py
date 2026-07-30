@@ -98,71 +98,60 @@ class C2Sim:
     async def read_primary_status_data(self):
       print("Waiting for Primary Status data")
       async for data in self.platform_init_status_reader.take_data_async():
-        print(f'- Received PlatformInitStatus from {data["msg.source"]}')
+        print(f'- Received PlatformInitStatus from {data["source"]}')
        
 
     async def read_detail_status_data(self):
       print("Waiting for Detail Status data")
       async for data in self.platform_detail_status_reader.take_data_async():
-        print(f'- Received PlatformDetailStatus from {data["msg.source"]}')
+        print(f'- Received PlatformDetailStatus from {data["source"]}')
 
     async def read_cmd_ack_data(self):
       print("Waiting for CommandAck data")
       async for data in self.platform_cmd_ack_reader.take_data_async():
-        print(f'- Received PlatformCommandAck from {data["msg.source"]}')
+        print(f'- Received PlatformCommandAck from {data["source"]}')
 
     async def read_contact_report_data(self):
       print("Waiting for ContactReport data")
       async for data in self.contact_report_reader.take_data_async():
-        print(f'- Received ContactReport from {data["msg.source"]}')
+        print(f'- Received ContactReport from {data["source"]}')
 
     async def write_cmd(self):
-      # Create Command sample
+      import math
       cmd_sample = dds.DynamicData(self.control_cmd_type)
+      cmd_sample["source"] = args.source
+      cmd_sample["destination"] = args.destination
 
-      # Set Source
-      cmd_sample["msg.source"] = args.source
-
-      # Set Destination
-      cmd_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      cmd_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      cmd_sample["msg.payload"] = payload
-
-
-      # Create Contact Report sample
-      contact_report_sample = dds.DynamicData(self.contact_report_type)
-
-      # Set Source Name
-      contact_report_sample["msg.source"] = args.source
-
-      # Set Source Type
-      contact_report_sample["msg.source_type"] = "C2"
-
-      # Set Destination Name
-      contact_report_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      contact_report_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      contact_report_sample["msg.payload"] = payload
-
+      contact_sample = dds.DynamicData(self.contact_report_type)
+      contact_sample["source"] = args.source
+      seq = 0
 
       while True:
-          # Send C2 Command
+          seq += 1
+          t = seq * 0.2
+          # Control command
+          cmd_sample["command_id"] = f"cmd-{seq}"
+          cmd_sample["command_type"] = "STATUS_REQUEST"
+          cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
+          cmd_sample["timestamp"] = int(time.time() * 1_000_000)
           self.control_cmd_writer.write(cmd_sample)
           print("Writing to ControlCommand topic")
 
-          # Send C2 Contact Report
-          self.control_contact_report_writer.write(contact_report_sample)
+          # Contact report
+          contact_sample["contact_id"] = f"C2-{(seq // 20) % 3:03d}"
+          contact_sample["classification"] = random.choice(["FRIENDLY", "UNKNOWN", "HOSTILE"])
+          contact_sample["bearing_deg"] = (90.0 + t * 2.0) % 360.0
+          contact_sample["range_m"] = 5000.0 + 1000.0 * math.sin(t * 0.1)
+          contact_sample["course_deg"] = (200.0 + t) % 360.0
+          contact_sample["speed_knots"] = 12.0 + 2.0 * math.sin(t * 0.3)
+          contact_sample["depth_m"] = 0.0
+          contact_sample["confidence_pct"] = min(99.0, 70.0 + seq * 0.05)
+          contact_sample["sensor_type"] = "RADAR"
+          contact_sample["latitude"] = 33.5 + 0.01 * math.sin(t * 0.05)
+          contact_sample["longitude"] = -117.5 + 0.01 * math.cos(t * 0.05)
+          contact_sample["lost"] = False
+          contact_sample["timestamp"] = int(time.time() * 1_000_000)
+          self.control_contact_report_writer.write(contact_sample)
           print("Writing to ContactReport topic")
 
           await asyncio.sleep(1)

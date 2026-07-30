@@ -356,33 +356,124 @@
     if (!keys.length) return "(no samples)";
     return keys.map((k) => {
       const sample = groupObj[k] || {};
-      const payload = (((sample || {}).msg || {}).payload || []).slice(0, 5).join(",");
-      const sourceType = ((sample || {}).msg || {}).source_type || "-";
-      return `${k} [${sourceType}] payload:[${payload}]`;
-    }).join("; ");
+      // Flat status types (detail, mission, debug, etc.) have fields at top level;
+      // legacy base_type-wrapped types have msg.payload. Show a compact summary of
+      // the most informative fields for either layout.
+      if (sample.msg && sample.msg.payload) {
+        const payload = (sample.msg.payload || []).slice(0, 5).join(",");
+        const sourceType = sample.msg.source_type || "-";
+        return `${k} [${sourceType}] payload:[${payload}]`;
+      }
+      // Flat struct: pick up to 4 non-key, non-timestamp numeric/string fields.
+      const skip = new Set(["source", "timestamp"]);
+      const fields = Object.keys(sample)
+        .filter((f) => !skip.has(f) && sample[f] != null)
+        .slice(0, 4)
+        .map((f) => {
+          const v = sample[f];
+          return `${f}=${typeof v === "number" ? v.toFixed(1) : v}`;
+        });
+      return `${k}: ${fields.join(", ") || "(empty)"}`;
+    }).join("<br>");
+  }
+
+  // Route-name → badge-label mapping. The router config names routes by the topic they
+  // forward; the badge labels are the user-facing resolution modes.
+  const ROUTE_BADGE_MAP = {
+    platform_init_status: "init",
+    platform_detail_status: "mission",
+    platform_debug_status: "debug",
+  };
+
+  // Extract per-route operational state from health.routes (populated by the C++ router in
+  // RouterHealth). Returns { init: "ROUTE_ENABLED"|..., mission: ..., debug: ... } or {}
+  // if no routes array is present (e.g. before router populates it).
+  function routeStatesFromHealth(health) {
+    const result = {};
+    if (!health || !Array.isArray(health.routes)) return result;
+    health.routes.forEach((rs) => {
+      const label = ROUTE_BADGE_MAP[rs.route_name];
+      if (label) result[label] = rs.state;
+    });
+    return result;
+  }
+
+  function routeBadge(label, routeState) {
+    // Green = route enabled/forwarding; amber = waiting/resolving; red = error; grey = disabled/unknown
+    let bg, fg;
+    switch (routeState) {
+      case "ROUTE_ENABLED":
+        bg = "#3aa655"; fg = "#ffffff"; break;
+      case "ROUTE_WAITING_FOR_DISCOVERY":
+      case "ROUTE_RESOLVING":
+        bg = "#c9a227"; fg = "#ffffff"; break;
+      case "ROUTE_DEGRADED":
+      case "ROUTE_ERROR":
+        bg = "#cc4444"; fg = "#ffffff"; break;
+      default: // ROUTE_DISABLED or not present
+        bg = "#3a3f4a"; fg = "#c7ccd3"; break;
+    }
+    const safeTitle = (routeState || "unknown").replace(/[&<>"']/g, "");
+    return `<span style="display:inline-block;margin-right:6px;padding:2px 8px;` +
+      `border-radius:10px;background:${bg};color:${fg};font-size:11px;` +
+      `text-transform:uppercase;" title="${safeTitle}">${label}</span>`;
   }
 
   function renderPlatformDataSection(nodeId) {
-    const data = platformStatusCache.get(nodeId);
-    if (!data) {
-      return `<div class="detail-note">No platform status samples cached yet.</div>`;
-    }
-    const now = Date.now();
-    const initAge = Math.max(0, now - (data.init_updated_at || data.updated_at || 0));
-    const missionAge = Math.max(0, now - (data.mission_updated_at || data.updated_at || 0));
-    const debugAge = Math.max(0, now - (data.debug_updated_at || data.updated_at || 0));
-    const initActive = Object.keys(data.init || {}).length > 0 && initAge < STATUS_LEVEL_FRESH_MS;
-    const missionActive = Object.keys(data.mission || {}).length > 0 && missionAge < STATUS_LEVEL_FRESH_MS;
-    const debugActive = Object.keys(data.debug || {}).length > 0 && debugAge < STATUS_LEVEL_FRESH_MS;
-    const age = Math.max(0, now - (data.updated_at || 0));
+    // Derive badge state from route status in RouterHealth (authoritative, comes over WAN)
+    const nodeObj = nodes.get(nodeId);
+    const health = nodeObj && nodeObj.health;
+    const routeStates = routeStatesFromHealth(health);
+    const hasRouteData = Object.keys(routeStates).length > 0;
 
-    return `<div class="detail-row"><span class="k">resolution</span><span class="v">`+
-      `${badge("init", initActive)}${badge("mission", missionActive)}`+
-      `${badge("debug", debugActive)}</span></div>`+
-      detailRow("init data", summarizeTopicGroup(data.init))+
-      detailRow("mission data", summarizeTopicGroup(data.mission))+
-      detailRow("debug data", summarizeTopicGroup(data.debug)) +
-      detailRow("status age", `${age} ms`);
+    // Route-status-driven badges (primary signal: the router knows its own route states)
+    let badgeHtml;
+    if (hasRouteData) {
+      badgeHtml = routeBadge("init", routeStates.init) +
+                  routeBadge("mission", routeStates.mission) +
+                  routeBadge("debug", routeStates.debug);
+    } else {
+      // Fallback: data-freshness badges (legacy, before router populates routes)
+      const data = platformStatusCache.get(nodeId);
+      if (!data) {
+        return `<div class="detail-note">No route status or platform data yet.</div>`;
+      }
+      const now = Date.now();
+      const initAge = Math.max(0, now - (data.init_updated_at || data.updated_at || 0));
+      const missionAge = Math.max(0, now - (data.mission_updated_at || data.updated_at || 0));
+      const debugAge = Math.max(0, now - (data.debug_updated_at || data.updated_at || 0));
+      const initActive = Object.keys(data.init || {}).length > 0 && initAge < STATUS_LEVEL_FRESH_MS;
+      const missionActive = Object.keys(data.mission || {}).length > 0 && missionAge < STATUS_LEVEL_FRESH_MS;
+      const debugActive = Object.keys(data.debug || {}).length > 0 && debugAge < STATUS_LEVEL_FRESH_MS;
+      badgeHtml = badge("init", initActive) + badge("mission", missionActive) + badge("debug", debugActive);
+    }
+
+    // Platform data section (still shows actual samples when available)
+    const data = platformStatusCache.get(nodeId);
+    const age = data ? Math.max(0, Date.now() - (data.updated_at || 0)) : null;
+
+    let html = `<div class="detail-row"><span class="k">resolution</span><span class="v">` +
+      badgeHtml + `</span></div>`;
+
+    if (data) {
+      html += detailRow("init data", summarizeTopicGroup(data.init)) +
+              detailRow("mission data", summarizeTopicGroup(data.mission)) +
+              detailRow("debug data", summarizeTopicGroup(data.debug)) +
+              detailRow("status age", `${age} ms`);
+    }
+
+    // Route detail table (when routes array is available from health)
+    if (health && Array.isArray(health.routes) && health.routes.length) {
+      html += `<hr style="border:0;border-top:1px solid #3a3f4a;margin:10px 0;">` +
+              `<div class="detail-title" style="font-size:13px;margin:0 0 6px 0;">Route Status</div>`;
+      health.routes.forEach((rs) => {
+        const stateShort = (rs.state || "").replace("ROUTE_", "");
+        const fwd = rs.samples_forwarded != null ? rs.samples_forwarded : "?";
+        html += detailRow(rs.route_name, `${stateShort} · ${fwd} fwd`);
+      });
+    }
+
+    return html;
   }
 
   async function refreshPlatformStatus(nodeId) {
@@ -834,12 +925,18 @@
     }));
     ctxMenu.appendChild(ctxItem("Resolution: Init", (nodeId) => {
       publishStatusResolution(nodeId, "init");
+      network.selectNodes([nodeId]);
+      renderDetail(nodeId);
     }));
     ctxMenu.appendChild(ctxItem("Resolution: Mission", (nodeId) => {
       publishStatusResolution(nodeId, "mission");
+      network.selectNodes([nodeId]);
+      renderDetail(nodeId);
     }));
     ctxMenu.appendChild(ctxItem("Resolution: Debug", (nodeId) => {
       publishStatusResolution(nodeId, "debug");
+      network.selectNodes([nodeId]);
+      renderDetail(nodeId);
     }));
     ctxMenu.style.left = params.event.pageX + "px";
     ctxMenu.style.top = params.event.pageY + "px";

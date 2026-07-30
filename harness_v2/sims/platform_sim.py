@@ -174,34 +174,27 @@ class PlatformSim:
     async def read_platform_data(self):
       print("Waiting for Platform Data ")
       async for data in self.platform_data_reader.take_data_async():
-        print(f'- Received PlatformData from {data["msg.source"]}')
+        print(f'- Received PlatformData from {data["source"]}')
 
     async def read_contact_report(self):
       print("Waiting for Contact Report")
       async for data in self.contact_report_reader.take_data_async():
-        print(f'- Received ContactReport from {data["msg.source"]}')
+        print(f'- Received ContactReport from {data["source"]}')
 
 
     async def write_cmd_ack(self):
-      # Create sample
-      cmd_ack_sample = dds.DynamicData(self.control_cmd_ack_type)
-
-      # Set Source
-      cmd_ack_sample["msg.source"] = args.source
-
-      # Set Destination
-      cmd_ack_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      cmd_ack_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      cmd_ack_sample["msg.payload"] = payload
+      sample = dds.DynamicData(self.control_cmd_ack_type)
+      sample["source"] = args.source
+      sample["destination"] = args.destination
+      seq = 0
 
       while True:
-          self.control_cmd_ack_writer.write(cmd_ack_sample)
+          seq += 1
+          sample["command_id"] = f"ack-{seq}"
+          sample["accepted"] = True
+          sample["message"] = "OK"
+          sample["timestamp"] = int(time.time() * 1_000_000)
+          self.control_cmd_ack_writer.write(sample)
           print("Writing to ControlCommandAck topic")
           await asyncio.sleep(1)
 
@@ -352,51 +345,51 @@ class PlatformSim:
             await asyncio.sleep(1)
 
     async def write_data(self):
-      # Create sample
-      data_sample = dds.DynamicData(self.platform_data_type)
-
-      # Set Source
-      data_sample["msg.source"] = args.source
-
-      # Set Destination
-      data_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      data_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      data_sample["msg.payload"] = payload
+      import math
+      sample = dds.DynamicData(self.platform_data_type)
+      sample["source"] = args.source
+      sample["sensor_id"] = "CTD-01"
+      seq = 0
 
       while True:
-        self.platform_data_writer.write(data_sample)
+        seq += 1
+        t = seq * 0.1
+        sample["water_temperature_c"] = 12.0 + 2.0 * math.sin(t * 0.3)
+        sample["salinity_psu"] = 35.0 + 0.5 * math.sin(t * 0.2)
+        sample["sound_velocity_mps"] = 1500.0 + 5.0 * math.sin(t * 0.1)
+        sample["current_speed_knots"] = 1.5 + 0.5 * math.sin(t * 0.4)
+        sample["current_direction_deg"] = (180.0 + t * 2.0) % 360.0
+        sample["visibility_m"] = 15.0 + 5.0 * math.sin(t * 0.15)
+        sample["sea_state"] = min(9, max(0, 3 + random.randint(-1, 1)))
+        sample["ambient_noise_db"] = 60.0 + random.uniform(-5, 5)
+        sample["timestamp"] = int(time.time() * 1_000_000)
+        self.platform_data_writer.write(sample)
         print("Writing to PlatformData topic")
         await asyncio.sleep(1)
 
     async def write_contact_report(self):
-      # Create sample
-      contact_report_sample = dds.DynamicData(self.contact_report_type)
-
-      # Set Source Name
-      contact_report_sample["msg.source"] = args.source
-
-      # Set Source Type
-      contact_report_sample["msg.source_type"] = "Platform"
-
-      # Set Destination Name
-      contact_report_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      contact_report_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      contact_report_sample["msg.payload"] = payload
+      import math
+      sample = dds.DynamicData(self.contact_report_type)
+      sample["source"] = args.source
+      seq = 0
 
       while True:
-          self.contact_report_writer.write(contact_report_sample)
+          seq += 1
+          t = seq * 0.2
+          sample["contact_id"] = f"C-{(seq // 30) % 5:03d}"
+          sample["classification"] = random.choice(["MERCHANT", "FISHING", "UNKNOWN", "MILITARY"])
+          sample["bearing_deg"] = (45.0 + t * 3.0) % 360.0
+          sample["range_m"] = 2000.0 + 500.0 * math.sin(t * 0.1)
+          sample["course_deg"] = (120.0 + t) % 360.0
+          sample["speed_knots"] = 10.0 + 3.0 * math.sin(t * 0.3)
+          sample["depth_m"] = 0.0
+          sample["confidence_pct"] = min(99.0, 60.0 + seq * 0.1)
+          sample["sensor_type"] = "PASSIVE_SONAR"
+          sample["latitude"] = 33.0 + 0.01 * math.sin(t * 0.05)
+          sample["longitude"] = -117.0 + 0.01 * math.cos(t * 0.05)
+          sample["lost"] = random.random() < 0.05
+          sample["timestamp"] = int(time.time() * 1_000_000)
+          self.contact_report_writer.write(sample)
           print("Writing to ContactReport topic")
           await asyncio.sleep(1)
 

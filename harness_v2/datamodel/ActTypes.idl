@@ -15,29 +15,36 @@
 // Application payload types
 // ============================================================================
 //
-// The base_type + derived structs are the ACT simulation payload envelope.
-// Each wraps a base_type `msg` member; platform_init_status propagates the
-// key from base_type.source via @key on the containing member.
-
-struct base_type {
-    @key
-    string<100> source;
-    string<100> source_type;
-    string<100> destination;
-    octet session[16];
-    sequence<octet, 100> payload;
-};
+// All types are flat structs keyed by `source`. The old `base_type`-wrapped
+// pattern (control_command { base_type msg }) is retired — it caused an
+// RTITypes::base_type XML collision in WIS/QosProvider double-parse scenarios
+// and was inconsistent with the newer status types.
 
 struct control_command {
-    base_type msg;
+    @key
+    string<100> source;
+    string<100> destination;
+    string<64> command_id;
+    string<64> command_type;
+    sequence<octet, 100> payload;
+    int64 timestamp;
 };
 
 struct control_command_ack {
-    base_type msg;
+    @key
+    string<100> source;
+    string<100> destination;
+    string<64> command_id;
+    boolean accepted;
+    string<256> message;
+    int64 timestamp;
 };
 
 struct platform_status {
-    base_type msg;
+    @key
+    string<100> source;
+    string<256> status_text;
+    int64 timestamp;
 };
 
 struct platform_init_status {
@@ -356,6 +363,7 @@ struct RouterHealth {
     RouterOverallState overall_state;
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
+    sequence<RouterRouteStatus> routes;
 };
 
 struct RouterMeshPeer {
