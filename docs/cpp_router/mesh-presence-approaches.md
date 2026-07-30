@@ -306,7 +306,7 @@ that doesn't exist when all nodes are 1-hop peers.
 The one scenario where path diversity matters (redundant multi-path verification) is
 better served by an on-demand diagnostic than a continuous flood.
 
-### Enhancement: ETX-style delivery ratio from `heartbeat_seq`
+### Enhancement evaluated: ETX-style delivery ratio from `heartbeat_seq`
 
 OLSR's ETX (Expected Transmission Count) metric is computed passively from HELLO loss:
 
@@ -318,7 +318,7 @@ $d_r$ = reverse delivery ratio (fraction of B's HELLOs received by A).
 **Mapped to `RouterHealth`:**
 
 Each router already publishes a monotonically-incrementing `heartbeat_seq`. The receiving
-router can compute the forward delivery ratio with zero additional traffic:
+router could compute the forward delivery ratio with zero additional traffic:
 
 ```
 // On receiving RouterHealth from peer P:
@@ -327,33 +327,41 @@ uint32_t received = samples_received_this_window_from[P];
 float forward_delivery_ratio = (float)received / (float)expected;
 ```
 
-Each router publishes its inbound delivery ratio per peer in `peers_seen`. Any observer
-can then compute bidirectional ETX for every link:
+**Verdict: subsumed by `LinkStatsCollector` — not implemented.**
 
-| Derived metric | How | From |
-|----------------|-----|------|
-| **Loss rate** per link | `1 - delivery_ratio` | Heartbeat seq gaps |
-| **Jitter** per link | Stddev of inter-arrival times within window | Heartbeat timestamps |
-| **Liveliness** | `delivery_ratio == 0` for a full window = DEAD | Heartbeat absence |
-| **Asymmetry detection** | `ratio(A→B) ≠ ratio(B→A)` | Both routers' `peers_seen` |
-| **ETX** (bidirectional) | `1 / (ratio_forward × ratio_reverse)` | Both routers' `peers_seen` |
+The `LinkStatsCollector` (Phase 9, D14/D81) already captures strictly richer per-peer,
+per-interval link-quality signals from RTPS protocol counters:
 
-**Cost: zero additional WAN traffic.** The delivery ratio is computed from the heartbeat
-that's already being sent. The only addition is a `float delivery_ratio` field in the
-`RouterPeerRef` struct within `peers_seen`.
+| ETX would give | `LinkStatsCollector` already gives | Source |
+|----------------|-----------------------------------|--------|
+| Loss rate (`1 - delivery_ratio`) | NACK rate (writer + reader side), `lost_by_writer` count | `WriterLinkDeltas`, `ReaderLinkDeltas` |
+| Jitter (inter-arrival variance) | Implicit from heartbeat timing; also `uncommitted_samples` gauge for transient loss | `ReaderLinkDeltas` |
+| Asymmetry (`ratio(A→B) ≠ ratio(B→A)`) | Per-peer directional NACK/loss/repair counts | Both sides via matched-endpoint status |
+| Congestion signal | Send-window size, backpressure counters | `WriterLinkDeltas` |
+| Per-link RTT | App-ack on `RouterLinkProbe` | Probe writer/reader |
+
+Additionally, the `PresenceMonitor`'s `RouterHealth` writer/reader pair is registered as an
+`IWanStatsSource` (the "idle-mesh bellwether"), so protocol-stats capture already covers
+the heartbeat channel even when all data routes are idle — the one scenario where
+heartbeat-only ETX would have an advantage.
+
+`RouterPeerRef` stays identity + presence only (no `delivery_ratio` field). Link quality
+lives on the LAN in `ActRouterLinkStats`, not on the WAN in `peers_seen`.
 
 ### Comparison: what each approach provides vs. traffic cost (8-node mesh, 1 Hz)
 
-| Metric needed | Epoch Flood | Pairwise HB + ETX | All-to-All Probe | Passive Stats |
-|---------------|:-----------:|:------------------:|:----------------:|:-------------:|
-| Presence | ✓ (timeout) | **✓** (DEADLINE) | ✓ | ✓ (DEADLINE) |
-| Per-link loss rate | ✗ | **✓** (ETX) | ✓ | ~ (NACK rate) |
-| Per-link RTT | ~ (clock-sync) | **✓** (probe) | ✓ | ~ |
-| Per-link jitter | ~ (clock-sync) | **✓** (inter-arrival) | ✓ | ✗ |
-| Asymmetric failure | ✓ (path diff) | **✓** (ratio diff) | ✓ | ✗ |
-| Multi-path diversity | **✓** | ✗ | ✗ | ✗ |
-| **Samples/sec** | **224** | **8** | **56** | **0** |
+| Metric needed | Epoch Flood | Pairwise HB + Protocol Stats | All-to-All Probe |
+|---------------|:-----------:|:----------------------------:|:----------------:|
+| Presence | ✓ (timeout) | **✓** (DEADLINE) | ✓ |
+| Per-link loss rate | ✗ | **✓** (NACK rate + `lost_by_writer`) | ✓ |
+| Per-link RTT | ~ (clock-sync) | **✓** (app-ack probe) | ✓ |
+| Per-link jitter | ~ (clock-sync) | **✓** (inter-arrival + uncommitted gauge) | ✓ |
+| Asymmetric failure | ✓ (path diff) | **✓** (directional counters) | ✓ |
+| Congestion / backpressure | ✗ | **✓** (send-window, unacked count) | ✗ |
+| Multi-path diversity | **✓** | ✗ | ✗ |
+| **Samples/sec (WAN)** | **224** | **8** (heartbeat) + **8** (probe) = **16** | **56** |
 
-The pairwise heartbeat + ETX approach provides liveliness, loss, jitter, and asymmetry
-detection at 8 samples/sec — 28× less traffic than epoch flood, with strictly better
-per-link fault isolation and O(1) detection latency.
+The pairwise heartbeat + protocol-stats harvest provides liveliness, loss, RTT, jitter,
+congestion, and asymmetry detection at 16 samples/sec — 14× less WAN traffic than epoch
+flood, with strictly better per-link fault isolation, O(1) detection latency, and richer
+signal decomposition.

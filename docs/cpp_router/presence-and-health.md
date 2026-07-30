@@ -301,13 +301,13 @@ deviation from the sketch below: `state_revision` is `uint64`, not `string` —
 enum RouterOverallState { ROUTER_OK, ROUTER_DEGRADED, ROUTER_ERROR };
 enum RouterPresenceState { PRESENCE_ALIVE, PRESENCE_STALE, PRESENCE_DEAD };
 
-// D77: one adjacency edge of the who-sees-who map. Identity + presence + delivery ratio
-// (OLSR ETX-style link quality from heartbeat loss counting — see
-// mesh-presence-approaches.md "Mesh Protocol Lineage" section for rationale).
+// D77: one adjacency edge of the who-sees-who map. Identity + presence only — never
+// the peer's own summary (a WAN observer already gets each router's RouterHealth).
+// Link quality (loss, RTT, congestion) is captured separately by LinkStatsCollector
+// (ActRouterLinkStats on the LAN) — see mesh-presence-approaches.md for rationale.
 struct RouterPeerRef {
     string router;              // "<node>/<router>" (name-only identity, D79)
     RouterPresenceState presence;
-    float  delivery_ratio;      // fraction of peer's heartbeats received this window (0.0–1.0)
 };
 
 // WAN: one compact, liveliness-bearing summary per router. Small on purpose.

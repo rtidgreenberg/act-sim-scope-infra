@@ -10,12 +10,12 @@
 > impairment (see [Deferred: inference](#deferred-inference-and-the-correlation-experiment)).
 > Until then the metrics are published raw; their *meaning* is assigned later, with data.
 >
-> **Companion: passive link quality from heartbeat loss.** The `RouterHealth` heartbeat
-> already provides a zero-cost ETX-style delivery ratio per link (OLSR model). This gives
-> loss rate, jitter, and asymmetry detection without any additional probe traffic. See
-> [presence-and-health.md](presence-and-health.md) "ETX-style delivery ratio" and
-> [mesh-presence-approaches.md](mesh-presence-approaches.md) "Mesh Protocol Lineage" for
-> the full rationale and alternatives analysis.
+> **Alternatives analysis:** an OLSR-style ETX delivery ratio computed from `RouterHealth`
+> heartbeat loss was evaluated but rejected — the `LinkStatsCollector`'s per-peer
+> protocol-stats capture (NACK rate, `lost_by_writer`, send-window, app-ack RTT) already
+> provides strictly richer per-link quality signals at the same or better granularity, with
+> no additional WAN traffic. See
+> [mesh-presence-approaches.md](mesh-presence-approaches.md) for the full comparison.
 
 All API facts below validated against **Connext 7.7.0, Modern C++** via
 `ask_connext_question` (2026-07-08), per the repo rule "validate Connext specifics — don't
