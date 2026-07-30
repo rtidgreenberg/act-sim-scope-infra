@@ -162,20 +162,20 @@ do_up() {
         echo "platform${ID}_sim $!" >> "$WORKDIR/pids.txt"
     done
 
-    echo "[run_mesh up] launching $PLATFORMS platform_control process(es)..."
-    # platform_control.py needs NDDS_QOS_PROFILES for the LAN QoS profiles (same as the
+    echo "[run_mesh up] launching $PLATFORMS platform_mesh_control process(es)..."
+    # platform_mesh_control.py needs NDDS_QOS_PROFILES for the LAN QoS profiles (same as the
     # platform_sim, which gets it via start_platform_sim.sh -> env.sh). Export it here so
     # the nohup child inherits it.
     export NDDS_QOS_PROFILES="${V2_ROOT}/qos/lan_qos_lib.xml;${V2_ROOT}/datamodel/gen/ActTypes.xml"
     for ID in $(seq 30 "$LAST_ID"); do
-        # Platform control process (team-control-topic-plan.md §3): subscribes to
+        # Platform mesh control process (team-control-topic-plan.md §3): subscribes to
         # TeamAssignment on platform_lan and translates into RouterCommand
         # (ADD/REMOVE_PARTICIPANT_PARTITION) for the local router. Needs the same
         # NDDS_QOS_PROFILES as the platform_sim (LAN QoS lib + types).
-        nohup python3 "$V2_ROOT/scripts/platform_control.py" \
+        nohup python3 "$V2_ROOT/scripts/platform_mesh_control.py" \
             --domain "$ID" --node "Platform_${ID}" \
-            > "$WORKDIR/platform${ID}_control.log" 2>&1 &
-        echo "platform${ID}_control $!" >> "$WORKDIR/pids.txt"
+            > "$WORKDIR/platform${ID}_mesh_control.log" 2>&1 &
+        echo "platform${ID}_mesh_control $!" >> "$WORKDIR/pids.txt"
     done
 
     if [[ "$WITH_DASHBOARD" == true ]]; then

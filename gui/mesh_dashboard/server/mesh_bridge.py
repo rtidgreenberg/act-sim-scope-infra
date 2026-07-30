@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -33,6 +34,22 @@ MESH_STATUS_TOPIC = "ActRouterMeshStatus"
 MESH_STATUS_TYPE = "RouterMeshStatus"
 TEAM_ASSIGNMENT_TOPIC = "ActTeamAssignment"
 TEAM_ASSIGNMENT_TYPE = "TeamAssignment"
+STATUS_MODE_TOPIC = "ActPlatformStatusMode"
+STATUS_MODE_TYPE = "PlatformStatusMode"
+
+INIT_STATUS_TOPICS = {
+    "PlatformPrimaryStatus": "platform_primary_status",
+}
+MISSION_STATUS_TOPICS = {
+    "PlatformDetailStatus": "platform_detail_status",
+    "PlatformMissionStatus": "platform_mission_status",
+    "PlatformWaypointStatus": "platform_waypoint_status",
+}
+DEBUG_STATUS_TOPICS = {
+    "PlatformDebugStatus": "platform_debug_status",
+    "PlatformThrusterStatus": "platform_thruster_status",
+    "PlatformPowerStatus": "platform_power_status",
+}
 
 
 def _qos_provider_for(types_xml: Path):
@@ -42,7 +59,7 @@ def _qos_provider_for(types_xml: Path):
     (`RTITypes::base_type`) if the SAME types XML gets parsed twice in one process --
     RTIXMLObject_addChild: XML object with name '::RTITypes::base_type' already exists.
     run_mesh.sh exports NDDS_QOS_PROFILES including this exact file for
-    platform_control.py's benefit; Connext auto-loads that at process init, so if this
+    platform_mesh_control.py's benefit; Connext auto-loads that at process init, so if this
     process inherited that env var, loading the file again explicitly hits the collision.
     Reuse QosProvider.default (which already has it loaded) instead, in that case only.
     """
@@ -60,6 +77,7 @@ class DdsBridge:
     def __init__(self, domain_id, types_xml, poll_interval):
         self.poll_interval = poll_interval
         self.cache = {}          # observer_node -> latest sample dict
+        self.platform_cache = {} # platform_node -> latest per-resolution topic samples
         self.cache_lock = threading.Lock()
         self.ws_clients = set()  # set[web.WebSocketResponse]
         self.loop = None         # set once the aiohttp event loop is running
@@ -68,6 +86,7 @@ class DdsBridge:
         qp = _qos_provider_for(types_xml)
         mesh_type = qp.type(MESH_STATUS_TYPE)
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
+        status_mode_type = qp.type(STATUS_MODE_TYPE)
 
         pqos = dds.DomainParticipantQos()
         pqos.transport_builtin = dds.TransportBuiltin.udpv4
@@ -81,6 +100,22 @@ class DdsBridge:
         rqos.reliability.kind = dds.ReliabilityKind.BEST_EFFORT
         self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic, rqos)
 
+        # Platform status readers (all best-effort + volatile on control_lan).
+        self.platform_readers = []
+        topic_specs = []
+        for topic, tname in INIT_STATUS_TOPICS.items():
+            topic_specs.append(("init", topic, tname))
+        for topic, tname in MISSION_STATUS_TOPICS.items():
+            topic_specs.append(("mission", topic, tname))
+        for topic, tname in DEBUG_STATUS_TOPICS.items():
+            topic_specs.append(("debug", topic, tname))
+
+        for level, topic_name, type_name in topic_specs:
+            dtype = qp.type(type_name)
+            topic = dds.DynamicData.Topic(self.participant, topic_name, dtype)
+            reader = dds.DynamicData.DataReader(subscriber, topic, rqos)
+            self.platform_readers.append((level, topic_name, reader))
+
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
         publisher = dds.Publisher(self.participant)
@@ -88,7 +123,13 @@ class DdsBridge:
         wqos.durability.kind = dds.DurabilityKind.VOLATILE
         wqos.reliability.kind = dds.ReliabilityKind.RELIABLE
         self.writer = dds.DynamicData.DataWriter(publisher, team_topic, wqos)
+
+        # StatusResolution writer (RELIABLE + VOLATILE).
+        status_topic = dds.DynamicData.Topic(self.participant, STATUS_MODE_TOPIC,
+                             status_mode_type)
+        self.status_mode_writer = dds.DynamicData.DataWriter(publisher, status_topic, wqos)
         self.team_type = team_type
+        self.status_mode_type = status_mode_type
 
     def start_poll_thread(self):
         threading.Thread(target=self._poll_loop, daemon=True, name="dds-poll").start()
@@ -102,20 +143,52 @@ class DdsBridge:
                 key = sample.get("observer_node", "?")
                 with self.cache_lock:
                     self.cache[key] = sample
-                self._broadcast(sample)
+
+                self._broadcast({"type": "mesh_status", "data": sample})
+
+            for level, topic_name, reader in self.platform_readers:
+                for data, info in reader.take():
+                    if not info.valid:
+                        continue
+                    sample = json.loads(data.to_json())
+                    msg = sample.get("msg", {})
+                    platform_node = msg.get("source")
+                    if not platform_node:
+                        continue
+
+                    now_ms = int(time.time() * 1000)
+                    with self.cache_lock:
+                        if platform_node not in self.platform_cache:
+                            self.platform_cache[platform_node] = {
+                                "init": {},
+                                "mission": {},
+                                "debug": {},
+                                "updated_at": 0,
+                            }
+                        entry = self.platform_cache[platform_node]
+                        entry[level][topic_name] = sample
+                        entry["updated_at"] = now_ms
+                        payload = {
+                            "type": "platform_status",
+                            "platform": platform_node,
+                            "data": json.loads(json.dumps(entry)),
+                        }
+
+                    self._broadcast(payload)
+
             self._stop.wait(self.poll_interval)
 
-    def _broadcast(self, sample):
+    def _broadcast(self, payload):
         if self.loop is None:
             return
         self.loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self._broadcast_async(sample)))
+            lambda: asyncio.ensure_future(self._broadcast_async(payload)))
 
-    async def _broadcast_async(self, sample):
+    async def _broadcast_async(self, payload):
         dead = []
         for ws in list(self.ws_clients):
             try:
-                await ws.send_str(json.dumps({"data": sample}))
+                await ws.send_str(json.dumps(payload))
             except (ConnectionResetError, RuntimeError):
                 dead.append(ws)
         for ws in dead:
@@ -125,11 +198,35 @@ class DdsBridge:
         with self.cache_lock:
             return [{"data": v} for v in self.cache.values()]
 
+    def platform_snapshot(self, platform_node=None):
+        with self.cache_lock:
+            if platform_node:
+                return self.platform_cache.get(platform_node, {
+                    "init": {}, "mission": {}, "debug": {}, "updated_at": 0,
+                })
+            return json.loads(json.dumps(self.platform_cache))
+
     def write_team_assignment(self, platform_node, team_name):
         sample = dds.DynamicData(self.team_type)
         sample["platform_node"] = platform_node
         sample["team_name"] = team_name
         self.writer.write(sample)
+
+    def write_status_mode(self, platform_node, resolution_mode):
+        mode_map = {
+            "init": 0,
+            "mission": 1,
+            "debug": 2,
+        }
+        mode = mode_map.get(str(resolution_mode).lower())
+        if mode is None:
+            raise ValueError("resolution_mode must be one of: primary, detail, debug")
+
+        sample = dds.DynamicData(self.status_mode_type)
+        sample["platform_node"] = platform_node
+        sample["resolution_mode"] = mode
+        sample["request_id"] = f"ui-{int(time.time() * 1000)}"
+        self.status_mode_writer.write(sample)
 
     def close(self):
         self._stop.set()
@@ -159,6 +256,26 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
             None, bridge.write_team_assignment, platform_node, team_name)
         return web.Response(status=204)
 
+    async def set_status_resolution(request):
+        try:
+            body = await request.json()
+            platform_node = body["platform_node"]
+            resolution_mode = body["resolution_mode"]
+        except (json.JSONDecodeError, KeyError):
+            return web.Response(status=400,
+                                text="expected JSON {platform_node, resolution_mode}")
+
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, bridge.write_status_mode, platform_node, resolution_mode)
+        except ValueError as exc:
+            return web.Response(status=400, text=str(exc))
+        return web.Response(status=204)
+
+    async def get_platform_status(request):
+        platform_node = request.rel_url.query.get("platform")
+        return web.json_response(bridge.platform_snapshot(platform_node))
+
     async def websocket_handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -174,7 +291,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
         return web.FileResponse(static_dir / "index.html")
 
     app.router.add_get("/api/mesh_status", get_mesh_status)
+    app.router.add_get("/api/platform_status", get_platform_status)
     app.router.add_post("/api/team_assignment", team_assignment)
+    app.router.add_post("/api/status_resolution", set_status_resolution)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/", index)
     app.router.add_static("/", str(static_dir))  # must be added last (catch-all for assets)

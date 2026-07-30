@@ -3,7 +3,7 @@
 the assignment propagates through the DDS mesh back to the GUI.
 
 Flow:
-  1. Launch mesh via run_mesh.sh (routers + sims + platform_control + mesh_bridge)
+    1. Launch mesh via run_mesh.sh (routers + sims + platform_mesh_control + mesh_bridge)
      -- OR connect to an already-running mesh (--skip-mesh)
   2. Wait for mesh to stabilize (bridge REST /api/mesh_status returns peers)
   3. Open the dashboard in Playwright, right-click a platform node, assign it to a
@@ -317,7 +317,7 @@ def browser_assign_and_verify(port, target_node, team_name,
         # ------------------------------------------------------------------
         # Step B: Wait for the team_partition to propagate through the mesh
         #         and back to the dashboard via WebSocket. The pipeline is:
-        #         POST → DDS TeamAssignment → platform_control.py →
+        #         POST → DDS TeamAssignment → platform_mesh_control.py →
         #         RouterCommand → router adds partition → RouterHealth
         #         heartbeat → control's PresenceMonitor → ActRouterMeshStatus
         #         → bridge WebSocket → browser. Typically 2-4s.

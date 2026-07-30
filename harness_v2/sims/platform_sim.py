@@ -34,6 +34,11 @@ class PlatformSim:
       self.control_cmd_ack_type = self.qos_provider.type("control_command_ack")
       self.platform_primary_status_type = self.qos_provider.type("platform_primary_status")
       self.platform_detail_status_type = self.qos_provider.type("platform_detail_status")
+      self.platform_mission_status_type = self.qos_provider.type("platform_mission_status")
+      self.platform_waypoint_status_type = self.qos_provider.type("platform_waypoint_status")
+      self.platform_debug_status_type = self.qos_provider.type("platform_debug_status")
+      self.platform_thruster_status_type = self.qos_provider.type("platform_thruster_status")
+      self.platform_power_status_type = self.qos_provider.type("platform_power_status")
       self.platform_data_type = self.qos_provider.type("platform_data")
       self.contact_report_type = self.qos_provider.type("contact_report")
 
@@ -59,6 +64,31 @@ class PlatformSim:
           self.participant,
           "PlatformDetailStatus",
           self.platform_detail_status_type
+      )
+      self.platform_mission_status_topic = dds.DynamicData.Topic(
+          self.participant,
+          "PlatformMissionStatus",
+          self.platform_mission_status_type
+      )
+      self.platform_waypoint_status_topic = dds.DynamicData.Topic(
+          self.participant,
+          "PlatformWaypointStatus",
+          self.platform_waypoint_status_type
+      )
+      self.platform_debug_status_topic = dds.DynamicData.Topic(
+          self.participant,
+          "PlatformDebugStatus",
+          self.platform_debug_status_type
+      )
+      self.platform_thruster_status_topic = dds.DynamicData.Topic(
+          self.participant,
+          "PlatformThrusterStatus",
+          self.platform_thruster_status_type
+      )
+      self.platform_power_status_topic = dds.DynamicData.Topic(
+          self.participant,
+          "PlatformPowerStatus",
+          self.platform_power_status_type
       )
       self.platform_data_topic = dds.DynamicData.Topic(
           self.participant,
@@ -94,6 +124,26 @@ class PlatformSim:
       )
       self.platform_detail_status_writer = dds.DynamicData.DataWriter(
           self.platform_detail_status_topic,
+          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+      )
+      self.platform_mission_status_writer = dds.DynamicData.DataWriter(
+          self.platform_mission_status_topic,
+          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+      )
+      self.platform_waypoint_status_writer = dds.DynamicData.DataWriter(
+          self.platform_waypoint_status_topic,
+          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+      )
+      self.platform_debug_status_writer = dds.DynamicData.DataWriter(
+          self.platform_debug_status_topic,
+          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+      )
+      self.platform_thruster_status_writer = dds.DynamicData.DataWriter(
+          self.platform_thruster_status_topic,
+          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+      )
+      self.platform_power_status_writer = dds.DynamicData.DataWriter(
+          self.platform_power_status_topic,
           self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
       )
       self.platform_data_writer = dds.DynamicData.DataWriter(
@@ -201,6 +251,81 @@ class PlatformSim:
         print("Writing to PlatformDetailStatus topic")
         await asyncio.sleep(1)
 
+    async def write_mission_status(self):
+        mission_status_sample = dds.DynamicData(self.platform_mission_status_type)
+        mission_status_sample["msg.source"] = args.source
+        mission_status_sample["msg.destination"] = args.destination
+        mission_status_sample["msg.source_type"] = "Mission"
+        session_guid = [args.session for d in range(16)]
+        mission_status_sample["msg.session"] = session_guid
+
+        while True:
+            payload = [random.randrange(0, 50, 3) for d in range(16)]
+            mission_status_sample["msg.payload"] = payload
+            self.platform_mission_status_writer.write(mission_status_sample)
+            print("Writing to PlatformMissionStatus topic")
+            await asyncio.sleep(1)
+
+    async def write_waypoint_status(self):
+        waypoint_status_sample = dds.DynamicData(self.platform_waypoint_status_type)
+        waypoint_status_sample["msg.source"] = args.source
+        waypoint_status_sample["msg.destination"] = args.destination
+        waypoint_status_sample["msg.source_type"] = "Waypoint"
+        session_guid = [args.session for d in range(16)]
+        waypoint_status_sample["msg.session"] = session_guid
+
+        while True:
+            payload = [random.randrange(0, 100, 5) for d in range(16)]
+            waypoint_status_sample["msg.payload"] = payload
+            self.platform_waypoint_status_writer.write(waypoint_status_sample)
+            print("Writing to PlatformWaypointStatus topic")
+            await asyncio.sleep(1)
+
+    async def write_debug_status(self):
+        debug_status_sample = dds.DynamicData(self.platform_debug_status_type)
+        debug_status_sample["msg.source"] = args.source
+        debug_status_sample["msg.destination"] = args.destination
+        debug_status_sample["msg.source_type"] = "Debug"
+        session_guid = [args.session for d in range(16)]
+        debug_status_sample["msg.session"] = session_guid
+
+        while True:
+            payload = [random.randrange(0, 255, 7) for d in range(16)]
+            debug_status_sample["msg.payload"] = payload
+            self.platform_debug_status_writer.write(debug_status_sample)
+            print("Writing to PlatformDebugStatus topic")
+            await asyncio.sleep(1)
+
+    async def write_thruster_status(self):
+        thruster_status_sample = dds.DynamicData(self.platform_thruster_status_type)
+        thruster_status_sample["msg.source"] = args.source
+        thruster_status_sample["msg.destination"] = args.destination
+        thruster_status_sample["msg.source_type"] = "Thruster"
+        session_guid = [args.session for d in range(16)]
+        thruster_status_sample["msg.session"] = session_guid
+
+        while True:
+            payload = [random.randrange(0, 120, 4) for d in range(16)]
+            thruster_status_sample["msg.payload"] = payload
+            self.platform_thruster_status_writer.write(thruster_status_sample)
+            print("Writing to PlatformThrusterStatus topic")
+            await asyncio.sleep(1)
+
+    async def write_power_status(self):
+        power_status_sample = dds.DynamicData(self.platform_power_status_type)
+        power_status_sample["msg.source"] = args.source
+        power_status_sample["msg.destination"] = args.destination
+        power_status_sample["msg.source_type"] = "Power"
+        session_guid = [args.session for d in range(16)]
+        power_status_sample["msg.session"] = session_guid
+
+        while True:
+            payload = [random.randrange(0, 240, 6) for d in range(16)]
+            power_status_sample["msg.payload"] = payload
+            self.platform_power_status_writer.write(power_status_sample)
+            print("Writing to PlatformPowerStatus topic")
+            await asyncio.sleep(1)
+
     async def write_data(self):
       # Create sample
       data_sample = dds.DynamicData(self.platform_data_type)
@@ -258,6 +383,11 @@ class PlatformSim:
             self.write_cmd_ack(),
             self.write_primary_status(),
             self.write_detail_status(),
+            self.write_mission_status(),
+            self.write_waypoint_status(),
+            self.write_debug_status(),
+            self.write_thruster_status(),
+            self.write_power_status(),
             self.write_data(),
             self.write_contact_report()
             )

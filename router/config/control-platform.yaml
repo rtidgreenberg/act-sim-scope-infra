@@ -132,7 +132,7 @@ routes:
   # Unfiltered control→platform event route (team-control-topic-plan.md). Same shape as
   # control_command but NO CFT filter — all platforms receive all samples. Used for
   # broadcast control topics like TeamAssignment where every platform needs every sample
-  # and the platform control process filters locally.
+  # and the platform mesh control process filters locally.
   - name: control_event
     enabled: true
     forwarding_mode: dynamic_data
@@ -152,6 +152,34 @@ routes:
         participant: platform_wan
         reader_qos: wan_event
         subscriber_partition: CONTROL
+      output:
+        participant: platform_lan
+
+  # Per-platform status resolution control (primary/detail/debug). Unlike TeamAssignment,
+  # this path is targeted at the router layer via destination-side CFT using the sample's
+  # platform_node key so platform mesh control receives only local-node commands.
+  - name: control_status_mode
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: control
+    destination: platform
+    topics:
+      - name: ActPlatformStatusMode
+    source_side:
+      input:
+        participant: control_lan
+      output:
+        participant: control_wan
+        writer_qos: wan_event
+        publisher_partition: CONTROL
+    destination_side:
+      input:
+        participant: platform_wan
+        reader_qos: wan_event
+        subscriber_partition: CONTROL
+        filter:
+          expression: "platform_node = %0"
+          parameters: ["${node.name}"]
       output:
         participant: platform_lan
 
@@ -185,6 +213,32 @@ routes:
     destination: control
     topics:
       - name: PlatformDetailStatus
+      - name: PlatformMissionStatus
+      - name: PlatformWaypointStatus
+    source_side:
+      input:
+        participant: platform_lan
+      output:
+        participant: platform_wan
+        writer_qos: wan_status
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_status
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan
+
+  - name: platform_debug_status
+    enabled: false
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
+      - name: PlatformDebugStatus
+      - name: PlatformThrusterStatus
+      - name: PlatformPowerStatus
     source_side:
       input:
         participant: platform_lan

@@ -23,6 +23,21 @@
 <struct name= "platform_detail_status">
   <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
 </struct>
+<struct name= "platform_mission_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_waypoint_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_debug_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_thruster_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
+<struct name= "platform_power_status">
+  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+</struct>
 <struct name= "platform_data">
   <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
 </struct>
@@ -195,6 +210,16 @@
 <struct name= "TeamAssignment">
   <member name="platform_node" stringMaxLength="255" type="string" key="true"/>
   <member name="team_name" stringMaxLength="255" type="string"/>
+</struct>
+<enum name="PlatformStatusResolutionMode">
+  <enumerator name="STATUS_INIT"/>
+  <enumerator name="STATUS_MISSION"/>
+  <enumerator name="STATUS_DEBUG"/>
+</enum> 
+<struct name= "PlatformStatusMode">
+  <member name="platform_node" stringMaxLength="255" type="string" key="true"/>
+  <member name="resolution_mode" type="nonBasic"  nonBasicTypeName= "PlatformStatusResolutionMode"/>
+  <member name="request_id" stringMaxLength="255" type="string"/>
 </struct>
 <struct name= "ControllerJournalRecord">
   <member name="target_node" stringMaxLength="255" type="string" key="true"/>

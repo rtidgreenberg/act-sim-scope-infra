@@ -32,6 +32,8 @@
   const REST_URL = `${HTTP_ORIGIN}/api/mesh_status`;
   const WS_URL = `${WS_ORIGIN}/ws`;
   const ASSIGN_URL = `${HTTP_ORIGIN}/api/team_assignment`;
+  const STATUS_MODE_URL = `${HTTP_ORIGIN}/api/status_resolution`;
+  const PLATFORM_STATUS_URL = `${HTTP_ORIGIN}/api/platform_status`;
 
   // Edge color encodes source, not presence (2026-07-23) -- green for a direct mesh_status
   // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
@@ -50,6 +52,9 @@
   const KNOWN_NODE_COLOR = EDGE_SOURCE_COLOR.mesh_status;
   const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
+  const STATUS_LEVEL_FRESH_MS = 5000;
+
+  const platformStatusCache = new Map(); // nodeId -> {primary, detail, debug, updated_at}
 
   // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
   // at EDGE_DECAY_WINDOW_MS -- deliberately the same 3s window as the AUTOMATIC liveliness
@@ -338,6 +343,59 @@
            `<span class="v">${v}</span></div>`;
   }
 
+  function badge(label, active) {
+    const bg = active ? "#3aa655" : "#3a3f4a";
+    const fg = active ? "#ffffff" : "#c7ccd3";
+    return `<span style="display:inline-block;margin-right:6px;padding:2px 8px;` +
+      `border-radius:10px;background:${bg};color:${fg};font-size:11px;` +
+      `text-transform:uppercase;">${label}</span>`;
+  }
+
+  function summarizeTopicGroup(groupObj) {
+    const keys = Object.keys(groupObj || {});
+    if (!keys.length) return "(no samples)";
+    return keys.map((k) => {
+      const sample = groupObj[k] || {};
+      const payload = (((sample || {}).msg || {}).payload || []).slice(0, 5).join(",");
+      const sourceType = ((sample || {}).msg || {}).source_type || "-";
+      return `${k} [${sourceType}] payload:[${payload}]`;
+    }).join("; ");
+  }
+
+  function renderPlatformDataSection(nodeId) {
+    const data = platformStatusCache.get(nodeId);
+    if (!data) {
+      return `<div class="detail-note">No platform status samples cached yet.</div>`;
+    }
+    const now = Date.now();
+    const age = Math.max(0, now - (data.updated_at || 0));
+    const initActive = Object.keys(data.init || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
+    const missionActive = Object.keys(data.mission || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
+    const debugActive = Object.keys(data.debug || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
+
+    return `<div class="detail-row"><span class="k">resolution</span><span class="v">`+
+      `${badge("init", initActive)}${badge("mission", missionActive)}`+
+      `${badge("debug", debugActive)}</span></div>`+
+      detailRow("init data", summarizeTopicGroup(data.init))+
+      detailRow("mission data", summarizeTopicGroup(data.mission))+
+      detailRow("debug data", summarizeTopicGroup(data.debug)) +
+      detailRow("status age", `${age} ms`);
+  }
+
+  async function refreshPlatformStatus(nodeId) {
+    try {
+      const resp = await fetch(`${PLATFORM_STATUS_URL}?platform=${encodeURIComponent(nodeId)}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && typeof data === "object") {
+        platformStatusCache.set(nodeId, data);
+        if (selectedId === nodeId) renderDetail(nodeId);
+      }
+    } catch (_err) {
+      // Best-effort refresh only.
+    }
+  }
+
   function renderDetail(id) {
     const n = nodes.get(id);
     if (!n) { hideDetail(); return; }
@@ -370,7 +428,10 @@
         detailRow("raw team_partition", `[${raw}]`) +
         detailRow("peers_seen", peersSeen) +
         detailRow("heartbeat_seq", h.heartbeat_seq) +
-        detailRow("config_hash", h.config_hash ? String(h.config_hash).slice(0, 12) + "…" : "?");
+        detailRow("config_hash", h.config_hash ? String(h.config_hash).slice(0, 12) + "…" : "?") +
+        `<hr style="border:0;border-top:1px solid #3a3f4a;margin:10px 0;">` +
+        `<div class="detail-title" style="font-size:13px;margin:0 0 6px 0;">Platform Data</div>` +
+        renderPlatformDataSection(id);
     }
     detailEl.innerHTML =
       `<span class="detail-close" title="close">×</span>` +
@@ -388,6 +449,7 @@
   network.on("selectNode", (p) => {
     if (p.nodes.length) {
       renderDetail(p.nodes[0]);
+      refreshPlatformStatus(p.nodes[0]);
       applyViewFilters();
     }
   });
@@ -608,7 +670,17 @@
       } catch (_err) {
         return;
       }
-      if (ingestSampleArray([msg])) {
+
+      if (msg.type === "platform_status") {
+        if (msg.platform && msg.data) {
+          platformStatusCache.set(msg.platform, msg.data);
+          if (selectedId === msg.platform) renderDetail(selectedId);
+        }
+        return;
+      }
+
+      const meshWrapped = (msg.type === "mesh_status") ? { data: msg.data } : msg;
+      if (ingestSampleArray([meshWrapped])) {
         setStatus(`${statusEl.textContent} · ${new Date().toLocaleTimeString()} · ` +
             `${nodes.length} nodes / ${edges.length} edges`);
       }
@@ -639,6 +711,21 @@
       setStatus(`Assigned ${platformNode} → ${teamName || "(no team)"}`);
     }).catch((err) => {
       setStatus(`Team assignment failed: ${err}`);
+    });
+  }
+
+  function publishStatusResolution(platformNode, resolutionMode) {
+    const sample = { platform_node: platformNode, resolution_mode: resolutionMode };
+    return fetch(STATUS_MODE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sample),
+    }).then((resp) => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setStatus(`Resolution ${platformNode} → ${resolutionMode}`);
+      refreshPlatformStatus(platformNode);
+    }).catch((err) => {
+      setStatus(`Status resolution failed: ${err}`);
     });
   }
 
@@ -741,6 +828,15 @@
     }));
     ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
       publishTeamAssignment(nodeId, "");
+    }));
+    ctxMenu.appendChild(ctxItem("Resolution: Init", (nodeId) => {
+      publishStatusResolution(nodeId, "init");
+    }));
+    ctxMenu.appendChild(ctxItem("Resolution: Mission", (nodeId) => {
+      publishStatusResolution(nodeId, "mission");
+    }));
+    ctxMenu.appendChild(ctxItem("Resolution: Debug", (nodeId) => {
+      publishStatusResolution(nodeId, "debug");
     }));
     ctxMenu.style.left = params.event.pageX + "px";
     ctxMenu.style.top = params.event.pageY + "px";

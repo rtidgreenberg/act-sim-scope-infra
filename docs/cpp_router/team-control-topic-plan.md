@@ -114,7 +114,7 @@ Content-Type: application/dds-web+json
 The existing `control_command` route is per-node filtered (CFT on
 `msg.destination = ${node.name}`), so it can't broadcast to all platforms.
 `TeamAssignment` is a broadcast topic — C2 publishes one sample per platform and every
-platform receives every sample (the platform control process filters locally).
+platform receives every sample (the platform mesh control process filters locally).
 
 Add a new **`control_event`** route — same control→platform shape as `control_command`,
 same `wan_event` QoS (RELIABLE), but **no CFT filter**:
@@ -152,19 +152,19 @@ The `CONTROL` partition on the WAN legs matches via `control_wan`'s wildcard (`"
 D103) on the source side, and every `platform_wan` subscriber carries `CONTROL` on this
 route's reader.
 
-### 3. Platform Control Process — TeamAssignment Subscriber (platform_lan)
+### 3. Platform Mesh Control Process — TeamAssignment Subscriber (platform_lan)
 
-A **separate platform control process** on each platform subscribes to `TeamAssignment`
+A **separate platform mesh control process** on each platform subscribes to `TeamAssignment`
 on `platform_lan` (the route's destination-side output delivers it there) and translates
 received assignments into `RouterCommand` / `ADD_PARTICIPANT_PARTITION` /
 `REMOVE_PARTICIPANT_PARTITION` commands published on the same `platform_lan` domain — the
 same admin command channel the router already listens on.
 
 This keeps the router's command interface the single entry point for partition changes,
-and the platform control process is a thin, stateless translator:
+and the platform mesh control process is a thin, stateless translator:
 
 ```
-Platform Control Process (per platform):
+Platform Mesh Control Process (per platform):
   - Subscribes: TeamAssignment on platform_lan (domain <platform_id>)
   - Publishes:  RouterCommand on platform_lan (domain <platform_id>)
   - Targets:    (target_node=Platform_XX, target_router=platform-XX-control-platform)
@@ -198,7 +198,7 @@ on_data_available(TeamAssignment sample):
 **Why a separate process (not built into the router):**
 - The router's internal command path is already validated end-to-end (D83/D103); reusing
   it via the external command topic avoids adding a second internal mutation path.
-- The platform control process can be written in Python (quick iteration, leverages the
+- The platform mesh control process can be written in Python (quick iteration, leverages the
   existing `harness_v2` Python infrastructure) or C++ — it's a ~50-line DDS app.
 - Decoupled lifecycle: the control process can restart independently without disturbing
   the router's forwarding state.
@@ -246,7 +246,7 @@ through explicit operator re-assignment in the dashboard before rejoining. There
 |---|---|---|
 | WIS writer (domain 20) | RELIABLE + VOLATILE | Fresh write per operator action |
 | Route WAN legs | `wan_event` (RELIABLE + VOLATILE) | Unchanged existing profile |
-| Platform control process reader | RELIABLE + VOLATILE | Starts with `tracked_team=""` (matches clean router state) |
+| Platform mesh control process reader | RELIABLE + VOLATILE | Starts with `tracked_team=""` (matches clean router state) |
 
 ## Implementation Order
 
@@ -254,7 +254,7 @@ through explicit operator re-assignment in the dashboard before rejoining. There
 2. **Route config:** Add `control_event` route to `control-platform.yaml` — same shape
    as `control_command` (control→platform, `wan_event` QoS, `CONTROL` partition) but
    **no CFT filter**. `TeamAssignment` as its first topic.
-3. **Platform control process:** A small Python DDS app that subscribes to
+3. **Platform mesh control process:** A small Python DDS app that subscribes to
    `TeamAssignment` on `platform_lan` and publishes `RouterCommand` on `platform_lan`.
    Launched alongside each platform router by `run_mesh.sh`.
 4. **WIS config:** Add writer to `wis_config.xml.template`; regenerate.

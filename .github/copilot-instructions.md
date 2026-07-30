@@ -159,7 +159,7 @@ Two test harnesses are available for debugging and verification:
   is immediately visible instead of requiring log-grepping.
 
 - **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
-  (control + platform routers + platform sims + platform_control processes) with optional
+  (control + platform routers + platform sims + platform_mesh_control processes) with optional
   WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
   `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
   `run_mesh.sh down`.

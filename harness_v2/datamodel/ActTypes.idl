@@ -49,6 +49,26 @@ struct platform_detail_status {
     base_type msg;
 };
 
+struct platform_mission_status {
+    base_type msg;
+};
+
+struct platform_waypoint_status {
+    base_type msg;
+};
+
+struct platform_debug_status {
+    base_type msg;
+};
+
+struct platform_thruster_status {
+    base_type msg;
+};
+
+struct platform_power_status {
+    base_type msg;
+};
+
 struct platform_data {
     base_type msg;
 };
@@ -275,6 +295,19 @@ struct TeamAssignment {
     @key
     string platform_node;
     string team_name;
+};
+
+enum PlatformStatusResolutionMode {
+    STATUS_INIT,
+    STATUS_MISSION,
+    STATUS_DEBUG
+};
+
+struct PlatformStatusMode {
+    @key
+    string platform_node;
+    PlatformStatusResolutionMode resolution_mode;
+    string request_id;
 };
 
 // ============================================================================

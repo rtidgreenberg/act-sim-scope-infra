@@ -189,7 +189,7 @@ above:** `QosProvider(types_xml)` itself hit the *exact same*
 `RTIXMLObject_addChild: ... '::RTITypes::base_type' already exists` collision the WIS
 config parser hits — but only when launched from `run_mesh.sh`, not standalone. Root
 cause: `run_mesh.sh` exports `NDDS_QOS_PROFILES` (including this same `ActTypes.xml`) for
-`platform_control.py`'s benefit; Connext auto-loads that at process init, so the bridge's
+`platform_mesh_control.py`'s benefit; Connext auto-loads that at process init, so the bridge's
 own explicit `QosProvider(types_xml)` call parsed the identical file a **second time** in
 the same process — the collision is triggered by double-loading the same types XML in one
 process, not specifically by WIS's XML-config-parsing path as originally assumed. Fixed by
