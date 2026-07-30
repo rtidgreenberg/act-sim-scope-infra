@@ -45,6 +45,25 @@ def get_types_xml():
     return TYPES_XML
 
 
+def _qos_provider_for(types_xml):
+    """Avoid double-parsing types_xml if NDDS_QOS_PROFILES already includes it.
+
+    ActTypes.idl's global `struct base_type` collides with an RTI-internal reserved
+    name (`RTITypes::base_type`) if the SAME types XML gets parsed twice in one
+    process. run_mesh.sh exports NDDS_QOS_PROFILES including this exact file for
+    platform_control.py's benefit; Connext auto-loads that at process init, so if
+    this process inherited that env var, loading the file again explicitly hits the
+    collision. Reuse QosProvider.default (which already has it loaded) instead.
+    Same fix as mesh_bridge.py._qos_provider_for().
+    """
+    resolved = Path(types_xml).resolve()
+    for entry in os.environ.get("NDDS_QOS_PROFILES", "").split(";"):
+        entry = entry.strip()
+        if entry and Path(entry).resolve() == resolved:
+            return dds.QosProvider.default
+    return dds.QosProvider(str(types_xml))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Platform control process")
     parser.add_argument("--domain", type=int, required=True,
@@ -59,8 +78,8 @@ def main():
     types_xml = get_types_xml()
     print(f"[platform_control] types: {types_xml}", flush=True)
 
-    # Load types via QosProvider
-    provider = dds.QosProvider(str(types_xml))
+    # Load types via QosProvider (avoid double-parse if NDDS_QOS_PROFILES has it)
+    provider = _qos_provider_for(types_xml)
     team_assignment_type = provider.type("TeamAssignment")
     router_command_type = provider.type("RouterCommand")
 
