@@ -1,6 +1,6 @@
 # e2e_platform_status.yaml — router_main-runnable fixture for the Python e2e suite
-# (router/test_e2e/). Same shape as control-platform.yaml's platform_primary_status route
-# (after the D50 topic-name fix: PlatformPrimaryStatus, not the stale PlatformStatus), with
+# (router/test_e2e/). Same shape as control-platform.yaml's platform_init_status route
+# (after the D50 topic-name fix: PlatformInitStatus, not the stale PlatformStatus), with
 # the same Phase 7/D34-D35 workarounds as e2e_control_command.yaml (qos: "" on LAN-local
 # legs, writer_qos: default on the WAN-crossing output leg to avoid the real auto-QoS
 # output-readiness deadlock between two independent router_main processes — D51; the gate
@@ -43,13 +43,13 @@ participants:
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
-  - name: platform_primary_status
+  - name: platform_init_status
     enabled: true
     forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
-      - name: PlatformPrimaryStatus
+      - name: PlatformInitStatus
     source_side:
       input:
         participant: platform_lan

@@ -17,32 +17,110 @@
 <struct name= "platform_status">
   <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
 </struct>
-<struct name= "platform_primary_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type" key="true"/>
+<struct name= "platform_init_status">
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="latitude" type="float32"/>
+  <member name="longitude" type="float32"/>
+  <member name="altitude_m" type="float32"/>
+  <member name="heading_deg" type="float32"/>
+  <member name="speed_knots" type="float32"/>
+  <member name="heartbeat_seq" type="uint32"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_detail_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="roll_deg" type="float32"/>
+  <member name="pitch_deg" type="float32"/>
+  <member name="yaw_deg" type="float32"/>
+  <member name="depth_m" type="float32"/>
+  <member name="battery_pct" type="float32"/>
+  <member name="comms_link_quality" type="uint16"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_mission_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="mission_id" stringMaxLength="64" type="string"/>
+  <member name="mission_phase" stringMaxLength="32" type="string"/>
+  <member name="waypoint_index" type="uint16"/>
+  <member name="waypoints_total" type="uint16"/>
+  <member name="distance_to_waypoint_m" type="float32"/>
+  <member name="mission_elapsed_s" type="float32"/>
+  <member name="mission_fuel_remaining_pct" type="float32"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_waypoint_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="waypoint_id" type="uint16"/>
+  <member name="wp_latitude" type="float32"/>
+  <member name="wp_longitude" type="float32"/>
+  <member name="wp_altitude_m" type="float32"/>
+  <member name="wp_speed_knots" type="float32"/>
+  <member name="eta_s" type="float32"/>
+  <member name="achieved" type="boolean"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_debug_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="cpu_usage_pct" type="uint32"/>
+  <member name="mem_usage_pct" type="uint32"/>
+  <member name="disk_usage_pct" type="uint32"/>
+  <member name="internal_temp_c" type="float32"/>
+  <member name="process_count" type="uint32"/>
+  <member name="error_count" type="uint32"/>
+  <member name="warning_count" type="uint32"/>
+  <member name="last_error_msg" stringMaxLength="256" type="string"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_thruster_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="thruster_id" type="uint8"/>
+  <member name="rpm" type="float32"/>
+  <member name="commanded_rpm" type="float32"/>
+  <member name="current_amps" type="float32"/>
+  <member name="temperature_c" type="float32"/>
+  <member name="fault" type="boolean"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_power_status">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="bus_voltage" type="float32"/>
+  <member name="bus_current" type="float32"/>
+  <member name="battery_voltage" type="float32"/>
+  <member name="battery_soc_pct" type="float32"/>
+  <member name="power_watts" type="float32"/>
+  <member name="energy_consumed_wh" type="float32"/>
+  <member name="charging" type="boolean"/>
+  <member name="time_remaining_min" type="uint16"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "platform_data">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="sensor_id" stringMaxLength="32" type="string"/>
+  <member name="water_temperature_c" type="float32"/>
+  <member name="salinity_psu" type="float32"/>
+  <member name="sound_velocity_mps" type="float32"/>
+  <member name="current_speed_knots" type="float32"/>
+  <member name="current_direction_deg" type="float32"/>
+  <member name="visibility_m" type="float32"/>
+  <member name="sea_state" type="uint8"/>
+  <member name="ambient_noise_db" type="float32"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "contact_report">
-  <member name="msg" type="nonBasic"  nonBasicTypeName= "base_type"/>
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="contact_id" stringMaxLength="32" type="string"/>
+  <member name="classification" stringMaxLength="32" type="string"/>
+  <member name="bearing_deg" type="float32"/>
+  <member name="range_m" type="float32"/>
+  <member name="course_deg" type="float32"/>
+  <member name="speed_knots" type="float32"/>
+  <member name="depth_m" type="float32"/>
+  <member name="confidence_pct" type="float32"/>
+  <member name="sensor_type" stringMaxLength="32" type="string"/>
+  <member name="latitude" type="float32"/>
+  <member name="longitude" type="float32"/>
+  <member name="lost" type="boolean"/>
+  <member name="timestamp" type="int64"/>
 </struct>
 <enum name="RouterCommandKind">
   <enumerator name="ENABLE_ROUTE"/>

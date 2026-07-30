@@ -368,10 +368,13 @@
       return `<div class="detail-note">No platform status samples cached yet.</div>`;
     }
     const now = Date.now();
+    const initAge = Math.max(0, now - (data.init_updated_at || data.updated_at || 0));
+    const missionAge = Math.max(0, now - (data.mission_updated_at || data.updated_at || 0));
+    const debugAge = Math.max(0, now - (data.debug_updated_at || data.updated_at || 0));
+    const initActive = Object.keys(data.init || {}).length > 0 && initAge < STATUS_LEVEL_FRESH_MS;
+    const missionActive = Object.keys(data.mission || {}).length > 0 && missionAge < STATUS_LEVEL_FRESH_MS;
+    const debugActive = Object.keys(data.debug || {}).length > 0 && debugAge < STATUS_LEVEL_FRESH_MS;
     const age = Math.max(0, now - (data.updated_at || 0));
-    const initActive = Object.keys(data.init || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
-    const missionActive = Object.keys(data.mission || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
-    const debugActive = Object.keys(data.debug || {}).length > 0 && age < STATUS_LEVEL_FRESH_MS;
 
     return `<div class="detail-row"><span class="k">resolution</span><span class="v">`+
       `${badge("init", initActive)}${badge("mission", missionActive)}`+

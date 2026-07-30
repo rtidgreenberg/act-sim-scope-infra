@@ -183,13 +183,13 @@ routes:
       output:
         participant: platform_lan
 
-  - name: platform_primary_status
+  - name: platform_init_status
     enabled: true
     forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
-      - name: PlatformPrimaryStatus
+      - name: PlatformInitStatus
     source_side:
       input:
         participant: platform_lan
@@ -223,6 +223,7 @@ routes:
         writer_qos: wan_status
         publisher_partition: PLATFORM
     destination_side:
+      enabled: true   # D120: C2 relay always ready; gating is source-side only
       input:
         participant: control_wan
         reader_qos: wan_status
@@ -247,6 +248,7 @@ routes:
         writer_qos: wan_status
         publisher_partition: PLATFORM
     destination_side:
+      enabled: true   # D120: C2 relay always ready; gating is source-side only
       input:
         participant: control_wan
         reader_qos: wan_status

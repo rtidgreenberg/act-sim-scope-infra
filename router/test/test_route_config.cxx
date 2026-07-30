@@ -62,8 +62,8 @@ int main() {
             }
         }
 
-        // platform is the SOURCE on platform_primary_status -> source_side selected.
-        const RouterRouteSpec *ps = find_route(cfg, "platform_primary_status");
+        // platform is the SOURCE on platform_init_status -> source_side selected.
+        const RouterRouteSpec *ps = find_route(cfg, "platform_init_status");
         CHECK(ps != nullptr);
         if (ps) {
             CHECK(ps->input.participant == "platform_lan");
@@ -88,8 +88,8 @@ int main() {
             CHECK(cc->input.filter_expression.empty());
         }
 
-        // control is the DESTINATION on platform_primary_status -> destination_side.
-        const RouterRouteSpec *ps = find_route(cfg, "platform_primary_status");
+        // control is the DESTINATION on platform_init_status -> destination_side.
+        const RouterRouteSpec *ps = find_route(cfg, "platform_init_status");
         CHECK(ps != nullptr);
         if (ps) {
             CHECK(ps->input.participant == "control_wan");

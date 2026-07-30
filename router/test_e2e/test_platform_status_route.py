@@ -1,4 +1,4 @@
-"""End-to-end: platform_primary_status route, real router_main pair, real WAN hop.
+"""End-to-end: platform_init_status route, real router_main pair, real WAN hop.
 
 platform app (platform_lan) --[router platform-role: platform_lan -> platform_wan]-->
   WAN --[router control-role: control_wan -> control_lan]--> control app (control_lan)
@@ -21,8 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from util.dds_probe import Probe, write_until_seen  # noqa: E402
 
-TYPE_NAME = "platform_primary_status"
-TOPIC_NAME = "PlatformPrimaryStatus"
+TYPE_NAME = "platform_init_status"
+TOPIC_NAME = "PlatformInitStatus"
 THIS_NODE = "Platform_30"
 
 
@@ -38,11 +38,11 @@ def test_status_reaches_control(router_pair, unique_domains):
 
         def write_status():
             writer.write(platform_app.sample(
-                TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
+                TYPE_NAME, **{"source": THIS_NODE}))
 
         buckets = write_until_seen(
             write_status, reader,
-            classify=lambda d: d["msg.source"], stop_key=THIS_NODE, grace_s=0.0,
+            classify=lambda d: d["source"], stop_key=THIS_NODE, grace_s=0.0,
             check_alive=lambda: control_proc.is_alive() and platform_proc.is_alive())
         seen = buckets.get(THIS_NODE, [])
 
@@ -52,7 +52,7 @@ def test_status_reaches_control(router_pair, unique_domains):
             f"platform router exited early, see {platform_proc.log_path}"
 
         assert seen, (
-            f"PlatformPrimaryStatus from {THIS_NODE} never arrived at the control "
+            f"PlatformInitStatus from {THIS_NODE} never arrived at the control "
             f"reader; router logs: control={control_proc.log_path} "
             f"platform={platform_proc.log_path}")
     finally:

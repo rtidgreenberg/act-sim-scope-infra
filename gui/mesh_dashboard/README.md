@@ -150,13 +150,13 @@ behavioral finding, not a source-level diagnosis) — logged here rather than in
 `docs/connext-ai-issues/connext-ai-issues.md` since that file is scoped to AI-assistant
 wrong claims, not general product behavior.
 
-**Also surfaced by scaling to 3 platforms, then FIXED (D96): `PlatformPrimaryStatus` was
+**Also surfaced by scaling to 3 platforms, then FIXED (D96): `PlatformInitStatus` was
 unkeyed.** Real `platform_sim.py` instances were run for all three platforms (genuine 1Hz
-app traffic, not just router heartbeats). Reading `PlatformPrimaryStatus` on `control_lan`
+app traffic, not just router heartbeats). Reading `PlatformInitStatus` on `control_lan`
 showed `matched_publications: 1` and exactly one visible sample at any time — control's
 single re-publishing writer for this topic had no per-platform key, so each platform's
 update overwrote the same instance rather than coexisting as three trackable values. Fixed
-by keying `platform_primary_status` on `msg.source` in `harness_v2/datamodel/act_types.xml`
+by keying `platform_init_status` on `msg.source` in `harness_v2/datamodel/act_types.xml`
 (see design-decisions.md D96 for the full rationale, including the empirically-confirmed
 two-level `key="true"` annotation this needed). Verified live: after restarting the 4
 routers + 3 sims to pick up the new type, `control_lan` shows all three sources

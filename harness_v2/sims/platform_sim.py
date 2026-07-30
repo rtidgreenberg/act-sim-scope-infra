@@ -32,7 +32,7 @@ class PlatformSim:
       #Pull in DynamicData types
       self.control_cmd_type = self.qos_provider.type("control_command")
       self.control_cmd_ack_type = self.qos_provider.type("control_command_ack")
-      self.platform_primary_status_type = self.qos_provider.type("platform_primary_status")
+      self.platform_init_status_type = self.qos_provider.type("platform_init_status")
       self.platform_detail_status_type = self.qos_provider.type("platform_detail_status")
       self.platform_mission_status_type = self.qos_provider.type("platform_mission_status")
       self.platform_waypoint_status_type = self.qos_provider.type("platform_waypoint_status")
@@ -55,10 +55,10 @@ class PlatformSim:
           "PlatformCommandAck",
           self.control_cmd_ack_type
       )
-      self.platform_primary_status_topic = dds.DynamicData.Topic(
+      self.platform_init_status_topic = dds.DynamicData.Topic(
           self.participant,
-          "PlatformPrimaryStatus",
-          self.platform_primary_status_type
+          "PlatformInitStatus",
+          self.platform_init_status_type
       )
       self.platform_detail_status_topic = dds.DynamicData.Topic(
           self.participant,
@@ -118,8 +118,8 @@ class PlatformSim:
           self.control_cmd_ack_topic,
           self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
       )
-      self.platform_primary_status_writer = dds.DynamicData.DataWriter(
-          self.platform_primary_status_topic,
+      self.platform_init_status_writer = dds.DynamicData.DataWriter(
+          self.platform_init_status_topic,
           self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
       )
       self.platform_detail_status_writer = dds.DynamicData.DataWriter(
@@ -206,124 +206,149 @@ class PlatformSim:
           await asyncio.sleep(1)
 
     async def write_primary_status(self):
-      # Create sample
-      primary_status_sample = dds.DynamicData(self.platform_primary_status_type)
-
-      # Set Source
-      primary_status_sample["msg.source"] = args.source
-
-      # Set Destination
-      primary_status_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      primary_status_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      primary_status_sample["msg.payload"] = payload
+      import math
+      sample = dds.DynamicData(self.platform_init_status_type)
+      sample["source"] = args.source
+      seq = 0
+      base_lat = 33.0 + random.uniform(-1, 1)
+      base_lon = -117.0 + random.uniform(-1, 1)
 
       while True:
-        self.platform_primary_status_writer.write(primary_status_sample)
-        print("Writing to PlatformPrimaryStatus topic")
+        seq += 1
+        t = seq * 0.1
+        sample["latitude"] = base_lat + 0.001 * math.sin(t)
+        sample["longitude"] = base_lon + 0.001 * math.cos(t)
+        sample["altitude_m"] = -50.0 + 2.0 * math.sin(t * 0.3)
+        sample["heading_deg"] = (90.0 + t * 5.0) % 360.0
+        sample["speed_knots"] = 8.0 + 2.0 * math.sin(t * 0.5)
+        sample["heartbeat_seq"] = seq
+        sample["timestamp"] = int(time.time() * 1_000_000)
+        self.platform_init_status_writer.write(sample)
+        print("Writing to PlatformInitStatus topic")
         await asyncio.sleep(1)
 
     async def write_detail_status(self):
-      # Create sample
-      detail_status_sample = dds.DynamicData(self.platform_detail_status_type)
-
-      # Set Source
-      detail_status_sample["msg.source"] = args.source
-
-      # Set Destination
-      detail_status_sample["msg.destination"] = args.destination
-
-      # Set Session "GUID"
-      session_guid = [args.session for d in range(16)]
-      detail_status_sample["msg.session"] = session_guid
-
-      # Create sim "Payload"
-      payload = [random.randrange(0, 10, 2) for d in range(16)]
-      detail_status_sample["msg.payload"] = payload
+      import math
+      sample = dds.DynamicData(self.platform_detail_status_type)
+      sample["source"] = args.source
+      seq = 0
 
       while True:
-        self.platform_detail_status_writer.write(detail_status_sample)
+        seq += 1
+        t = seq * 0.2
+        sample["roll_deg"] = 2.0 * math.sin(t)
+        sample["pitch_deg"] = 1.5 * math.cos(t * 0.7)
+        sample["yaw_deg"] = (180.0 + t * 3.0) % 360.0
+        sample["depth_m"] = 50.0 + 5.0 * math.sin(t * 0.1)
+        sample["battery_pct"] = max(0.0, 95.0 - seq * 0.01)
+        sample["comms_link_quality"] = min(100, 85 + random.randint(-5, 5))
+        sample["timestamp"] = int(time.time() * 1_000_000)
+        self.platform_detail_status_writer.write(sample)
         print("Writing to PlatformDetailStatus topic")
         await asyncio.sleep(1)
 
     async def write_mission_status(self):
-        mission_status_sample = dds.DynamicData(self.platform_mission_status_type)
-        mission_status_sample["msg.source"] = args.source
-        mission_status_sample["msg.destination"] = args.destination
-        mission_status_sample["msg.source_type"] = "Mission"
-        session_guid = [args.session for d in range(16)]
-        mission_status_sample["msg.session"] = session_guid
+        sample = dds.DynamicData(self.platform_mission_status_type)
+        sample["source"] = args.source
+        sample["mission_id"] = f"MSN-{random.randint(1000,9999)}"
+        sample["mission_phase"] = "TRANSIT"
+        wp_total = random.randint(5, 12)
+        sample["waypoints_total"] = wp_total
+        seq = 0
 
         while True:
-            payload = [random.randrange(0, 50, 3) for d in range(16)]
-            mission_status_sample["msg.payload"] = payload
-            self.platform_mission_status_writer.write(mission_status_sample)
+            seq += 1
+            sample["waypoint_index"] = min(seq // 30, wp_total - 1)
+            sample["distance_to_waypoint_m"] = max(0.0, 500.0 - (seq % 30) * 17.0)
+            sample["mission_elapsed_s"] = float(seq)
+            sample["mission_fuel_remaining_pct"] = max(0.0, 100.0 - seq * 0.05)
+            if seq % 30 == 0:
+                sample["mission_phase"] = random.choice(["TRANSIT", "LOITER", "EXECUTE", "RTB"])
+            sample["timestamp"] = int(time.time() * 1_000_000)
+            self.platform_mission_status_writer.write(sample)
             print("Writing to PlatformMissionStatus topic")
             await asyncio.sleep(1)
 
     async def write_waypoint_status(self):
-        waypoint_status_sample = dds.DynamicData(self.platform_waypoint_status_type)
-        waypoint_status_sample["msg.source"] = args.source
-        waypoint_status_sample["msg.destination"] = args.destination
-        waypoint_status_sample["msg.source_type"] = "Waypoint"
-        session_guid = [args.session for d in range(16)]
-        waypoint_status_sample["msg.session"] = session_guid
+        import math
+        sample = dds.DynamicData(self.platform_waypoint_status_type)
+        sample["source"] = args.source
+        base_lat = 33.0 + random.uniform(-1, 1)
+        base_lon = -117.0 + random.uniform(-1, 1)
+        seq = 0
 
         while True:
-            payload = [random.randrange(0, 100, 5) for d in range(16)]
-            waypoint_status_sample["msg.payload"] = payload
-            self.platform_waypoint_status_writer.write(waypoint_status_sample)
+            seq += 1
+            wp_id = (seq // 20) % 10
+            sample["waypoint_id"] = wp_id
+            sample["wp_latitude"] = base_lat + wp_id * 0.01
+            sample["wp_longitude"] = base_lon + wp_id * 0.008
+            sample["wp_altitude_m"] = -30.0 - wp_id * 5.0
+            sample["wp_speed_knots"] = 6.0 + wp_id * 0.5
+            sample["eta_s"] = max(0.0, 300.0 - (seq % 20) * 15.0)
+            sample["achieved"] = (seq % 20) == 0
+            sample["timestamp"] = int(time.time() * 1_000_000)
+            self.platform_waypoint_status_writer.write(sample)
             print("Writing to PlatformWaypointStatus topic")
             await asyncio.sleep(1)
 
     async def write_debug_status(self):
-        debug_status_sample = dds.DynamicData(self.platform_debug_status_type)
-        debug_status_sample["msg.source"] = args.source
-        debug_status_sample["msg.destination"] = args.destination
-        debug_status_sample["msg.source_type"] = "Debug"
-        session_guid = [args.session for d in range(16)]
-        debug_status_sample["msg.session"] = session_guid
+        sample = dds.DynamicData(self.platform_debug_status_type)
+        sample["source"] = args.source
+        seq = 0
 
         while True:
-            payload = [random.randrange(0, 255, 7) for d in range(16)]
-            debug_status_sample["msg.payload"] = payload
-            self.platform_debug_status_writer.write(debug_status_sample)
+            seq += 1
+            sample["cpu_usage_pct"] = random.randint(15, 65)
+            sample["mem_usage_pct"] = random.randint(40, 75)
+            sample["disk_usage_pct"] = min(99, 50 + seq // 100)
+            sample["internal_temp_c"] = 35.0 + random.uniform(-2, 5)
+            sample["process_count"] = random.randint(80, 120)
+            sample["error_count"] = random.randint(0, 3)
+            sample["warning_count"] = random.randint(0, 10)
+            sample["last_error_msg"] = "" if random.random() > 0.1 else "sensor timeout"
+            sample["timestamp"] = int(time.time() * 1_000_000)
+            self.platform_debug_status_writer.write(sample)
             print("Writing to PlatformDebugStatus topic")
             await asyncio.sleep(1)
 
     async def write_thruster_status(self):
-        thruster_status_sample = dds.DynamicData(self.platform_thruster_status_type)
-        thruster_status_sample["msg.source"] = args.source
-        thruster_status_sample["msg.destination"] = args.destination
-        thruster_status_sample["msg.source_type"] = "Thruster"
-        session_guid = [args.session for d in range(16)]
-        thruster_status_sample["msg.session"] = session_guid
+        sample = dds.DynamicData(self.platform_thruster_status_type)
+        sample["source"] = args.source
+        seq = 0
 
         while True:
-            payload = [random.randrange(0, 120, 4) for d in range(16)]
-            thruster_status_sample["msg.payload"] = payload
-            self.platform_thruster_status_writer.write(thruster_status_sample)
+            seq += 1
+            sample["thruster_id"] = seq % 4
+            sample["rpm"] = 1200.0 + random.uniform(-50, 50)
+            sample["commanded_rpm"] = 1200.0
+            sample["current_amps"] = 12.0 + random.uniform(-1, 2)
+            sample["temperature_c"] = 45.0 + random.uniform(-3, 8)
+            sample["fault"] = random.random() < 0.02
+            sample["timestamp"] = int(time.time() * 1_000_000)
+            self.platform_thruster_status_writer.write(sample)
             print("Writing to PlatformThrusterStatus topic")
             await asyncio.sleep(1)
 
     async def write_power_status(self):
-        power_status_sample = dds.DynamicData(self.platform_power_status_type)
-        power_status_sample["msg.source"] = args.source
-        power_status_sample["msg.destination"] = args.destination
-        power_status_sample["msg.source_type"] = "Power"
-        session_guid = [args.session for d in range(16)]
-        power_status_sample["msg.session"] = session_guid
+        sample = dds.DynamicData(self.platform_power_status_type)
+        sample["source"] = args.source
+        seq = 0
 
         while True:
-            payload = [random.randrange(0, 240, 6) for d in range(16)]
-            power_status_sample["msg.payload"] = payload
-            self.platform_power_status_writer.write(power_status_sample)
+            seq += 1
+            sample["bus_voltage"] = 48.0 + random.uniform(-0.5, 0.5)
+            sample["bus_current"] = 15.0 + random.uniform(-2, 3)
+            sample["battery_voltage"] = 51.0 - seq * 0.001
+            sample["battery_soc_pct"] = max(0.0, 95.0 - seq * 0.02)
+            sample["power_watts"] = sample["bus_voltage"] * sample["bus_current"]
+            sample["energy_consumed_wh"] = seq * 0.2
+            sample["charging"] = False
+            sample["time_remaining_min"] = max(0, int(480 - seq * 0.1))
+            sample["timestamp"] = int(time.time() * 1_000_000)
+            self.platform_power_status_writer.write(sample)
             print("Writing to PlatformPowerStatus topic")
+            await asyncio.sleep(1)
             await asyncio.sleep(1)
 
     async def write_data(self):

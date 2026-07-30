@@ -2,7 +2,7 @@
 
 Two router_main processes (control + platform roles, config/e2e_link_stats.yaml). Each
 runs a LinkStatsCollector on its WAN participant: it polls every registered WAN endpoint's
-per-matched-endpoint reliable-protocol statuses (the ENABLED PlatformPrimaryStatus route's
+per-matched-endpoint reliable-protocol statuses (the ENABLED PlatformInitStatus route's
 WAN leg + PresenceMonitor's RouterHealth bellwether pair), rolls them up per peer NAME
 resolved from the middleware discovery DB (D81 — no roster join), probes RTT via app-ack on
 the dedicated RouterLinkProbe topic, and publishes per-peer ActRouterLinkStats on its admin
@@ -52,8 +52,8 @@ set_wan_qos_env()
 RTPS_PORT_BASE = 7400
 RTPS_DOMAIN_GAIN = 250
 
-TYPE_NAME = "platform_primary_status"
-TOPIC_NAME = "PlatformPrimaryStatus"
+TYPE_NAME = "platform_init_status"
+TOPIC_NAME = "PlatformInitStatus"
 # The reliable event leg (production platform_events uses wan_event) — same platform_wan
 # participant as the best-effort status leg, so the node carries both QoS classes (D95).
 EVENT_TYPE_NAME = "contact_report"
@@ -136,11 +136,11 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
             assert alive(), (f"a router exited early; control={control.log_path} "
                              f"platform={platform.log_path}")
             writer.write(platform_app.sample(
-                TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
+                TYPE_NAME, **{"source": THIS_NODE}))
             event_writer.write(platform_app.sample(
-                EVENT_TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
+                EVENT_TYPE_NAME, **{"source": THIS_NODE}))
             for s in control_reader.take():
-                if s.info.valid and str(s.data["msg.source"]) == THIS_NODE:
+                if s.info.valid and str(s.data["source"]) == THIS_NODE:
                     forwarded = True
             control_event_reader.take()  # drain the reliable leg's forwarded stream (consumer)
             drain_into(plat_stats, plat_acc)
@@ -164,7 +164,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
                 break
             time.sleep(0.1)
 
-        assert forwarded, (f"PlatformPrimaryStatus never forwarded end-to-end; "
+        assert forwarded, (f"PlatformInitStatus never forwarded end-to-end; "
                            f"control={control.log_path} platform={platform.log_path}")
 
         plat_cp = [f for f in plat_acc if f["observer"] == PLATFORM
@@ -243,7 +243,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
         while time.monotonic() < stable_deadline:
             assert alive(), "a router exited during the revision-stability window"
             writer.write(platform_app.sample(
-                TYPE_NAME, **{"msg.source": THIS_NODE, "msg.source_type": "Platform"}))
+                TYPE_NAME, **{"source": THIS_NODE}))
             rev = read_status_revision(status_reader)
             assert rev == rev0, \
                 (f"state_revision moved ({rev0} -> {rev}) with only link-stats/heartbeat "

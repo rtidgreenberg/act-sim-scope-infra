@@ -1,18 +1,15 @@
 """End-to-end Phase 7d E7: platform_detail_status toggled via the Phase 6 command loop.
 
-Same production control-platform.yaml pair as test_control_platform_full.py. The
-platform_detail_status route ships `enabled: false` on BOTH routers, and the detail flow
-starts only when ENABLE_ROUTE reaches the addressed router (the D47 CFT keys each
-command on target_node/target_router, so each router's route is toggled independently):
+Same production control-platform.yaml pair as test_control_platform_full.py. With D120
+the destination (control) side ships `enabled: true` while the source (platform) side
+remains `enabled: false`. End-to-end flow only begins once the platform router's source
+leg is enabled (independent gating):
 
-  1. both routers report the route DISABLED; PlatformDetailStatus written on the
-     platform LAN never reaches the control LAN.
-  2. ENABLE_ROUTE at the PLATFORM router only: its source-side leg builds and forwards
-     to the WAN (the app writer's inline type taught the topic, 7c/D70) — but the
-     control router's destination leg is still disabled, so the flow still does not
-     reach the control LAN ("from the target only": each leg gates independently).
-  3. ENABLE_ROUTE at the CONTROL router too: the WAN-crossing chain completes and
-     detail-status samples arrive at the control LAN.
+  1. platform router reports the route DISABLED; control router reports it ENABLED (D120).
+     PlatformDetailStatus written on the platform LAN never reaches the control LAN
+     because the source leg is still disabled.
+  2. ENABLE_ROUTE at the PLATFORM router: its source-side leg builds and forwards to the
+     WAN; the control router's destination leg is already live — data flows end-to-end.
 
 Run from the repo root (see router/test_e2e/README.md).
 """
@@ -86,23 +83,30 @@ def test_detail_status_flow_starts_from_the_target_only(
         # teach both routers the topic (7c/D70) whether or not the route is enabled.
         detail_writer = platform_app.writer(TOPIC, TYPE)
         detail_reader = control_app.reader(TOPIC, TYPE)
-        sample = platform_app.sample(TYPE, **{"msg.source": PLATFORM_NODE})
+        sample = platform_app.sample(TYPE, **{"source": PLATFORM_NODE})
 
-        # (1) DISABLED everywhere at startup; no flow.
-        for admin, router_name in ((platform_admin, "platform"),
-                                   (control_admin, "control")):
-            facts = wait_for_route(admin.status, ROUTE,
-                                   lambda f: f["state"] == "ROUTE_DISABLED",
-                                   check_alive=alive)
-            assert facts is not None and facts["state"] == "ROUTE_DISABLED", (
-                f"{ROUTE} should start DISABLED on the {router_name} router, got "
-                f"{facts}; logs: control={control_proc.log_path} "
-                f"platform={platform_proc.log_path}")
+        # (1) D120: platform source side starts DISABLED, control destination side
+        # starts ENABLED. No end-to-end flow because the source leg is still off.
+        facts = wait_for_route(platform_admin.status, ROUTE,
+                               lambda f: f["state"] == "ROUTE_DISABLED",
+                               check_alive=alive)
+        assert facts is not None and facts["state"] == "ROUTE_DISABLED", (
+            f"{ROUTE} should start DISABLED on the platform router, got "
+            f"{facts}; log {platform_proc.log_path}")
+
+        ctrl_facts = wait_for_route(control_admin.status, ROUTE,
+                                    lambda f: f["state"] == "ROUTE_ENABLED",
+                                    timeout_s=30.0, check_alive=alive)
+        assert ctrl_facts is not None and ctrl_facts["state"] == "ROUTE_ENABLED", (
+            f"{ROUTE} should start ENABLED on the control router (D120), got "
+            f"{ctrl_facts}; log {control_proc.log_path}")
+
         _assert_no_flow(detail_writer, detail_reader, sample, alive, 2.0,
-                        "the route is disabled on both routers")
+                        "the platform source leg is disabled")
 
-        # (2) enable at the platform router ONLY: its source leg forwards (app writer
-        # matched), but the control leg is still disabled — still no end-to-end flow.
+        # (2) ENABLE_ROUTE at the platform router: source leg builds, and since the
+        # control destination leg is already live (D120), data flows end-to-end
+        # immediately.
         platform_admin.cmd_writer.write(_enable(
             cmd_type, "detail-enable-platform", PLATFORM_NODE, PLATFORM_ROUTER))
         ack = platform_admin.acks.wait("detail-enable-platform", check_alive=alive)
@@ -116,28 +120,8 @@ def test_detail_status_flow_starts_from_the_target_only(
         assert facts is not None and facts["state"] == "ROUTE_ENABLED", (
             f"platform {ROUTE} never built after ENABLE_ROUTE: {facts}; "
             f"log {platform_proc.log_path}")
-        off_target = wait_for_route(control_admin.status, ROUTE, lambda f: True,
-                                    timeout_s=5.0, check_alive=alive)
-        assert off_target is not None and off_target["state"] == "ROUTE_DISABLED", (
-            f"the platform-addressed ENABLE_ROUTE leaked to the control router "
-            f"(D47 CFT): {off_target}; log {control_proc.log_path}")
-        _assert_no_flow(detail_writer, detail_reader, sample, alive, 2.0,
-                        "only the platform router's route is enabled")
 
-        # (3) enable at the control router too: the chain completes.
-        control_admin.cmd_writer.write(_enable(
-            cmd_type, "detail-enable-control", CONTROL_NODE, CONTROL_ROUTER))
-        ack = control_admin.acks.wait("detail-enable-control", check_alive=alive)
-        assert ack is not None and ack["accepted"], (
-            f"control ENABLE_ROUTE not accepted: {ack}; log {control_proc.log_path}")
-        facts = wait_for_route(
-            control_admin.status, ROUTE,
-            lambda f: f["state"] == "ROUTE_ENABLED",
-            timeout_s=30.0, check_alive=alive)
-        assert facts is not None and facts["state"] == "ROUTE_ENABLED", (
-            f"control {ROUTE} never built after ENABLE_ROUTE: {facts}; "
-            f"log {control_proc.log_path}")
-
+        # Data should now flow end-to-end (control side was already enabled).
         got = None
         deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline and got is None:
@@ -151,10 +135,10 @@ def test_detail_status_flow_starts_from_the_target_only(
                     break
             time.sleep(0.2)
         assert got is not None, (
-            f"PlatformDetailStatus never reached the control LAN after both routes "
-            f"were enabled; logs: control={control_proc.log_path} "
+            f"PlatformDetailStatus never reached the control LAN after enabling the "
+            f"platform source leg; logs: control={control_proc.log_path} "
             f"platform={platform_proc.log_path}")
-        assert got["msg.source"] == PLATFORM_NODE
+        assert got["source"] == PLATFORM_NODE
     finally:
         control_app.close()
         platform_app.close()

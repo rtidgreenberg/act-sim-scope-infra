@@ -156,7 +156,7 @@ def main():
 
     def apply_mode(mode_ordinal):
         # Primary route should always be enabled in every mode.
-        cmd_writer.write(make_route_cmd(ENABLE_ROUTE, "platform_primary_status"))
+        cmd_writer.write(make_route_cmd(ENABLE_ROUTE, "platform_init_status"))
 
         if mode_ordinal == STATUS_INIT:
             cmd_writer.write(make_route_cmd(DISABLE_ROUTE, "platform_detail_status"))

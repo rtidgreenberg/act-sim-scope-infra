@@ -32,7 +32,7 @@ class C2Sim:
       #Pull in DynamicData types
       self.control_cmd_type = self.qos_provider.type("control_command")
       self.control_cmd_ack_type = self.qos_provider.type("control_command_ack")
-      self.platform_primary_status_type = self.qos_provider.type("platform_primary_status")
+      self.platform_init_status_type = self.qos_provider.type("platform_init_status")
       self.platform_detail_status_type = self.qos_provider.type("platform_detail_status")
       self.contact_report_type = self.qos_provider.type("contact_report")
 
@@ -48,10 +48,10 @@ class C2Sim:
           "PlatformCommandAck",
           self.control_cmd_ack_type
       )
-      self.platform_primary_status_topic = dds.DynamicData.Topic(
+      self.platform_init_status_topic = dds.DynamicData.Topic(
           self.participant,
-          "PlatformPrimaryStatus",
-          self.platform_primary_status_type
+          "PlatformInitStatus",
+          self.platform_init_status_type
       )
       self.platform_detail_status_topic = dds.DynamicData.Topic(
           self.participant,
@@ -78,8 +78,8 @@ class C2Sim:
           self.platform_cmd_ack_topic,
           self.qos_provider.datareader_qos_from_profile(args.qos_profile)
       )
-      self.platform_primary_status_reader = dds.DynamicData.DataReader(
-          self.platform_primary_status_topic,
+      self.platform_init_status_reader = dds.DynamicData.DataReader(
+          self.platform_init_status_topic,
           self.qos_provider.datareader_qos_from_profile(args.qos_profile)
       )
       self.platform_detail_status_reader = dds.DynamicData.DataReader(
@@ -97,8 +97,8 @@ class C2Sim:
 
     async def read_primary_status_data(self):
       print("Waiting for Primary Status data")
-      async for data in self.platform_primary_status_reader.take_data_async():
-        print(f'- Received PlatformPrimaryStatus from {data["msg.source"]}')
+      async for data in self.platform_init_status_reader.take_data_async():
+        print(f'- Received PlatformInitStatus from {data["msg.source"]}')
        
 
     async def read_detail_status_data(self):

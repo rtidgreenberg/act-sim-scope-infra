@@ -38,7 +38,7 @@ STATUS_MODE_TOPIC = "ActPlatformStatusMode"
 STATUS_MODE_TYPE = "PlatformStatusMode"
 
 INIT_STATUS_TOPICS = {
-    "PlatformPrimaryStatus": "platform_primary_status",
+    "PlatformInitStatus": "platform_init_status",
 }
 MISSION_STATUS_TOPICS = {
     "PlatformDetailStatus": "platform_detail_status",
@@ -128,6 +128,7 @@ class DdsBridge:
         status_topic = dds.DynamicData.Topic(self.participant, STATUS_MODE_TOPIC,
                              status_mode_type)
         self.status_mode_writer = dds.DynamicData.DataWriter(publisher, status_topic, wqos)
+
         self.team_type = team_type
         self.status_mode_type = status_mode_type
 
@@ -151,8 +152,8 @@ class DdsBridge:
                     if not info.valid:
                         continue
                     sample = json.loads(data.to_json())
-                    msg = sample.get("msg", {})
-                    platform_node = msg.get("source")
+                    # New types have source at top level; legacy types nested in msg
+                    platform_node = sample.get("source") or sample.get("msg", {}).get("source")
                     if not platform_node:
                         continue
 
@@ -164,10 +165,14 @@ class DdsBridge:
                                 "mission": {},
                                 "debug": {},
                                 "updated_at": 0,
+                                "init_updated_at": 0,
+                                "mission_updated_at": 0,
+                                "debug_updated_at": 0,
                             }
                         entry = self.platform_cache[platform_node]
                         entry[level][topic_name] = sample
                         entry["updated_at"] = now_ms
+                        entry[f"{level}_updated_at"] = now_ms
                         payload = {
                             "type": "platform_status",
                             "platform": platform_node,
@@ -220,7 +225,7 @@ class DdsBridge:
         }
         mode = mode_map.get(str(resolution_mode).lower())
         if mode is None:
-            raise ValueError("resolution_mode must be one of: primary, detail, debug")
+            raise ValueError("resolution_mode must be one of: init, mission, debug")
 
         sample = dds.DynamicData(self.status_mode_type)
         sample["platform_node"] = platform_node

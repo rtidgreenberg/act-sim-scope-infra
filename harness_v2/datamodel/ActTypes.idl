@@ -16,7 +16,7 @@
 // ============================================================================
 //
 // The base_type + derived structs are the ACT simulation payload envelope.
-// Each wraps a base_type `msg` member; platform_primary_status propagates the
+// Each wraps a base_type `msg` member; platform_init_status propagates the
 // key from base_type.source via @key on the containing member.
 
 struct base_type {
@@ -40,41 +40,127 @@ struct platform_status {
     base_type msg;
 };
 
-struct platform_primary_status {
+struct platform_init_status {
     @key
-    base_type msg;
+    string<100> source;
+    float latitude;
+    float longitude;
+    float altitude_m;
+    float heading_deg;
+    float speed_knots;
+    uint32 heartbeat_seq;
+    int64 timestamp;
 };
 
 struct platform_detail_status {
-    base_type msg;
+    @key
+    string<100> source;
+    float roll_deg;
+    float pitch_deg;
+    float yaw_deg;
+    float depth_m;
+    float battery_pct;
+    uint16 comms_link_quality;
+    int64 timestamp;
 };
 
 struct platform_mission_status {
-    base_type msg;
+    @key
+    string<100> source;
+    string<64> mission_id;
+    string<32> mission_phase;
+    uint16 waypoint_index;
+    uint16 waypoints_total;
+    float distance_to_waypoint_m;
+    float mission_elapsed_s;
+    float mission_fuel_remaining_pct;
+    int64 timestamp;
 };
 
 struct platform_waypoint_status {
-    base_type msg;
+    @key
+    string<100> source;
+    uint16 waypoint_id;
+    float wp_latitude;
+    float wp_longitude;
+    float wp_altitude_m;
+    float wp_speed_knots;
+    float eta_s;
+    boolean achieved;
+    int64 timestamp;
 };
 
 struct platform_debug_status {
-    base_type msg;
+    @key
+    string<100> source;
+    uint32 cpu_usage_pct;
+    uint32 mem_usage_pct;
+    uint32 disk_usage_pct;
+    float internal_temp_c;
+    uint32 process_count;
+    uint32 error_count;
+    uint32 warning_count;
+    string<256> last_error_msg;
+    int64 timestamp;
 };
 
 struct platform_thruster_status {
-    base_type msg;
+    @key
+    string<100> source;
+    uint8 thruster_id;
+    float rpm;
+    float commanded_rpm;
+    float current_amps;
+    float temperature_c;
+    boolean fault;
+    int64 timestamp;
 };
 
 struct platform_power_status {
-    base_type msg;
+    @key
+    string<100> source;
+    float bus_voltage;
+    float bus_current;
+    float battery_voltage;
+    float battery_soc_pct;
+    float power_watts;
+    float energy_consumed_wh;
+    boolean charging;
+    uint16 time_remaining_min;
+    int64 timestamp;
 };
 
 struct platform_data {
-    base_type msg;
+    @key
+    string<100> source;
+    string<32> sensor_id;
+    float water_temperature_c;
+    float salinity_psu;
+    float sound_velocity_mps;
+    float current_speed_knots;
+    float current_direction_deg;
+    float visibility_m;
+    uint8 sea_state;
+    float ambient_noise_db;
+    int64 timestamp;
 };
 
 struct contact_report {
-    base_type msg;
+    @key
+    string<100> source;
+    string<32> contact_id;
+    string<32> classification;
+    float bearing_deg;
+    float range_m;
+    float course_deg;
+    float speed_knots;
+    float depth_m;
+    float confidence_pct;
+    string<32> sensor_type;
+    float latitude;
+    float longitude;
+    boolean lost;
+    int64 timestamp;
 };
 
 // ============================================================================

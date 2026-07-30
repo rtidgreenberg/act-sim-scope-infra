@@ -5139,3 +5139,48 @@ exchange `PlatformData`/heartbeats; different-team platforms exchange zero SEDP
 (wire-capture per the repo's tshark/GuidPrefix convention); C2 still sees every
 platform's `RouterHealth`/status regardless of team; `REMOVE_PARTICIPANT_PARTITION
 control_wan=*` is rejected on a live process, not just in the unit-test fixture.
+
+## D120 — Per-side `enabled:` override in route config; C2 destination-side routes always enabled (2026-07-30, accepted)
+
+**Context**: Status resolution (Phase 17) adds `platform_detail_status` and
+`platform_debug_status` routes that start `enabled: false` so the platform side
+doesn't publish detail/debug telemetry until commanded. Data flows
+platform_sim → platform_lan → (platform router source_side) → platform_wan →
+(control router destination_side) → control_lan → bridge/dashboard.
+
+**Problem**: When the platform source_side is enabled, data reaches `platform_wan`
+(domain 200) but the control router's destination_side for the same route was also
+disabled — data stopped at the WAN boundary and never reached `control_lan`
+(domain 20) where the bridge reads.
+
+**Decision**: The route config now supports a per-side `enabled:` field inside
+`source_side:` or `destination_side:` that overrides the route-level `enabled:`
+default. The C2 (control/destination) relay declares `enabled: true` on its
+`destination_side:` block so it is always ready to forward whatever arrives on the
+WAN. Bandwidth gating happens exclusively on the source (platform) side via
+`ENABLE_ROUTE`/`DISABLE_ROUTE` commands from `platform_mesh_control`.
+
+**Config pattern**:
+```yaml
+- name: platform_detail_status
+  enabled: false            # route-level default (platform source starts disabled)
+  source: platform
+  destination: control
+  source_side:
+    ...                     # inherits enabled: false
+  destination_side:
+    enabled: true           # D120: C2 relay always ready
+    ...
+```
+
+**Implementation**: `RouteConfigParser.cxx` — after reading the route-level
+`enabled:`, if the selected side node also contains an `enabled:` key it takes
+precedence. No bridge-side command sending needed; the control router creates its
+relay entities at startup.
+
+**Alternatives rejected**:
+- Bridge sends `ENABLE_ROUTE` commands to control router at mode-change time:
+  couples the bridge to router internals, adds latency, requires the bridge to
+  know the control router's identity.
+- Hardcoded C++ rule "destination_side always enabled": invisible, not configurable,
+  surprising for future routes where destination gating IS desired.

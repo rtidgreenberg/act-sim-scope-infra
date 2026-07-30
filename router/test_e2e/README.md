@@ -38,7 +38,7 @@ by role exactly as deployed:
 
 - **`test_control_platform_full.py`** — Phase 7d (D71, plan E5/E6): the full production
   config as a control+platform pair; all three enabled routes cross the WAN (CFT'd
-  `control_command`, `platform_primary_status` on the real `LAN_QOS_LIB` profile, and
+  `control_command`, `platform_init_status` on the real `LAN_QOS_LIB` profile, and
   the two-type `platform_events`); per-route `samples_forwarded` advances via the D63
   1 s refresh tick while `state_revision` provably does not move.
 - **`test_detail_status_toggle.py`** — Phase 7d (D71, plan E7): `platform_detail_status`
@@ -56,7 +56,7 @@ by role exactly as deployed:
 - **`test_control_command_route.py`** — control app publishes `ControlCommand`; asserts
   it's forwarded to the addressed platform and filtered out for every other destination
   (the `msg.destination` ContentFilteredTopic).
-- **`test_platform_status_route.py`** — platform app publishes `PlatformPrimaryStatus`;
+- **`test_platform_status_route.py`** — platform app publishes `PlatformInitStatus`;
   asserts it's forwarded to the control app.
 - **`test_discovery_startup.py`** — regression test for the D52 disabled-startup fix:
   launches the router pair on fresh domains and asserts both sides discover each other's

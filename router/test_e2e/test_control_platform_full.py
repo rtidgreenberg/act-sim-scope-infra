@@ -15,7 +15,7 @@ multi-topic platform_events route (7c/D70), create-and-observe matching (7m/D67)
 Asserts the plan's E5/E6 evidence:
   E5  all three enabled routes cross the WAN without Routing Service:
       control_command (control app -> platform app, CFT msg.destination),
-      platform_primary_status (platform app -> control app),
+      platform_init_status (platform app -> control app),
       platform_events (BOTH PlatformCommandAck and ContactReport, one route);
       platform_detail_status rides along DISABLED (toggled in
       test_detail_status_toggle.py).
@@ -53,7 +53,7 @@ QOS_LIB_FILES = [
     "relay/qos_isc.xml",
 ]
 
-ENABLED_ROUTES = ["control_command", "platform_primary_status", "platform_events"]
+ENABLED_ROUTES = ["control_command", "platform_init_status", "platform_events"]
 
 
 def _all_topics_forwarding(facts):
@@ -70,7 +70,7 @@ def test_full_control_platform_config(
 
     status_type = dds.QosProvider(str(admin_types_xml)).type("RouterStatus")
     # Same production QoS libs the router resolves its aliases against: the app-side
-    # PlatformPrimaryStatus writer uses the profile family the route's lan_status_1hz
+    # PlatformInitStatus writer uses the profile family the route's lan_status_1hz
     # input reader resolves to, guaranteeing RxO compatibility (the 7a technique).
     qos_prov = dds.QosProvider(";".join(str(REPO_ROOT / f) for f in QOS_LIB_FILES))
     status_writer_qos = qos_prov.datawriter_qos_from_profile(
@@ -95,10 +95,10 @@ def test_full_control_platform_config(
         cmd_writer = control_app.writer("ControlCommand", "control_command")
         cmd_reader = platform_app.reader("ControlCommand", "control_command")
         pstatus_writer = platform_app.writer(
-            "PlatformPrimaryStatus", "platform_primary_status",
+            "PlatformInitStatus", "platform_init_status",
             qos=status_writer_qos)
         pstatus_reader = control_app.reader(
-            "PlatformPrimaryStatus", "platform_primary_status")
+            "PlatformInitStatus", "platform_init_status")
         ack_writer = platform_app.writer("PlatformCommandAck", "control_command_ack")
         ack_reader = control_app.reader("PlatformCommandAck", "control_command_ack")
         contact_writer = platform_app.writer("ContactReport", "contact_report")
@@ -119,12 +119,19 @@ def test_full_control_platform_config(
                     f"router; got {facts}; logs: control={control_proc.log_path} "
                     f"platform={platform_proc.log_path}")
 
-        # The disabled route rides along visibly DISABLED on both routers.
-        for reader in (platform_status, control_status):
-            facts = read_route_facts(reader, "platform_detail_status")
-            assert facts is not None and facts["state"] == "ROUTE_DISABLED", (
-                f"platform_detail_status expected DISABLED in the full config, got "
-                f"{facts}")
+        # D120: platform_detail_status source side (platform router) starts DISABLED;
+        # destination side (control router) starts enabled but may be WAITING_FOR_DISCOVERY
+        # (type not yet propagated since no detail writer exists in this test).
+        plat_detail = read_route_facts(platform_status, "platform_detail_status")
+        assert plat_detail is not None and plat_detail["state"] == "ROUTE_DISABLED", (
+            f"platform_detail_status expected DISABLED on platform router, got "
+            f"{plat_detail}")
+        ctrl_detail = wait_for_route(control_status, "platform_detail_status",
+                                     lambda f: f["state"] != "ROUTE_DISABLED",
+                                     timeout_s=30.0, check_alive=alive)
+        assert ctrl_detail is not None and ctrl_detail["state"] != "ROUTE_DISABLED", (
+            f"platform_detail_status expected non-DISABLED on control router (D120), got "
+            f"{ctrl_detail}")
 
         # (E5) control_command crosses control_lan -> WAN -> platform_lan, through the
         # destination-side CFT (msg.destination = 'Platform_30').
@@ -139,26 +146,27 @@ def test_full_control_platform_config(
             f"ControlCommand never crossed the WAN; logs: "
             f"control={control_proc.log_path} platform={platform_proc.log_path}")
 
-        # (E5) platform_primary_status crosses platform_lan -> WAN -> control_lan.
+        # (E5) platform_init_status crosses platform_lan -> WAN -> control_lan.
         buckets = write_until_seen(
             lambda: pstatus_writer.write(platform_app.sample(
-                "platform_primary_status", **{"msg.source": PLATFORM_NODE})),
+                "platform_init_status", **{"source": PLATFORM_NODE})),
             pstatus_reader,
-            classify=lambda d: d["msg.source"], stop_key=PLATFORM_NODE,
+            classify=lambda d: d["source"], stop_key=PLATFORM_NODE,
             check_alive=alive)
         assert buckets.get(PLATFORM_NODE), (
-            f"PlatformPrimaryStatus never crossed the WAN; logs: "
+            f"PlatformInitStatus never crossed the WAN; logs: "
             f"control={control_proc.log_path} platform={platform_proc.log_path}")
 
         # (E5) platform_events carries BOTH topics through ONE route.
-        for writer, reader, type_name, label in (
-                (ack_writer, ack_reader, "control_command_ack", "PlatformCommandAck"),
-                (contact_writer, contact_reader, "contact_report", "ContactReport")):
+        # control_command_ack still wraps base_type msg; contact_report is now flat.
+        for writer, reader, type_name, label, src_field in (
+                (ack_writer, ack_reader, "control_command_ack", "PlatformCommandAck", "msg.source"),
+                (contact_writer, contact_reader, "contact_report", "ContactReport", "source")):
             buckets = write_until_seen(
-                lambda w=writer, t=type_name: w.write(platform_app.sample(
-                    t, **{"msg.source": PLATFORM_NODE})),
+                lambda w=writer, t=type_name, sf=src_field: w.write(platform_app.sample(
+                    t, **{sf: PLATFORM_NODE})),
                 reader,
-                classify=lambda d: d["msg.source"], stop_key=PLATFORM_NODE,
+                classify=lambda d, sf=src_field: d[sf], stop_key=PLATFORM_NODE,
                 check_alive=alive)
             assert buckets.get(PLATFORM_NODE), (
                 f"{label} never crossed the WAN (platform_events route); logs: "
@@ -170,11 +178,11 @@ def test_full_control_platform_config(
         # resolves lan_status_1hz (a 1 s time_based_filter), so keep writing and give
         # the counter a couple of tick periods to visibly advance.
         def _pstatus_count(facts):
-            return facts["topics"].get("PlatformPrimaryStatus",
+            return facts["topics"].get("PlatformInitStatus",
                                        {}).get("samples_forwarded", 0)
 
         first = wait_for_route(
-            platform_status, "platform_primary_status",
+            platform_status, "platform_init_status",
             lambda f: _pstatus_count(f) >= 1,
             timeout_s=15.0, check_alive=alive)
         assert first is not None, (
@@ -190,8 +198,8 @@ def test_full_control_platform_config(
                              f"control={control_proc.log_path} "
                              f"platform={platform_proc.log_path}")
             pstatus_writer.write(platform_app.sample(
-                "platform_primary_status", **{"msg.source": PLATFORM_NODE}))
-            facts = read_route_facts(platform_status, "platform_primary_status")
+                "platform_init_status", **{"source": PLATFORM_NODE}))
+            facts = read_route_facts(platform_status, "platform_init_status")
             if facts is not None and _pstatus_count(facts) > c1:
                 second = facts
                 break
@@ -207,10 +215,10 @@ def test_full_control_platform_config(
         # The WAN-crossing leg counts too: the control router forwarded the same flow
         # on its destination side.
         control_counts = wait_for_route(
-            control_status, "platform_primary_status",
+            control_status, "platform_init_status",
             lambda f: _pstatus_count(f) >= 1, timeout_s=10.0, check_alive=alive)
         assert control_counts is not None and _pstatus_count(control_counts) >= 1, (
-            f"control router's platform_primary_status counter never advanced: "
+            f"control router's platform_init_status counter never advanced: "
             f"{control_counts}; log {control_proc.log_path}")
     finally:
         control_app.close()

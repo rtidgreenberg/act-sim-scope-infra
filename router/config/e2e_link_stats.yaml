@@ -3,7 +3,7 @@
 #
 # Same two-role shape as e2e_presence.yaml: each process runs its role's WAN participant
 # with a RouterHealth heartbeat pair (the mandatory idle-mesh bellwether) AND the Phase 9
-# RouterLinkProbe RTT pair + LinkStatsCollector. One ENABLED WAN route (PlatformPrimaryStatus,
+# RouterLinkProbe RTT pair + LinkStatsCollector. One ENABLED WAN route (PlatformInitStatus,
 # platform -> control) carries steady traffic so the per-matched-endpoint protocol counters
 # advance; the collector rolls them up per peer NAME (D79) resolved from the discovery DB
 # and publishes ActRouterLinkStats on each router's admin (LAN) participant.
@@ -61,7 +61,7 @@ participants:
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
-  # STATUS leg — BEST_EFFORT (production platform_primary_status uses wan_status). A
+  # STATUS leg — BEST_EFFORT (production platform_init_status uses wan_status). A
   # platform_wan data leg that is on_wan but not team_scoped.
   - name: link_stats_route
     enabled: true
@@ -69,7 +69,7 @@ routes:
     source: platform
     destination: control
     topics:
-      - name: PlatformPrimaryStatus
+      - name: PlatformInitStatus
     source_side:
       input:
         participant: platform_lan

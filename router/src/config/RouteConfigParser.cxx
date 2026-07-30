@@ -357,6 +357,13 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             RouterRouteSpec spec;
             spec.route_name = get_str(rt, "name");
             spec.desired_enabled = rt["enabled"] ? rt["enabled"].as<bool>() : false;
+            // D120: a per-side enabled: field overrides the route-level default.
+            // The C2 (control/destination) relay declares enabled: true inside its
+            // destination_side block so it's always ready to forward whatever arrives,
+            // while the source (platform) side stays disabled until commanded.
+            if (side["enabled"]) {
+                spec.desired_enabled = side["enabled"].as<bool>();
+            }
             spec.forwarding_mode = get_str(rt, "forwarding_mode");
             fill_endpoint(side["input"], spec.input, out.node_name, /*is_input=*/true);
             fill_endpoint(side["output"], spec.output, out.node_name, /*is_input=*/false);
