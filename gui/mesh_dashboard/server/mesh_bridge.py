@@ -37,6 +37,7 @@ TEAM_ASSIGNMENT_TYPE = "TeamAssignment"
 STATUS_MODE_TOPIC = "ActPlatformStatusMode"
 STATUS_MODE_TYPE = "PlatformStatusMode"
 
+
 INIT_STATUS_TOPICS = {
     "PlatformInitStatus": "platform_init_status",
 }
@@ -112,6 +113,8 @@ class DdsBridge:
             topic = dds.DynamicData.Topic(self.participant, topic_name, dtype)
             reader = dds.DynamicData.DataReader(subscriber, topic, rqos)
             self.platform_readers.append((level, topic_name, reader))
+
+        self.traffic_cache = {}  # domain_id -> latest sample dict (fed via HTTP POST)
 
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
@@ -199,6 +202,10 @@ class DdsBridge:
     def snapshot(self):
         with self.cache_lock:
             return [{"data": v} for v in self.cache.values()]
+
+    def traffic_snapshot(self):
+        with self.cache_lock:
+            return list(self.traffic_cache.values())
 
     def platform_snapshot(self, platform_node=None):
         with self.cache_lock:
@@ -295,6 +302,13 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
                 None, bridge.write_status_mode, platform_node, resolution_mode)
         except ValueError as exc:
             return web.Response(status=400, text=str(exc))
+        # Broadcast resolution change event for traffic chart annotations
+        bridge._broadcast({
+            "type": "resolution_change",
+            "platform": platform_node,
+            "resolution_mode": str(resolution_mode),
+            "timestamp": int(time.time() * 1000),
+        })
         return web.Response(status=204)
 
     async def get_platform_status(request):
@@ -315,8 +329,30 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def index(_request):
         return web.FileResponse(static_dir / "index.html")
 
+    async def get_traffic_stats(_request):
+        return web.json_response(bridge.traffic_snapshot())
+
+    async def post_traffic_stats(request):
+        """Ingest endpoint for domain_traffic_monitor.py — accepts a JSON array of
+        traffic-stats samples and broadcasts each to WebSocket clients."""
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return web.Response(status=400, text="expected JSON array")
+        samples = body if isinstance(body, list) else [body]
+        for sample in samples:
+            domain_id = sample.get("domain_id")
+            if domain_id is None:
+                continue
+            with bridge.cache_lock:
+                bridge.traffic_cache[domain_id] = sample
+            bridge._broadcast({"type": "traffic_stats", "data": sample})
+        return web.Response(status=204)
+
     app.router.add_get("/api/mesh_status", get_mesh_status)
     app.router.add_get("/api/platform_status", get_platform_status)
+    app.router.add_get("/api/traffic_stats", get_traffic_stats)
+    app.router.add_post("/api/traffic_stats", post_traffic_stats)
     app.router.add_post("/api/team_assignment", team_assignment)
     app.router.add_post("/api/status_resolution", set_status_resolution)
     app.router.add_get("/ws", websocket_handler)
