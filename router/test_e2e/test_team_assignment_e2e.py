@@ -279,28 +279,25 @@ def browser_assign_and_verify(port, target_node, team_name,
 
         if ctx_menu.is_visible():
             results["ctx_menu"] = True
-            dialog_handled = []
 
-            def handle_dialog(dialog):
-                print(f"  [browser] dialog type={dialog.type} "
-                      f"message='{dialog.message}'")
-                dialog.accept(team_name)
-                dialog_handled.append(True)
-
-            page.on("dialog", handle_dialog)
-
-            # Find and click "Assign to team…" in the context menu
+            # Find and click "Assign to team…" in the context menu.
+            # This opens an inline modal (#team-input-modal) instead of
+            # window.prompt() (VS Code Simple Browser doesn't support prompt).
             assign_item = ctx_menu.locator("div", has_text="Assign to team")
             assign_item.click()
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(500)
 
-            if dialog_handled:
-                results["dialog"] = True
+            modal = page.locator("#team-input-modal")
+            if modal.is_visible():
+                page.locator("#team-input-field").fill(team_name)
+                page.locator("#team-input-ok").click()
+                page.wait_for_timeout(500)
                 used_ui = True
-                print(f"  [browser] team '{team_name}' submitted via prompt "
-                      f"dialog")
+                results["dialog"] = True
+                print(f"  [browser] team '{team_name}' submitted via inline "
+                      f"modal")
             else:
-                print("  WARN: prompt dialog was not triggered — "
+                print("  WARN: team input modal did not appear — "
                       "falling back to REST API")
                 results["dialog"] = False
         else:

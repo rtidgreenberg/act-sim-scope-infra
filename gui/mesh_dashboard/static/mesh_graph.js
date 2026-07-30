@@ -148,6 +148,7 @@
     "#3ae6a1", "#e63a8a", "#a1e63a", "#3ae6e6",
   ];
   const teamColors = new Map(); // team name -> assigned palette color
+  const teamChips = new Map();  // team name -> DOM span element (for pruning)
   const teamLegendEl = document.getElementById("team-legend");
   const directLinksToggle = document.getElementById("toggle-direct-links");
   const relayedLinksToggle = document.getElementById("toggle-relayed-links");
@@ -171,10 +172,20 @@
     if (!selectedId) return null;
     const nodeIds = new Set([selectedId]);
     const edgeIds = new Set();
+    // First pass: collect direct neighbors (edges touching the selected node).
     edges.get().forEach((e) => {
       if (e.from === selectedId || e.to === selectedId) {
         nodeIds.add(e.from);
         nodeIds.add(e.to);
+        edgeIds.add(e.id);
+      }
+    });
+    // Second pass: include edges BETWEEN neighbors (2-hop closure). This makes
+    // inter-peer peers_seen links visible when the observer is selected — e.g.
+    // clicking Control_20 shows the dashed Platform_30↔Platform_31 edge if both
+    // are in the same team / WAN partition and can see each other.
+    edges.get().forEach((e) => {
+      if (nodeIds.has(e.from) && nodeIds.has(e.to)) {
         edgeIds.add(e.id);
       }
     });
@@ -203,7 +214,25 @@
       applyViewFilters();
     });
     teamLegendEl.appendChild(span);
+    teamChips.set(team, span);
     return color;
+  }
+
+  // Remove team legend chips for teams that no longer have any member nodes.
+  // Called after every sample ingest so the legend stays in sync with the live mesh.
+  function pruneStaleTeams() {
+    const liveTeams = new Set();
+    nodes.get().forEach((n) => {
+      (n.teamNames || []).forEach((t) => liveTeams.add(t));
+    });
+    teamChips.forEach((span, team) => {
+      if (!liveTeams.has(team)) {
+        span.remove();
+        teamChips.delete(team);
+        teamColors.delete(team);
+        activeTeamFilter.delete(team);
+      }
+    });
   }
 
   // Dim every node whose team set doesn't intersect the active filter. The observer node
@@ -325,6 +354,12 @@
       const teams = (n.teamNames && n.teamNames.length)
         ? n.teamNames.join(", ") : "(no team)";
       const raw = (h.team_partition || []).join(", ") || "(none)";
+      const peersSeen = (h.peers_seen || []).map((p) => {
+        const name = nodeNameOf(p.router || "?");
+        const pres = (p.presence || "").replace("PRESENCE_", "");
+        const ago = p.last_seen_delta_ms != null ? `${p.last_seen_delta_ms}ms` : "?";
+        return `${name} (${pres}, ${ago})`;
+      }).join(", ") || "(none)";
       body =
         detailRow("role", h.role) +
         detailRow("overall_state", h.overall_state) +
@@ -333,6 +368,7 @@
         detailRow("routes", `${h.n_routes} (${h.n_degraded} degraded, ${h.n_error} error)`) +
         detailRow("team", teams) +
         detailRow("raw team_partition", `[${raw}]`) +
+        detailRow("peers_seen", peersSeen) +
         detailRow("heartbeat_seq", h.heartbeat_seq) +
         detailRow("config_hash", h.config_hash ? String(h.config_hash).slice(0, 12) + "…" : "?");
     }
@@ -538,6 +574,7 @@
       }
     });
     if (n) {
+      pruneStaleTeams();                        // remove chips for teams with no members
       applyViewFilters();                      // new nodes respect active filters/highlight
       if (selectedId) renderDetail(selectedId); // live-refresh an open panel in place
     }
@@ -617,7 +654,11 @@
   let ctxNodeId = null;
 
   function hideCtxMenu() { ctxMenu.style.display = "none"; ctxNodeId = null; }
-  document.addEventListener("click", hideCtxMenu);
+  document.addEventListener("click", (e) => {
+    // Don't hide if clicking inside the team-input modal
+    if (e.target.closest("#team-input-modal")) return;
+    hideCtxMenu();
+  });
   document.addEventListener("contextmenu", (e) => {
     // Let only the vis canvas handler show the menu; hide on any other right-click.
     if (!e.target.closest("#graph")) hideCtxMenu();
@@ -629,9 +670,61 @@
     el.style.cssText = "padding:4px 14px;cursor:pointer;";
     el.addEventListener("mouseenter", () => { el.style.background = "#2a2d38"; });
     el.addEventListener("mouseleave", () => { el.style.background = ""; });
-    el.addEventListener("click", (e) => { e.stopPropagation(); hideCtxMenu(); fn(); });
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const savedNodeId = ctxNodeId;   // capture before hideCtxMenu nulls it
+      hideCtxMenu();
+      fn(savedNodeId);
+    });
     return el;
   }
+
+  // Inline team-name input modal — replaces window.prompt() which is not supported
+  // in VS Code's Simple Browser (throws "prompt() is not supported").
+  const teamInputModal = document.createElement("div");
+  teamInputModal.id = "team-input-modal";
+  teamInputModal.style.cssText = "display:none;position:fixed;top:0;left:0;right:0;bottom:0;" +
+    "z-index:2000;background:rgba(0,0,0,.5);align-items:center;justify-content:center;";
+  teamInputModal.innerHTML =
+    `<div style="background:#1e2028;border:1px solid #3a3f4a;border-radius:6px;padding:16px 20px;` +
+    `min-width:280px;box-shadow:0 8px 24px rgba(0,0,0,.6);font:13px/1.6 sans-serif;color:#e6e8eb;">` +
+    `<div id="team-input-label" style="margin-bottom:8px;"></div>` +
+    `<input id="team-input-field" type="text" style="width:100%;box-sizing:border-box;` +
+    `padding:6px 10px;background:#14181f;border:1px solid #3a3f4a;border-radius:4px;` +
+    `color:#e6e8eb;font:13px sans-serif;outline:none;" />` +
+    `<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">` +
+    `<button id="team-input-cancel" style="padding:4px 14px;background:#2a2d38;border:1px solid #3a3f4a;` +
+    `border-radius:4px;color:#e6e8eb;cursor:pointer;font:13px sans-serif;">Cancel</button>` +
+    `<button id="team-input-ok" style="padding:4px 14px;background:#3aa655;border:none;` +
+    `border-radius:4px;color:#fff;cursor:pointer;font:13px sans-serif;">Assign</button>` +
+    `</div></div>`;
+  document.body.appendChild(teamInputModal);
+
+  const teamInputLabel = teamInputModal.querySelector("#team-input-label");
+  const teamInputField = teamInputModal.querySelector("#team-input-field");
+  const teamInputOk = teamInputModal.querySelector("#team-input-ok");
+  const teamInputCancel = teamInputModal.querySelector("#team-input-cancel");
+  let teamInputResolve = null;
+
+  function showTeamInput(nodeId) {
+    teamInputLabel.textContent = `Team name for ${nodeId}:`;
+    teamInputField.value = "";
+    teamInputModal.style.display = "flex";
+    teamInputField.focus();
+    return new Promise((resolve) => { teamInputResolve = resolve; });
+  }
+
+  function closeTeamInput(value) {
+    teamInputModal.style.display = "none";
+    if (teamInputResolve) { teamInputResolve(value); teamInputResolve = null; }
+  }
+
+  teamInputOk.addEventListener("click", () => closeTeamInput(teamInputField.value));
+  teamInputCancel.addEventListener("click", () => closeTeamInput(null));
+  teamInputField.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") closeTeamInput(teamInputField.value);
+    if (e.key === "Escape") closeTeamInput(null);
+  });
 
   network.on("oncontext", (params) => {
     params.event.preventDefault();
@@ -641,12 +734,13 @@
     if (!n || n.kind === "observer") { hideCtxMenu(); return; }
     ctxNodeId = nodeId;
     ctxMenu.innerHTML = "";
-    ctxMenu.appendChild(ctxItem("Assign to team…", () => {
-      const team = prompt(`Team name for ${ctxNodeId}:`, "");
-      if (team != null) publishTeamAssignment(ctxNodeId, team);
+    ctxMenu.appendChild(ctxItem("Assign to team…", (nodeId) => {
+      showTeamInput(nodeId).then((team) => {
+        if (team != null) publishTeamAssignment(nodeId, team);
+      });
     }));
-    ctxMenu.appendChild(ctxItem("Remove from team", () => {
-      publishTeamAssignment(ctxNodeId, "");
+    ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
+      publishTeamAssignment(nodeId, "");
     }));
     ctxMenu.style.left = params.event.pageX + "px";
     ctxMenu.style.top = params.event.pageY + "px";

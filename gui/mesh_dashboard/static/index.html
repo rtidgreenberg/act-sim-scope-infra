@@ -9,22 +9,35 @@
   #statusbar { position: fixed; top: 0; left: 0; right: 46%; z-index: 10; padding: 8px 14px;
                background: #1c222c; border-bottom: 1px solid #2c3542; font-size: 13px;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #legend, #team-legend { position: fixed; right: 0; z-index: 10; padding: 8px 14px;
+  #right-panel { position: fixed; right: 0; top: 0; z-index: 10; display: flex;
+            flex-direction: column; align-items: flex-end; }
+  #legend { padding: 8px 14px;
             background: #1c222c; border-bottom: 1px solid #2c3542; border-left: 1px solid #2c3542;
-            font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40%; }
-  #legend { top: 0; }
-  #team-legend { top: 37px; }
+            font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40vw; }
+  #team-legend { padding: 0;
+            background: #1c222c; border-left: 1px solid #2c3542;
+            font-size: 12px; display: flex; flex-direction: column; gap: 0; min-width: 120px; }
+  #team-legend:empty { display: none; }
   #topology-controls { position: fixed; left: 0; top: 37px; z-index: 10; padding: 8px 14px;
             background: #1c222c; border-right: 1px solid #2c3542; border-bottom: 1px solid #2c3542;
             font-size: 12px; display: flex; gap: 14px; align-items: center; }
-  #legend span, #team-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #legend span { display: inline-flex; align-items: center; gap: 6px; }
+  #team-legend span { display: flex; align-items: center; gap: 6px; padding: 5px 14px;
+            border-bottom: 1px solid #2c3542; }
   #legend i, #team-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  #legend .arrow { display: inline-block; width: 20px; height: 0; position: relative;
+    vertical-align: middle; margin-right: 2px; }
+  #legend .arrow::after { content: ''; position: absolute; right: -1px; top: -4px;
+    border: 4px solid transparent; }
+  #legend .arrow.solid { border-top: 2px solid; }
+  #legend .arrow.solid::after { border-left: 6px solid; border-left-color: inherit; }
+  #legend .arrow.dashed { border-top: 2px dashed; }
+  #legend .arrow.dashed::after { border-left: 6px solid; border-left-color: inherit; }
   #topology-controls label { display: inline-flex; align-items: center; gap: 6px; color: #d5d9df; }
   #topology-controls input { margin: 0; accent-color: #3aa655; }
   /* team chips are clickable filters; the active ones get a pill highlight */
   #team-legend span:hover { color: #fff; }
-  #team-legend span.active { background: #2c3542; border-radius: 10px; padding: 1px 8px;
-                             font-weight: 600; }
+  #team-legend span.active { background: #2c3542; font-weight: 600; }
   /* Taller viewport for the shallow 2-row control/platform layout. */
   #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; min-height: 760px; }
   /* node detail panel (click a node) */
@@ -50,19 +63,20 @@
   <label><input id="toggle-direct-links" type="checkbox" checked> direct links</label>
   <label><input id="toggle-relayed-links" type="checkbox" checked> relayed links</label>
 </div>
+<div id="right-panel">
 <div id="legend">
-  <span><i style="background:#e0b84d"></i> observer router</span>
-  <span><i style="background:#3aa655"></i> router (heard directly)</span>
-  <span><i style="background:#3a7bd9"></i> router (only via a peer)</span>
-  <span><i style="background:#3aa655"></i> direct link</span>
-  <span><i style="background:#3a7bd9"></i> dashed relayed link</span>
-  <span><i style="background:#3a3f4a"></i> ring = team (fill color unchanged)</span>
-  <span>· click a node for detail · click a team below to filter</span>
+  <span><i style="background:#e0b84d"></i> observer</span>
+  <span><i style="background:#3aa655"></i> direct peer</span>
+  <span><i style="background:#3a7bd9"></i> relayed peer</span>
+  <span><span class="arrow solid" style="border-color:#3aa655;"></span> direct link</span>
+  <span><span class="arrow dashed" style="border-color:#3a7bd9;"></span> relayed link</span>
+  <span><i style="background:transparent;border:2px solid #3a3f4a;width:6px;height:6px;"></i> ring = team</span>
 </div>
 <div id="team-legend"></div>
+</div>
 <div id="detail"></div>
 <div id="graph"></div>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js?v=20260723-topology-clarity-3"></script>
+<script src="mesh_graph.js?v=20260729-inline-team-input"></script>
 </body>
 </html>
