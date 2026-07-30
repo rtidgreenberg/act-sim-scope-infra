@@ -185,6 +185,20 @@ do_up() {
             > "$WORKDIR/mesh_bridge.log" 2>&1 &
         echo "mesh_bridge $!" >> "$WORKDIR/pids.txt"
         echo "[run_mesh up] dashboard: http://localhost:${DASHBOARD_PORT}/"
+
+        # Traffic monitor: captures RTPS on loopback, classifies discovery vs user-data,
+        # publishes DomainTrafficStats on domain 20 for the dashboard to visualize.
+        # Monitor domain 20 (control_lan) + 200 (WAN) + each platform's LAN domain.
+        MONITOR_DOMAINS="20,200"
+        for ID in $(seq 30 "$LAST_ID"); do
+            MONITOR_DOMAINS="${MONITOR_DOMAINS},${ID}"
+        done
+        echo "[run_mesh up] launching traffic monitor (domains: $MONITOR_DOMAINS)..."
+        nohup python3 "$V2_ROOT/scripts/domain_traffic_monitor.py" \
+            --domains "$MONITOR_DOMAINS" --dashboard-url "http://localhost:${DASHBOARD_PORT}" \
+            --interval 0.1 \
+            > "$WORKDIR/traffic_monitor.log" 2>&1 &
+        echo "traffic_monitor $!" >> "$WORKDIR/pids.txt"
     fi
 
     sleep 3
