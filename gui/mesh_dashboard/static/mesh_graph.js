@@ -336,11 +336,25 @@
   // Click a node -> side panel with its full RouterHealth. All fields already live on the
   // node object (stashed in upsertMeshStatusSample), so this reads the DataSet, not the
   // wire. selectedId lets an in-place sample update refresh the open panel live.
+
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
   const detailEl = document.getElementById("detail");
+  const collapsedDetailSections = new Set();
 
   function detailRow(k, v) {
     return `<div class="detail-row"><span class="k">${k}</span>` +
            `<span class="v">${v}</span></div>`;
+  }
+
+  function detailSection(nodeId, sectionId, title, content) {
+    const key = `${nodeId}:${sectionId}`;
+    const open = collapsedDetailSections.has(key) ? "" : " open";
+    return `<details class="detail-section" data-section-key="${key}"${open}>` +
+      `<summary>${title}</summary><div class="detail-section-content">${content}</div></details>`;
   }
 
   function badge(label, active) {
@@ -452,25 +466,63 @@
     const data = platformStatusCache.get(nodeId);
     const age = data ? Math.max(0, Date.now() - (data.updated_at || 0)) : null;
 
-    let html = `<div class="detail-row"><span class="k">resolution</span><span class="v">` +
+    let platformHtml = `<div class="detail-row"><span class="k">resolution</span><span class="v">` +
       badgeHtml + `</span></div>`;
 
     if (data) {
-      html += detailRow("init data", summarizeTopicGroup(data.init)) +
-              detailRow("mission data", summarizeTopicGroup(data.mission)) +
-              detailRow("debug data", summarizeTopicGroup(data.debug)) +
-              detailRow("status age", `${age} ms`);
+      platformHtml += detailRow("init data", summarizeTopicGroup(data.init)) +
+                      detailRow("mission data", summarizeTopicGroup(data.mission)) +
+                      detailRow("debug data", summarizeTopicGroup(data.debug)) +
+                      detailRow("status age", `${age} ms`);
     }
+
+    let html = detailSection(nodeId, "platform-data", "Platform Data", platformHtml);
 
     // Route detail table (when routes array is available from health)
     if (health && Array.isArray(health.routes) && health.routes.length) {
-      html += `<hr style="border:0;border-top:1px solid #3a3f4a;margin:10px 0;">` +
-              `<div class="detail-title" style="font-size:13px;margin:0 0 6px 0;">Route Status</div>`;
+      let routeHtml = "";
       health.routes.forEach((rs) => {
         const stateShort = (rs.state || "").replace("ROUTE_", "");
         const fwd = rs.samples_forwarded != null ? rs.samples_forwarded : "?";
-        html += detailRow(rs.route_name, `${stateShort} · ${fwd} fwd`);
+        const isUnhealthy = rs.state === "ROUTE_ERROR" || rs.state === "ROUTE_DEGRADED";
+        const stateColor = isUnhealthy ? "#cc4444" : (rs.state === "ROUTE_ENABLED" ? "#3aa655" : "#c9a227");
+        const stateHtml = `<span style="color:${stateColor};font-weight:bold;">${stateShort}</span> · ${fwd} fwd`;
+        routeHtml += detailRow(rs.route_name, stateHtml);
+
+        // Show route-level error and discovery details when not healthy.
+        if (isUnhealthy || rs.state === "ROUTE_WAITING_FOR_DISCOVERY" || rs.state === "ROUTE_RESOLVING") {
+          const disc = (rs.discovery_state || "").replace("DISCOVERY_", "");
+          if (disc && disc !== "READY") {
+            routeHtml += detailRow("  discovery", `<span style="color:#c9a227;">${disc}</span>`);
+          }
+          if (rs.last_error) {
+            routeHtml += detailRow("  error", `<span style="color:#cc6666;word-break:break-all;">${escHtml(rs.last_error)}</span>`);
+          }
+        }
+
+        // Per-topic breakdown — always show topics in error; collapse healthy ones.
+        if (Array.isArray(rs.topic_status)) {
+          rs.topic_status.forEach((ts) => {
+            const topicUnhealthy = ts.topic_state === "TOPIC_ERROR" || ts.last_error || ts.qos_warning || !ts.type_resolved;
+            if (!topicUnhealthy && rs.state === "ROUTE_ENABLED") return; // skip noise for healthy topics
+            const topicState = (ts.topic_state || "").replace("TOPIC_", "");
+            const typeOk = ts.type_resolved ? "✓type" : `<span style="color:#cc4444;">✗type</span>`;
+            const matched = `in=${ts.input_matched != null ? ts.input_matched : "?"}→out=${ts.output_matched != null ? ts.output_matched : "?"}`;
+            let topicHtml = `${topicState} ${typeOk} ${matched}`;
+            if (ts.qos_warning) {
+              topicHtml += `<br><span style="color:#c9a227;font-size:11px;">⚠ QoS: ${escHtml(ts.qos_warning)}</span>`;
+            }
+            if (ts.last_error) {
+              topicHtml += `<br><span style="color:#cc6666;font-size:11px;">✗ ${escHtml(ts.last_error)}</span>`;
+            }
+            if (ts.match_reason && ts.match_reason !== "ok") {
+              topicHtml += `<br><span style="color:#c9a227;font-size:11px;">match: ${escHtml(ts.match_reason)}</span>`;
+            }
+            routeHtml += detailRow(`  topic: ${escHtml(ts.name || "?")}`, topicHtml);
+          });
+        }
       });
+      html += detailSection(nodeId, "route-status", "Route Status", routeHtml);
     }
 
     return html;
@@ -524,13 +576,24 @@
         detailRow("heartbeat_seq", h.heartbeat_seq) +
         detailRow("config_hash", h.config_hash ? String(h.config_hash).slice(0, 12) + "…" : "?") +
         `<hr style="border:0;border-top:1px solid #3a3f4a;margin:10px 0;">` +
-        `<div class="detail-title" style="font-size:13px;margin:0 0 6px 0;">Platform Data</div>` +
         renderPlatformDataSection(id);
     }
     detailEl.innerHTML =
       `<span class="detail-close" title="close">×</span>` +
       `<div class="detail-title">${id}</div>` + body;
     detailEl.querySelector(".detail-close").addEventListener("click", hideDetail);
+    detailEl.querySelectorAll(".detail-section").forEach((section) => {
+      section.querySelector("summary").addEventListener("click", (event) => {
+        event.preventDefault();
+        if (section.open) {
+          section.removeAttribute("open");
+          collapsedDetailSections.add(section.dataset.sectionKey);
+        } else {
+          section.setAttribute("open", "");
+          collapsedDetailSections.delete(section.dataset.sectionKey);
+        }
+      });
+    });
     detailEl.style.display = "block";
   }
 

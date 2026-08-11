@@ -124,7 +124,7 @@ routes:
         reader_qos: wan_event
         subscriber_partition: CONTROL
         filter:
-          expression: "msg.destination = %0"
+          expression: "destination = %0"
           parameters: ["${node.name}"]
       output:
         participant: platform_lan

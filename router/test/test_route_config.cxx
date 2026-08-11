@@ -55,7 +55,7 @@ int main() {
             CHECK(cc->input.participant == "platform_wan");
             CHECK(cc->output.participant == "platform_lan");
             // Content filter substituted + quoted to this node's name.
-            CHECK(cc->input.filter_expression == "msg.destination = %0");
+            CHECK(cc->input.filter_expression == "destination = %0");
             CHECK(cc->input.filter_parameters.size() == 1);
             if (cc->input.filter_parameters.size() == 1) {
                 CHECK(cc->input.filter_parameters.at(0) == "'Platform_30'");

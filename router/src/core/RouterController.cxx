@@ -800,6 +800,10 @@ void RouterController::apply_presence_tick() {
     hb.overall_state = (error > 0) ? RouterOverallState::ROUTER_ERROR
                      : (degraded > 0) ? RouterOverallState::ROUTER_DEGRADED
                                       : RouterOverallState::ROUTER_OK;
+    const std::vector<RouterRouteStatus> route_statuses = build_route_statuses();
+    for (size_t i = 0; i < route_statuses.size(); ++i) {
+        hb.routes.push_back(route_statuses[i]);
+    }
     // team_partition is deliberately NOT filled in here. Unlike every other field above
     // (derived from state_, the controller's own config-mirrored copy), team_partition is
     // polled live off the real DomainParticipantQos.partition by PresenceMonitor itself,
@@ -1059,26 +1063,8 @@ void RouterController::publish_if_changed(const std::vector<std::string> &pre,
     status_->publish(build_snapshot());
 }
 
-std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
-    // The generated type IS the snapshot (D25).
-    std::shared_ptr<RouterStatus> s(new RouterStatus());
-    s->target_node = state_.node_name;
-    s->target_router = state_.router_name;
-    s->status_id = state_.status_id;
-    s->state_revision = state_.state_revision;
-    s->caused_by_command_id = current_cause_;
-
-    for (std::map<std::string, ParticipantState>::const_iterator p =
-                 state_.participants.begin();
-         p != state_.participants.end(); ++p) {
-        RouterParticipantStatus ps;
-        ps.name = p->second.name;
-        ps.domain = p->second.domain;
-        ps.participant_partition = p->second.participant_partition;
-        ps.qos_profile_alias = p->second.qos_profile_alias;
-        s->participants.push_back(ps);
-    }
-
+std::vector<RouterRouteStatus> RouterController::build_route_statuses() const {
+    std::vector<RouterRouteStatus> statuses;
     for (std::map<std::string, RouteState>::const_iterator r = state_.routes.begin();
          r != state_.routes.end(); ++r) {
         const RouteState &route = r->second;
@@ -1121,7 +1107,34 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
             rs.samples_forwarded += ts.samples_forwarded; // aggregates (D11)
             rs.lifecycle_events_forwarded += ts.lifecycle_events_forwarded;
         }
-        s->routes.push_back(rs);
+        statuses.push_back(rs);
+    }
+    return statuses;
+}
+
+std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
+    // The generated type IS the snapshot (D25).
+    std::shared_ptr<RouterStatus> s(new RouterStatus());
+    s->target_node = state_.node_name;
+    s->target_router = state_.router_name;
+    s->status_id = state_.status_id;
+    s->state_revision = state_.state_revision;
+    s->caused_by_command_id = current_cause_;
+
+    for (std::map<std::string, ParticipantState>::const_iterator p =
+                 state_.participants.begin();
+         p != state_.participants.end(); ++p) {
+        RouterParticipantStatus ps;
+        ps.name = p->second.name;
+        ps.domain = p->second.domain;
+        ps.participant_partition = p->second.participant_partition;
+        ps.qos_profile_alias = p->second.qos_profile_alias;
+        s->participants.push_back(ps);
+    }
+
+    const std::vector<RouterRouteStatus> route_statuses = build_route_statuses();
+    for (size_t i = 0; i < route_statuses.size(); ++i) {
+        s->routes.push_back(route_statuses[i]);
     }
     return s;
 }

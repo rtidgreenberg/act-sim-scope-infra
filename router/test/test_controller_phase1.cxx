@@ -140,6 +140,15 @@ struct FakeStatusPublisher : IStatusPublisher {
     const RouterCommandAck &last_ack() const { return acks.back(); }
 };
 
+struct FakePresencePublisher : IPresencePublisher {
+    std::vector<RouterHealth> heartbeats;
+
+    void publish_heartbeat(const RouterHealth &heartbeat) override {
+        heartbeats.push_back(heartbeat);
+    }
+    void publish_mesh_tick() override {}
+};
+
 // --- Fixture helpers ---
 
 static RouterRouteTopicSpec topic_spec(const std::string &name) {
@@ -618,6 +627,37 @@ static void test_error_sticky_until_rearm() {
     f.post(ControllerEvent::topic_entities_ready("r", "T", gen));
     CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_ENABLED);
 }
+
+    static void test_presence_heartbeat_carries_route_diagnostics() {
+        std::vector<RouterRouteSpec> specs(
+            1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+        FakeEntityFactory factory;
+        FakeStatusPublisher status;
+        FakePresencePublisher presence;
+        RouterController controller(Fixture::identity(), specs, Fixture::participants(),
+                    &factory, &status, nullptr, &presence);
+        controller.post(ControllerEvent::type_resolved("T"));
+        controller.drain();
+        controller.activate();
+        CHECK(factory.creates.size() == 1);
+
+        controller.post(ControllerEvent::route_entity_error(
+            "r", "T", factory.creates.back().gen, "Failed to create ContentFilteredTopic"));
+        controller.drain();
+        controller.post(ControllerEvent::presence_tick());
+        controller.drain();
+
+        CHECK(presence.heartbeats.size() == 1);
+        const RouterHealth &heartbeat = presence.heartbeats.back();
+        CHECK(heartbeat.overall_state == RouterOverallState::ROUTER_ERROR);
+        CHECK(heartbeat.routes.size() == 1);
+        CHECK(heartbeat.routes.at(0).route_name == "r");
+        CHECK(heartbeat.routes.at(0).topic_status.size() == 1);
+        CHECK(heartbeat.routes.at(0).topic_status.at(0).topic_state ==
+          RouterRouteTopicState::TOPIC_ERROR);
+        CHECK(heartbeat.routes.at(0).topic_status.at(0).last_error ==
+          "Failed to create ContentFilteredTopic");
+    }
 
 // Two-topic route (D11): activate builds both; the route is active as soon as one topic
 // is ready; one topic's failure is contained; route ERROR only when all topics errored.
@@ -1105,6 +1145,7 @@ int main() {
     RUN(test_stale_error_after_abort_discarded);
     RUN(test_redundant_enable_idempotent_accept);
     RUN(test_error_sticky_until_rearm);
+    RUN(test_presence_heartbeat_carries_route_diagnostics);
     RUN(test_per_topic_activation_two_topics);
     RUN(test_endpoint_records_never_drive_teardown);
     RUN(test_auto_route_creates_with_baseline);

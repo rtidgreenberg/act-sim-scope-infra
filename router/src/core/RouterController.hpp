@@ -118,6 +118,7 @@ private:
 
     std::uint64_t next_generation() { return ++state_.entity_generation_counter; }
 
+    std::vector<RouterRouteStatus> build_route_statuses() const;
     std::shared_ptr<const RouterStatus> build_snapshot() const;
     // include_participants: skip the O(participants) fingerprint scan for event kinds
     // that structurally cannot change a participant's partition set (D83) — only

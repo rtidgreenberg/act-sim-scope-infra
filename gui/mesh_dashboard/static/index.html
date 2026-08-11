@@ -58,6 +58,14 @@
   #detail .detail-close { position: absolute; top: 8px; right: 12px; cursor: pointer;
                           color: #8a94a6; font-size: 16px; line-height: 1; }
   #detail .detail-close:hover { color: #fff; }
+  #detail .detail-section { border-top: 1px solid #3a3f4a; margin-top: 10px; padding-top: 6px; }
+  #detail .detail-section summary { cursor: pointer; color: #e6e8eb; font-size: 13px;
+                                    font-weight: 600; list-style: none; }
+  #detail .detail-section summary::-webkit-details-marker { display: none; }
+  #detail .detail-section summary::before { content: '▸'; display: inline-block; margin-right: 6px;
+                                             color: #8a94a6; }
+  #detail .detail-section[open] summary::before { transform: rotate(90deg); }
+  #detail .detail-section-content { padding-top: 6px; }
   /* Traffic panel — right side */
   #traffic-panel { position: fixed; right: 0; top: 60px; z-index: 10; width: 320px;
             bottom: 28px; overflow-y: auto; background: #1c222c; border-left: 1px solid #2c3542;
@@ -101,7 +109,7 @@
 <div id="traffic-panel"></div>
 <div id="graph"></div>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js?v=20260729-inline-team-input"></script>
+<script src="mesh_graph.js?v=20260811-collapsible-detail-sections-v2"></script>
 <script src="traffic_chart.js?v=20260730"></script>
 </body>
 </html>

@@ -39,6 +39,21 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   below (existing spikes use domains from ~60 up to ~5900) rather than picking arbitrary
   large numbers.
 
+## Mesh debugging safety
+
+- Treat a running mesh as immutable during diagnosis: inspect logs, bridge JSON, and code
+  read-only first. Do not patch a generated config or manually kill/relaunch one router in a
+  live mesh.
+- Use `harness_v2/scripts/run_mesh.sh up` and `down` as the only normal mesh lifecycle
+  commands. The runner owns its PIDs and cleanup; do not bypass it with ad hoc restarts.
+- Reproduce a configuration failure in a fresh, isolated `/tmp` workdir with **one** platform
+  first. Scale to a multi-boat mesh only after that reproduction is understood and torn down.
+- Before starting any new mesh, verify no prior mesh processes and no `/dev/shm/RTI*` or
+  `/dev/shm/dds*` segments remain. After every teardown or VM freeze, repeat that check before
+  another DDS run.
+- Prefer unit tests and builds for controller/UI diagnostic changes. Do not launch a live mesh
+  solely to validate code that can be exercised in-process.
+
 ## Connext environment (this VM)
 
 - `NDDSHOME=/home/rti/rti_connext_dds-7.7.0`, arch **`x64Linux4gcc7.3.0`**, Connext

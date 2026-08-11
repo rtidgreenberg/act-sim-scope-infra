@@ -69,7 +69,7 @@ routes:
       input:
         participant: platform_wan
         filter:
-          expression: "msg.destination = %0"
+          expression: "destination = %0"
           parameters: ["${node.name}"]
       output:
         participant: platform_lan
