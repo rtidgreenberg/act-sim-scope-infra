@@ -6,6 +6,7 @@
 #include <dds/sub/ddssub.hpp>
 #include <rti/core/policy/CorePolicy.hpp> // D101: PublishMode::Asynchronous (mesh_writer_qos)
 
+#include <iterator> // std::next (prune_dead_locked's handle sweep)
 #include <sstream>
 
 namespace router {
@@ -394,6 +395,34 @@ void PresenceMonitor::on_health_reader_status() {
     }
 }
 
+bool PresenceMonitor::prune_dead_locked() {
+    const auto now = std::chrono::steady_clock::now();
+    const auto retention = std::chrono::milliseconds(kDeadPeerRetentionMs);
+    bool pruned = false;
+    for (auto it = roster_.begin(); it != roster_.end();) {
+        if (it->second.presence != RouterPresenceState::PRESENCE_DEAD
+            || now - it->second.last_seen < retention) {
+            ++it;
+            continue;
+        }
+        // Drop every handle that resolved to this name. A peer can have been seen under
+        // more than one instance handle across a restart, so this is a scan by value, not
+        // a single erase — the map is roster-sized, and this runs only when a peer is
+        // actually being forgotten.
+        for (auto h = handle_to_name_.begin(); h != handle_to_name_.end();) {
+            h = (h->second == it->first) ? handle_to_name_.erase(h) : std::next(h);
+        }
+        Log::info("presence_peer_forgotten",
+                  {{"router", it->first},
+                   {"dead_for_ms", std::to_string(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now - it->second.last_seen).count())}});
+        it = roster_.erase(it);
+        pruned = true;
+    }
+    return pruned;
+}
+
 RouterMeshStatus PresenceMonitor::build_mesh_locked() {
     RouterMeshStatus mesh;
     mesh.observer_node = node_name_;
@@ -479,6 +508,13 @@ void PresenceMonitor::publish_mesh() {
     RouterMeshStatus mesh;
     {
         std::lock_guard<std::mutex> lk(roster_mutex_);
+        // H4: forget long-dead peers first, so this sample (and the next heartbeat's
+        // peers_seen, which reads the same roster) no longer carries them. Forgetting a
+        // peer is a roster change, so it bumps the revision here — build_mesh_locked()
+        // stays a pure read (D99).
+        if (prune_dead_locked()) {
+            ++mesh_revision_;
+        }
         mesh = build_mesh_locked();
     }
     try {

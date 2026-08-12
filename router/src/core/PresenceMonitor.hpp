@@ -68,6 +68,8 @@
 //     ALIVE peer's last_seen against the deadline — coalesced misses (several peers
 //     silent in one dispatch window) all surface in the same pass.
 //   instance NOT_ALIVE_NO_WRITERS           -> DEAD  (liveliness lost / participant purge)
+//   DEAD for longer than kDeadPeerRetentionMs -> forgotten (erased from the roster;
+//     review 2026-08-11 H4 — before this, nothing ever removed a roster entry)
 // A real crash cascades STALE -> DEAD (the 2s deadline fires before the 3s liveliness
 // lease) — normal, not an anomaly (D75).
 //
@@ -111,6 +113,21 @@ const int kHealthLivelinessLeaseMs = 3000; // 3x heartbeat period (AUTOMATIC)
 // D98: the LAN mesh-dashboard republish cadence — independent of the WAN heartbeat
 // numbers above (see MeshTick in RouterEvents.hpp / DrainThread.hpp).
 const int kMeshPublishPeriodMs = 500;
+
+// How long a DEAD peer is retained in the roster before it is forgotten entirely
+// (review 2026-08-11, H4). Before this, nothing ever erased a roster entry: a
+// decommissioned or renamed router stayed DEAD in every mesh sample and every
+// heartbeat's peers_seen for the process lifetime, the maps grew without bound, and —
+// because both peers_seen and mesh.peers truncate in roster NAME order at their
+// bounded_sequence(100) cap — accumulated DEAD entries with low-sorting names could
+// displace live peers once the roster passed 100 names.
+//
+// Measured from last_seen (the last valid heartbeat), so the clock starts when the peer
+// actually went quiet, not when we noticed. Deliberately much longer than the 3 s
+// liveliness lease: a DEAD transition is information an operator should have time to see
+// on the dashboard before it disappears. Rejoin needs no special handling — the roster is
+// name-keyed, so a returning peer simply re-enters as ALIVE.
+const int kDeadPeerRetentionMs = 60000;
 
 // Also an IWanStatsSource (Phase 9, D81): the RouterHealth writer/reader pair is the
 // mandatory idle-mesh bellwether — a known-rate WAN pair the LinkStatsCollector polls so
@@ -171,6 +188,13 @@ private:
 
     void on_health_data();
     void on_health_reader_status();
+    // Drop DEAD peers quiet for longer than kDeadPeerRetentionMs, along with their
+    // handle_to_name_ entries (H4). Returns true if anything was removed — the caller
+    // (publish_mesh) then bumps mesh_revision_, since forgetting a peer IS a roster
+    // change. Deliberately NOT done inside build_mesh_locked(): D99 requires that
+    // function to stay a pure read, because MeshTick calls it every 0.5 s regardless of
+    // whether anything changed. Caller holds roster_mutex_.
+    bool prune_dead_locked();
     // Snapshot the roster into a mesh sample. Caller holds roster_mutex_.
     RouterMeshStatus build_mesh_locked();
     // Build (briefly under roster_mutex_) + write (off it) the LAN mesh aggregate,
