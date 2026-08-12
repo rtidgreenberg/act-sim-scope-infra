@@ -33,11 +33,20 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   stray `RTI*`/`dds*` segments.
 - Loopback UDP works for co-located test processes; isolate concurrent tests by DDS
   **domain id**.
-- **Domain IDs above ~5900–6000 can hit the default port-mapping ceiling** on this install
-  and fail with `RTIOsapiSocket_bindWithIP: Permission denied` (the computed port lands in
-  the privileged <1024 range). Keep ad hoc spike/test domain ids in the low thousands or
-  below (existing spikes use domains from ~60 up to ~5900) rather than picking arbitrary
-  large numbers.
+- **Keep every domain id <= 232.** RTPS maps a domain to a UDP port as `PB + DG*D`
+  (`7400 + 250*D`). That exceeds 65535 at **D = 233** and then wraps mod 65536, landing on
+  an arbitrary port — sometimes in the privileged <1024 range, where the bind fails with
+  `RTIOsapiSocket_bindWithIP: OS bind() failure ... Permission denied`. Measured here:
+  `232 -> 65400` (ok), `233 -> 114`, `1023 -> 1006`, and `1046` gives a WAN port range of
+  `[268900, 269149]` that matches no real traffic at all.
+  An earlier version of this note quoted "~5900–6000" as the ceiling; that was **one
+  observed instance of the wrap landing low, not the limit**, and following it cost a full
+  e2e run (2026-08-11: `E2E_DOMAIN_BASE = 1000` failed exactly this way). Above 232 the
+  failure is not a threshold you can stay under — it is a wrap that can land anywhere, so
+  a domain id can look fine and silently mis-bind or capture nothing.
+  Live domains in this repo: `20` (control_lan), `30–99` (platform_lan, one per platform),
+  `200` (WAN). The e2e suite allocates from `101–199` (`conftest.E2E_DOMAIN_BASE`);
+  `0–19`, `21–29` and `201–232` are the other free windows.
 
 ## Mesh debugging safety
 
@@ -151,7 +160,11 @@ local fs per the rules above.
 Two test harnesses are available for debugging and verification:
 
 - **C++ unit tests** (`router/test/`): in-process controller/state-machine tests with fakes
-  for all DDS seams. Run via `ctest --test-dir router/build --output-on-failure`. Fast,
+  for all DDS seams. Run via `router/run_tests.sh`. **Do not use
+  `ctest --test-dir router/build`** — `--test-dir` needs CMake >= 3.20 and this VM has
+  3.16.3, where the flag is ignored, ctest scans the cwd, finds nothing, prints "No tests
+  were found!!!" and **exits 0**; `run_tests.sh` cds into the build tree and fails a
+  zero-test run instead of passing it. Fast,
   no DDS entities created.
 
 - **Python e2e suite** (`router/test_e2e/`): launches real `router_main` subprocess pairs
