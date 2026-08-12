@@ -27,8 +27,11 @@ import rti.connextdds as dds  # noqa: E402
 from util.dds_probe import AdminChannel, Probe, wait_for_route  # noqa: E402
 
 CONFIG = "control-platform.yaml"
-CONTROL_LAN_DOMAIN = 20    # the production config's literal domains
-PLATFORM_LAN_DOMAIN = 30
+# Domain isolation (review 2026-08-11, H3): the production config declares the LIVE
+# domains 20/200/30 and has no __DOMAIN_*__ placeholders, so this test used to run on
+# them and could collide with a concurrent run_mesh.sh mesh. conftest.render_config()
+# now rewrites those literals onto this test's unique_domains triple; read the fixture,
+# never the literals.
 
 ROUTE = "platform_detail_status"
 TOPIC = "PlatformDetailStatus"
@@ -73,8 +76,8 @@ def test_detail_status_flow_starts_from_the_target_only(
     provider = dds.QosProvider(str(admin_types_xml))
     cmd_type = provider.type("RouterCommand")
 
-    control_app = Probe(CONTROL_LAN_DOMAIN)
-    platform_app = Probe(PLATFORM_LAN_DOMAIN)
+    control_app = Probe(unique_domains["control_lan"])
+    platform_app = Probe(unique_domains["platform_lan"])
     try:
         control_admin = AdminChannel(control_app, provider)
         platform_admin = AdminChannel(platform_app, provider)

@@ -49,6 +49,44 @@ def set_wan_qos_env():
 
 _domain_counter = itertools.count()
 
+# --- Domain isolation (review 2026-08-11, H3) ---------------------------------------
+#
+# The e2e suite must never allocate a domain the LIVE system uses, or a test run and a
+# `harness_v2/scripts/run_mesh.sh` mesh on this VM discover each other. The live band is:
+#
+#   20        control_lan            (control-platform.yaml, run_mesh.sh --domain 20)
+#   30..99    platform_lan           (one per platform; start_platform_sim.sh's ID range)
+#   200       control_wan/platform_wan (the shared WAN)
+#
+# The allocator used to start at 40, i.e. squarely inside the platform_lan band — every
+# test past the first few handed itself a live platform's domain.
+#
+# The band has a hard upper bound. RTPS maps a domain to a UDP port as
+# PB + DG*D (= 7400 + 250*D), which exceeds 65535 at D = 233 and then WRAPS mod 65536 —
+# landing anywhere, including the privileged range. Measured on this install:
+#
+#   domain  232 -> port 65400        ok (the last domain that fits)
+#   domain  233 -> port 65650 -> 114  wraps into <1024
+#   domain 1023 -> port 263150 -> 1006 wraps into <1024
+#
+# That last line is not hypothetical: a first attempt at this fix used base 1000 and the
+# suite failed with "RTIOsapiSocket_bindWithIP: OS bind() failure ... Port 1006 with error
+# 0XD (Permission denied)" on Domain=1023, plus a wire-frugality test whose WAN port range
+# computed as [268900, 269149]. Note the repo guardrail in copilot-instructions.md quotes
+# "~5900-6000" as the ceiling; that is one observed instance of the wrap landing low, not
+# the limit. The limit is 232.
+#
+# So the usable non-live windows are 0-19, 21-29, 101-199 and 201-232. 101-199 is the only
+# one with real room: 99 ids = 33 triples, against 27 collected tests today.
+E2E_DOMAIN_BASE = 101
+E2E_DOMAIN_MAX = 199
+
+# The literal domains `router/config/control-platform.yaml` declares. That file is
+# deliberately runnable "as literally authored" (router/README.md), so it carries no
+# __DOMAIN_*__ placeholders — render_config() rewrites these values instead, mapping each
+# onto the test's own unique_domains triple. Keyed by the unique_domains role name.
+PRODUCTION_DOMAINS = {"control_lan": 20, "wan": 200, "platform_lan": 30}
+
 
 @pytest.fixture(scope="session")
 def admin_types_xml():
@@ -74,11 +112,18 @@ def router_binary():
 @pytest.fixture
 def unique_domains():
     """Three domain ids (control_lan, wan, platform_lan), spread out per test so
-    concurrent runs are unlikely to collide. Basic domain-id isolation only for now —
+    concurrent runs are unlikely to collide, and allocated from a band the live system
+    never uses (see E2E_DOMAIN_BASE above — H3). Basic domain-id isolation only for now —
     DomainParticipant-level PARTITION isolation (stronger: mismatched partitions block
     discovery entirely) is deferred to a later pass, once the router_main wiring + e2e
     suite are confirmed working end-to-end (docs/cpp_router/design-decisions.md D50)."""
-    base = 40 + next(_domain_counter) * 3
+    base = E2E_DOMAIN_BASE + next(_domain_counter) * 3
+    assert base + 2 <= E2E_DOMAIN_MAX, (
+        f"e2e domain allocator reached {base}, past the {E2E_DOMAIN_MAX} ceiling of the "
+        f"{E2E_DOMAIN_BASE}-{E2E_DOMAIN_MAX} band. Do NOT just raise the ceiling: domain "
+        f"ids above 232 make 7400+250*D exceed 65535, wrap mod 65536, and can land on a "
+        f"privileged port (bind fails with 'Permission denied'). Use 201-232, or free up "
+        f"ids, or move to PARTITION-based isolation (D50).")
     return {"control_lan": base, "wan": base + 1, "platform_lan": base + 2}
 
 
@@ -92,13 +137,50 @@ def e2e_tmp_dir(tmp_path, request):
 
 
 def render_config(fixture_name, domains, e2e_tmp_dir):
-    """Copy router/config/<fixture_name> into e2e_tmp_dir with domain placeholders
-    substituted, and return the rendered path."""
+    """Copy router/config/<fixture_name> into e2e_tmp_dir with its domains rewritten to
+    this test's `domains` triple, and return the rendered path.
+
+    Two shapes are supported, and one of them MUST apply — a config that neither carries
+    placeholders nor declares the production domains would otherwise be rendered
+    unchanged and silently run on whatever domains it happened to name (H3):
+
+    1. e2e fixtures carry __DOMAIN_CONTROL_LAN__ / __DOMAIN_WAN__ /
+       __DOMAIN_PLATFORM_LAN__ placeholders.
+    2. control-platform.yaml is deliberately runnable as literally authored, so it has no
+       placeholders — its literal live domains (PRODUCTION_DOMAINS) are rewritten instead.
+       Matched with a trailing \\b so `domain: 20` never eats the `20` of `domain: 200`.
+    """
     src = CONFIG_DIR / fixture_name
     text = src.read_text()
-    text = text.replace("__DOMAIN_CONTROL_LAN__", str(domains["control_lan"]))
-    text = text.replace("__DOMAIN_WAN__", str(domains["wan"]))
-    text = text.replace("__DOMAIN_PLATFORM_LAN__", str(domains["platform_lan"]))
+
+    placeholders = {
+        "__DOMAIN_CONTROL_LAN__": domains["control_lan"],
+        "__DOMAIN_WAN__": domains["wan"],
+        "__DOMAIN_PLATFORM_LAN__": domains["platform_lan"],
+    }
+    substituted = 0
+    for token, value in placeholders.items():
+        if token in text:
+            text = text.replace(token, str(value))
+            substituted += 1
+
+    if substituted == 0:
+        # Production-config path: rewrite the literal domains. Longest-first plus \b so
+        # the 20 -> N mapping cannot corrupt 200.
+        for role, live in sorted(PRODUCTION_DOMAINS.items(),
+                                 key=lambda kv: -kv[1]):
+            pattern = re.compile(r"(domain:\s*)%d\b" % live)
+            text, n = pattern.subn(r"\g<1>%d" % domains[role], text)
+            assert n > 0, (
+                f"{fixture_name} has no __DOMAIN_*__ placeholders and no literal "
+                f"'domain: {live}' for {role} — it cannot be domain-isolated, so it "
+                f"would run on live domains. Add placeholders, or update "
+                f"PRODUCTION_DOMAINS in conftest.py to match the config.")
+            substituted += n
+        assert not re.search(r"domain:\s*(20|30|200)\b", text), (
+            f"{fixture_name} still names a live domain after rendering: "
+            f"{re.findall(r'domain:.*', text)}")
+
     out = e2e_tmp_dir / fixture_name
     out.write_text(text)
     return out

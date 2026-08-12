@@ -3,8 +3,8 @@
 Milestone 2 (D59/D63/D66): the real config — not a trimmed e2e fixture — loaded twice by
 role, exactly as it is meant to be deployed:
 
-  control-role router_main  (control_lan 20 <-> control_wan 200, admin control_lan)
-  platform-role router_main (platform_wan 200 <-> platform_lan 30, admin platform_lan)
+  control-role router_main  (control_lan <-> control_wan, admin control_lan)
+  platform-role router_main (platform_wan <-> platform_lan, admin platform_lan)
 
 Everything Phase 7 delivered is load-bearing here at once: named QoS aliases on every WAN
 leg + both *_wan_udpv4_qos participant profiles (7a/D65), CONTROL/PLATFORM publisher/
@@ -14,7 +14,7 @@ multi-topic platform_events route (7c/D70), create-and-observe matching (7m/D67)
 
 Asserts the plan's E5/E6 evidence:
   E5  all three enabled routes cross the WAN without Routing Service:
-      control_command (control app -> platform app, CFT msg.destination),
+      control_command (control app -> platform app, CFT on `destination`),
       platform_init_status (platform app -> control app),
       platform_events (BOTH PlatformCommandAck and ContactReport, one route);
       platform_detail_status rides along DISABLED (toggled in
@@ -22,9 +22,20 @@ Asserts the plan's E5/E6 evidence:
   E6  per-route samples_forwarded advances in RouterStatus while state_revision does NOT
       move — the D63 periodic refresh republish, the one sanctioned D5 exception.
 
-The config's domains are its literal production values (20/30/200) — no placeholder
-rendering happens (render_config passes the file through unchanged), and the suite's
-unique_domains spreading starts at 40, so nothing else collides. Run from the repo root.
+Domain isolation (review 2026-08-11, H3): control-platform.yaml is deliberately runnable
+as literally authored, so it declares the LIVE domains 20/200/30 and carries no
+__DOMAIN_*__ placeholders. This test used to run on those literal values, which meant it
+could discover — and perturb — a `run_mesh.sh` mesh running concurrently on this VM.
+conftest.render_config() now rewrites those three literals onto this test's
+`unique_domains` triple (allocated from the non-live 1000+ band), so the production config
+is exercised verbatim in every respect except the domain ids. The probes below therefore
+read `unique_domains`, never the literals.
+
+Field naming: the payload types (`control_command`, `control_command_ack`, ...) are FLAT —
+`source`/`destination` at the top level. The `base_type msg` wrapper was retired when
+ActTypes.idl was flattened (review 2026-08-11, H2).
+
+Run from the repo root.
 """
 
 import sys
@@ -41,11 +52,9 @@ from util.dds_probe import (  # noqa: E402
     Probe, reader_qos, read_route_facts, wait_for_route, write_until_seen)
 
 CONFIG = "control-platform.yaml"
-# The production config's literal domains (participants: in the YAML).
-CONTROL_LAN_DOMAIN = 20
-PLATFORM_LAN_DOMAIN = 30
 
-PLATFORM_NODE = "Platform_30"  # config node.name; the control_command CFT parameter
+PLATFORM_NODE = "Platform_30"  # config node.name; the control_command CFT parameter.
+                               # A NAME, not a domain — unaffected by the H3 remapping.
 
 QOS_LIB_FILES = [
     "harness_v2/qos/lan_qos_lib.xml",
@@ -76,8 +85,8 @@ def test_full_control_platform_config(
     status_writer_qos = qos_prov.datawriter_qos_from_profile(
         "LAN_QOS_LIB::status_1sec_qos")
 
-    control_app = Probe(CONTROL_LAN_DOMAIN)
-    platform_app = Probe(PLATFORM_LAN_DOMAIN)
+    control_app = Probe(unique_domains["control_lan"])
+    platform_app = Probe(unique_domains["platform_lan"])
     try:
         control_status = control_app.reader(
             "ActRouterStatus", "RouterStatus",
@@ -134,13 +143,13 @@ def test_full_control_platform_config(
             f"{ctrl_detail}")
 
         # (E5) control_command crosses control_lan -> WAN -> platform_lan, through the
-        # destination-side CFT (msg.destination = 'Platform_30').
+        # destination-side CFT (destination = 'Platform_30').
         buckets = write_until_seen(
             lambda: cmd_writer.write(control_app.sample(
                 "control_command",
-                **{"msg.destination": PLATFORM_NODE, "msg.source": "Control_20"})),
+                destination=PLATFORM_NODE, source="Control_20")),
             cmd_reader,
-            classify=lambda d: d["msg.destination"], stop_key=PLATFORM_NODE,
+            classify=lambda d: d["destination"], stop_key=PLATFORM_NODE,
             check_alive=alive)
         assert buckets.get(PLATFORM_NODE), (
             f"ControlCommand never crossed the WAN; logs: "
@@ -157,10 +166,11 @@ def test_full_control_platform_config(
             f"PlatformInitStatus never crossed the WAN; logs: "
             f"control={control_proc.log_path} platform={platform_proc.log_path}")
 
-        # (E5) platform_events carries BOTH topics through ONE route.
-        # control_command_ack still wraps base_type msg; contact_report is now flat.
+        # (E5) platform_events carries BOTH topics through ONE route. Both payload types
+        # are FLAT (`source` at the top level) since ActTypes.idl retired the base_type
+        # wrapper — see this module's field-naming note.
         for writer, reader, type_name, label, src_field in (
-                (ack_writer, ack_reader, "control_command_ack", "PlatformCommandAck", "msg.source"),
+                (ack_writer, ack_reader, "control_command_ack", "PlatformCommandAck", "source"),
                 (contact_writer, contact_reader, "contact_report", "ContactReport", "source")):
             buckets = write_until_seen(
                 lambda w=writer, t=type_name, sf=src_field: w.write(platform_app.sample(

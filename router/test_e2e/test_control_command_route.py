@@ -1,7 +1,7 @@
 """End-to-end: control_command route, real router_main pair, real WAN hop.
 
 control app (control_lan) --[router control-role: control_lan -> control_wan]-->
-  WAN --[router platform-role: platform_wan (CFT msg.destination=Platform_30) -> platform_lan]-->
+  WAN --[router platform-role: platform_wan (CFT destination=Platform_30) -> platform_lan]-->
     platform app (platform_lan)
 
 Proves the same "simulate -> route -> subscribe" path through two real subprocess
@@ -9,10 +9,15 @@ router_main instances and a real WAN domain hop (see docs/cpp_router/design-deci
 D50 for what this fixture does and does not cover).
 
 Absorbs the retired C++ test/test_dynamic_forward.cxx (D52 test-suite policy: integration
-tests are Python). That test asserted DynamicData forwarding with a msg.destination
+tests are Python). That test asserted DynamicData forwarding with a `destination`
 ContentFilteredTopic — addressed platform receives, others are filtered out — which is
 exactly what this test asserts, but end-to-end through router_main instead of an
 in-process EntityFactory.
+
+Field naming: `control_command` is FLAT (`source`/`destination` at the top level). The
+`base_type msg` wrapper it used to carry was retired when ActTypes.idl was flattened —
+addressing `msg.destination` here throws "Failed to loan complex member" from the probe
+before the router is ever exercised (review 2026-08-11, H2).
 """
 
 import sys
@@ -39,13 +44,13 @@ def test_command_reaches_only_addressed_platform(router_pair, unique_domains):
 
         def write_both():
             writer.write(control_app.sample(
-                TYPE_NAME, **{"msg.destination": THIS_NODE, "msg.source": "Control_20"}))
+                TYPE_NAME, destination=THIS_NODE, source="Control_20"))
             writer.write(control_app.sample(
-                TYPE_NAME, **{"msg.destination": OTHER_NODE, "msg.source": "Control_20"}))
+                TYPE_NAME, destination=OTHER_NODE, source="Control_20"))
 
         buckets = write_until_seen(
             write_both, reader,
-            classify=lambda d: d["msg.destination"], stop_key=THIS_NODE,
+            classify=lambda d: d["destination"], stop_key=THIS_NODE,
             check_alive=lambda: control_proc.is_alive() and platform_proc.is_alive())
         seen_us = buckets.get(THIS_NODE, [])
         seen_other = buckets.get(OTHER_NODE, [])
