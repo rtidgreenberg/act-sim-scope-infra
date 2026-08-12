@@ -31,9 +31,11 @@ wired to run them for real (D46):
 - `config/e2e_control_command.yaml`, `config/e2e_platform_status.yaml` — trimmed,
   `router_main`-runnable fixtures (single type, `qos: ""`) used by the Python e2e suite
   (`test_e2e/`).
-- Tests: 9 C++ binaries under `test/` (`ctest`), plus the Python suite under `test_e2e/`.
-
-Phase 6 (command/status DDS control loop) is next.
+- Tests: 4 C++ unit binaries under `test/` (run via `run_tests.sh`), plus the Python suite
+  under `test_e2e/`. (The build tree may still hold binaries for retired targets —
+  `test_route_forward`, `test_dynamic_forward`, `test_runtime_spine`, `test_auto_qos`,
+  `test_discovery_smoke` — whose coverage moved to `test_e2e/` under D52. Only the four
+  registered with `add_test` are the suite.)
 
 ## Build & test
 
@@ -44,8 +46,13 @@ export NDDSHOME=/home/rti/rti_connext_dds-7.7.0
 cd router
 cmake -B build -DCONNEXTDDS_ARCH=x64Linux4gcc7.3.0
 cmake --build build
-ctest --test-dir build --output-on-failure
+./run_tests.sh
 ```
+
+**Use `run_tests.sh`, not `ctest --test-dir build`.** `--test-dir` requires CMake >= 3.20;
+this VM has 3.16.3, which ignores the flag, scans the current directory, prints `No tests
+were found!!!` — and **exits 0**. A gate using it reports success having run nothing.
+`run_tests.sh` cds into the build tree (works on any ctest) and fails a zero-test run.
 
 `router_main` must be run with **cwd = repo root**, not `router/` — the `types.xml`/
 `qos_libraries` paths in the config files are repo-root-relative:

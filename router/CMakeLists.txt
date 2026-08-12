@@ -3,7 +3,11 @@
 #   export NDDSHOME=/home/rti/rti_connext_dds-7.7.0
 #   cmake -B build -DCONNEXTDDS_ARCH=x64Linux4gcc7.3.0
 #   cmake --build build
-#   ctest --test-dir build --output-on-failure
+#   ./run_tests.sh                      # NOT `ctest --test-dir build`: --test-dir needs
+#                                       # CMake >= 3.20 and this install is 3.16.3, where
+#                                       # it is ignored and ctest exits 0 having run
+#                                       # nothing. run_tests.sh cds in and fails on an
+#                                       # empty run.
 #
 # Targets:
 #   router_main          Phase-0 entry point (no DDS): validate config, print identity.
