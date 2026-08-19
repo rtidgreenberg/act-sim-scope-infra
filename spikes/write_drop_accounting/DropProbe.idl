@@ -1,0 +1,7 @@
+// Minimal payload for the write-drop accounting spike. Unkeyed on purpose: every
+// sample lands on the single default instance, so a KEEP_LAST depth-N writer cache
+// is guaranteed to replace older samples rather than spreading them across instances.
+struct DropProbe {
+    long seq;
+    string<64> filler;
+};

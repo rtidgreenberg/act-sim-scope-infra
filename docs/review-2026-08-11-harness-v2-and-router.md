@@ -10,7 +10,8 @@ can re-check the claim rather than take it on trust.
 
 **Resolution status.** H1–H4 are **fixed and committed** on branch
 `review/2026-08-11-h1-h4-fixes` (see the per-finding *Status* blocks and the resolution log
-at the end). M5–M14 and L1–L10 are **open**. One residual follow-up is carried under H4.
+at the end). M5–M15 and L1–L10 are **open**. One residual follow-up is carried under H4.
+**M15 was added after the initial review**, from the spike run to settle M6.
 
 ---
 
@@ -25,7 +26,16 @@ at the end). M5–M14 and L1–L10 are **open**. One residual follow-up is carri
 | Post-run hygiene | `ls /dev/shm \| grep -E '^(RTI\|dds)'` | none | none |
 
 No live mesh was launched (per the repo's mesh-debugging guardrails); every router finding
-below is from source, the unit suite, or the e2e suite.
+below is from source, the unit suite, or the e2e suite — with one addition made after the
+initial review:
+
+| Check | Command | Result |
+|---|---|---|
+| Write-drop accounting spike (M6, M15) | `spikes/write_drop_accounting/build/write_drop_accounting` | 4 runs, stable; UDPv4-only, domains 181-184, `/dev/shm` clean after |
+
+That spike exists because M6 and M15 are both claims about *what Connext does and does not
+count*, which source reading cannot settle. See
+[`spikes/write_drop_accounting/README.md`](../spikes/write_drop_accounting/README.md).
 
 ---
 
@@ -317,6 +327,117 @@ field. A route whose writer rejects *every* sample is indistinguishable from an 
 drop and on each order-of-magnitude, and a `samples_dropped` field on
 `RouterRouteTopicStatus`. Cheap, and it turns a silent failure into a visible one.
 
+> **Evidence: `spikes/write_drop_accounting/` (2026-08-19, Connext 7.7.0).** The obvious
+> objection to the fix is that it duplicates a counter the middleware already keeps, so
+> this was measured before writing any code. It does not — **no native writer-side counter
+> observes a thrown `write()` at all.** Forcing 25 `dds::core::TimeoutError`s out of 40
+> writes (RELIABLE + KEEP_ALL, stalled reader) left `pushed_sample_count` at exactly 15 —
+> the count of writes that *returned* — with writer-global `rejected_sample_count`,
+> per-subscription `rejected_sample_count` and `replaced_unacknowledged_sample_count` all
+> at **0**. The sample never enters the writer's cache, so there is nothing for Connext to
+> account. A router-side counter of our own `write()` outcomes is the only possible source.
+> Full results, including the rejected alternatives below, in
+> [`spikes/write_drop_accounting/README.md`](../spikes/write_drop_accounting/README.md).
+>
+> **Two refinements to the fix**, both from the same spike:
+> - Classify the error. All 25 failures were `dds::core::TimeoutError` with zero other
+>   exception types, so `max_blocking_time` exhaustion is distinguishable at the catch site.
+>   Carry a `last_write_error` (or error-class) field rather than a bare count. Give it its
+>   own field — `last_error` belongs to the `apply_entity_error` lifecycle and is cleared on
+>   re-arm (`RouterController.cxx:409`).
+> - Pull it on the existing D63 counter tick. `apply_refresh_counters` already reads
+>   `forwarded_count()` synchronously on the controller strand and republishes without
+>   bumping `state_revision`; adding `dropped_count()` beside it needs no new
+>   `ControllerEvent`, no cross-strand mutation, and no D23 stale-stamp gating. Do **not**
+>   add a `topic_state` value for this — a topic hitting write exceptions is still armed and
+>   pumping and must keep reading as `TOPIC_FORWARDING` everywhere, including the
+>   `!= TOPIC_FORWARDING` guard at `RouterController.cxx:753`. If a visible degraded flag is
+>   wanted, derive it at publish time from "the dropped counter moved since the previous
+>   tick" — self-clearing, and it cannot get stuck the way a latch cleared only by a
+>   subsequent successful write does when the input goes idle.
+>
+> **Three native counters were considered and rejected** — recorded so they are not
+> re-proposed:
+> - `replaced_unacknowledged_sample_count` **is not a loss counter.** Two scenarios with
+>   identical writer QoS, differing only in whether the reader was drained, both read
+>   **35** — one having genuinely lost 35 samples, the other having lost **none**. It counts
+>   samples overwritten before the heartbeat-driven ACK returned, which is routine on a
+>   healthy KEEP_LAST reliable writer. Wiring it to route health would light up permanently
+>   on every healthy route.
+> - `unacknowledged_sample_count` is a **saturating gauge**. It read exactly 10 at the first
+>   throw — precisely the writer's `max_samples` — and peaked there, so it reaches its
+>   ceiling simultaneously with the first failure rather than ahead of it, and cannot count
+>   what was lost. It stays legitimate for what `ControllerJournalPublisher` uses it for.
+> - `full_reliable_writer_cache` counts cache-full *events*, not samples (2 events for 25
+>   lost samples), and reads 0 on the KEEP_LAST path where 35 were lost. Supporting signal
+>   at best.
+>
+> **Scope note.** `samples_dropped` captures the forwarding side only. In the same scenario
+> a further 10 samples reached the reader and were rejected *there* — so 35 of 40 were lost
+> through two independent mechanisms, and the second is visible only on the receiving
+> router's reader (`samples_rejected_local`). See **M15** for the writer-side field that was
+> supposed to cover the remote half and does not.
+
+### M6 — decided: dropping samples does NOT change route state or `state_revision`
+
+Recorded because it is the one part of this fix that is a decision rather than an edit, and
+because the obvious-looking alternative is wrong for a non-obvious reason.
+
+A route dropping every sample keeps `topic_state == TOPIC_FORWARDING` and route state
+`ROUTE_ENABLED` (`derive_operational` returns it as soon as `any_forwarding`, and never
+consults counters — `RouterState.cxx:100-131`). The dropped counter rides the D63
+refresh-counters republish: fresh numbers, **same** `state_revision`. `route_fingerprint`
+already excludes sample counters and says so at `RouterState.cxx:158-160`.
+
+The fork, if a `write_degraded` flag is added: `qos_warning` **is** in the fingerprint
+(`RouterState.cxx:155`), so there is a precedent for a runtime-observed health signal being
+D5-visible and revision-bumping. Resist it here. The flag would be derived from counters
+sampled at 1 Hz, so including it lets a flapping writer bump `state_revision` once per
+second — which drains the meaning of revision ("externally visible state changed") and makes
+**M5** materially worse, since every revision-less republish already re-asserts a stale
+`caused_by_command_id`. Turning counter churn into revision churn multiplies that bug. Keep
+`write_degraded` out of the fingerprint; if it ever goes in, it needs hysteresis first, and
+that is a larger change than M6 justifies.
+
+Do **not** repurpose `ROUTE_DEGRADED`. It is reachable today from exactly one condition — a
+topic in `TOPIC_TEARING_DOWN` with nothing forwarding (`RouterState.cxx:125`) — and both
+`test_controller_phase1.cxx:831` and `test_qos_alias_route.py:90` pin that meaning, while
+`gui/mesh_dashboard/static/mesh_graph.js:487` already renders it as unhealthy. Using it for
+write drops would report a *forwarding* route as degraded and collide with the teardown
+meaning.
+
+### M6 — implementation order (each step mirrors something that already exists)
+
+1. **Runtime** — `dropped_` atomic beside `count_` in `RouteRuntime.hpp:217-230`, incremented
+   in `pump()`'s catch, plus a `last_write_error_` classification. Expose `dropped()` on
+   `RouteTopicRuntimeBase` next to `forwarded()`.
+2. **Factory seam** — `dropped_count(route, topic)` as a sibling of `forwarded_count` on
+   `Interfaces.hpp:66` and `RouteEntityFactory.hpp:247`.
+3. **Controller** — pull it in `apply_refresh_counters` (`RouterController.cxx:741`) beside
+   `forwarded_count`, under the same `TOPIC_FORWARDING` guard, folding into `any_changed`.
+4. **IDL** — append `samples_dropped` + `last_write_error` to `RouterRouteTopicStatus`, and
+   roll `samples_dropped` up on `RouterRouteStatus` like `samples_forwarded` (D11 aggregate).
+   Regenerate `harness_v2/datamodel/gen/ActTypes.xml` per the data-model rule. The IDL
+   carries no extensibility annotations, so every type is default-appendable and appending at
+   the end is assignability-safe; in practice all routers build from this one IDL anyway.
+5. **Log** — rate-limited `Log::warn` on the first drop and each order of magnitude.
+
+**Test.** Extend `test_refresh_counters_republish_no_bump`
+(`router/test/test_controller_phase1.cxx:1068`): add a `dropped_counts` map to
+`FakeEntityFactory` beside `forwarded_counts` and assert the three properties it already
+asserts for forwarded — republish without a revision bump, silence when unchanged, cleared on
+teardown. No DDS entities.
+
+**Known gap.** That covers the controller half only. `pump()` actually incrementing on a
+throw is not reachable from the current fakes, since `RouteTopicRuntime` is templated on a
+real DDS writer. Either accept `spikes/write_drop_accounting/` as the evidence for that half,
+or add an e2e whose route output writer is RELIABLE + KEEP_ALL with tight resource limits
+against an undrained reader — scenario A of the spike, expressed as a `router/config/e2e_*.yaml`.
+Recommendation: ship without it, treat the e2e as optional follow-up.
+
+**Do this in the same pass as M15** — same subsystem, same evidence, and one IDL
+regeneration instead of two.
+
 ## M7 — An error on a FORWARDING topic leaves live entities running, and a later re-arm corrupts the dispatcher map
 
 `apply_entity_error` (`RouterController.cxx:891-923`) sets `TOPIC_ERROR`, zeroes the
@@ -489,6 +610,44 @@ in the file suggests this is deliberate. Any rate-based analysis of that topic �
 the traffic monitor's data/discovery split — is skewed by it. This is the kind of defect
 the duplication in L1 makes easy to introduce and hard to see.
 
+## M15 — `samples_rejected_remote` is always zero and does not measure remote rejection
+
+Found while measuring M6 (`spikes/write_drop_accounting/`, 2026-08-19, Connext 7.7.0).
+
+`poll_writer_wan_stats` reads `st.rejected_sample_count().total()` off the
+**per-matched-subscription** `DataWriterProtocolStatus`
+(`router/src/core/WanStatsPoll.hpp:73-85`) into `WriterLinkDeltas::samples_rejected_remote`,
+published as `samples_rejected_remote` (`harness_v2/datamodel/ActTypes.idl:460`). The name,
+the field, and the surrounding comment all promise "samples the peer reader rejected".
+
+It does not measure that. In a scenario where the remote reader **demonstrably rejected 35
+samples** — confirmed on that reader's own
+`DataReaderProtocolStatus::rejected_sample_count` — both the per-subscription **and** the
+writer-global `rejected_sample_count` read **0**. Across all four scenarios in the spike,
+including two with heavy confirmed loss, every writer-side rejection counter stayed at 0.
+
+Two things follow:
+
+1. This is **not** merely the `/* Only available for local DW status */` annotation on
+   `$NDDSHOME/include/ndds/dds_c/dds_c_publication.h:460` — which would have predicted the
+   per-subscription variant reading 0 while the writer-global one moved. The writer-global
+   variant does not move either. **Switching getters will not fix it**; nothing on the
+   writer side observes peer-side rejection.
+2. The working counterpart already exists and is already collected: the reader-side
+   `samples_rejected_local` cleanly separated the lossy scenario (35) from the lossless ones
+   (0). But it lives on the *receiving* router's reader, so remote rejection is observable
+   in the mesh — just never from the sending side.
+
+**Fix.** Delete `samples_rejected_remote` from `WriterTotals`, `WriterLinkDeltas`, the poll,
+and the IDL, and note in `WanStatsPoll.hpp` that writer-side rejection accounting is not
+available per peer so readers of link stats look to the peer's `samples_rejected_local`
+instead. Keeping a permanently-zero field named after a real failure mode is worse than not
+having it: it reads as evidence of no rejection.
+
+Worth checking the same way before trusting them: the other writer-side fields
+(`nack_frags_received`, `heartbeats_sent`) came from the same per-matched-endpoint getter,
+and only `pushed_sample_count` was confirmed live here.
+
 ---
 
 # LOW — clarity, simplification, hygiene
@@ -659,13 +818,17 @@ one applies — would produce unbounded WAN amplification, and the suite would s
    asserted (see the H4 status block's residual note). Small, and it closes the one place
    where an applied fix currently rests on inspection rather than a test.
 1. **M9** — close the remaining coverage hole that makes the suite look bigger than it is.
-2. **M5, M6, M13, M14** — small correctness fixes with visible consequences.
-3. **M7, M11** — the remaining state-hygiene items; each needs a decision, not just an edit.
-4. **M8** — measure the heartbeat first, then decide. Do not change the IDL on a hunch.
-5. **M10, M12, L6** — harness robustness.
-6. **L1** — the sim refactor. Highest line-count payoff, lowest risk, and it removes the
+2. **M5, M6, M13, M14** — small correctness fixes with visible consequences. M6's shape is
+   now settled by measurement rather than argument, so it is ready to write.
+3. **M15** — best done with M6: same subsystem, same spike, and the two findings are the
+   forwarding-side and remote-side halves of the same question. Deleting a
+   permanently-zero field is smaller than adding the counter that replaces its intent.
+4. **M7, M11** — the remaining state-hygiene items; each needs a decision, not just an edit.
+5. **M8** — measure the heartbeat first, then decide. Do not change the IDL on a hunch.
+6. **M10, M12, L6** — harness robustness.
+7. **L1** — the sim refactor. Highest line-count payoff, lowest risk, and it removes the
    soil M14 grew in.
-7. **L2–L5, L7–L9** — hygiene, best done as one sweep. (L10 was folded into the H1 fix.)
+8. **L2–L5, L7–L9** — hygiene, best done as one sweep. (L10 was folded into the H1 fix.)
 
 ---
 

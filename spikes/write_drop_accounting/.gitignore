@@ -1,0 +1,4 @@
+# CMake build tree: generated type support + binaries — never committed.
+build/
+# Result captures.
+results/
