@@ -1,0 +1,24 @@
+services:
+  connext:
+    build:
+      context: .
+      network: host
+      additional_contexts:
+        connext-host: /home/dgreenberg/rti_connext_dds-7.7.0
+      args:
+        CONNEXT_VERSION: "7.7.0"
+        ACT_REPO_URL: "https://github.com/rtidgreenberg/act-sim-scope-infra.git"
+        # Set ACT_REPO_REF to a branch, tag, or commit when needed.
+        ACT_REPO_REF: ""
+    image: connext:7.7.0
+    container_name: connext-7.7
+    init: true
+    network_mode: host
+    stdin_open: true
+    tty: true
+    environment:
+      NDDSHOME: /opt/rti.com/rti_connext_dds-7.7.0
+      RTI_LICENSE_FILE: /shared/rti_license.dat
+    volumes:
+      - ${CONNEXT_SHARED_DIR:-./shared}:/shared
+      - ${CONNEXT_WORKSPACE_DIR:-./workspace}:/workspace
