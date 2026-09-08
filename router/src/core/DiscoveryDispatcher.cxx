@@ -294,8 +294,8 @@ void DiscoveryDispatcher::maybe_learn_type(
         // missing-tests.md #4) — a per-topic key meant that once ANY endpoint on a
         // topic (e.g. an app subscription) drew the warning, a later untyped
         // publication on that SAME topic (e.g. a WIS writer — the type that actually
-        // matters for TypeResolved) was silently swallowed. The request_types_filter
-        // fallback is wired only when a real type needs it (D66/D70).
+        // matters for TypeResolved) was silently swallowed. LAN QoS profiles request
+        // discovered types proactively, so a later builtin update can still resolve it.
         bool first;
         {
             std::lock_guard<std::mutex> lk(table_mutex_);

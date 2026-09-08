@@ -2508,7 +2508,7 @@ guardrail).
 real production QoS libs (load + resolve + apply + match + participant-from-profile), but the
 spike surfaced three concrete additions 7a must absorb — the reason it was not high-confidence
 on paper:
-1. **The production QoS libs are templated with 14 env vars** (`*_LAN_PEER*`, `*_WAN_PEER*`,
+1. **The production QoS libs are templated with 13 env vars** (`*_LAN_PEER*`, `WAN_PEER`,
    `WAN_HB_PERIOD_SEC`, `WAN_TTL`, `WAN_TIMEOUT_SEC`, …) and do **not parse** unless they are
    defined. `router_main` must supply/propagate them and fail fast naming a missing one.
 2. **The WAN participant profile has an env-var constraint:** `participant_liveliness_assert_period`

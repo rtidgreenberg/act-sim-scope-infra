@@ -95,9 +95,9 @@ Type resolution rule for topic-only routes:
 
 - Discovery provides the topic name and the remote endpoint's registered type name. The
   router uses that type name internally when creating the output `Topic`.
-- In Connext 7.7, TypeObject v2 plus on-demand TypeLookup is the target mechanism:
-  discovery advertises small type-identifier hashes and Connext fetches the full type
-  definition (once, then caches it) only when the router needs it.
+- On LAN participants, Connext 7.7 TypeObject v2 plus proactive TypeLookup is the target
+  mechanism: `request_types_filter("*")` resolves complete types before a matching router
+  endpoint exists.
 - Once the router has a `DynamicType`, it can register/create the corresponding DynamicData
   topic on the WAN participant and write with that type.
 - For `serialized_cdr` forwarding, the discovered/registered type is still needed for DDS
@@ -106,28 +106,23 @@ Type resolution rule for topic-only routes:
 - Static `act_types.xml` is still useful as a deterministic fallback for the ACT POC, but
   the architecture is pinned to Connext 7.7 wire-learned type resolution.
 
-**Type discovery is enabled on the WAN (why it is now cheap).** The router creates the same
-topics/types on both ends of the link, so in steady state discovery carries only the small
-per-endpoint TypeIdentifier hashes — a full TypeObject crosses the WAN only when a peer that
-has never seen the type joins, served once by the relay and then cached (full behavior and
-validation in [Connext Investigation Review](connext-investigation-review.md#wan-type-exchange-behavior-typeobject-v2)).
-Config implications:
+**WAN type definitions are served only on demand.** Each router independently learns the
+complete type from its local LAN application endpoint, then creates its WAN endpoint with that
+`DynamicType`. WAN discovery carries the TypeObject v2 TypeIdentifier/equivalence hash; a
+complete definition crosses the WAN only when a TypeObject-v2 peer on that DDS domain requests
+it (for example, Admin Console). Config implications:
 
-- The WAN participant QoS must set `resource_limits.type_object_max_serialized_length` to
-  `LENGTH_AUTO` (not `0` — `0` disables TypeObject v2 entirely) and keep
-  `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. The relay
-  ships this in **its own** WAN QoS library rather than editing ACT: the ACT submodule's
-  `wan_qos_lib.xml` (which sets the value to `0`) is left untouched for now, and reconciling
-  it is deferred to a single later pass. The relay QoS library takes precedence for the
-  relay's own participants.
-- Leave `type_code_max_serialized_length = 0` (legacy TypeCode, not used by v2).
-- Do **not** set `request_types_filter` to `*` on the WAN participant — the router is a type
-  *source*, not a learner, so proactive fetching is unnecessary and only adds WAN traffic.
-- The builtin TypeLookup replier endpoints must be reachable inbound across the WAN
-  transport/NAT/firewall so remote peers that lack a type can resolve it from the relay.
-- Keep both ends' type definitions synchronized (shared IDL, same extensibility and
-  `rtiddsgen` version). If the structural equivalence hashes drift, Connext silently falls
-  back to fetching full TypeObjects per affected topic — the WAN cost this design avoids.
+- `router/qos/type_discovery_qos.xml` sets LAN `request_types_filter("*")`. The WAN
+  participant profile sets legacy `type_code_max_serialized_length = 0` and
+  `type_object_max_serialized_length = LENGTH_AUTO` to permit on-demand TypeObject v2.
+- A DynamicData sample does not carry its schema. The far-side router must learn the same type
+  from its own LAN endpoint, a local catalog, or an on-demand WAN TypeLookup reply before it
+  can create the WAN endpoint.
+- Keep both ends structurally identical (shared IDL, extensibility, and generator version).
+  A schema mismatch produces different TypeIdentifiers and requires TypeLookup to assess
+  assignability.
+- If the destination LAN endpoint appears late, the WAN reader is also created late. Recovery
+  of earlier samples depends on the configured WAN reliability, durability, and history.
 
 **One system-wide config (D80; supersedes the two-config-set model below).** A single YAML
 describes the whole system — every route (control↔platform and platform↔platform team),
@@ -160,8 +155,7 @@ QoS when it is intentionally changing the app-facing traffic shape, such as `lan
 
 ```yaml
 qos_profiles:
-  control_wan_udpv4_qos: WAN_QOS_LIB::control_participant_udpv4_qos
-  platform_wan_udpv4_qos: WAN_QOS_LIB::platform_participant_udpv4_qos
+  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
   wan_event: WAN_QOS_LIB::event_qos
   wan_status: WAN_QOS_LIB::status_qos
   lan_status_1hz: LAN_QOS_LIB::status_1hz_qos

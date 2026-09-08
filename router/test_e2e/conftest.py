@@ -28,16 +28,16 @@ os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
 os.environ.setdefault("RTI_LICENSE_FILE", os.path.join(os.environ["NDDSHOME"], "rti_license.dat"))
 
 # The production qos_libraries: files (harness_v2/qos/*.xml) are templated with
-# 14 env vars (peer locators + WAN tuning) and fail to parse without them. Loopback/test
+# 13 env vars (peer locators + WAN tuning) and fail to parse without them. Loopback/test
 # values, validated by spikes/qos_alias/ (WAN_TIMEOUT_SEC must be > the hardcoded 30s
 # participant_liveliness_assert_period in wan_qos_lib.xml — D60/D65). Tests that load
 # these libs (in-process via rti.connextdds, or by launching router_main against a
 # config that names them) call set_wan_qos_env() BEFORE importing rti.connextdds.
 WAN_QOS_ENV_DEFAULTS = {
     "CONTROL_LAN_PEER1": "127.0.0.1", "CONTROL_LAN_PEER2": "127.0.0.1",
-    "CONTROL_LAN_PEER3": "127.0.0.1", "CONTROL_WAN_PEER1": "127.0.0.1",
+    "CONTROL_LAN_PEER3": "127.0.0.1", "WAN_PEER": "127.0.0.1",
     "PLATFORM_LAN_PEER1": "127.0.0.1", "PLATFORM_LAN_PEER2": "127.0.0.1",
-    "PLATFORM_LAN_PEER3": "127.0.0.1", "PLATFORM_WAN_PEER1": "127.0.0.1",
+    "PLATFORM_LAN_PEER3": "127.0.0.1",
     "WAN_HB_PERIOD_SEC": "1", "WAN_HB_RETRIES": "10", "WAN_MAX_BLOCKING_SEC": "1",
     "WAN_TIMEOUT_SEC": "100", "WAN_TTL": "1", "WAN_RECEIVE_MULTICAST": "0",
 }
@@ -276,6 +276,7 @@ def router_pair(router_binary, e2e_tmp_dir):
     started = []
 
     def start(fixture_name, domains):
+        set_wan_qos_env()
         # Explicit for both roles (not "control_lan" override + implicit YAML default
         # for platform) so a copy-pasted fixture with a stale admin_participant default
         # can't silently make both processes resolve to the same admin participant.

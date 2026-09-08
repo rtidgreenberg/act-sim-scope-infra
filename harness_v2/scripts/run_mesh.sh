@@ -93,7 +93,7 @@ do_up() {
 
     export NDDSHOME="${NDDSHOME:-/home/rti/rti_connext_dds-7.7.0}"
     export RTI_LICENSE_FILE="${RTI_LICENSE_FILE:-$NDDSHOME/rti_license.dat}"
-    # CONTROL_WAN_PEER1/PLATFORM_WAN_PEER1 seed discovery on domain 200 (platform_wan +
+    # WAN_PEER seeds discovery on domain 200 (platform_wan +
     # control_wan -- team_wan retired, its role folded into platform_wan, D103), which
     # every platform shares -- a bare "127.0.0.1" peer descriptor implies Connext's
     # default max participant id of 4 (probes ids 0..4 only, confirmed against RTI's
@@ -108,8 +108,8 @@ do_up() {
     # control_wan (1) + up to 10 platforms x 1 domain-200 participant each post-D103
     # (was up to 5 platforms x 2 before); kept at 10 rather than shrunk since a larger
     # window is harmless headroom, not a tightness requirement.
-    export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 CONTROL_WAN_PEER1=10@127.0.0.1
-    export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1 PLATFORM_WAN_PEER1=10@127.0.0.1
+    export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 WAN_PEER=10@127.0.0.1
+    export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1
     export WAN_HB_PERIOD_SEC=1 WAN_HB_RETRIES=10 WAN_MAX_BLOCKING_SEC=1
     export WAN_TIMEOUT_SEC=100 WAN_TTL=1 WAN_RECEIVE_MULTICAST=0
 

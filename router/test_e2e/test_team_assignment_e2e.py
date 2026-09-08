@@ -153,7 +153,8 @@ def _get_node_dom_pos(page, node_id):
         const pos = net.getPositions(['{node_id}'])['{node_id}'];
         if (!pos) return null;
         const dom = net.canvasToDOM(pos);
-        return {{x: dom.x, y: dom.y}};
+        const rect = document.querySelector('#graph canvas').getBoundingClientRect();
+        return {{x: rect.left + dom.x, y: rect.top + dom.y}};
     }}""")
 
 

@@ -24,21 +24,33 @@ router:
 types:
   xml: harness_v2/datamodel/gen/ActTypes.xml
 
+qos_libraries:
+  - router/qos/type_discovery_qos.xml
+  - harness_v2/qos/wan_qos_lib.xml
+
+qos_profiles:
+  router_lan_participant: ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos
+  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
+
 participants:
   control_lan:
     role: control
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   control_wan:
     role: control
     domain: __DOMAIN_WAN__
+    qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
   platform_wan:
     role: platform
     domain: __DOMAIN_WAN__
+    qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 

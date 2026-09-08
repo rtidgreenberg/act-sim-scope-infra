@@ -24,9 +24,9 @@
 // spike-proven, spikes/type_discovery/) and registers it in the TypeResolver per topic
 // (first-learned-wins, D66), posting TypeResolved so the controller can build gated
 // topics. Ignored same-node router publications never teach types. An endpoint whose
-// type object is NOT inline draws a once-per-(topic, endpoint) `type_not_inline` warning
-// — the request_types_filter fallback (C++-only on this install) is wired only when a
-// real type needs it (D66).
+// type object is NOT inline draws a once-per-(topic, endpoint) `type_not_inline` warning.
+// LAN participant QoS profiles proactively request discovered TypeObject v2 definitions,
+// allowing a later builtin endpoint update to supply the COMPLETE DynamicType.
 
 #pragma once
 

@@ -160,7 +160,7 @@ has **literal** domains — `20`, `200`, `30` (`router/config/control-platform.y
 20/200/30.
 
 Those are exactly the domains `harness_v2/scripts/run_mesh.sh` uses (`--domain 20` for the
-bridge, `CONTROL_WAN_PEER1` on 200, platform LANs from 30). On a VM that runs concurrent
+bridge, `WAN_PEER` on 200, platform LANs from 30). On a VM that runs concurrent
 sessions, this test can discover — and be discovered by — a mesh it does not own. It can
 both produce false results and perturb someone else's run.
 

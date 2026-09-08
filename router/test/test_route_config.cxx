@@ -99,7 +99,7 @@ int main() {
 
     // --- QoS alias resolution (Phase 7a, D60) ---
     // control-platform.yaml declares every alias it uses (wan_event, wan_status,
-    // lan_status_1hz, control_wan_udpv4_qos, platform_wan_udpv4_qos) in its own
+    // lan_status_1hz, router_lan_participant, wan_participant) in its own
     // qos_profiles: map, so validate_qos_aliases now passes (it once rejected this file
     // during the Phase-5-interim gap, before qos_profiles: parsing existed).
     {
@@ -116,10 +116,10 @@ int main() {
         // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md
         // finding 3): must point at the profile the lib actually defines.
         CHECK(cfg.qos_profiles.at("lan_status_1hz") == "LAN_QOS_LIB::status_1sec_qos");
-        CHECK(cfg.qos_profiles.at("control_wan_udpv4_qos")
-              == "WAN_QOS_LIB::control_participant_udpv4_qos");
-        CHECK(cfg.qos_profiles.at("platform_wan_udpv4_qos")
-              == "WAN_QOS_LIB::platform_participant_udpv4_qos");
+          CHECK(cfg.qos_profiles.at("router_lan_participant")
+              == "ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos");
+          CHECK(cfg.qos_profiles.at("wan_participant")
+              == "WAN_QOS_LIB::wan_participant_udpv4_qos");
     }
 
     // --- config_hash (D80): SHA-256 over the file's raw bytes, full lowercase hex ---

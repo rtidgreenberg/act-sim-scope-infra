@@ -19,6 +19,8 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
             : dds::domain::DomainParticipant::default_participant_qos();
     // UDPv4 only — no shared memory segments on /dev/shm per vboxsf safety rules.
     qos << rti::core::policy::TransportBuiltin::UDPv4();
+    rti::core::policy::DiscoveryConfig discovery =
+        qos.policy<rti::core::policy::DiscoveryConfig>();
     if (!cfg.participant_name.empty()) {
         // D74 identity: name = "<node>/<router>" (Admin Console display), role_name =
         // the act.router detection sentinel. Replaces the D15 user_data tag.
@@ -51,8 +53,7 @@ dds::domain::qos::DomainParticipantQos make_participant_qos(
         // the link-stats WAN-leg flag (every WAN participant). SPDP2 tracks the same set as
         // on_wan today, but the choice of discovery protocol and the link-stats concern stay
         // separate flags so neither silently changes when the other is retuned.
-        rti::core::policy::DiscoveryConfig discovery =
-            qos.policy<rti::core::policy::DiscoveryConfig>();
+        discovery = qos.policy<rti::core::policy::DiscoveryConfig>();
         discovery.builtin_discovery_plugins(
             rti::core::policy::DiscoveryConfigBuiltinPluginKindMask::SPDP2() |
             rti::core::policy::DiscoveryConfigBuiltinPluginKindMask::SEDP());

@@ -82,6 +82,15 @@ Confidence after investigation: high.
 
 ## Type Resolution And ACT WAN QoS
 
+> **Superseded 2026-09-08: proactive type acquisition is LAN-only; WAN TypeObject v2 is
+> served on demand.** Both routers independently learn the complete type from their local LAN
+> endpoints (or a synchronized local catalog), create WAN endpoints from those types, and
+> match their TypeObject v2 TypeIdentifiers. The router participant QoS XML requests all types on LAN
+> participants, disables legacy WAN TypeCode, and uses `LENGTH_AUTO` so a peer on the same DDS
+> domain (such as Admin Console) may explicitly resolve TypeObject v2. Router WAN participants
+> do not proactively request remote types. A DynamicData sample does not transport its schema. The
+> historical WAN-TypeLookup decision and analysis below remain as investigation history.
+
 > **Decision reversed (2026-07-07): type discovery is now ENABLED on the WAN.** An earlier
 > draft required propagation to stay off and matched types from a local XML catalog only. We
 > now keep TypeObject v2 + on-demand TypeLookup enabled, because when both ends create the

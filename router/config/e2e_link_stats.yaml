@@ -31,14 +31,16 @@ types:
 
 # Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_status is
 # BEST_EFFORT (periodic status), wan_event is RELIABLE (events). Loading only the WAN lib —
-# its profiles reference only WAN_QOS_LIB::/BuiltinQosLib:: internally. Endpoint profiles only;
-# participants stay on default QoS so the two-process multicast discovery is unchanged. The
-# lib's participant profiles are env-templated, so test_link_stats.py calls set_wan_qos_env()
-# (loopback defaults) before launching the routers.
+# its profiles reference only WAN_QOS_LIB::/BuiltinQosLib:: internally. The shared WAN
+# participant profile is env-templated, so router_pair() initializes those variables before
+# launching the routers.
 qos_libraries:
+  - router/qos/type_discovery_qos.xml
   - harness_v2/qos/wan_qos_lib.xml
 
 qos_profiles:
+  router_lan_participant: ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos
+  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
   wan_status: WAN_QOS_LIB::status_qos
   wan_event: WAN_QOS_LIB::event_qos
 
@@ -46,17 +48,21 @@ participants:
   control_lan:
     role: control
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   control_wan:
     role: control
     domain: __DOMAIN_WAN__
+    qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
   platform_wan:
     role: platform
     domain: __DOMAIN_WAN__
+    qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
     spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
