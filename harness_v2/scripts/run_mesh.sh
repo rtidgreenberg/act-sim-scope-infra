@@ -52,6 +52,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 do_up() {
+    # router_main resolves qos_libraries paths relative to the repository root.
+    # The harness may be invoked from a container exec whose default cwd is `/`.
+    cd "$REPO_ROOT"
+
     if [[ -z "$PLATFORMS" ]]; then
         echo "Error: --platforms <N> is required for 'up'" >&2; exit 1
     fi

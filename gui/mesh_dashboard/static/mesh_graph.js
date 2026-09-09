@@ -312,6 +312,7 @@
   }
 
   const statusEl = document.getElementById("statusbar");
+  let topologyStatus = "connecting…";
   function setStatus(text) {
     statusEl.textContent = text;
   }
@@ -779,8 +780,9 @@
     const aliveCount = (data.peers || []).filter((p) => p && p.presence === "PRESENCE_ALIVE").length;
     const relayedCount = edges.get({ filter: (e) => e.source === "peers_seen" }).length;
     const revision = data.state_revision != null ? ` · rev ${data.state_revision}` : "";
-    setStatus(`View from ${data.observer_node} · control_lan · ${aliveCount}/${directCount} direct alive · ` +
-          `${relayedCount} relayed${revision}`);
+        topologyStatus = `View from ${data.observer_node} · control_lan · ${aliveCount}/${directCount} direct alive · ` +
+          `${relayedCount} relayed${revision}`;
+        setStatus(topologyStatus);
   }
 
   function ingestSampleArray(samples) {
@@ -838,7 +840,7 @@
 
       const meshWrapped = (msg.type === "mesh_status") ? { data: msg.data } : msg;
       if (ingestSampleArray([meshWrapped])) {
-        setStatus(`${statusEl.textContent} · ${new Date().toLocaleTimeString()} · ` +
+        setStatus(`${topologyStatus} · ${new Date().toLocaleTimeString()} · ` +
             `${nodes.length} nodes / ${edges.length} edges`);
       }
     };
