@@ -55,6 +55,11 @@ do_up() {
     # The harness may be invoked from a container exec whose default cwd is `/`.
     cd "$REPO_ROOT"
 
+    if [[ "$EUID" -eq 0 ]]; then
+        echo "Error: refuse to launch the mesh as root; run it as the checkout owner" >&2
+        exit 1
+    fi
+
     if [[ -z "$PLATFORMS" ]]; then
         echo "Error: --platforms <N> is required for 'up'" >&2; exit 1
     fi
@@ -72,6 +77,10 @@ do_up() {
     LOG_ROOT="$REPO_ROOT/debug/logs/mesh"
     rm -rf "$LOG_ROOT"
     mkdir -p "$LOG_ROOT"
+    NETWORK_LOG_ROOT="$REPO_ROOT/debug/logs/network_monitor"
+    mkdir -p "$NETWORK_LOG_ROOT"
+    find "$NETWORK_LOG_ROOT" -type f ! -name .gitkeep -delete
+    find "$NETWORK_LOG_ROOT" -mindepth 1 -type d -empty -delete
     # filesystem-safety guard: prove $WORKDIR is a real local fs, not the vboxsf share.
     if ! (mkfifo "$WORKDIR/.probe" 2>/dev/null && rm -f "$WORKDIR/.probe"); then
         echo "Error: $WORKDIR failed the mkfifo probe -- refusing to use a vboxsf/non-local path" >&2
@@ -192,13 +201,9 @@ do_up() {
         echo "mesh_bridge $!" >> "$WORKDIR/pids.txt"
         echo "[run_mesh up] dashboard: http://localhost:${DASHBOARD_PORT}/"
 
-        # Traffic monitor: captures RTPS on loopback, classifies discovery vs user-data,
-        # publishes DomainTrafficStats on domain 20 for the dashboard to visualize.
-        # Monitor domain 20 (control_lan) + 200 (WAN) + each platform's LAN domain.
-        MONITOR_DOMAINS="20,200"
-        for ID in $(seq 30 "$LAST_ID"); do
-            MONITOR_DOMAINS="${MONITOR_DOMAINS},${ID}"
-        done
+        # Traffic monitor: capture only the shared WAN domain and split its RTPS traffic
+        # into discovery versus user-data for the dashboard and diagnostic JSONL output.
+        MONITOR_DOMAINS="200"
         echo "[run_mesh up] launching traffic monitor (domains: $MONITOR_DOMAINS)..."
         nohup python3 "$REPO_ROOT/debug/scripts/domain_traffic_monitor.py" \
             --domains "$MONITOR_DOMAINS" --dashboard-url "http://localhost:${DASHBOARD_PORT}" \

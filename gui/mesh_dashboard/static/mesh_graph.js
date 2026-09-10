@@ -119,6 +119,11 @@
   const PLATFORM_PIN_Y = 35;
   const PLATFORM_PIN_X_SPACING = 210; // 140 * 1.5 (2026-07-23, user ask: widen 50%)
   const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
+  const RESOLUTION_BADGES = {
+    init: { label: "INIT", color: "#8a94a6" },
+    mission: { label: "MISSION", color: "#e0b84d" },
+    debug: { label: "DEBUG", color: "#e6553a" },
+  };
 
   function relayoutPlatformRow() {
     const rowIds = nodes
@@ -333,6 +338,29 @@
   // page.evaluate() call network.getPositions() / canvasToDOM() to find node coords.
   window.__network = network;
 
+  network.on("afterDrawing", (ctx) => {
+    nodes.get({ filter: (node) => node.kind === "peer" && node.resolutionMode }).forEach((node) => {
+      const badge = RESOLUTION_BADGES[node.resolutionMode];
+      const position = network.getPositions([node.id])[node.id];
+      if (!badge || !position) return;
+      ctx.save();
+      ctx.font = "bold 9px sans-serif";
+      const width = ctx.measureText(badge.label).width + 12;
+      const height = 17;
+      const x = position.x - width / 2;
+      const y = position.y - 34;
+      ctx.fillStyle = badge.color;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 4);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(badge.label, position.x, y + height / 2);
+      ctx.restore();
+    });
+  });
+
   // --- Detail panel (interactivity, 2026-07-21) ---------------------------------------
   // Click a node -> side panel with its full RouterHealth. All fields already live on the
   // node object (stashed in upsertMeshStatusSample), so this reads the DataSet, not the
@@ -344,7 +372,7 @@
   }
 
   const detailEl = document.getElementById("detail");
-  const collapsedDetailSections = new Set();
+  const expandedDetailSections = new Set();
 
   function detailRow(k, v) {
     return `<div class="detail-row"><span class="k">${k}</span>` +
@@ -353,9 +381,11 @@
 
   function detailSection(nodeId, sectionId, title, content) {
     const key = `${nodeId}:${sectionId}`;
-    const open = collapsedDetailSections.has(key) ? "" : " open";
-    return `<details class="detail-section" data-section-key="${key}"${open}>` +
-      `<summary>${title}</summary><div class="detail-section-content">${content}</div></details>`;
+    const expanded = expandedDetailSections.has(key);
+    const state = expanded ? " expanded" : "";
+    return `<section class="detail-section${state}" data-section-key="${key}">` +
+      `<button type="button" class="detail-section-toggle" aria-expanded="${expanded}">${title}</button>` +
+      `<div class="detail-section-content">${content}</div></section>`;
   }
 
   function badge(label, active) {
@@ -411,6 +441,13 @@
       if (label) result[label] = rs.state;
     });
     return result;
+  }
+
+  function resolutionModeFromHealth(health) {
+    const routeStates = routeStatesFromHealth(health);
+    if (routeStates.debug === "ROUTE_ENABLED") return "debug";
+    if (routeStates.mission === "ROUTE_ENABLED") return "mission";
+    return "init";
   }
 
   function routeBadge(label, routeState) {
@@ -536,7 +573,6 @@
       const data = await resp.json();
       if (data && typeof data === "object") {
         platformStatusCache.set(nodeId, data);
-        if (selectedId === nodeId) renderDetail(nodeId);
       }
     } catch (_err) {
       // Best-effort refresh only.
@@ -584,14 +620,17 @@
       `<div class="detail-title">${id}</div>` + body;
     detailEl.querySelector(".detail-close").addEventListener("click", hideDetail);
     detailEl.querySelectorAll(".detail-section").forEach((section) => {
-      section.querySelector("summary").addEventListener("click", (event) => {
+      const toggle = section.querySelector(".detail-section-toggle");
+      toggle.addEventListener("click", (event) => {
         event.preventDefault();
-        if (section.open) {
-          section.removeAttribute("open");
-          collapsedDetailSections.add(section.dataset.sectionKey);
+        event.stopPropagation();
+        const expanded = !section.classList.contains("expanded");
+        section.classList.toggle("expanded", expanded);
+        toggle.setAttribute("aria-expanded", String(expanded));
+        if (expanded) {
+          expandedDetailSections.add(section.dataset.sectionKey);
         } else {
-          section.setAttribute("open", "");
-          collapsedDetailSections.delete(section.dataset.sectionKey);
+          expandedDetailSections.delete(section.dataset.sectionKey);
         }
       });
     });
@@ -742,6 +781,7 @@
         // Stashed for the detail panel (interactivity) + team filter — read back from the
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
+        resolutionMode: resolutionModeFromHealth(health),
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
         ...PLATFORM_ROW_Y_FIELDS,
         ...(c2PinFields(health) || {}),
@@ -797,7 +837,6 @@
     if (n) {
       pruneStaleTeams();                        // remove chips for teams with no members
       applyViewFilters();                      // new nodes respect active filters/highlight
-      if (selectedId) renderDetail(selectedId); // live-refresh an open panel in place
     }
     return n;
   }
@@ -833,7 +872,6 @@
       if (msg.type === "platform_status") {
         if (msg.platform && msg.data) {
           platformStatusCache.set(msg.platform, msg.data);
-          if (selectedId === msg.platform) renderDetail(selectedId);
         }
         return;
       }

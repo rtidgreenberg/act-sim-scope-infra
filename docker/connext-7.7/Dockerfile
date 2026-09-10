@@ -18,6 +18,7 @@ RUN apt-get update \
         make \
         cmake \
         iproute2 \
+        libcap2-bin \
         libglib2.0-0 \
         libgtk2.0-0 \
         openjdk-11-jre-headless \
@@ -26,6 +27,8 @@ RUN apt-get update \
         python3-pip \
         tshark \
     && rm -rf /var/lib/apt/lists/*
+
+RUN setcap cap_net_raw=eip /usr/bin/dumpcap
 
 RUN curl -fsSL -o /usr/share/keyrings/rti-official-archive.gpg \
         https://packages.rti.com/deb/official/repo.key \
