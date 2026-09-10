@@ -19,7 +19,7 @@ app propagates its type. So we prove it against the real 7.7 install here.
 
 Method. One UDPv4 domain. An "app" participant owns act_types.xml (type control_command:
 struct { base_type msg }, base_type has a string member `destination`) — this is exactly
-how the real ACT sim publishes (harness/act/node_sim/python/*, rti.connextdds +
+how the real ACT sim publishes (harness_v2/sims/*, rti.connextdds +
 QosProvider.type(...)). A "router-like" participant has NO type at all and reads the type
 object straight off the builtin discovery data (data.type), the rti_view / rtiddsspy
 model — NOT the 7.7-only request_types_filter/TypeLookup path (which is unavailable in the
@@ -59,7 +59,7 @@ import rti.connextdds as dds  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-ACT_TYPES_XML = str(REPO_ROOT / "harness/act/node_sim/datamodel/act_types.xml")
+ACT_TYPES_XML = str(REPO_ROOT / "harness_v2/datamodel/gen/ActTypes.xml")
 
 _types_provider = None
 

@@ -67,7 +67,7 @@ import rti.connextdds as dds  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-ACT_TYPES_XML = str(REPO_ROOT / "harness/act/node_sim/datamodel/act_types.xml")
+ACT_TYPES_XML = str(REPO_ROOT / "harness_v2/datamodel/gen/ActTypes.xml")
 
 # The qos_libraries and qos_profiles map exactly as control-platform.yaml declares them.
 QOS_LIBS = [str(REPO_ROOT / p) for p in (

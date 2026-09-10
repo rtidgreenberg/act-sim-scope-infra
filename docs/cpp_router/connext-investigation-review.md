@@ -19,7 +19,7 @@ Evidence sources:
 
 - Connext AI answers for RTI Connext DDS Professional 7.7.0 Modern C++ API behavior.
 - Local Connext 7.7.0 headers under `/home/rti/rti_connext_dds-7.7.0/include/ndds/hpp`.
-- Existing ACT QoS and Routing Service configuration under `harness/act/config`.
+- Existing ACT QoS and Routing Service configuration is retained in the legacy ACT reference submodule.
 - Existing keyed C++ relay proof in `spikes/isc_recovery/relay/cpp/isc_relay.cxx`.
 
 Overall confidence: high for the phased plan if serialized CDR forwarding and generic
@@ -132,7 +132,7 @@ Decision:
   `TYPE_LOOKUP_SERVICE_CHANNEL` in `discovery_config.enabled_builtin_channels`. Leave
   `type_code_max_serialized_length = 0` (legacy).
 - **The relay carries this in its own QoS files, not by editing ACT.** The ACT submodule
-  (`harness/act`, `wan_qos_lib.xml` with `type_object_max_serialized_length = 0`) is left
+  (the legacy ACT reference, `wan_qos_lib.xml` with `type_object_max_serialized_length = 0`) is left
   untouched for now. The relay ships its own WAN QoS library (same pattern as `spikes/isc_recovery/relay/qos_isc.xml`)
   with v2 enabled, and reconciling the ACT repo is deferred to a single later pass.
 - The router must not silently depend on the setting — validate at startup and fail the route

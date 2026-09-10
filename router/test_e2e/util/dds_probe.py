@@ -1,7 +1,7 @@
 """Lightweight, synchronous DynamicData pub/sub helpers for the router e2e suite.
 
 Mirrors the pattern already proven in router/test/test_dynamic_forward.cxx (one writer,
-one reader, poll-with-timeout) rather than reusing harness/act's asyncio interactive sim
+one reader, poll-with-timeout) rather than reusing the legacy ACT asyncio interactive sim
 scripts — deterministic, single-shot, easy to assert against.
 """
 

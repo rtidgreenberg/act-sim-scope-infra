@@ -82,7 +82,7 @@ should:
 4. **Map every evidence bullet 1:1 onto a named test** before coding (D56 pattern); "done"
    must be checkable, not asserted.
 5. Run the Python e2e suite **from the repo root** (`python3 -m pytest router/test_e2e -q`;
-   relative `harness/act` paths break otherwise and leak `router_main` processes), keep
+  relative `references/legacy_harness` paths break otherwise and leak `router_main` processes), keep
    runtime files off the vboxsf share, and check `/dev/shm` after kill-based tests.
 6. After implementing, run an independent `/code-review` over the diff (D43/D44 precedent —
    a second pass finds real gaps even after a clean first review), then pin the

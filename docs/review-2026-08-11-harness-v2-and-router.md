@@ -1,7 +1,8 @@
 # Exhaustive review — `harness_v2/` and the C++ router — 2026-08-11
 
 Scope: everything under `harness_v2/` (datamodel, QoS libs, sims, scripts) and `router/`
-(src, config, test, test_e2e, CMake). GUI (`gui/mesh_dashboard/`) and the v1 `harness/` are
+(src, config, test, test_e2e, CMake). GUI (`gui/mesh_dashboard/`) and the removed v1 scaffold
+are
 out of scope except where `run_mesh.sh` launches them. Reviewed at commit `777f8df`,
 working tree clean.
 

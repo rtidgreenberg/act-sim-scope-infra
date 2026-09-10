@@ -154,7 +154,7 @@ coding starts:
 ## ACT Routes To Replace First
 
 The ACT submodule uses these channels in
-[harness/act/config/routing/routing_service_config.xml](../../harness/act/config/routing/routing_service_config.xml):
+[harness_v2 router configuration](../../router/config/control-platform.yaml):
 
 | ACT flow | Topics | Current Routing Service behavior | POC router behavior |
 |---|---|---|---|
@@ -166,7 +166,7 @@ The ACT submodule uses these channels in
 | Platform team traffic | `PlatformData` | platform LAN to `team_wan`; participant-level partition initially node-specific such as `PLATFORM_30`, changed to uppercase team name at runtime | route pair using a team participant partition updated by control command |
 
 The ACT DynamicData types come from
-[harness/act/node_sim/datamodel/act_types.xml](../../harness/act/node_sim/datamodel/act_types.xml):
+[harness_v2 data model](../../harness_v2/datamodel/ActTypes.idl):
 
 - `control_command` on topic `ControlCommand`
 - `control_command_ack` on topic `PlatformCommandAck`

@@ -38,7 +38,7 @@ import rti.connextdds as dds  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
-ACT_TYPES_XML = str(REPO_ROOT / "harness/act/node_sim/datamodel/act_types.xml")
+ACT_TYPES_XML = str(REPO_ROOT / "harness_v2/datamodel/gen/ActTypes.xml")
 
 TOPIC = "ControlCommand"
 TYPE = "control_command"

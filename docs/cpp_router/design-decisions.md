@@ -1249,7 +1249,7 @@ the generated-type fast path ships first by design.
 
 **Context.** Phase 3 forwarded a compile-time *generated* type (`RouterStatus`, already in the
 build). Phase 4's `control_command` route forwards an ACT type defined only in
-`harness/act/node_sim/datamodel/act_types.xml` (`control_command { base_type msg }`, with
+`harness_v2/datamodel/gen/ActTypes.xml` (`control_command { base_type msg }`, with
 `msg.destination : string`). Nothing generates ACT types into the router build, so Phase 4 forced
 a fork the plan never resolved: codegen the ACT types vs forward DynamicData. Both validated
 supported in 7.7 Modern C++ (`ask_connext_question`, 2026-07-09).
@@ -1872,7 +1872,7 @@ also multi-type). `platform-team.yaml`'s flat `input`/`output` route shape (no
    the resolved path if a file is missing, rather than inventing a path-rewriting rule the
    YAML wasn't authored for. `router/README.md`'s run examples are corrected accordingly.
 4. Two real, in-scope bugs fixed: `control-platform.yaml`'s `platform_primary_status` route
-   named its topic `PlatformStatus`; the real ACT system (`harness/act/node_sim/python/*`,
+  named its topic `PlatformStatus`; the legacy ACT reference system's node simulator,
    `act_types.xml`) uses `PlatformPrimaryStatus` — corrected. The stale "Phase 0" status
    blurb in `router/README.md` is updated to Phases 0-5 shipped / Phase 6 next.
 5. Since neither committed production YAML can run as a single process today (item above),
@@ -5117,7 +5117,7 @@ sides still see nothing of each other. Existing evidence strongly supports it (D
 `spikes/dp_partition_monitor/`), but none of it is a byte-for-byte test of this exact
 shape.
 
-**Out of scope.** `harness/act/` (the older harness, including
+**Out of scope.** The legacy ACT use-cases reference (including
 `routing_service_config.xml` and `remote_admin.cxx`'s hardcoded `team_wan` admin-tool
 target) is historical and untouched by this decision — only `harness_v2`-referencing
 config (this router's own `control-platform.yaml` et al.) is in scope.

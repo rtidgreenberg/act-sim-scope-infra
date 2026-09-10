@@ -191,11 +191,10 @@ control:
   target_router: platform-30-control-platform
 
 types:
-  xml: harness/act/node_sim/datamodel/act_types.xml
+  xml: harness_v2/datamodel/gen/ActTypes.xml
 
 qos_libraries:
-  - harness/act/config/qos/lan_qos_lib.xml
-  - harness/act/config/qos/wan_qos_lib.xml
+  - harness_v2/qos/act_qos_profiles.xml
   - spikes/isc_recovery/relay/qos_isc.xml
 
 participants:

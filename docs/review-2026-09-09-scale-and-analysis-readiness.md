@@ -159,7 +159,7 @@ evidence for RF behavior, DDS wire overhead, or impairment detection.
 ## Recommended next sequence
 
 1. Fix H1-H4 and M1-M3 in the current diagnostic path where applicable.
-2. Repair or replace the stale `harness/` Compose scaffold with the Phase 0.5 topology.
+2. Continue the Phase 0.5 topology work in `harness_v2/`; the obsolete Compose scaffold was removed.
 3. Add a minimal scenario controller: lifecycle, run ids, event journal, reset, and
    artifact directory on local storage.
 4. Add QoS pinning and EMANE RF Pipe; prove S1 with bounded capture on `emane0`.

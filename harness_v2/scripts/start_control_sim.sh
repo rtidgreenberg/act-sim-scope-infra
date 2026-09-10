@@ -1,5 +1,5 @@
 #!/bin/bash
-# harness_v2 CONTROL simulator launcher (trimmed v2 copy of harness/act/scripts).
+# harness_v2 CONTROL simulator launcher (trimmed v2 copy of the legacy ACT scripts).
 #
 # Usage:
 #   ./start_control_sim.sh --id <control_id> [options]

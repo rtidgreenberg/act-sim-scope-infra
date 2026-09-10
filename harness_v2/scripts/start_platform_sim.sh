@@ -1,5 +1,5 @@
 #!/bin/bash
-# harness_v2 PLATFORM simulator launcher (trimmed v2 copy of harness/act/scripts).
+# harness_v2 PLATFORM simulator launcher (trimmed v2 copy of the legacy ACT scripts).
 #
 # Usage:
 #   ./start_platform_sim.sh --id <platform_id> [options]
