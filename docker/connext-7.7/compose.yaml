@@ -3,8 +3,6 @@ services:
     build:
       context: .
       network: host
-      additional_contexts:
-        connext-host: /home/dgreenberg/rti_connext_dds-7.7.0
       args:
         CONNEXT_VERSION: "7.7.0"
         ACT_REPO_URL: "https://github.com/rtidgreenberg/act-sim-scope-infra.git"

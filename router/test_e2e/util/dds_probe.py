@@ -10,8 +10,10 @@ import time
 import rti.connextdds as dds
 
 ACT_TYPES_XML = "harness_v2/datamodel/gen/ActTypes.xml"
+ACT_QOS_XML = "harness_v2/qos/act_qos_profiles.xml"
 
 _provider = None
+_qos_provider = None
 
 
 def _types():
@@ -21,13 +23,20 @@ def _types():
     return _provider
 
 
+def _qos():
+    global _qos_provider
+    if _qos_provider is None:
+        _qos_provider = dds.QosProvider(ACT_QOS_XML)
+    return _qos_provider
+
+
 class Probe:
     """One UDPv4-only DomainParticipant on `domain`, for app-side pub/sub in a test."""
 
     def __init__(self, domain, participant_name=None, role_name=None, spdp2=False,
                  participant_partition=None):
-        qos = dds.DomainParticipant.default_participant_qos
-        qos.transport_builtin = dds.TransportBuiltin.udpv4
+        qos = _qos().participant_qos_from_profile(
+            "ACT_QOS_LIB::test_participant_qos")
         # participant_partition (D83/D103): PARTICIPANT-level partition, the RTI
         # extension that gates discovery itself (SPDP), not just endpoint (SEDP)
         # matching -- same mechanism the router applies via ParticipantRegistry. A probe

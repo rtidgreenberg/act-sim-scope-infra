@@ -57,9 +57,7 @@ PLATFORM_NODE = "Platform_30"  # config node.name; the control_command CFT param
                                # A NAME, not a domain — unaffected by the H3 remapping.
 
 QOS_LIB_FILES = [
-    "harness_v2/qos/lan_qos_lib.xml",
-    "harness_v2/qos/wan_qos_lib.xml",
-    "relay/qos_isc.xml",
+    "harness_v2/qos/act_qos_profiles.xml",
 ]
 
 ENABLED_ROUTES = ["control_command", "platform_init_status", "platform_events"]

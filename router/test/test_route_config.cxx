@@ -117,7 +117,7 @@ int main() {
         // finding 3): must point at the profile the lib actually defines.
         CHECK(cfg.qos_profiles.at("lan_status_1hz") == "LAN_QOS_LIB::status_1sec_qos");
           CHECK(cfg.qos_profiles.at("router_lan_participant")
-              == "ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos");
+              == "ACT_QOS_LIB::router_lan_participant_qos");
           CHECK(cfg.qos_profiles.at("wan_participant")
               == "WAN_QOS_LIB::wan_participant_udpv4_qos");
     }

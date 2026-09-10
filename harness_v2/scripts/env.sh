@@ -11,9 +11,9 @@
 
 _V2_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-export NDDS_QOS_PROFILES="${_V2_ROOT}/qos/lan_qos_lib.xml;${_V2_ROOT}/datamodel/gen/ActTypes.xml"
+export NDDS_QOS_PROFILES="${_V2_ROOT}/qos/act_qos_profiles.xml;${_V2_ROOT}/datamodel/gen/ActTypes.xml"
 
-# lan_qos_lib.xml expands these LAN initial-peer vars in <initial_peers> (all overridable).
+# act_qos_profiles.xml expands these LAN initial-peer vars in <initial_peers>.
 # Values mirror harness/act/params/system_params.sh: multicast + UDP loopback + shmem.
 export LAN_MULTICAST_ADDRESS="${LAN_MULTICAST_ADDRESS:-builtin.udpv4://239.255.0.1}"
 export PLATFORM_LAN_PEER1="${PLATFORM_LAN_PEER1:-$LAN_MULTICAST_ADDRESS}"

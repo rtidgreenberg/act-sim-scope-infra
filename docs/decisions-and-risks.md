@@ -8,7 +8,7 @@
 
 | Decision | Choice |
 |---|---|
-| RTI packaging | **Node image:** `FROM rticom/routing-service` + **PyPI** `rti.connext`; license mounted at runtime. **No RTI Debian packages / apt token anywhere** — remote admin is done in Python (`rti.connext` ServiceAdmin request/reply). The C++ `remote_admin` tool + `Dockerfile.remote-admin` are **reference-only, off the critical path**. |
+| RTI packaging | **Current router-mesh image:** Ubuntu 22.04 + RTI's public Debian repository (`rti-connext-dds-7.7.0`) + pinned PyPI `rti.connext`; license mounted at runtime. The image build needs access to `packages.rti.com` and PyPI but no host Connext installation. Remote admin remains Python (`rti.connext` ServiceAdmin request/reply); the C++ `remote_admin` tool + `Dockerfile.remote-admin` are **reference-only, off the critical path**. |
 | EMANE source | Upstream **[adjacentlink/emane](https://github.com/adjacentlink/emane)** — prebuilt `.deb` packages on GitHub Releases (+ RF Pipe model, `emane-model-rfpipe`) install cleanly on the Debian/Ubuntu node image |
 | EMANE RF model | **CommEffect + RF Pipe** — CommEffect for precise manual/scenario impairment (exact per-link loss / latency / jitter / bandwidth directives); RF Pipe for realistic range / pathloss / mobility. Pick per scenario. |
 | Initial scale | **2–5 nodes** (e.g. 1 Control + 2–4 Platforms) |
@@ -30,9 +30,9 @@
   Service, Python, CDS, **Observability Framework** (Monitoring Library 2.0 + Collector).
 - **Monitoring Library 2.0 not in host package** — RTI host installers omit the lib;
   the node image must install the monitoring target package + set the lib search path.
-- **RTI apt repo is license-gated** — the Debian repo URL embeds a per-user access
-  token. Passed to the build as `--build-arg RTI_APT_TOKEN=...` (never baked into the
-  image or committed). Same for the license file (mounted at runtime, not built in).
+- **RTI package-repository availability** — the current image uses RTI's public Debian
+  repository. Treat repository reachability and package-version availability as a build
+  prerequisite; keep the runtime license mounted rather than copying it into the image.
 - **EMANE + RTI version alignment** — ✅ both target **Ubuntu 22.04 (Jammy)**; single base image.
 - **Multicast over RF Pipe** — validate broadcast forwarding for DDS discovery early;
   fall back to unicast/CDS if flaky.

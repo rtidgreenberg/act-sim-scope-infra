@@ -34,6 +34,9 @@ os.environ.setdefault(
 
 import rti.connextdds as dds  # noqa: E402
 
+QOS_XML = os.path.join(os.path.dirname(os.path.dirname(__file__)), "qos",
+                       "act_qos_profiles.xml")
+
 
 def build_participant_name_map(participant):
     """Map participant_key (as returned by the builtin data, stringified) -> a display
@@ -98,8 +101,8 @@ def main():
                         help="Seconds to wait for discovery before reporting.")
     args = parser.parse_args()
 
-    qos = dds.DomainParticipant.default_participant_qos
-    qos.transport_builtin = dds.TransportBuiltin.udpv4
+    qos = dds.QosProvider(QOS_XML).participant_qos_from_profile(
+        "ACT_QOS_LIB::test_participant_qos")
     participant = dds.DomainParticipant(args.domain, qos)
 
     time.sleep(args.wait)

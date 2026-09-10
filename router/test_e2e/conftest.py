@@ -30,7 +30,7 @@ os.environ.setdefault("RTI_LICENSE_FILE", os.path.join(os.environ["NDDSHOME"], "
 # The production qos_libraries: files (harness_v2/qos/*.xml) are templated with
 # 13 env vars (peer locators + WAN tuning) and fail to parse without them. Loopback/test
 # values, validated by spikes/qos_alias/ (WAN_TIMEOUT_SEC must be > the hardcoded 30s
-# participant_liveliness_assert_period in wan_qos_lib.xml — D60/D65). Tests that load
+# participant_liveliness_assert_period in act_qos_profiles.xml — D60/D65). Tests that load
 # these libs (in-process via rti.connextdds, or by launching router_main against a
 # config that names them) call set_wan_qos_env() BEFORE importing rti.connextdds.
 WAN_QOS_ENV_DEFAULTS = {

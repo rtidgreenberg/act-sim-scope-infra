@@ -5,6 +5,8 @@ agent: "agent"
 ---
 Tear down only the ACT router mesh launched by `/launch`. The repository root is the current workspace root, the container is `connext-7.7`, and the harness workdir inside the container is `/tmp/act_mesh_launch`.
 
+If Docker is installed but this shell has not received the `docker` group membership yet, run Docker commands through `sg docker -c '...'`; do not use `sudo` for Docker commands.
+
 Follow this sequence:
 1. If the `connext-7.7` container exists and is running, invoke only the harness lifecycle command:
    ```bash

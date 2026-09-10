@@ -49,6 +49,29 @@ runs **three** cooperating processes via a supervisor/entrypoint:
 **Container requirements:** `--cap-add=NET_ADMIN`, `--device=/dev/net/tun`,
 `sysctl` for multicast; the control bridge is a dedicated compose network.
 
+### Migration checkpoint: container baseline before RF
+
+The working `harness_v2/scripts/run_mesh.sh` harness remains the host-process diagnostic
+tool until the Compose baseline is proven. Its DDS domains isolate simulated LANs, but it
+does not create network namespaces or demonstrate that WAN traffic crosses an impaired
+link. The next implementation phase is therefore a **container isolation baseline**, not
+an ad-hoc Docker bridge WAN:
+
+1. Compose creates one container per control/platform node and an `emane_ctrl` bridge for
+  EMANE OTA/Event Service plus management traffic only.
+2. WAN DDS has no direct Docker bridge route. Once EMANE is added, each WAN participant is
+  pinned to `emane0`; any alternative path is a test failure because it bypasses RF Pipe
+  and CommEffect.
+3. LAN DDS remains node-local. The EMANE slice adds UDP-only LAN QoS plus explicit
+  loopback pinning, allowing packet capture to prove LAN traffic never crosses `emane0`.
+4. The container lifecycle is owned by the harness controller, not shell scripts launched
+  outside it. It creates an isolated run directory on local storage and records all
+  actions there.
+
+This yields a meaningful progression: domain IDs allocate DDS test space; containers
+create network isolation; EMANE owns WAN transport and impairment. The Phase 0.5 exit
+criteria and baseline tests are in [roadmap.md](roadmap.md).
+
 ## Control-plane API (the backbone, §2.5)
 
 Both GUIs, the scenario runner, and scripted/CI tests all sit on one **backend control
@@ -60,6 +83,21 @@ service** exposing primitives across:
 - **State/query:** read topology + metrics (Prometheus / EMANE events).
 
 **Define this control surface before choosing GUI tech.**
+
+### Scenario controller boundary
+
+The scenario controller is the harness's centralized experiment authority. Its initial
+API should be deliberately small: create/reset a run, bring the topology up/down, query
+node health, execute a timed action, and append a durable action/result event to the run
+log. A scenario is a declarative sequence of those actions with stable ids and relative
+times; failures stop the run unless the scenario marks them as expected.
+
+Later adapters implement EMANE link/mobility/CommEffect events, Docker node
+kill/restart, DDS stimulus, and remote-admin actions. Each adapter reports a correlated
+result to the controller so scenarios can make a verdict and export artifacts. Do not put
+this experiment lifecycle or fault policy into `router_main` or a per-node orchestrator:
+those processes make local mission/router decisions, while the controller deliberately
+causes and records faults across the whole topology.
 
 ### Python-relay control surface — custom DDS topics ✅ decided
 The **Python ISC relay's** control surface is **custom DDS topics** (not RS `ServiceAdmin` — we own the relay, so we give it a clean, typed, observable contract). Two patterns, by action type:
@@ -99,6 +137,33 @@ Design rules: **desired + reported topics are `TRANSIENT_LOCAL`/KEEP_LAST** so a
 - **Run/session history** — name runs, browse past runs, load their artifacts for review.
 
 ## Test-operation gaps (scenario runner, §2.6)
+
+### Measurement objectives and correlation method
+
+The harness exists to produce defensible evidence under controlled conditions, not merely
+to demonstrate that messages can flow. Every baseline and fault scenario records a shared
+scenario clock, the requested fault schedule, and measurements from the three distinct
+path segments:
+
+| Question | Ground truth / measurement | Required output |
+|---|---|---|
+| What is DDS network overhead? | Packet capture on `emane0`, classified into user DATA and RTPS discovery/reliability/control traffic; offered application payload bytes from the sims | bytes/s and bytes per delivered application byte, by topic, node pair, and RTPS class |
+| How does DDS react to impairment? | EMANE CommEffect/RF Pipe parameters and events; per-peer `LinkStatsCollector` reliable-protocol totals and interval deltas; app seq/timestamp delivery and RTT | time-aligned traces of NACKs, repair bytes, heartbeats, send-window/backlog, inactive readers, `lost_by_writer`, app delivery, and RTT |
+| Can protocol statistics detect a bad link? | A scenario's labeled transient loss, outage, recovery, delay, and congestion windows | detection latency, recovery latency, precision/recall, and false alarms during a nominal baseline |
+
+Detection begins as an offline correlation exercise. The controller must retain raw counters
+and fault labels before selecting thresholds or a classifier. Candidate signals include
+NACK/repair-byte rate, unacknowledged backlog, send-window contraction, reader inactivity,
+application-ack RTT, and app sequence gaps. A detector may report `nominal`, `degraded`,
+`congested`, or `unreachable` only after the experiment distinguishes network impairment
+from local resource limits, endpoint rediscovery, and quiet traffic. Until then, the UI
+shows the raw measurements and scenario ground truth rather than an unsupported health
+judgment.
+
+The initial fault matrix is: nominal baseline; fixed bandwidth congestion; bounded loss;
+intermittent loss; complete cutout; recovery; and a node kill/restart control case. Each
+fault action is emitted by the scenario controller with a stable id and expected duration,
+so a run can be replayed and metrics windows can be compared across configurations.
 
 - **Result capture & verdict** — per-scenario metric windows, **pass/fail vs thresholds**,
   and an **artifact bundle** (metrics CSV, event log, screenshots, optional pcap). This is the

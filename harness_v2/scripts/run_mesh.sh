@@ -170,7 +170,7 @@ do_up() {
     # platform_mesh_control.py needs NDDS_QOS_PROFILES for the LAN QoS profiles (same as the
     # platform_sim, which gets it via start_platform_sim.sh -> env.sh). Export it here so
     # the nohup child inherits it.
-    export NDDS_QOS_PROFILES="${V2_ROOT}/qos/lan_qos_lib.xml;${V2_ROOT}/datamodel/gen/ActTypes.xml"
+    export NDDS_QOS_PROFILES="${V2_ROOT}/qos/act_qos_profiles.xml;${V2_ROOT}/datamodel/gen/ActTypes.xml"
     for ID in $(seq 30 "$LAST_ID"); do
         # Platform mesh control process (team-control-topic-plan.md §3): subscribes to
         # TeamAssignment on platform_lan and translates into RouterCommand

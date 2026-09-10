@@ -11,6 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
+        curl \
         git \
         gcc \
         g++ \
@@ -26,16 +27,23 @@ RUN apt-get update \
         tshark \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=connext-host bin /opt/rti.com/rti_connext_dds-7.7.0/bin
-COPY --from=connext-host doc /opt/rti.com/rti_connext_dds-7.7.0/doc
-COPY --from=connext-host include /opt/rti.com/rti_connext_dds-7.7.0/include
-COPY --from=connext-host lib /opt/rti.com/rti_connext_dds-7.7.0/lib
-COPY --from=connext-host resource /opt/rti.com/rti_connext_dds-7.7.0/resource
-COPY --from=connext-host third_party /opt/rti.com/rti_connext_dds-7.7.0/third_party
-COPY --from=connext-host rti_versions.xml /opt/rti.com/rti_connext_dds-7.7.0/rti_versions.xml
+RUN curl -fsSL -o /usr/share/keyrings/rti-official-archive.gpg \
+        https://packages.rti.com/deb/official/repo.key \
+    && printf 'deb [arch=%s signed-by=%s] %s %s main\n' \
+        "$(dpkg --print-architecture)" \
+        /usr/share/keyrings/rti-official-archive.gpg \
+        https://packages.rti.com/deb/official \
+        "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+        > /etc/apt/sources.list.d/rti.list \
+    && printf '%s\n' \
+        'rti-connext-dds-7.7.0-common rti-connext-dds-7.7.0/license/accepted select true' \
+        | debconf-set-selections \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y rti-connext-dds-7.7.0 \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir \
-    "$NDDSHOME"/resource/python_api/rti_connext-${CONNEXT_VERSION}-cp310-*.whl
+    "rti.connext==${CONNEXT_VERSION}"
 
 RUN printf '%s\n' \
     'export NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0' \

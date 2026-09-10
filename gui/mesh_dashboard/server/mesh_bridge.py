@@ -28,6 +28,7 @@ import rti.connextdds as dds
 
 _THIS_FILE = Path(__file__).resolve()
 DEFAULT_TYPES_XML = _THIS_FILE.parents[3] / "harness_v2" / "datamodel" / "gen" / "ActTypes.xml"
+DEFAULT_QOS_XML = _THIS_FILE.parents[3] / "harness_v2" / "qos" / "act_qos_profiles.xml"
 DEFAULT_STATIC_DIR = _THIS_FILE.parents[1] / "static"
 
 MESH_STATUS_TOPIC = "ActRouterMeshStatus"
@@ -66,7 +67,7 @@ def _qos_provider_for(types_xml: Path):
         entry = entry.strip()
         if entry and Path(entry).resolve() == resolved:
             return dds.QosProvider.default
-    return dds.QosProvider(str(types_xml))
+    return dds.QosProvider(f"{DEFAULT_QOS_XML};{types_xml}")
 
 
 class DdsBridge:
@@ -86,16 +87,14 @@ class DdsBridge:
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
         status_mode_type = qp.type(STATUS_MODE_TYPE)
 
-        pqos = dds.DomainParticipantQos()
-        pqos.transport_builtin = dds.TransportBuiltin.udpv4
+        pqos = qp.participant_qos_from_profile(
+            "ACT_QOS_LIB::dashboard_participant_qos")
         self.participant = dds.DomainParticipant(domain_id, pqos)
 
         # MeshStatusReaderQos equivalent: VOLATILE + BEST_EFFORT (D100).
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
         subscriber = dds.Subscriber(self.participant)
-        rqos = dds.QosProvider.default.datareader_qos
-        rqos.durability.kind = dds.DurabilityKind.VOLATILE
-        rqos.reliability.kind = dds.ReliabilityKind.BEST_EFFORT
+        rqos = qp.datareader_qos_from_profile("ACT_QOS_LIB::dashboard_reader_qos")
         self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic, rqos)
 
         # Platform status readers (all best-effort + volatile on control_lan).
@@ -119,9 +118,7 @@ class DdsBridge:
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
         publisher = dds.Publisher(self.participant)
-        wqos = dds.QosProvider.default.datawriter_qos
-        wqos.durability.kind = dds.DurabilityKind.VOLATILE
-        wqos.reliability.kind = dds.ReliabilityKind.RELIABLE
+        wqos = qp.datawriter_qos_from_profile("ACT_QOS_LIB::dashboard_writer_qos")
         self.writer = dds.DynamicData.DataWriter(publisher, team_topic, wqos)
 
         # StatusResolution writer (RELIABLE + VOLATILE).

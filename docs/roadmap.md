@@ -16,6 +16,28 @@ Milestone tags (M0–M4) map to the original plan milestones.
 - **Tests:** containers start; DDS discovery over the bridge; **all ACT channels flow** (commands / status / events / team); no EMANE.
 - **Exit:** the ACT stack runs containerized end-to-end without EMANE. *(Foundational; can proceed in parallel with Phase 1.)*
 
+## Phase 0.5 — Container isolation baseline & scenario control contract  · **[M0]**
+Bridge the working host-process harness to the EMANE architecture before introducing
+impairment. The current DDS-domain isolation remains useful for test allocation, but it
+does not prove network isolation.
+
+- **Feature-set (harness):** replace host-launched node processes with Compose-managed
+  control and platform containers. Create an `emane_ctrl` Docker bridge used only for
+  EMANE OTA/Event Service traffic and management. Define each node's future WAN contract
+  as `emane0`; do **not** carry direct WAN DDS on the Docker bridge, because that would
+  bypass EMANE in Phase 3. Preserve node-local LAN traffic on loopback until LAN UDP-only
+  pinning lands with EMANE.
+- **Feature-set (control):** introduce a centralized scenario controller with lifecycle
+  primitives (`up`, `down`, `reset`, node status) and an append-only run event log. It owns
+  Compose/Docker lifecycle and later EMANE events and faults. It is not the per-node
+  mission orchestrator: per-node policy continues to command only its local router.
+- **Tests:** start one control plus two platforms; prove all expected WAN-domain traffic
+  is absent from the Docker bridge until `emane0` exists; prove container lifecycle actions
+  are recorded with run id, timestamp, target, request, and result; reset returns to a
+  clean baseline with no residual containers, ports, or DDS shared-memory entries.
+- **Exit:** a repeatable container baseline and a narrow controller contract exist without
+  claiming RF impairment. Detailed topology and controller ownership: [test-harness.md](test-harness.md).
+
 ## Phase 1 — Python ISC relay proof-of-concept + ISC test  · **[M0 · go/no-go gate]**
 De-risk the linchpin of the transparent-relay strategy **before** building the environment around it: *does a pure-Python, ISC-enabled DP-to-DP relay preserve true DDS `instance_state` across a disconnection?* Needs only `rti.connext` + a plain network — **no containers/EMANE/ACT stack.**
 - **Feature-set (relay):** rough Python relay = **ISC-enabled `DataReader` (leg 1) + ISC-enabled `DataWriter` (leg 2)**, forwarding samples and **mirroring instance lifecycle** (reader instance-state change → writer `dispose`/`unregister`). Concrete keyed `@idl.struct` type first; ISC via QoS API or **XML QoS profile** fallback.
@@ -36,14 +58,24 @@ De-risk the linchpin of the transparent-relay strategy **before** building the e
 - **Exit:** full stack over emulated RF, observed on `emane0`.
 
 ## Phase 4 — Instrumentation, decode & metrics  · **[M2]**
-- **Feature-set (DDS + sniffer + scope):** seq#/timestamp payloads (app e2e latency/loss); **RTI Observability** (Monitoring Lib 2.0 → `collector-service` → Prometheus/Loki/Grafana), telemetry **pinned off the RF**; `emanesh` PHY exporter; **sniffer decode stage** (command-gated, `act_types.xml`) → **endpoint inspector** live decoded samples.
-- **Tests:** per-channel latency (p50/p95) + delivery ratio; **observer-off vs observer-on** credibility check; decode-set gating + rate-cap; **capture throughput** (signal drops, don't under-count); cross-layer loss (app seq-gaps vs `emanesh`).
-- **Exit:** quantitative metrics + live decoded inspector, trustworthy under load.
+- **Feature-set (DDS + sniffer + scope):** seq#/timestamp payloads (app e2e latency/loss); **RTI Observability** (Monitoring Lib 2.0 → `collector-service` → Prometheus/Loki/Grafana), telemetry **pinned off the RF**; `emanesh` PHY exporter; packet accounting on `emane0` for user DATA versus RTPS discovery/reliability/control overhead; **sniffer decode stage** (command-gated, `act_types.xml`) → **endpoint inspector** live decoded samples. Add bounded control-side replay for the existing `ActRouterControllerJournal` ledger: an analysis client requests the last $K$ records, or records after an event sequence, from one target router and receives a correlated finite reply stream.
+- **Tests:** per-channel latency (p50/p95) + delivery ratio; bytes/s and bytes-per-delivered-payload-byte by RTPS class; **observer-off vs observer-on** credibility check; decode-set gating + rate-cap; **capture throughput** (signal drops, don't under-count); cross-layer loss (app seq-gaps vs `emanesh`); time-aligned raw per-peer DDS protocol counters against a labeled fault schedule; a late control-side analysis client requests the last $K$ ledger records and receives ordered, gap-explicit results without enabling durable replay on the WAN.
+- **Exit:** quantitative metrics + live decoded inspector, trustworthy under load, with enough raw evidence to begin the Phase 5 impairment-correlation experiment.
+
+**Journal replay contract.** The live controller journal remains a LAN-local analysis stream.
+Replay is an explicit, bounded request/reply operation over the target router's local control
+interface, not a change to WAN durability: request fields include target router, correlation
+id, and either `last_k` or `after_event_sequence`; replies carry records in increasing event
+sequence plus the oldest/newest retained sequence and a truncation indicator. The target keeps
+only a fixed in-memory ring, rejects invalid or unbounded requests, and never blocks the
+controller event strand while a control-side reader is slow. This allows late analysis clients
+to recover enough decision history to align fault windows and protocol counters while retaining
+the current bounded-overhead posture.
 
 ## Phase 5 — Degradation & prioritization  · **[M3]**
 - **Feature-set (DDS):** CommEffect / EEL impairment; **DDS-layer prioritization** (TransportPriority + **async flow controllers**) — *central, not optional* (§6, test-harness); reliable-vs-best-effort split.
-- **Tests:** **S2 — degrade to 50 kbps** (reliable commands+events persist while best-effort status starves; SYS-REQ-02, partial SYS-REQ-11); prioritization keeps low-rate control alive as the pipe collapses.
-- **Exit:** graceful degradation + prioritization demonstrated and measured.
+- **Tests:** **S2 — degrade to 50 kbps** (reliable commands+events persist while best-effort status starves; SYS-REQ-02, partial SYS-REQ-11); intermittent-loss, cutout, recovery, and congestion windows are controller-labeled; prioritization keeps low-rate control alive as the pipe collapses; correlate per-peer reliable-protocol counters with those windows before evaluating a link-impairment detector.
+- **Exit:** graceful degradation + prioritization demonstrated and measured, with detection latency, recovery latency, and false-alarm evidence for any proposed protocol-statistics detector.
 
 ## Phase 6 — Dynamic C2: teams, targeting, isolation  · **[M3]**
 - **Feature-set (DDS control):** partition/**team CRUD via Python remote admin** (`rti.connext ServiceAdmin`) — **operational C2 over the RF**; content-filtered targeted commands; on-demand detail-status enable.

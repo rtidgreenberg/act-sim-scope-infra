@@ -21,13 +21,21 @@ router:
 types:
   xml: router/config/example_types.xml
 
+qos_libraries:
+  - harness_v2/qos/act_qos_profiles.xml
+
+qos_profiles:
+  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
+
 participants:
   lan_in:
     role: platform
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   lan_out:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
 
 routes:
   - name: ignore_r1

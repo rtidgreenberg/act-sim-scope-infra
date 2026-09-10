@@ -42,13 +42,10 @@ types:
   xml: harness_v2/datamodel/gen/ActTypes.xml
 
 qos_libraries:
-  - router/qos/type_discovery_qos.xml
-  - harness_v2/qos/lan_qos_lib.xml
-  - harness_v2/qos/wan_qos_lib.xml
-  - relay/qos_isc.xml
+  - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
-  router_lan_participant: ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos
+  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
   wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
   wan_event: WAN_QOS_LIB::event_qos
   wan_status: WAN_QOS_LIB::status_qos

@@ -22,13 +22,21 @@ router:
   name: events
   admin_participant: wan_in
 
+qos_libraries:
+  - harness_v2/qos/act_qos_profiles.xml
+
+qos_profiles:
+  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
+
 participants:
   wan_in:
     role: platform
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   lan_out:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
 
 routes:
   - name: events_r1

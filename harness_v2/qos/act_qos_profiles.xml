@@ -1,53 +1,218 @@
 <?xml version="1.0"?>
 
-<!-- 
-(c) Copyright, Real-Time Innovations, 2025.  All rights reserved.
-RTI grants Licensee a license to use, modify, compile, and create derivative
-works of the software solely for use with RTI Connext DDS. Licensee may
-redistribute copies of the software provided that all such copies are subject
-to this license. The software is provided "as is", with no warranty of any
-type, including any warranty for fitness for any purpose. RTI is under no
-obligation to maintain or support the software. RTI shall not be liable for
-any incidental or consequential damages arising out of the use or inability
-to use the software.
--->
-
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.3.0/rti_dds_qos_profiles.xsd">
 
-  <!-- 
-    These Variables are intended to be set/calculated in the start_router.sh script. 
-    Defaults can be set below. 
-  -->
-
   <configuration_variables>
-
-    <!-- Multicast TTL for over the WAN network -->
+    <element>
+      <name>CONTROL_LAN_PEER1</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>CONTROL_LAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>CONTROL_LAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER1</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_HB_RETRIES</name>
+      <value>10</value>
+    </element>
+    <element>
+      <name>WAN_RECEIVE_MULTICAST</name>
+      <value>0</value>
+    </element>
     <element>
       <name>WAN_TTL</name>
       <value>6</value>
     </element>
-
-    <!-- Heartbeat Period for RELIABILITY QoS -->
     <element>
       <name>WAN_HB_PERIOD_SEC</name>
       <value>3</value>
     </element>
-
-    <!-- WAN System Timeout -->
     <element>
       <name>WAN_TIMEOUT_SEC</name>
       <value>300</value>
     </element>
-
-    <!-- WAN Max Blocking Time -->
     <element>
       <name>WAN_MAX_BLOCKING_SEC</name>
       <value>15</value>
     </element>
-
   </configuration_variables>
 
+  <qos_library name="ACT_QOS_LIB">
+    <qos_profile name="router_lan_participant_qos">
+      <domain_participant_qos>
+        <discovery_config>
+          <request_types_filter>*</request_types_filter>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="test_participant_qos">
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="dashboard_participant_qos" base_name="ACT_QOS_LIB::test_participant_qos"/>
+
+    <qos_profile name="dashboard_reader_qos">
+      <datareader_qos>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="dashboard_writer_qos">
+      <datawriter_qos>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+      </datawriter_qos>
+    </qos_profile>
+  </qos_library>
+  <qos_library name="LAN_QOS_LIB">
+    <!--              
+    ____________________________________________________________________________
+
+                      QOS Profiles used on the LAN side      
+    ____________________________________________________________________________
+    -->
+
+    <qos_profile name="platform_lan_participant_qos">
+
+      <domain_participant_qos>
+
+        <!-- Match QoS in your Platform LAN -->
+
+        <discovery>
+          <initial_peers>
+            <element>$(PLATFORM_LAN_PEER1)</element>
+            <element>$(PLATFORM_LAN_PEER2)</element>
+            <element>$(PLATFORM_LAN_PEER3)</element>
+          </initial_peers>
+        </discovery>
+
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="control_lan_participant_qos">
+
+      <domain_participant_qos>
+
+        <!-- Match QoS in your Control LAN -->
+
+        <discovery>
+          <initial_peers>
+            <element>$(CONTROL_LAN_PEER1)</element>
+            <element>$(CONTROL_LAN_PEER2)</element>
+            <element>$(CONTROL_LAN_PEER3)</element>
+          </initial_peers>
+        </discovery>
+
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="status_qos" base_name="BuiltinQosLib::Generic.Common">
+      <!-- 
+        This profile is intended for Periodic "STATUS" data. 
+
+        Deadline: INF [Default]
+        Liveliness: INF [Default]
+        -->
+
+      <datawriter_qos>
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- How many samples to keep around. BEST_EFFORT only needs 1 as it doesn't resend -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+      </datawriter_qos>
+
+      <datareader_qos>
+
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- KEEP_LAST will overwrite data if cache is "full" -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>50</depth>
+        </history>
+
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="status_1sec_qos" base_name="LAN_QOS_LIB::status_qos">
+
+      <!-- Inheriting the status_qos profile and just adding a time based filter to downsample -->
+
+      <datareader_qos>
+        <!-- 
+          We want to downsample on the LAN "Input" Routing Service reader before 
+          it goes into Routing Service 
+          This minimizes resource usage as high rate data is not processed at full rate
+          -->
+        <time_based_filter>
+          <minimum_separation>
+            <sec>1</sec>
+            <nanosec>0</nanosec>
+          </minimum_separation>
+        </time_based_filter>
+      </datareader_qos>
+
+    </qos_profile>
+
+
+    <qos_profile name="event_qos" base_name="BuiltinQosLib::Generic.Common">
+      <!-- Update here per an Aperiodic Command Data Pattern/your system -->
+
+    </qos_profile>
+
+    <qos_profile name="platform_event_qos" base_name="LAN_QOS_LIB::event_qos">
+    </qos_profile>
+
+    <qos_profile name="control_event_qos" base_name="LAN_QOS_LIB::event_qos">
+    </qos_profile>
+
+    <qos_profile name="platform_status_qos" base_name="LAN_QOS_LIB::status_qos">
+    </qos_profile>
+
+    <qos_profile name="platform_status_1sec_qos" base_name="LAN_QOS_LIB::status_1sec_qos">
+    </qos_profile>
+
+    <qos_profile name="control_status_qos" base_name="LAN_QOS_LIB::status_qos">
+    </qos_profile>
+
+  </qos_library>
   <qos_library name="WAN_QOS_LIB">
 
     <!--              
@@ -83,6 +248,9 @@ to use the software.
 
 
         <discovery_config>
+          <!-- Router WAN legs create DynamicData routes from discovered TypeObjects. -->
+          <request_types_filter>*</request_types_filter>
+
           <!-- 
             Defines amount of messages broadcast on startup to announce a participants presence. 
             DEFAULT: 5.
@@ -408,5 +576,4 @@ to use the software.
 
 
   </qos_library>
-
 </dds>

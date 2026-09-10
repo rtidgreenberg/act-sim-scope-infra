@@ -8,7 +8,7 @@
 # Same single-process topology as e2e_auto_qos.yaml (this test's Python port
 # fixture for Phase 5) — the app writer/reader the test creates are the matched peers.
 #
-# wan_qos_lib.xml is templated with WAN_PEER and WAN tuning variables; the e2e harness
+# The canonical QoS XML is templated with WAN_PEER and WAN tuning variables; the e2e harness
 # supplies loopback/test values before launching router_main.
 #
 # Domain placeholders substituted per test run — see router/test_e2e/conftest.py
@@ -26,9 +26,7 @@ types:
   xml: router/config/example_types.xml
 
 qos_libraries:
-  - harness_v2/qos/lan_qos_lib.xml
-  - harness_v2/qos/wan_qos_lib.xml
-  - relay/qos_isc.xml
+  - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
   wan_status: WAN_QOS_LIB::status_qos

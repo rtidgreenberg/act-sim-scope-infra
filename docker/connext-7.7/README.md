@@ -1,14 +1,15 @@
 # Connext DDS 7.7 container
 
-This example builds an Ubuntu 22.04 image from the local Connext DDS 7.7
-installation at `/home/dgreenberg/rti_connext_dds-7.7.0` and clones
-`https://github.com/rtidgreenberg/act-sim-scope-infra.git` into
-`/opt/act-sim-scope-infra`. The Connext license is not copied into the image;
-it is mounted only when the container runs.
+This example builds an Ubuntu 22.04 image from RTI's public Debian repository
+and clones `https://github.com/rtidgreenberg/act-sim-scope-infra.git` into
+`/opt/act-sim-scope-infra`. The build installs the full
+`rti-connext-dds-7.7.0` SDK and the matching `rti.connext` Python binding. The
+Connext license is not copied into the image; it is mounted only when the
+container runs.
 
 ## Prepare the files
 
-Place the license and any shared configuration at:
+Place the license and any shared configuration in a host directory, for example:
 
 ```text
 docker/connext-7.7/shared/rti_license.dat
@@ -16,7 +17,12 @@ docker/connext-7.7/shared/
 ```
 
 The `shared` directory is mounted at `/shared`; it is not copied into the
-image. Keep the license file out of source control.
+image. It needs only `rti_license.dat`; the Docker image installs the Connext
+SDK itself. Keep the license file out of source control.
+
+The `/launch` prompt uses `/home/dgreenberg/rti_connext_dds-7.7.0` as its fixed
+license-only mount source. Create that directory and place `rti_license.dat`
+there before launching on a new host.
 
 ## Build and start
 
@@ -27,8 +33,10 @@ docker compose build
 docker compose run --rm connext bash
 ```
 
-The host installation path is configured in `compose.yaml` as an additional
-build context. Change that path if Connext 7.7 is installed elsewhere.
+The Dockerfile configures RTI's APT repository and preseeds the RTI license
+agreement required for unattended package installation. The build requires
+network access to `packages.rti.com` and PyPI; it does not require a host
+Connext installation.
 
 The container starts in `/opt/act-sim-scope-infra`. To build a specific branch
 or tag:
