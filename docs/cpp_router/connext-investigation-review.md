@@ -20,7 +20,7 @@ Evidence sources:
 - Connext AI answers for RTI Connext DDS Professional 7.7.0 Modern C++ API behavior.
 - Local Connext 7.7.0 headers under `/home/rti/rti_connext_dds-7.7.0/include/ndds/hpp`.
 - Existing ACT QoS and Routing Service configuration under `harness/act/config`.
-- Existing keyed C++ relay proof in `relay/cpp/isc_relay.cxx`.
+- Existing keyed C++ relay proof in `spikes/isc_recovery/relay/cpp/isc_relay.cxx`.
 
 Overall confidence: high for the phased plan if serialized CDR forwarding and generic
 DynamicData lifecycle mirroring remain isolated optimization/risk spikes, not blockers for
@@ -133,7 +133,7 @@ Decision:
   `type_code_max_serialized_length = 0` (legacy).
 - **The relay carries this in its own QoS files, not by editing ACT.** The ACT submodule
   (`harness/act`, `wan_qos_lib.xml` with `type_object_max_serialized_length = 0`) is left
-  untouched for now. The relay ships its own WAN QoS library (same pattern as `relay/qos_isc.xml`)
+  untouched for now. The relay ships its own WAN QoS library (same pattern as `spikes/isc_recovery/relay/qos_isc.xml`)
   with v2 enabled, and reconciling the ACT repo is deferred to a single later pass.
 - The router must not silently depend on the setting — validate at startup and fail the route
   loudly if a type cannot be resolved.
@@ -376,7 +376,7 @@ Confidence after investigation: medium-high for API feasibility, medium for ACT 
 
 Evidence:
 
-- Existing `relay/cpp/isc_relay.cxx` already proves generated-type key recovery using
+- Existing `spikes/isc_recovery/relay/cpp/isc_relay.cxx` already proves generated-type key recovery using
   `reader_.key_value(key, info.instance_handle())` and mirrors dispose/unregister with the
   output writer.
 - Connext AI confirmed the generic DynamicData pattern: recover a key-only DynamicData from

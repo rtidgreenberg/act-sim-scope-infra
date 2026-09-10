@@ -91,7 +91,7 @@ Also: keyed types only; ServiceRequest builtin channel enabled (default); if
 `DESTINATION_ORDER = BY_SOURCE_TIMESTAMP`, RECOVER is limited to INSTANCE scope. **[C]**
 
 Reference profile: [`spikes/isc_recovery/qos_isc_recovery.xml`](../../spikes/isc_recovery/qos_isc_recovery.xml),
-and the proven relay profile [`relay/cpp/qos_isc.xml`](../../relay/qos_isc.xml).
+and the proven relay profile [`spikes/isc_recovery/relay/qos_isc.xml`](../../spikes/isc_recovery/relay/qos_isc.xml).
 
 ## 3. The intermediary gap (why a relay/router can't be transparent for free)
 
@@ -158,7 +158,7 @@ source of truth.
 
 Residual limit (both forms): an instance recovered to `ALIVE` that the relay never held a
 value for cannot be re-asserted — logged and skipped, same class as the `key_value()`
-recovery caveat in [`relay/cpp/isc_relay.cxx`](../../relay/cpp/isc_relay.cxx). With
+recovery caveat in [`spikes/isc_recovery/relay/cpp/isc_relay.cxx`](../../spikes/isc_recovery/relay/cpp/isc_relay.cxx). With
 `TRANSIENT_LOCAL` the value normally arrives alongside, so this is an edge, not the common
 case.
 

@@ -15,7 +15,7 @@
 // SIGUSR1 prints a full per-key snapshot of the current instance states.
 // SIGINT/SIGTERM exits cleanly.
 //
-// Modern C++ entity/QoS/key_value patterns follow relay/cpp/isc_relay.cxx.
+// Modern C++ entity/QoS/key_value patterns follow spikes/isc_recovery/relay/cpp/isc_relay.cxx.
 // -----------------------------------------------------------------------------
 
 #include <atomic>

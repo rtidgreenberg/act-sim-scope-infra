@@ -54,6 +54,6 @@ PASS iff A and B both hold. Exit nonzero on any structural failure.
 ## Method
 
 `spdp_partition_discovery_spike.cxx`, built via `CMakeLists.txt` (same `RTIConnextDDS::cpp2_api`
-pattern as `relay/cpp/CMakeLists.txt`, no codegen needed — no topics/types involved). Poll
+pattern as `spikes/isc_recovery/relay/cpp/CMakeLists.txt`, no codegen needed — no topics/types involved). Poll
 `dds::domain::discovered_participants(participant).size()` on a plain loop with
 `std::this_thread::sleep_for`.

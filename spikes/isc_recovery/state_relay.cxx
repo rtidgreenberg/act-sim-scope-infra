@@ -3,7 +3,7 @@
 //
 //     origin (dom A) --> [ ISC reader (leg 1) ]--(mirror)-->[ ISC writer (leg 2) ] --> downstream (dom B)
 //
-// This is the relay/cpp/isc_relay.cxx mirror, extended to answer the actual question:
+// This is the spikes/isc_recovery/relay/cpp/isc_relay.cxx mirror, extended to answer the actual question:
 // does instance state RELAYED from the reader reach the writer so the DOWNSTREAM
 // reader sees it — including the case where leg-1 native ISC recovers an instance
 // back to ALIVE?

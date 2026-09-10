@@ -70,9 +70,9 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
 - CMake pattern: add `${CONNEXTDDS_DIR}/resource/cmake` to `CMAKE_MODULE_PATH`,
   `find_package(RTIConnextDDS "7.7.0" REQUIRED COMPONENTS core)`, generate types with
   `connextdds_rtiddsgen_run(... LANG "C++11" ...)`, link `RTIConnextDDS::cpp2_api`.
-  Reference build: `relay/cpp/CMakeLists.txt`.
+  Reference build: `spikes/isc_recovery/relay/cpp/CMakeLists.txt`.
 - Modern C++ (C++11) API. Proven entity/QoS/`key_value()` patterns live in
-  `relay/cpp/isc_relay.cxx`.
+  `spikes/isc_recovery/relay/cpp/isc_relay.cxx`.
 - **Generated types use DIRECT public data members, not accessors.** Connext 7.7 follows the
   updated OMG IDL-to-C++11 mapping, so `rtiddsgen` emits struct fields as public members with
   `{}` initializers — write `s.target_node = "x";` / `s.routes.push_back(r);` / `s.routes.at(0)`,
@@ -185,7 +185,7 @@ real interface (not `lo`) will pick up unrelated host traffic and run forever.
 
 ## Spikes
 
-Experimental proofs live in their own folder (e.g. `relay/`, `spikes/isc_recovery/`) with a
+Experimental proofs live in their own folder (e.g. `spikes/isc_recovery/relay/`) with a
 `PLAN.md`, sources, QoS, a runner, and a `README.md`. Runners must place working dirs on a
 local fs per the rules above.
 

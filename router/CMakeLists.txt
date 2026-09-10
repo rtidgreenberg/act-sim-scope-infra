@@ -16,7 +16,7 @@
 # DDS integration tests (discovery smoke, forwarding, auto-QoS) live in Python under
 # router/test_e2e/ — see that dir's README and D52.
 #
-# Modeled on the proven relay/cpp/CMakeLists.txt. rtiddsgen generates C++11 type support
+# Modeled on the proven spikes/isc_recovery/relay/cpp/CMakeLists.txt. rtiddsgen generates C++11 type support
 # from harness_v2/datamodel/ActTypes.idl at configure/build time (no committed generated code).
 
 cmake_minimum_required(VERSION 3.11)

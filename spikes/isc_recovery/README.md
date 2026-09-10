@@ -62,7 +62,7 @@ short lease) — that is the Scenario A trigger.
 
 Note on T1 key `C` (unregister): a `NOT_ALIVE_NO_WRITERS`-only instance the reader never saw
 alive is not delivered to a late joiner (no key to recover) — consistent with the
-`relay/cpp/isc_relay.cxx` key-recovery caveat. Not a failure.
+`spikes/isc_recovery/relay/cpp/isc_relay.cxx` key-recovery caveat. Not a failure.
 
 ## Relay-chain results (the router leg: reader → mirror → writer → downstream reader)
 
@@ -77,7 +77,7 @@ alive is not delivered to a late joiner (no key to recover) — consistent with 
 
 ### The key finding
 
-The naive mirror in `relay/cpp/isc_relay.cxx` forwards valid data and mirrors
+The naive mirror in `spikes/isc_recovery/relay/cpp/isc_relay.cxx` forwards valid data and mirrors
 dispose/unregister, but has **no case for an invalid sample that reports the instance back
 to `ALIVE`** — which is exactly how leg-1 native ISC recovery is delivered. So when the
 origin loses and regains liveliness, the relay drives downstream to `NOT_ALIVE_NO_WRITERS`

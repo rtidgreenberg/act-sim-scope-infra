@@ -1,4 +1,4 @@
-# relay/cpp/ — Modern C++ ISC relay (with Network Capture)
+# spikes/isc_recovery/relay/cpp/ — Modern C++ ISC relay (with Network Capture)
 
 A **Modern C++ (C++11) port of the Python ISC relay** ([../isc_relay.py](../isc_relay.py)).
 Same job, same QoS, same mirroring rule — plus the one thing the Python API can't do:

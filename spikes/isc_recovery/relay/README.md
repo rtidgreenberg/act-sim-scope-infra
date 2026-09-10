@@ -1,4 +1,4 @@
-# relay/ — Python ISC relay · Phase 1 PoC (M0 go/no-go gate)
+# spikes/isc_recovery/relay/ — Python ISC relay · Phase 1 PoC (M0 go/no-go gate)
 
 > Part of the ACT EMANE plan — see [roadmap.md](../docs/roadmap.md) **Phase 1** and
 > [product-gaps.md](../docs/product-gaps.md) **LP-1**.

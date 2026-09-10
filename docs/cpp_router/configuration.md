@@ -196,7 +196,7 @@ types:
 qos_libraries:
   - harness/act/config/qos/lan_qos_lib.xml
   - harness/act/config/qos/wan_qos_lib.xml
-  - relay/qos_isc.xml
+  - spikes/isc_recovery/relay/qos_isc.xml
 
 participants:
   control_lan:

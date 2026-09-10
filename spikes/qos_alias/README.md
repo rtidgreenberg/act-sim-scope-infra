@@ -26,4 +26,4 @@ supplies these via the ACT harness.
 ## Requirements
 
 `rti.connextdds` (Connext 7.7) and the ACT QoS libs at `harness/act/config/qos/` +
-`relay/qos_isc.xml` (present in-repo / via the `harness/act` submodule).
+`spikes/isc_recovery/relay/qos_isc.xml` (present in-repo / via the `references/legacy_harness` submodule).

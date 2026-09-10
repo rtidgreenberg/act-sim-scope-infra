@@ -43,7 +43,7 @@ router substitute an imperative mirror for the missing Scenario B.
 ## Test type
 
 `IscState` — minimal keyed type (`@key string key_id; int64 seq; string payload;`),
-mirroring the `relay/cpp/ActState.idl` shape so the rig reuses the proven Modern C++ paths.
+mirroring the `spikes/isc_recovery/relay/cpp/ActState.idl` shape so the rig reuses the proven Modern C++ paths.
 
 ## Components
 
@@ -136,4 +136,4 @@ whether the roadmap needs durable writer history for router restarts.
   expected in 7.7, that itself is a finding (it would mean DWH is harder than assumed) and is
   reported rather than worked around.
 - `key_value()` recovery for dispose-only samples depends on `serialize_key_with_dispose` and
-  `keep_minimum_state_for_instances`, both already proven in `relay/cpp/isc_relay.cxx`.
+  `keep_minimum_state_for_instances`, both already proven in `spikes/isc_recovery/relay/cpp/isc_relay.cxx`.

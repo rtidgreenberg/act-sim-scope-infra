@@ -66,7 +66,7 @@ void print_usage() {
 }
 
 // SIGINT/SIGTERM flip this; the run loop wakes every 200ms to re-check it (mirrors
-// relay/cpp/isc_relay.cxx's existing idiom in this repo).
+// spikes/isc_recovery/relay/cpp/isc_relay.cxx's existing idiom in this repo).
 volatile std::sig_atomic_t g_stop = 0;
 void handle_signal(int) { g_stop = 1; }
 

@@ -14,7 +14,7 @@
                          drop/regain liveliness WITHOUT dying (Scenario A trigger).
     Recovery::NoRecover  identical but instance_state_consistency = NONE (control).
 
-  Reader recovery knobs + writer serialize_key_with_dispose match relay/cpp/qos_isc.xml
+    Reader recovery knobs + writer serialize_key_with_dispose match spikes/isc_recovery/relay/qos_isc.xml
   so key_value() recovery of dispose-only samples works. UDPv4-only transport so no
   process can leak /dev/shm shared-memory segments.
 -->

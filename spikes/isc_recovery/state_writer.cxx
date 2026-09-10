@@ -20,7 +20,7 @@
 // launch it again with the SAME durable-writer-history file, so it resumes under the
 // same virtual GUID but a new physical GUID.
 //
-// Modern C++ entity/QoS patterns follow relay/cpp/isc_relay.cxx.
+// Modern C++ entity/QoS patterns follow spikes/isc_recovery/relay/cpp/isc_relay.cxx.
 // -----------------------------------------------------------------------------
 
 #include <atomic>

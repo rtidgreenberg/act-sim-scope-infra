@@ -713,9 +713,9 @@ at parse time.
 The IDL fields are the ones worth deciding about deliberately: they are on the wire, so
 consumers can see them and reasonably assume they mean something.
 
-## L4 — `relay/qos_isc.xml` is loaded but unused, and claims default-QoS status
+## L4 — the retired ISC QoS profile was loaded but unused, and claimed default-QoS status
 
-The older `control-platform.yaml` listed `relay/qos_isc.xml` in `qos_libraries:`, but no
+The older `control-platform.yaml` listed the ISC QoS profile in `qos_libraries:`, but no
 `qos_profiles:` alias resolved into it. The current configuration uses the single
 `ACT_QOS_LIB` source and no longer loads the retired ISC profile. The old file declared:
 

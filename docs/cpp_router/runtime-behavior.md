@@ -116,7 +116,7 @@ The relay's instance-state job has exactly three parts:
 
 1. **Forward data** — `reader valid sample -> writer.write(sample)` (the common path).
 2. **Mirror meta samples regardless** — application-driven lifecycle, proven in
-   [relay/](../../relay/), **minus** the re-assert step:
+  [ISC relay spike](../../spikes/isc_recovery/relay/), **minus** the re-assert step:
 
    ```text
    reader valid sample          -> writer.write(sample)

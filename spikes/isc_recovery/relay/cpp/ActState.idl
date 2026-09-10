@@ -1,4 +1,4 @@
-// ACT keyed state type — Modern C++ port of relay/act_state.py's @idl.struct ActState.
+// ACT keyed state type — Modern C++ port of spikes/isc_recovery/relay/act_state.py's @idl.struct ActState.
 //
 // Field order and types match the Python type exactly so the C++ relay is wire-
 // compatible with the Python PoC endpoints (path A/C interop across languages).

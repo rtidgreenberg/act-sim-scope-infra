@@ -12,7 +12,7 @@ the mechanism actually work against the *real* files the config names?
 ## Approach
 
 Load the three `qos_libraries` `control-platform.yaml` declares
-(`harness/act/config/qos/{lan,wan}_qos_lib.xml`, `relay/qos_isc.xml`), resolve every profile
+(`references/legacy_harness/config/qos/{lan,wan}_qos_lib.xml`, `spikes/isc_recovery/relay/qos_isc.xml`), resolve every profile
 its `qos_profiles:` map references, apply one to real endpoints and one to a participant, and
 confirm they work — all against Connext 7.7.0 via `rti.connextdds` (the same binding the ACT
 sim and the e2e suite use). Parts:

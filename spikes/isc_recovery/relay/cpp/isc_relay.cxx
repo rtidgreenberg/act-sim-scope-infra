@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Modern C++ ISC relay — C++ port of relay/isc_relay.py (Phase 1 PoC).
+// Modern C++ ISC relay — C++ port of spikes/isc_recovery/relay/isc_relay.py (Phase 1 PoC).
 //
 // A standalone DomainParticipant-to-DomainParticipant relay:
 //
@@ -19,7 +19,7 @@
 // traffic — to <name>*.pcap for offline Wireshark analysis. Everything else mirrors
 // the Python relay's behaviour.
 //
-// QoS comes from the shared XML profile (relay/qos_isc.xml, profile
+// QoS comes from the shared XML profile (spikes/isc_recovery/relay/qos_isc.xml, profile
 // "ActIscLibrary::ActIscProfile") — the same profile Routing Service loads — so the
 // C++ and Python relays are QoS-identical. The XML token is
 // RECOVER_INSTANCE_STATE_CONSISTENCY (the Python binding spells the enum RECOVER_STATE;

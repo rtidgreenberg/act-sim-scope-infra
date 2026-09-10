@@ -1857,7 +1857,7 @@ also multi-type). `platform-team.yaml`'s flat `input`/`output` route shape (no
    test mains — `RouteConfigParser` → `TypeResolver` → `ParticipantRegistry` →
    `DdsStatusPublisher` → `AsyncWaitSet`/`AsyncWaitSetDispatcher` → `QosResolver` →
    `DynamicRouteFactory` → `RouterController` → `DiscoveryDispatcher` — runs until
-   `SIGINT`/`SIGTERM` (mirroring the existing `relay/cpp/isc_relay.cxx` signal idiom), then
+  `SIGINT`/`SIGTERM` (mirroring the existing `spikes/isc_recovery/relay/cpp/isc_relay.cxx` signal idiom), then
    shuts down in the proven order (`route_disp.shutdown()` → `discovery.shutdown()` →
    `drain.stop()` → `aws.stop()`). `--role`/`--node-name` CLI overrides let one config file
    be launched twice, once per node role, matching how `control-platform.yaml` is meant to
