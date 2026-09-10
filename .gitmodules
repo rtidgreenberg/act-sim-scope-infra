@@ -1,5 +1,5 @@
-[submodule "harness/act"]
-	path = harness/act
+[submodule "references/legacy_harness"]
+	path = references/legacy_harness
 	url = https://github.com/rticommunity/rticonnextdds-usecases-act.git
 	branch = dev
 [submodule "docs/connext-ai-issues"]
