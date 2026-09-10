@@ -80,6 +80,40 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   `omg::types::bounded_sequence<T, N>` (unbounded IDL sequences default to cap `100`). Verified
   against the `router/admin/RouterAdminTypes.idl` codegen.
 
+## Docker Connext setup and test workflow
+
+- Build the supported image from `docker/connext-7.7/`:
+  `docker compose -f docker/connext-7.7/compose.yaml build`. The image installs the RTI
+  7.7.0 SDK from RTI's Debian repository and `rti.connext==7.7.0` from PyPI; it does not
+  require a host Connext SDK.
+- The fixed host directory `/home/dgreenberg/rti_connext_dds-7.7.0` is **license-only**.
+  It must contain `rti_license.dat` and is mounted at `/shared:ro`; use
+  `RTI_LICENSE_FILE=/shared/rti_license.dat`. Do not use this directory as a Docker build
+  context or assume it contains headers, `rti_versions.xml`, or the SDK.
+- After adding a user to the Docker group, start a new shell. Until then use
+  `sg docker -c '...'`; do not use `sudo docker`.
+- For a disposable unit-test/build container, mount the checkout writable because CTest
+  writes `router/build/Testing/Temporary/LastTest.log`:
+  ```bash
+  sg docker -c 'docker run --rm \
+    -v "$PWD":/workspace \
+    -v /home/dgreenberg/rti_connext_dds-7.7.0:/shared:ro \
+    -w /workspace \
+    -e NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0 \
+    -e RTI_LICENSE_FILE=/shared/rti_license.dat \
+    connext:7.7.0 sh -lc "cmake --build router/build -j2 && bash router/run_tests.sh"'
+  ```
+- For e2e validation, mount the checkout read-only and keep all caches, logs, pytest state,
+  and temporary files under `/tmp`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`, `TMPDIR=/tmp`,
+  and run pytest with `-p no:cacheprovider` so `.pytest_cache` is not written to the share.
+  Install pytest only inside the disposable container if the image does not already provide it.
+- Before and after either test mode, check for `pytest`, `router_main`, and mesh processes and
+  for `/dev/shm/RTI*` and `/dev/shm/dds*`. Use host networking for DDS e2e tests, reserve
+  domains through `router/test_e2e/conftest.py`, and never run e2e tests against a live mesh.
+- Rebuild `router/build` after C++ changes; stale binaries can report behavior from older
+  source. The verified clean baseline is `bash router/run_tests.sh` with 4/4 tests passing
+  and `python3 -m pytest -q -p no:cacheprovider router/test_e2e` with 27 tests passing.
+
 ## Validate Connext specifics — don't guess
 
 A `connext` MCP server is available. Use it instead of relying on memory for Connext APIs,
@@ -158,6 +192,15 @@ local fs per the rules above.
 ## Test harnesses
 
 Two test harnesses are available for debugging and verification:
+
+Before claiming the full test suite is green, verify the environment that is actually running
+the commands. A valid full router gate needs `cmake`/`ctest`, `pytest`, and an importable
+`rti.connextdds` binding in the same shell/container that runs the tests. Do not treat stale
+prebuilt binaries as a full-suite substitute: binaries compiled with `/workspace/...` sample
+paths will fail config tests when run from `/home/ssm-user/...` unless rebuilt or executed from
+the matching mounted path. The Connext Docker image is optional, not assumed; use it only after
+confirming the image exists or Docker daemon access is available, then bind the current checkout
+as `/workspace`, rebuild inside that environment, and run the tests there.
 
 - **C++ unit tests** (`router/test/`): in-process controller/state-machine tests with fakes
   for all DDS seams. Run via `router/run_tests.sh`. **Do not use
