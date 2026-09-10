@@ -1,6 +1,6 @@
 // traffic_chart.js — Per-domain DDS traffic time-series sparklines.
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
-// DomainTrafficStats published by domain_traffic_monitor.py). Renders small canvas
+// DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
 // sparkline plots on the right panel, one card per domain ID, each with two subplots:
 // discovery bytes/s (green) and user-data bytes/s (blue).
 

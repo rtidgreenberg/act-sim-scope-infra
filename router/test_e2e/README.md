@@ -125,7 +125,8 @@ test-fixture quirks — see `docs/cpp_router/design-decisions.md` D51 for the fu
 
 ## Notes
 
-- Runtime artifacts (rendered per-test configs, subprocess logs) go under `/tmp/router_e2e/`
+- Runtime artifacts (rendered per-test configs, subprocess logs) go under
+  `debug/logs/router_e2e/`
   — never the repo/share, per the repo's filesystem-safety rule.
 - **Test isolation is domain-id-only for now.** Each test gets unique DDS domain ids
   (`conftest.py`'s `unique_domains` fixture) so tests within one pytest run don't collide.

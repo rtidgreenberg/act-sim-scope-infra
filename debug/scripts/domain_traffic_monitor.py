@@ -27,8 +27,10 @@ Entity-ID classification (last byte = entity kind):
 Requires: tshark (unprivileged on this VM via cap_net_raw on dumpcap).
 
 Usage:
-  python3 harness_v2/scripts/domain_traffic_monitor.py [--domains 20,21] [--interval 2]
-  python3 harness_v2/scripts/domain_traffic_monitor.py --help
+    python3 debug/scripts/domain_traffic_monitor.py [--domains 20,21] [--interval 2]
+    python3 debug/scripts/domain_traffic_monitor.py --help
+
+When launched by the mesh harness, its log is written to debug/logs/mesh/traffic_monitor.log.
 """
 
 import argparse

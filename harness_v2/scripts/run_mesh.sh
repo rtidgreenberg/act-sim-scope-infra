@@ -20,9 +20,8 @@
 # process (no shell-wrapper/child-process pair to track, unlike WIS) -- one PID goes in
 # the same pids.txt, so a single `down` tears down routers + sims + dashboard.
 #
-# All runtime artifacts (logs, generated per-platform yaml) go under --workdir (default:
-# /tmp/act_mesh_run), which MUST be on a local filesystem -- never point it at this repo's
-# vboxsf share (repo CLAUDE.md filesystem-safety rule).
+# Generated per-platform YAML and lifecycle state go under --workdir. Runtime logs go under
+# debug/logs/mesh and are cleared when the mesh starts.
 
 set -euo pipefail
 
@@ -70,6 +69,9 @@ do_up() {
     # Wipe and recreate -- ensures a clean slate each run.
     rm -rf "$WORKDIR"
     mkdir -p "$WORKDIR"
+    LOG_ROOT="$REPO_ROOT/debug/logs/mesh"
+    rm -rf "$LOG_ROOT"
+    mkdir -p "$LOG_ROOT"
     # filesystem-safety guard: prove $WORKDIR is a real local fs, not the vboxsf share.
     if ! (mkfifo "$WORKDIR/.probe" 2>/dev/null && rm -f "$WORKDIR/.probe"); then
         echo "Error: $WORKDIR failed the mkfifo probe -- refusing to use a vboxsf/non-local path" >&2
@@ -126,7 +128,7 @@ do_up() {
     # absolute-path nohup calls at this level exec directly, so $! is the real PID.
     nohup "$REPO_ROOT/router/build/router_main" --config "$REPO_ROOT/router/config/control-platform.yaml" \
         --role control --node-name Control_20 --name control-platform-run \
-        --admin-participant control_lan > "$WORKDIR/control.log" 2>&1 &
+        --admin-participant control_lan > "$LOG_ROOT/control.log" 2>&1 &
     echo "control $!" >> "$WORKDIR/pids.txt"
 
     LAST_ID=$((30 + PLATFORMS - 1))
@@ -151,7 +153,7 @@ do_up() {
         fi
         nohup "$REPO_ROOT/router/build/router_main" --config "$WORKDIR/control-platform-${ID}.yaml" \
             --role platform --node-name "Platform_${ID}" --name "platform-${ID}-control-platform" \
-            --admin-participant platform_lan > "$WORKDIR/platform${ID}.log" 2>&1 &
+            --admin-participant platform_lan > "$LOG_ROOT/platform${ID}.log" 2>&1 &
         echo "platform${ID}_router $!" >> "$WORKDIR/pids.txt"
     done
 
@@ -162,7 +164,7 @@ do_up() {
         # with "Permission denied" (found testing this script: 3/3 sims failed that way,
         # while router_main -- which IS +x -- launched fine).
         nohup bash "$V2_ROOT/scripts/start_platform_sim.sh" --id "$ID" --destination Control_20 \
-            --verbosity "$VERBOSITY" > "$WORKDIR/platform${ID}_sim.log" 2>&1 &
+            --verbosity "$VERBOSITY" > "$LOG_ROOT/platform${ID}_sim.log" 2>&1 &
         echo "platform${ID}_sim $!" >> "$WORKDIR/pids.txt"
     done
 
@@ -178,7 +180,7 @@ do_up() {
         # NDDS_QOS_PROFILES as the platform_sim (LAN QoS lib + types).
         nohup python3 "$V2_ROOT/scripts/platform_mesh_control.py" \
             --domain "$ID" --node "Platform_${ID}" \
-            > "$WORKDIR/platform${ID}_mesh_control.log" 2>&1 &
+            > "$LOG_ROOT/platform${ID}_mesh_control.log" 2>&1 &
         echo "platform${ID}_mesh_control $!" >> "$WORKDIR/pids.txt"
     done
 
@@ -186,7 +188,7 @@ do_up() {
         echo "[run_mesh up] launching dashboard (mesh_bridge.py) on port $DASHBOARD_PORT..."
         nohup python3 "$REPO_ROOT/gui/mesh_dashboard/server/mesh_bridge.py" \
             --domain 20 --port "$DASHBOARD_PORT" \
-            > "$WORKDIR/mesh_bridge.log" 2>&1 &
+            > "$LOG_ROOT/mesh_bridge.log" 2>&1 &
         echo "mesh_bridge $!" >> "$WORKDIR/pids.txt"
         echo "[run_mesh up] dashboard: http://localhost:${DASHBOARD_PORT}/"
 
@@ -198,17 +200,18 @@ do_up() {
             MONITOR_DOMAINS="${MONITOR_DOMAINS},${ID}"
         done
         echo "[run_mesh up] launching traffic monitor (domains: $MONITOR_DOMAINS)..."
-        nohup python3 "$V2_ROOT/scripts/domain_traffic_monitor.py" \
+        nohup python3 "$REPO_ROOT/debug/scripts/domain_traffic_monitor.py" \
             --domains "$MONITOR_DOMAINS" --dashboard-url "http://localhost:${DASHBOARD_PORT}" \
             --interval 0.1 \
-            > "$WORKDIR/traffic_monitor.log" 2>&1 &
+            > "$LOG_ROOT/traffic_monitor.log" 2>&1 &
         echo "traffic_monitor $!" >> "$WORKDIR/pids.txt"
     fi
 
     sleep 3
     echo "[run_mesh up] done. control.log tail:"
-    tail -5 "$WORKDIR/control.log"
+    tail -5 "$LOG_ROOT/control.log"
     echo "[run_mesh up] WORKDIR=$WORKDIR"
+    echo "[run_mesh up] LOG_ROOT=$LOG_ROOT"
 }
 
 do_down() {
@@ -241,7 +244,7 @@ do_down() {
 
     echo "[run_mesh down] stray /dev/shm segments:"
     ls /dev/shm 2>/dev/null | grep -E "^(RTI|dds)" || echo "  none"
-    echo "[run_mesh down] done. logs/configs left in $WORKDIR for inspection (rm -rf it when done)."
+    echo "[run_mesh down] done. configs left in $WORKDIR; logs are in $REPO_ROOT/debug/logs/mesh."
 }
 
 case "$ACTION" in

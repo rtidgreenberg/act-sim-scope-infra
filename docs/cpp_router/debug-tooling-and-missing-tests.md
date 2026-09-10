@@ -13,7 +13,7 @@ per topic (so the WIS publication's missing TypeObject was silently swallowed).
 
 ### What to build
 
-A standalone Python diagnostic script: `harness_v2/scripts/dds_type_probe.py`
+A standalone Python diagnostic script: `debug/scripts/dds_type_probe.py`
 
 **Usage:** `python3 dds_type_probe.py --domain 20 [--topic ActTeamAssignment] [--wait 5]`
 
@@ -46,8 +46,9 @@ Domain 20 — discovered endpoints (5s wait):
   → Router routes waiting on this type will stay TOPIC_IDLE
 ```
 
-**Where to put it:** `harness_v2/scripts/dds_type_probe.py` (not test_e2e/util — this is a
-standalone debugging tool, not a test utility)
+**Where to put it:** `debug/scripts/dds_type_probe.py` (not test_e2e/util — this is a
+standalone debugging tool, not a test utility). Store diagnostic output under the relevant
+`debug/logs/<application>/` or `debug/pcap/<application>/` directory.
 
 **Also add to copilot-instructions.md** under the "Test harnesses" section as a fourth
 bullet: "Type probe" with usage.

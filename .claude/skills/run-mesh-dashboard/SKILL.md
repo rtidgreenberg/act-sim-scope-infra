@@ -19,9 +19,10 @@ of that doc's "Running it against a real mesh" section.
 
 Wraps steps 1-3, 5c, and 6 below into one script: builds the control node + N platform
 routers (each on its own `platform_lan` domain per step 5c's convention) + N matching
-`platform_sim`s, generates the WIS config, and launches the dashboard — all runtime
-artifacts under one `--workdir` on local disk, all launched PIDs tracked in its
-`pids.txt` for a precise teardown (never a name-based `pkill`, see step 6's warning).
+`platform_sim`s, generates the WIS config, and launches the dashboard. Generated configs
+and lifecycle state go under `--workdir`; application logs go under `debug/logs/mesh`, and
+all launched PIDs are tracked in `pids.txt` for a precise teardown (never a name-based
+`pkill`, see step 6's warning).
 
 ```bash
 cd /home/rti/act-sim-scope-infra

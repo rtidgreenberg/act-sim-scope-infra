@@ -19,6 +19,12 @@ tmp/
 *.pcapng
 *.eel.out
 
+# Local debug artifacts
+debug/logs/*
+!debug/logs/.gitkeep
+debug/pcap/*
+!debug/pcap/.gitkeep
+
 # RTI
 rti_license.dat
 

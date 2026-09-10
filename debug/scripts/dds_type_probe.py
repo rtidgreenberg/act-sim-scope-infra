@@ -1,31 +1,17 @@
 #!/usr/bin/env python3
-"""dds_type_probe.py — standalone diagnostic: does every endpoint on a domain carry an
-inline TypeObject?
+"""Standalone diagnostic for discovered inline TypeObjects.
 
-Problem this solves (docs/cpp_router/debug-tooling-and-missing-tests.md #1). During
-team-control-topic debugging, the `control_event` route was stuck in TOPIC_IDLE with
-input_matched=0. Root cause: the WIS writer did not propagate inline TypeObjects (an RTI
-WIS limitation), so the router's DiscoveryDispatcher.maybe_learn_type() never fired
-TypeResolved for ActTeamAssignment. Diagnosing this required manually grepping logs and
-cross-referencing GUIDs, and the type_not_inline warning is deduplicated per topic, so the
-WIS publication's missing TypeObject was silently swallowed.
-
-This script surfaces the same fact maybe_learn_type() checks — whether a discovered
-endpoint's inline type resolved — directly, per endpoint, for any domain.
+This surfaces the same fact DiscoveryDispatcher.maybe_learn_type() checks: whether a
+discovered endpoint's inline TypeObject resolved. It is useful when a route remains in
+TOPIC_IDLE because a WIS publication did not propagate its TypeObject.
 
 Usage:
-    python3 harness_v2/scripts/dds_type_probe.py --domain 20 \
+    python3 debug/scripts/dds_type_probe.py --domain 20 \
         [--topic ActTeamAssignment] [--wait 5]
-
-Reads builtin DCPSPublication and DCPSSubscription data on a plain UDPv4-only
-participant — no application type library is required, since builtin topic data alone
-carries topic_name/type_name/type. Run from the repo root or anywhere; the only
-dependency is the `rti.connextdds` Python binding and a reachable NDDSHOME.
 """
 
 import argparse
 import os
-import sys
 import time
 
 os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
@@ -36,16 +22,12 @@ import rti.connextdds as dds  # noqa: E402
 
 
 def build_participant_name_map(participant):
-    """Map participant_key (as returned by the builtin data, stringified) -> a display
-    label built from its EntityName (name/role_name, D74), for endpoints whose owning
-    participant has one set (router participants always do; plain app participants may
-    not)."""
     names = {}
     for handle in participant.discovered_participants():
         try:
             data = participant.discovered_participant_data(handle)
         except Exception:
-            continue  # participant vanished between enumerate and fetch
+            continue
         entity_name = data.participant_name
         name = entity_name.name or ""
         role = entity_name.role_name or ""
@@ -62,8 +44,6 @@ def build_participant_name_map(participant):
 
 
 def collect_endpoints(participant, direction, topic_filter):
-    """direction: 'PUB' or 'SUB'. Returns a list of dicts describing every discovered
-    endpoint (optionally filtered to topic_filter)."""
     reader = (participant.publication_reader if direction == "PUB"
               else participant.subscription_reader)
     rows = []
@@ -72,9 +52,6 @@ def collect_endpoints(participant, direction, topic_filter):
             continue
         if topic_filter and data.topic_name != topic_filter:
             continue
-        # The exact check DiscoveryDispatcher.maybe_learn_type() does on the C++ side
-        # (dds::core::optional<DynamicType>::is_set()) — in the Python binding, `.type`
-        # is simply None until the inline TypeObject resolves.
         try:
             has_type = data.type is not None
         except Exception:
@@ -108,7 +85,7 @@ def main():
     rows = (collect_endpoints(participant, "PUB", args.topic)
             + collect_endpoints(participant, "SUB", args.topic))
 
-    print(f"\nDomain {args.domain} — discovered endpoints ({args.wait:g}s wait):\n")
+    print(f"\nDomain {args.domain} - discovered endpoints ({args.wait:g}s wait):\n")
     if not rows:
         print("  (none discovered)")
     for row in sorted(rows, key=lambda r: (r["topic"], r["direction"])):
@@ -117,9 +94,6 @@ def main():
         print(f"  {row['direction']:<4} {row['topic']:<22} {row['type_name']:<18} "
               f"{row['participant_key']:<28} {label:<18} TypeObject: {type_flag}")
 
-    # Summary: per topic, how many publications carry an inline TypeObject. This is the
-    # exact fact that gates DiscoveryDispatcher.maybe_learn_type()/TypeResolved — a topic
-    # with zero typed publications will leave every route on it stuck in TOPIC_IDLE.
     by_topic = {}
     for row in rows:
         if row["direction"] != "PUB":
@@ -129,12 +103,12 @@ def main():
     print()
     any_warned = False
     for topic, flags in sorted(by_topic.items()):
-        n_typed = sum(1 for f in flags if f)
+        n_typed = sum(flags)
         if n_typed < len(flags):
             any_warned = True
-            print(f"\u26a0 {topic}: {n_typed} of {len(flags)} publications carry "
-                  f"inline TypeObject")
-            print("  \u2192 Router routes waiting on this type will stay TOPIC_IDLE")
+            print(f"WARNING {topic}: {n_typed} of {len(flags)} publications carry "
+                  "inline TypeObject")
+            print("  -> Router routes waiting on this type will stay TOPIC_IDLE")
     if not any_warned and by_topic:
         print("All discovered publications carry inline TypeObjects.")
 

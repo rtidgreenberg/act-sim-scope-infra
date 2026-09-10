@@ -326,7 +326,7 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
         return web.json_response(bridge.traffic_snapshot())
 
     async def post_traffic_stats(request):
-        """Ingest endpoint for domain_traffic_monitor.py — accepts a JSON array of
+        """Ingest endpoint for debug/scripts/domain_traffic_monitor.py — accepts a JSON array of
         traffic-stats samples and broadcasts each to WebSocket clients."""
         try:
             body = await request.json()

@@ -22,7 +22,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROUTER_MAIN = REPO_ROOT / "router" / "build" / "router_main"
 CONFIG_DIR = REPO_ROOT / "router" / "config"
-TMP_ROOT = Path("/tmp/router_e2e")
+TMP_ROOT = REPO_ROOT / "debug" / "logs" / "router_e2e"
 
 os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
 os.environ.setdefault("RTI_LICENSE_FILE", os.path.join(os.environ["NDDSHOME"], "rti_license.dat"))

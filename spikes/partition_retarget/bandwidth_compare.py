@@ -32,7 +32,8 @@ import rti.connextdds as dds  # noqa: E402
 import partition_retarget_spike as prs  # noqa: E402
 
 IDLE_WINDOW_S = 8.0   # >= the 2.0s SPDP2 settle (Part F), so its handshake completes inside
-PCAP_DIR = "/tmp"
+PCAP_DIR = os.path.join(os.getcwd(), "debug", "pcap", "partition_retarget")
+os.makedirs(PCAP_DIR, exist_ok=True)
 
 
 def guid_prefix_hex(participant):
