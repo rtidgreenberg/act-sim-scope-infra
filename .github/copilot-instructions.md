@@ -179,6 +179,9 @@ Use these paths first when investigating a running or recently stopped applicati
   mesh-control, dashboard, and traffic-monitor logs).
 - Router e2e tests: `debug/logs/router_e2e/<test-name>/` (rendered configs and subprocess
   logs; each test process exposes its exact `log_path` in failures).
+- Router journal subscriber: `debug/logs/journal/router_journal.jsonl` when running
+  `debug/scripts/router_journal_subscriber.py`; each line includes the DDS topic and JSON
+  sample for `ActRouterControllerJournal` or `ActRouterStatus`.
 - Router network capture: `debug/pcap/router/` when Connext network capture is enabled.
 - Tool- or spike-specific captures: `debug/pcap/<application>/`.
 
@@ -193,6 +196,12 @@ python3 debug/scripts/dds_type_probe.py --domain 20 \
 
 Create the application directory before redirecting output. Use the `clear-debug-artifacts`
 prompt after stopping the associated processes to remove generated logs and captures.
+
+To capture the router's route-change ledger and current status over DDS:
+
+```bash
+python3 debug/scripts/router_journal_subscriber.py --domain 20
+```
 
 Before claiming the full test suite is green, verify the environment that is actually running
 the commands. A valid full router gate needs `cmake`/`ctest`, `pytest`, and an importable
@@ -233,13 +242,20 @@ as `/workspace`, rebuild inside that environment, and run the tests there.
 - **Domain traffic monitor** (`debug/scripts/domain_traffic_monitor.py`): live RTPS traffic
   diagnostic using `tshark` — `python3 debug/scripts/domain_traffic_monitor.py
   --domains 20,21 --interval 2`. It classifies discovery and user-data packets by DDS
-  domain and periodically posts traffic statistics to the mesh dashboard bridge. It does
-  not create a DDS participant, so it does not add discovery traffic to the capture.
+  domain, appends interval samples to `debug/logs/network_monitor/traffic_stats.jsonl`, and
+  posts the same traffic statistics to the mesh dashboard bridge. It does not create a DDS
+  participant, so it does not add discovery traffic to the capture.
+
+- **Router journal subscriber** (`debug/scripts/router_journal_subscriber.py`): DDS diagnostic
+  subscriber for route-change decisions and current router status —
+  `python3 debug/scripts/router_journal_subscriber.py --domain 20`. It captures
+  `ActRouterControllerJournal` and `ActRouterStatus` samples as JSONL in
+  `debug/logs/journal/router_journal.jsonl` for offline troubleshooting.
 
 - **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
   (control + platform routers + platform sims + platform_mesh_control processes) with optional
   WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
-  `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
+  `test_team_assignment_e2e.py` script. Logs in `debug/logs/mesh/`. Tear down with
   `run_mesh.sh down`.
 
 ## Data model

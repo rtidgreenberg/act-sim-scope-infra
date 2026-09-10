@@ -31,6 +31,7 @@ Usage:
     python3 debug/scripts/domain_traffic_monitor.py --help
 
 When launched by the mesh harness, its log is written to debug/logs/mesh/traffic_monitor.log.
+Traffic samples are also appended to debug/logs/network_monitor/traffic_stats.jsonl.
 """
 
 import argparse
@@ -57,6 +58,8 @@ D3 = 11     # user unicast offset
 # ── RTPS entity-kind byte classification ──
 DISCOVERY_ENTITY_KINDS = {0xc2, 0xc7, 0xc3, 0xc4}   # builtin writers/readers
 DATA_ENTITY_KINDS = {0x02, 0x03, 0x04, 0x07}          # user-defined writers/readers
+DEFAULT_OUTPUT = (Path(__file__).resolve().parents[2] / "debug" / "logs"
+                  / "network_monitor" / "traffic_stats.jsonl")
 
 
 def port_to_domain(port: int) -> Optional[int]:
@@ -223,11 +226,14 @@ def main():
                         help="Observer name for published samples (default: hostname)")
     parser.add_argument("--max-participants", type=int, default=8,
                         help="Max participant index per domain for port filter (default: 8)")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
+                        help=f"JSONL traffic output (default: {DEFAULT_OUTPUT})")
     args = parser.parse_args()
 
     domain_ids = [int(d.strip()) for d in args.domains.split(",")]
     observer = args.observer or os.uname().nodename
     post_url = args.dashboard_url.rstrip("/") + "/api/traffic_stats"
+    args.output.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"[traffic-monitor] Monitoring domains {domain_ids} on {args.interface}")
     print(f"[traffic-monitor] POSTing to {post_url}, interval {args.interval}s")
@@ -260,6 +266,7 @@ def main():
     interval_ms = int(args.interval * 1000)
     print("[traffic-monitor] Running (no DDS participant — pure tshark + HTTP). Ctrl+C to stop.")
     try:
+        output = args.output.open("a", encoding="utf-8")
         while not stop_event.is_set():
             stop_event.wait(args.interval)
             snapshot = accumulator.drain()
@@ -294,12 +301,21 @@ def main():
                       f"({s['total_bytes']} B) — "
                       f"discovery={disc} data={data} other={other}")
 
-            if not _post_stats(post_url, batch):
+            posted = _post_stats(post_url, batch)
+            output.write(json.dumps({
+                "capture_interface": args.interface,
+                "dashboard_posted": posted,
+                "samples": batch,
+            }, separators=(",", ":")) + "\n")
+            output.flush()
+            if not posted:
                 print("  [warn] POST failed (bridge not ready?)")
 
     except KeyboardInterrupt:
         pass
     finally:
+        if "output" in locals():
+            output.close()
         stop_event.set()
         capture_thread.join(timeout=5)
         print("[traffic-monitor] Done.")
