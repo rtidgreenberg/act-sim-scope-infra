@@ -715,9 +715,9 @@ consumers can see them and reasonably assume they mean something.
 
 ## L4 — `relay/qos_isc.xml` is loaded but unused, and claims default-QoS status
 
-`control-platform.yaml:47` lists `relay/qos_isc.xml` in `qos_libraries:`, but no
-`qos_profiles:` alias resolves into it — every alias points at `WAN_QOS_LIB::` or
-`LAN_QOS_LIB::` (lines 50-54). The file declares:
+The older `control-platform.yaml` listed `relay/qos_isc.xml` in `qos_libraries:`, but no
+`qos_profiles:` alias resolved into it. The current configuration uses the single
+`ACT_QOS_LIB` source and no longer loads the retired ISC profile. The old file declared:
 
 ```xml
 <qos_library name="ActIscLibrary">

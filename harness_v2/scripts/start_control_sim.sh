@@ -46,7 +46,7 @@ fi
 [[ -z "$CONTROL_DOMAIN" ]] && CONTROL_DOMAIN=$CONTROL_ID
 [[ -z "$ROUTER_NAME" ]] && ROUTER_NAME="Control_${CONTROL_ID}"
 
-LAN_QOS_PROFILE="LAN_QOS_LIB::control_lan_participant_qos"
+LAN_QOS_PROFILE="ACT_QOS_LIB::lan_control_participant"
 DOMAIN_ID=$CONTROL_DOMAIN
 
 echo "

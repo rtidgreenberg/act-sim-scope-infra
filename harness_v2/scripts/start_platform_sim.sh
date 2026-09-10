@@ -46,7 +46,7 @@ fi
 [[ -z "$PLATFORM_DOMAIN" ]] && PLATFORM_DOMAIN=$PLATFORM_ID
 [[ -z "$ROUTER_NAME" ]] && ROUTER_NAME="Platform_${PLATFORM_ID}"
 
-LAN_QOS_PROFILE="LAN_QOS_LIB::platform_lan_participant_qos"
+LAN_QOS_PROFILE="ACT_QOS_LIB::lan_platform_participant"
 DOMAIN_ID=$PLATFORM_DOMAIN
 
 echo "

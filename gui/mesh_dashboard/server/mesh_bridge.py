@@ -87,15 +87,12 @@ class DdsBridge:
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
         status_mode_type = qp.type(STATUS_MODE_TYPE)
 
-        pqos = qp.participant_qos_from_profile(
-            "ACT_QOS_LIB::dashboard_participant_qos")
+        pqos = dds.DomainParticipant.default_participant_qos
         self.participant = dds.DomainParticipant(domain_id, pqos)
 
-        # MeshStatusReaderQos equivalent: VOLATILE + BEST_EFFORT (D100).
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
         subscriber = dds.Subscriber(self.participant)
-        rqos = qp.datareader_qos_from_profile("ACT_QOS_LIB::dashboard_reader_qos")
-        self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic, rqos)
+        self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic)
 
         # Platform status readers (all best-effort + volatile on control_lan).
         self.platform_readers = []
@@ -110,7 +107,7 @@ class DdsBridge:
         for level, topic_name, type_name in topic_specs:
             dtype = qp.type(type_name)
             topic = dds.DynamicData.Topic(self.participant, topic_name, dtype)
-            reader = dds.DynamicData.DataReader(subscriber, topic, rqos)
+            reader = dds.DynamicData.DataReader(subscriber, topic)
             self.platform_readers.append((level, topic_name, reader))
 
         self.traffic_cache = {}  # domain_id -> latest sample dict (fed via HTTP POST)
@@ -118,13 +115,12 @@ class DdsBridge:
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
         publisher = dds.Publisher(self.participant)
-        wqos = qp.datawriter_qos_from_profile("ACT_QOS_LIB::dashboard_writer_qos")
-        self.writer = dds.DynamicData.DataWriter(publisher, team_topic, wqos)
+        self.writer = dds.DynamicData.DataWriter(publisher, team_topic)
 
         # StatusResolution writer (RELIABLE + VOLATILE).
         status_topic = dds.DynamicData.Topic(self.participant, STATUS_MODE_TOPIC,
                              status_mode_type)
-        self.status_mode_writer = dds.DynamicData.DataWriter(publisher, status_topic, wqos)
+        self.status_mode_writer = dds.DynamicData.DataWriter(publisher, status_topic)
 
         self.team_type = team_type
         self.status_mode_type = status_mode_type

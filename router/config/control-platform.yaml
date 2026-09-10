@@ -45,11 +45,11 @@ qos_libraries:
   - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
-  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
-  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
-  wan_event: WAN_QOS_LIB::event_qos
-  wan_status: WAN_QOS_LIB::status_qos
-  lan_status_1hz: LAN_QOS_LIB::status_1sec_qos
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+  wan_participant: ACT_QOS_LIB::wan_router_participant
+  wan_event: ACT_QOS_LIB::wan_event
+  wan_status: ACT_QOS_LIB::wan_status
+  lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 
 participants:
   control_lan:

@@ -1,7 +1,7 @@
 #!/bin/bash
 # harness_v2 simulator environment (trimmed v2).
 #
-# The v2 node sims are LAN-side participants (LAN_QOS_LIB::*_lan_participant_qos), so they
+# The v2 node sims are LAN-side participants (ACT_QOS_LIB::lan_*_participant), so they
 # need only the LAN QoS library plus the ACT datamodel on NDDS_QOS_PROFILES. harness/act's
 # params/system_params.sh additionally pulled in the WAN and remote-admin QoS libs, the
 # legacy routing_service_config.xml, and a large set of WAN/peer/channel vars — none of

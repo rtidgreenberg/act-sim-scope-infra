@@ -96,14 +96,14 @@ def main():
     participant = dds.DomainParticipant(
         args.domain,
         qos_provider.participant_qos_from_profile(
-            "LAN_QOS_LIB::platform_lan_participant_qos"),
+            "ACT_QOS_LIB::lan_platform_participant"),
     )
 
     # TeamAssignment reader (RELIABLE + VOLATILE)
     team_topic = dds.DynamicData.Topic(participant, "ActTeamAssignment",
                                        team_assignment_type)
     reader_qos = (dds.QosProvider.default
-                  .datareader_qos_from_profile("LAN_QOS_LIB::event_qos"))
+                  .datareader_qos_from_profile("ACT_QOS_LIB::lan_event"))
     reader_qos << dds.Reliability.reliable()
     reader_qos << dds.Durability.volatile
     team_reader = dds.DynamicData.DataReader(
@@ -120,7 +120,7 @@ def main():
     cmd_topic = dds.DynamicData.Topic(participant, "ActRouterCommand",
                                       router_command_type)
     writer_qos = (dds.QosProvider.default
-                  .datawriter_qos_from_profile("LAN_QOS_LIB::event_qos"))
+                  .datawriter_qos_from_profile("ACT_QOS_LIB::lan_event"))
     writer_qos << dds.Reliability.reliable()
     writer_qos << dds.Durability.volatile
     cmd_writer = dds.DynamicData.DataWriter(

@@ -81,7 +81,7 @@ def test_full_control_platform_config(
     # input reader resolves to, guaranteeing RxO compatibility (the 7a technique).
     qos_prov = dds.QosProvider(";".join(str(REPO_ROOT / f) for f in QOS_LIB_FILES))
     status_writer_qos = qos_prov.datawriter_qos_from_profile(
-        "LAN_QOS_LIB::status_1sec_qos")
+        "ACT_QOS_LIB::lan_status_1s")
 
     control_app = Probe(unique_domains["control_lan"])
     platform_app = Probe(unique_domains["platform_lan"])

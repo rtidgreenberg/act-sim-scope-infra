@@ -492,7 +492,7 @@ Evidence (6b, D56):
 Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
 
 - **7a — QoS-alias XML resolution (D60).** The deferred D45 work. Parse `qos_profiles:` (the
-  `wan_event → WAN_QOS_LIB::event_qos` indirection, currently unparsed); build a `QosProvider`
+  `wan_event → ACT_QOS_LIB::wan_event` indirection, currently unparsed); build a `QosProvider`
   over `qos_libraries` via `QosProviderParams::url_profile`; `QosResolver` resolves named
   aliases (`provider.datareader_qos("LIB::profile")` / `datawriter_qos(...)`); widen
   `is_resolvable_qos_alias` to any alias in the loaded map; apply participant `qos:` in

@@ -31,17 +31,17 @@ types:
 
 # Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_status is
 # BEST_EFFORT (periodic status), wan_event is RELIABLE (events). Loading only the WAN lib —
-# its profiles reference only WAN_QOS_LIB::/BuiltinQosLib:: internally. The shared WAN
+# its profiles reference only ACT_QOS_LIB::/BuiltinQosLib:: internally. The shared WAN
 # participant profile is env-templated, so router_pair() initializes those variables before
 # launching the routers.
 qos_libraries:
   - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
-  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
-  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
-  wan_status: WAN_QOS_LIB::status_qos
-  wan_event: WAN_QOS_LIB::event_qos
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+  wan_participant: ACT_QOS_LIB::wan_router_participant
+  wan_status: ACT_QOS_LIB::wan_status
+  wan_event: ACT_QOS_LIB::wan_event
 
 participants:
   control_lan:

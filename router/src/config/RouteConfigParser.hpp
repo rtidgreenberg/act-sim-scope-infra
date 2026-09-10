@@ -38,7 +38,7 @@ struct RouteConfig {
     std::string types_xml_path;               // types.xml
     std::vector<std::string> qos_library_paths; // qos_libraries: loaded into a QosProvider
                                                 // by router_main (Phase 7a, D60).
-    // qos_profiles: alias -> "LIB::Profile" (e.g. wan_event -> WAN_QOS_LIB::event_qos).
+    // qos_profiles: alias -> "LIB::Profile" (e.g. wan_event -> ACT_QOS_LIB::wan_event).
     // Endpoint reader_qos:/writer_qos: and participant qos: values are alias keys into this
     // map; router_main resolves them via a QosProvider built over qos_library_paths (D60).
     std::map<std::string, std::string> qos_profiles;

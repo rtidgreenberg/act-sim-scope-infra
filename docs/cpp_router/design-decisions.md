@@ -2461,14 +2461,14 @@ contracts).
 **Context.** The deferred D45 work. `control-platform.yaml` names aliases on both endpoints
 (`writer_qos: wan_event`, `reader_qos: wan_status`, `reader_qos: lan_status_1hz`) and on
 participants (`qos: control_wan_udpv4_qos`). Three parsing/resolution gaps: `qos_profiles:`
-(the `wan_event → WAN_QOS_LIB::event_qos` indirection) is unparsed; `is_resolvable_qos_alias`
+(the `wan_event → ACT_QOS_LIB::wan_event` indirection) is unparsed; `is_resolvable_qos_alias`
 rejects everything but `""`/`"default"`; participant `qos:` is not applied.
 
 **Validated against 7.7** (`ask_connext_question`, 2026-07-14): construct one
 `dds::core::QosProvider` over several files with
 `rti::core::QosProviderParams params; params.url_profile(urls); dds::core::QosProvider(params);`
-then fetch named QoS with `provider.datareader_qos("WAN_QOS_LIB::status_qos")` /
-`provider.datawriter_qos("WAN_QOS_LIB::status_qos")`. Profile-name format is exactly
+then fetch named QoS with `provider.datareader_qos("ACT_QOS_LIB::wan_status")` /
+`provider.datawriter_qos("ACT_QOS_LIB::wan_status")`. Profile-name format is exactly
 `"Library::Profile"`.
 
 **Decision.**
@@ -2516,7 +2516,7 @@ on paper:
    so **`WAN_TIMEOUT_SEC` must be > 30** (XML default 100) or the participant fails to create
    with "Inconsistent QoS".
 3. **`control-platform.yaml` named a non-existent profile (now fixed):** `lan_status_1hz →
-   LAN_QOS_LIB::status_1hz_qos` (the lib has `status_1sec_qos`). Fixed to `status_1sec_qos`.
+  ACT_QOS_LIB::lan_status_1s`.
    `validate_qos_aliases` must still check profile **existence in the loaded provider**, not
    just the `is_resolvable_qos_alias` string rule, so this class of error is caught at load.
 
@@ -3185,7 +3185,7 @@ production `control-platform.yaml` (literal domains 20/30/200 — the suite's
 `unique_domains` spreading starts at 40, no collision) loaded twice by role via the
 standard `router_pair` fixture; all three enabled routes cross the WAN
 (`control_command` through the destination CFT, `platform_primary_status` with the
-app writer on the REAL `LAN_QOS_LIB::status_1sec_qos` profile, `platform_events`
+app writer on the REAL `ACT_QOS_LIB::lan_status_1s` profile, `platform_events`
 carrying BOTH wire-learned types through one route); `platform_detail_status` rides
 along DISABLED; then E6 — `samples_forwarded` ≥1 appears via the tick, advances during
 a write window while `state_revision` provably does NOT move (counter/revision pairs

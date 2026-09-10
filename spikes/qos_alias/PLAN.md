@@ -3,7 +3,7 @@
 ## Question
 
 Phase 7a (D60) resolves the named QoS aliases in `control-platform.yaml`
-(`wan_event → WAN_QOS_LIB::event_qos`, participant `qos: control_wan_udpv4_qos`, …) from the
+(`wan_event → ACT_QOS_LIB::wan_event`, participant `qos: control_wan_udpv4_qos`, …) from the
 loaded `qos_libraries` XML, and applies them to route entities and participants. D60's API
 specifics were **MCP-sourced and never build-verified**, and the connext MCP has been wrong
 3× on this exact Python/XML QoS surface (see the `docs/connext-ai-issues` submodule). Does
@@ -52,7 +52,7 @@ concrete facts D60 did not capture — the reason 7a was *not* high-confidence o
    produces an *inconsistent participant QoS that fails to create* — discovered when Part 4
    first ran with `WAN_TIMEOUT_SEC=30` and `create_participant` threw "Inconsistent QoS".
 3. **`control-platform.yaml` referenced a non-existent profile (found here, now fixed).**
-   `lan_status_1hz` pointed at `LAN_QOS_LIB::status_1hz_qos` — the lib defines
+   `lan_status_1hz` pointed at `ACT_QOS_LIB::lan_status_1s`.
    `status_1sec_qos` / `status_qos`, not `status_1hz_qos`. Fixed to `status_1sec_qos`. 7a's
    `validate_qos_aliases` must still add a profile-**existence** check (not just the
    `is_resolvable_qos_alias` string rule) so this class of error is caught at load time; the

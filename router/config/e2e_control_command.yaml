@@ -37,8 +37,8 @@ qos_libraries:
   - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
-  router_lan_participant: ACT_QOS_LIB::router_lan_participant_qos
-  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+  wan_participant: ACT_QOS_LIB::wan_router_participant
 
 participants:
   control_lan:

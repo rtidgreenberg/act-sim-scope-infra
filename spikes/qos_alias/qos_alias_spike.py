@@ -2,7 +2,7 @@
 """QoS-alias spike — validate Phase 7a against the REAL production QoS libraries.
 
 Phase 7a (D60) resolves the named QoS aliases in control-platform.yaml
-(wan_event -> WAN_QOS_LIB::event_qos, etc.) from the loaded `qos_libraries` XML. D60's
+(wan_event -> ACT_QOS_LIB::wan_event, etc.) from the loaded `qos_libraries` XML. D60's
 API specifics were MCP-sourced and never build-verified, and the MCP has been wrong 3x on
 this exact Python/XML QoS surface (see docs/connext-ai-issues). This proves the mechanism
 against the actual files the config names.
@@ -16,7 +16,7 @@ Findings this spike locks in (all verified against Connext 7.7.0, rti.connextdds
      `datareader_qos_from_profile` / `datawriter_qos_from_profile` /
      `participant_qos_from_profile` (NOT D60's `datareader_qos(...)`).
   3. control-platform.yaml's `lan_status_1hz` alias ORIGINALLY pointed at
-     `LAN_QOS_LIB::status_1hz_qos`, a profile that DOES NOT EXIST (the lib defines
+    `ACT_QOS_LIB::lan_status_1s`, a profile that is now defined canonically.
      `status_1sec_qos`). This spike caught it; the config is now fixed. 7a's
      validate_qos_aliases (D44/D60) must still add a profile-EXISTENCE check (not just the
      string rule) so this class of error is caught at load time. The resolve loop reports
@@ -71,22 +71,17 @@ ACT_TYPES_XML = str(REPO_ROOT / "harness/act/node_sim/datamodel/act_types.xml")
 
 # The qos_libraries and qos_profiles map exactly as control-platform.yaml declares them.
 QOS_LIBS = [str(REPO_ROOT / p) for p in (
-    "harness/act/config/qos/lan_qos_lib.xml",
-    "harness/act/config/qos/wan_qos_lib.xml",
-    "relay/qos_isc.xml",
+    "harness_v2/qos/act_qos_profiles.xml",
 )]
 # alias -> LIB::profile, and whether it is used as a participant or endpoint QoS.
 ENDPOINT_ALIASES = {
-    "wan_event": "WAN_QOS_LIB::event_qos",
-    "wan_status": "WAN_QOS_LIB::status_qos",
-    # Was LAN_QOS_LIB::status_1hz_qos — a broken alias this spike caught (the lib has no such
-    # profile); fixed in control-platform.yaml to status_1sec_qos. The resolve loop below
-    # still flags ANY alias that fails to resolve, so a future break is caught the same way.
-    "lan_status_1hz": "LAN_QOS_LIB::status_1sec_qos",
+    "wan_event": "ACT_QOS_LIB::wan_event",
+    "wan_status": "ACT_QOS_LIB::wan_status",
+    "lan_status_1hz": "ACT_QOS_LIB::lan_status_1s",
 }
 PARTICIPANT_ALIASES = {
-    "control_wan_udpv4_qos": "WAN_QOS_LIB::control_participant_udpv4_qos",
-    "platform_wan_udpv4_qos": "WAN_QOS_LIB::platform_participant_udpv4_qos",
+    "control_wan_udpv4_qos": "ACT_QOS_LIB::wan_router_participant",
+    "platform_wan_udpv4_qos": "ACT_QOS_LIB::wan_router_participant",
 }
 
 TOPIC = "ControlCommand"
@@ -133,8 +128,8 @@ def apply_and_forward(prov, domain):
     print("Part 3: apply a resolved endpoint profile (event_qos) and forward end-to-end")
     types = dds.QosProvider(ACT_TYPES_XML)
     dtype = types.type(TYPE)
-    wqos = prov.datawriter_qos_from_profile("WAN_QOS_LIB::event_qos")
-    rqos = prov.datareader_qos_from_profile("WAN_QOS_LIB::event_qos")
+    wqos = prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_event")
+    rqos = prov.datareader_qos_from_profile("ACT_QOS_LIB::wan_event")
 
     def udp():
         q = dds.DomainParticipantQos()
@@ -171,7 +166,7 @@ def apply_and_forward(prov, domain):
 def participant_from_profile(prov, domain):
     print("Part 4: create a DomainParticipant from a resolved participant profile")
     pqos = prov.participant_qos_from_profile(
-        "WAN_QOS_LIB::control_participant_udpv4_qos")
+        "ACT_QOS_LIB::wan_router_participant")
     try:
         p = dds.DomainParticipant(domain, pqos)
     except dds.Error as e:

@@ -111,15 +111,15 @@ int main() {
         CHECK(qos_err.empty());
 
         CHECK(cfg.qos_profiles.size() == 5);
-        CHECK(cfg.qos_profiles.at("wan_event") == "WAN_QOS_LIB::event_qos");
-        CHECK(cfg.qos_profiles.at("wan_status") == "WAN_QOS_LIB::status_qos");
+        CHECK(cfg.qos_profiles.at("wan_event") == "ACT_QOS_LIB::wan_event");
+        CHECK(cfg.qos_profiles.at("wan_status") == "ACT_QOS_LIB::wan_status");
         // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md
         // finding 3): must point at the profile the lib actually defines.
-        CHECK(cfg.qos_profiles.at("lan_status_1hz") == "LAN_QOS_LIB::status_1sec_qos");
+        CHECK(cfg.qos_profiles.at("lan_status_1hz") == "ACT_QOS_LIB::lan_status_1s");
           CHECK(cfg.qos_profiles.at("router_lan_participant")
-              == "ACT_QOS_LIB::router_lan_participant_qos");
+              == "ACT_QOS_LIB::lan_router_participant");
           CHECK(cfg.qos_profiles.at("wan_participant")
-              == "WAN_QOS_LIB::wan_participant_udpv4_qos");
+              == "ACT_QOS_LIB::wan_router_participant");
     }
 
     // --- config_hash (D80): SHA-256 over the file's raw bytes, full lowercase hex ---

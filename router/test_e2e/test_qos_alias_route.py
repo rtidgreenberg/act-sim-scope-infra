@@ -35,7 +35,7 @@ TOPIC = "QosAliasCmd"
 TYPE = "ExampleCommand"
 ROUTE = "qos_alias_r1"
 EXAMPLE_TYPES_XML = "router/config/example_types.xml"
-WAN_QOS_LIB_FILES = [
+QOS_PROFILE_FILES = [
     "harness_v2/qos/act_qos_profiles.xml",
 ]
 
@@ -62,10 +62,10 @@ def test_qos_alias_route_resolves_and_forwards(
     # Same production QoS-library provider the router resolves aliases against — building
     # the app-side peer QoS from the SAME named profiles (not hand-guessed policies)
     # guarantees RxO compatibility, the technique spikes/qos_alias/ already validated.
-    qos_files = [str(REPO_ROOT / f) for f in WAN_QOS_LIB_FILES]
+    qos_files = [str(REPO_ROOT / f) for f in QOS_PROFILE_FILES]
     qos_prov = dds.QosProvider(";".join(qos_files))
-    app_writer_qos = qos_prov.datawriter_qos_from_profile("WAN_QOS_LIB::status_qos")
-    app_reader_qos = qos_prov.datareader_qos_from_profile("WAN_QOS_LIB::event_qos")
+    app_writer_qos = qos_prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_status")
+    app_reader_qos = qos_prov.datareader_qos_from_profile("ACT_QOS_LIB::wan_event")
 
     in_probe = Probe(in_domain)
     out_probe = Probe(out_domain)
