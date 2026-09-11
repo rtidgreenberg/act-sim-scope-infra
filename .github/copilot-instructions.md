@@ -1,13 +1,18 @@
 # Repo context & guardrails for AI assistants
 
-This repo runs on a full Ubuntu filesystem. Runtime diagnostics belong in the repository's
-`debug/` folder:
+This repo is developed on an AWS instance. The checkout is on the instance's normal
+filesystem.
 
-- Logs: `debug/logs/<application>/`
-- Packet captures: `debug/pcap/<application>/`
-- Diagnostic scripts: `debug/scripts/`
+## Runtime artifact safety (READ FIRST before running anything)
 
-Generated logs and captures are Git-ignored.
+`debug/logs`, `debug/pcap`, and per-node directories such as `debug/platform_30_debug` are
+generated-artifact roots. Use the per-node directories for current container logs and
+`debug/test_reports/<test_id>.*` for compact retained summaries; clear raw artifacts before
+each run and keep source/config files separate from artifacts.
+
+Use `/tmp/...` (or `mktemp -d`) for disposable working directories, FIFOs, SQLite/DWH files,
+and other lock-sensitive transient state. Do not leave processes holding runtime files open
+across forced termination; use the owned harness lifecycle for cleanup.
 
 ## DDS / Connext runtime hygiene
 
@@ -18,8 +23,12 @@ Generated logs and captures are Git-ignored.
   `-x` exact-name match — `pkill -f` can match your own shell), and check `/dev/shm` for
   stray `RTI*`/`dds*` segments.
 - Loopback UDP works for co-located test processes; isolate concurrent tests by DDS
+  **domain id**.
 - **Keep every domain id <= 232.** RTPS maps a domain to a UDP port as `PB + DG*D`
+  (`7400 + 250*D`). That exceeds 65535 at **D = 233** and then wraps mod 65536, landing on
   an arbitrary port — sometimes in the privileged <1024 range, where the bind fails with
+  `RTIOsapiSocket_bindWithIP: OS bind() failure ... Permission denied`. Measured here:
+  `232 -> 65400` (ok), `233 -> 114`, `1023 -> 1006`, and `1046` gives a WAN port range of
   `[268900, 269149]` that matches no real traffic at all.
   An earlier version of this note quoted "~5900–6000" as the ceiling; that was **one
   observed instance of the wrap landing low, not the limit**, and following it cost a full
@@ -42,6 +51,7 @@ Generated logs and captures are Git-ignored.
 - Before starting any new mesh, verify no prior mesh processes and no `/dev/shm/RTI*` or
   `/dev/shm/dds*` segments remain. After every teardown or VM freeze, repeat that check before
   another DDS run.
+- Prefer unit tests and builds for controller/UI diagnostic changes. Do not launch a live mesh
   solely to validate code that can be exercised in-process.
 
 ## Connext environment (this VM)
@@ -49,6 +59,7 @@ Generated logs and captures are Git-ignored.
 - `NDDSHOME=/home/rti/rti_connext_dds-7.7.0`, arch **`x64Linux4gcc7.3.0`**, Connext
   **7.7.0**, `rtiddsgen` 4.7.0, license at `$NDDSHOME/rti_license.dat`.
 - CMake pattern: add `${CONNEXTDDS_DIR}/resource/cmake` to `CMAKE_MODULE_PATH`,
+  `find_package(RTIConnextDDS "7.7.0" REQUIRED COMPONENTS core)`, generate types with
   `connextdds_rtiddsgen_run(... LANG "C++11" ...)`, link `RTIConnextDDS::cpp2_api`.
   Reference build: `spikes/isc_recovery/relay/cpp/CMakeLists.txt`.
 - Modern C++ (C++11) API. Proven entity/QoS/`key_value()` patterns live in
@@ -59,6 +70,7 @@ Generated logs and captures are Git-ignored.
   **not** the old getter/setter pairs (`s.target_node("x")`). Sequences are vector-like
   `omg::types::bounded_sequence<T, N>` (unbounded IDL sequences default to cap `100`). Verified
   against the `router/admin/RouterAdminTypes.idl` codegen.
+
 ## Docker Connext setup and test workflow
 
 - Build the supported image from `docker/connext-7.7/`:
@@ -66,11 +78,13 @@ Generated logs and captures are Git-ignored.
   7.7.0 SDK from RTI's Debian repository and `rti.connext==7.7.0` from PyPI; it does not
   require a host Connext SDK.
 - The fixed host directory `/home/dgreenberg/rti_connext_dds-7.7.0` is **license-only**.
+  It must contain `rti_license.dat` and is mounted at `/shared:ro`; use
   `RTI_LICENSE_FILE=/shared/rti_license.dat`. Do not use this directory as a Docker build
   context or assume it contains headers, `rti_versions.xml`, or the SDK.
 - After adding a user to the Docker group, start a new shell. Until then use
   `sg docker -c '...'`; do not use `sudo docker`.
 - For a disposable unit-test/build container, mount the checkout writable because CTest
+  writes `router/build/Testing/Temporary/LastTest.log`:
   ```bash
   sg docker -c 'docker run --rm \
     -v "$PWD":/workspace \
@@ -80,9 +94,8 @@ Generated logs and captures are Git-ignored.
     -e RTI_LICENSE_FILE=/shared/rti_license.dat \
     connext:7.7.0 sh -lc "cmake --build router/build -j2 && bash router/run_tests.sh"'
   ```
-- For e2e validation, keep caches and pytest state under `/tmp`, but write application logs
-  and captures under `debug/logs/<application>/` and `debug/pcap/<application>/`. Set
-  `PYTHONPYCACHEPREFIX=/tmp/pycache`, `TMPDIR=/tmp`,
+- For e2e validation, mount the checkout read-only and keep all caches, logs, pytest state,
+  and temporary files under `/tmp`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`, `TMPDIR=/tmp`,
   and run pytest with `-p no:cacheprovider` so `.pytest_cache` is not written to the share.
   Install pytest only inside the disposable container if the image does not already provide it.
 - Before and after either test mode, check for `pytest`, `router_main`, and mesh processes and
@@ -171,38 +184,6 @@ local fs per the rules above.
 
 Two test harnesses are available for debugging and verification:
 
-## Debug Artifact Locations
-
-Use these paths first when investigating a running or recently stopped application:
-
-- Live mesh: `debug/logs/mesh/` (`control.log`, `platform<ID>.log`, simulator,
-  mesh-control, dashboard, and traffic-monitor logs).
-- Router e2e tests: `debug/logs/router_e2e/<test-name>/` (rendered configs and subprocess
-  logs; each test process exposes its exact `log_path` in failures).
-- Router journal subscriber: `debug/logs/journal/router_journal.jsonl` when running
-  `debug/scripts/router_journal_subscriber.py`; each line includes the DDS topic and JSON
-  sample for `ActRouterControllerJournal` or `ActRouterStatus`.
-- Router network capture: `debug/pcap/router/` when Connext network capture is enabled.
-- Tool- or spike-specific captures: `debug/pcap/<application>/`.
-
-The mesh launcher creates and redirects its application logs automatically. E2E fixtures do
-the same for test subprocesses. Standalone scripts need explicit redirection to their
-application directory, for example:
-
-```bash
-python3 debug/scripts/dds_type_probe.py --domain 20 \
-  > debug/logs/dds_type_probe/probe.log 2>&1
-```
-
-Create the application directory before redirecting output. Use the `clear-debug-artifacts`
-prompt after stopping the associated processes to remove generated logs and captures.
-
-To capture the router's route-change ledger and current status over DDS:
-
-```bash
-python3 debug/scripts/router_journal_subscriber.py --domain 20
-```
-
 Before claiming the full test suite is green, verify the environment that is actually running
 the commands. A valid full router gate needs `cmake`/`ctest`, `pytest`, and an importable
 `rti.connextdds` binding in the same shell/container that runs the tests. Do not treat stale
@@ -231,31 +212,18 @@ as `/workspace`, rebuild inside that environment, and run the tests there.
   Key utility: `dds_probe.Probe` (UDPv4-only participant), `AdminChannel` (status reader +
   command writer + ack collector), `write_until_seen` (poll-with-timeout).
 
-- **Type probe** (`debug/scripts/dds_type_probe.py`): standalone diagnostic —
-  `python3 debug/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
+- **Type probe** (`harness_v2/scripts/dds_type_probe.py`): standalone diagnostic —
+  `python3 harness_v2/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
   [--wait 5]` — lists every discovered publication/subscription on a domain (topic, type,
   owning participant, name) and whether its inline TypeObject resolved. Surfaces exactly
   the fact `DiscoveryDispatcher.maybe_learn_type()` gates on, so a topic stuck in
   `TOPIC_IDLE` because no publication propagates an inline TypeObject (e.g. WIS writers)
   is immediately visible instead of requiring log-grepping.
 
-- **Domain traffic monitor** (`debug/scripts/domain_traffic_monitor.py`): live RTPS traffic
-  diagnostic using `tshark` — `python3 debug/scripts/domain_traffic_monitor.py
-  --domains 20,21 --interval 2`. It classifies discovery and user-data packets by DDS
-  domain, appends interval samples to `debug/logs/network_monitor/traffic_stats.jsonl`, and
-  posts the same traffic statistics to the mesh dashboard bridge. It does not create a DDS
-  participant, so it does not add discovery traffic to the capture.
-
-- **Router journal subscriber** (`debug/scripts/router_journal_subscriber.py`): DDS diagnostic
-  subscriber for route-change decisions and current router status —
-  `python3 debug/scripts/router_journal_subscriber.py --domain 20`. It captures
-  `ActRouterControllerJournal` and `ActRouterStatus` samples as JSONL in
-  `debug/logs/journal/router_journal.jsonl` for offline troubleshooting.
-
 - **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
   (control + platform routers + platform sims + platform_mesh_control processes) with optional
   WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
-  `test_team_assignment_e2e.py` script. Logs in `debug/logs/mesh/`. Tear down with
+  `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
   `run_mesh.sh down`.
 
 ## Data model

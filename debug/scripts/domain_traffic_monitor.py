@@ -27,7 +27,7 @@ Entity-ID classification (last byte = entity kind):
 Requires: tshark (unprivileged on this VM via cap_net_raw on dumpcap).
 
 Usage:
-    python3 debug/scripts/domain_traffic_monitor.py [--domains 20,21] [--interval 2]
+    python3 debug/scripts/domain_traffic_monitor.py [--domains 200] [--interval 2]
     python3 debug/scripts/domain_traffic_monitor.py --help
 
 When launched by the mesh harness, its log is written to debug/logs/mesh/traffic_monitor.log.
@@ -214,8 +214,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="DDS domain traffic monitor — captures RTPS on loopback, "
                     "POSTs stats to the mesh dashboard bridge.")
-    parser.add_argument("--domains", default="20",
-                        help="Comma-separated domain IDs to monitor (default: 20)")
+    parser.add_argument("--domains", default="200",
+                        help="Comma-separated domain IDs to monitor (default: 200, WAN)")
     parser.add_argument("--dashboard-url", default="http://localhost:8080",
                         help="Base URL of the mesh dashboard bridge (default: http://localhost:8080)")
     parser.add_argument("--interval", type=float, default=0.1,

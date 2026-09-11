@@ -114,7 +114,11 @@ $$
 \mathrm{completion} = \frac{\mathrm{received\ expected\ deliveries}}{\mathrm{expected\ deliveries}} \times 100\%.
 $$
 
-Results are grouped by topic, source, receiver, route, team, and scenario action window.
+Every topic receives an independent completion rate and verdict. The aggregate result is a
+roll-up only: it must never mask a failed or inconclusive high-priority topic. Future scenarios
+may apply different threshold/latency policies by topic priority without changing event identity
+or the per-topic denominator. Results are also grouped by source, receiver, route, team, and
+scenario action window.
 Command reports additionally show command-to-ack completion and latency. Sequence gaps are
 listed explicitly so a partial stream cannot be hidden by aggregate percentages.
 
@@ -128,7 +132,8 @@ A verdict is `pass`, `fail`, or `inconclusive`:
 ## Reports
 
 `report.json` is the machine-readable source of truth. `report.html` is a self-contained test
-artifact with run metadata, an overall completion summary, per-route/topic tables, latency
+artifact with run metadata, an overall completion summary, per-topic verdict/completion tables,
+per-route tables, latency
 percentiles, and drill-down lists for missing, duplicate, unexpected, and late sequences.
 
 The HTML report links the expectation snapshot, node event logs, controller action log, router
