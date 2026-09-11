@@ -24,6 +24,9 @@ debug/logs/*
 !debug/logs/.gitkeep
 debug/pcap/*
 !debug/pcap/.gitkeep
+debug/*_debug/
+debug/test_controller_debug/
+debug/test_reports/
 
 # RTI
 rti_license.dat
