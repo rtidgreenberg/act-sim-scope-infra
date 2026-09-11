@@ -10,12 +10,6 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 
-AUDITED_RECIPIENTS = {
-    "ControlCommand": lambda event: [event["destination"]],
-    "PlatformInitStatus": lambda event: ["Control_20"],
-}
-
-
 def load_events(debug_root, run_id, nodes):
     events = []
     errors = []
@@ -64,18 +58,63 @@ def load_manifest(path, run_id):
     return {"nodes": nodes, "topics": topics}, []
 
 
-def analyze(events, event_paths, evidence_errors, manifest, run_id):
+def load_expectations(path, manifest, run_id):
+    try:
+        snapshot = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {}, [f"invalid expectations {path}: {error}"]
+    if snapshot.get("run_id") != run_id:
+        return {}, [f"expectations run_id does not match {run_id}"]
+    if snapshot.get("nodes") != manifest.get("nodes"):
+        return {}, ["expectations node list does not match manifest"]
+    topics = snapshot.get("topics")
+    if not isinstance(topics, dict) or set(topics) != set(manifest.get("topics", {})):
+        return {}, ["expectations topics do not match manifest"]
+    for topic, expectation in topics.items():
+        if not isinstance(expectation, dict):
+            return {}, [f"invalid expectation for topic {topic}"]
+        rule = expectation.get("recipient_rule")
+        if not isinstance(expectation.get("enabled"), bool) \
+                or not isinstance(expectation.get("source_nodes"), list) \
+                or not isinstance(rule, dict) \
+                or rule.get("kind") not in {"fixed_nodes", "sample_destination"} \
+                or not isinstance(rule.get("nodes"), list):
+            return {}, [f"invalid expectation for topic {topic}"]
+    return topics, []
+
+
+def expected_receivers(event, expectation):
+    if not expectation["enabled"]:
+        return []
+    rule = expectation["recipient_rule"]
+    if rule["kind"] == "fixed_nodes":
+        return rule["nodes"]
+    destination = event.get("destination")
+    return [destination] if destination in rule["nodes"] else []
+
+
+def analyze(events, event_paths, evidence_errors, manifest, expectations, run_id):
     requirements = manifest.get("topics", {})
+    errors = list(evidence_errors)
     sends = [event for event in events if event.get("event") == "sent"
-             and event.get("topic") in AUDITED_RECIPIENTS]
+             and event.get("topic") in expectations]
     receives = [event for event in events if event.get("event") == "received"
-                and event.get("topic") in AUDITED_RECIPIENTS]
+                and event.get("topic") in expectations]
     received_keys = Counter(
         (event["topic"], event["source_node"], event["sequence"], event["node"])
         for event in receives)
     expected = []
+    not_expected = []
     for sent in sends:
-        for receiver in AUDITED_RECIPIENTS[sent["topic"]](sent):
+        expectation = expectations[sent["topic"]]
+        if sent["source_node"] not in expectation["source_nodes"]:
+            errors.append(f"unexpected source {sent['source_node']} for {sent['topic']}")
+            continue
+        receivers = expected_receivers(sent, expectation)
+        if not receivers:
+            not_expected.append({"topic": sent["topic"], "source_node": sent["source_node"],
+                                 "sequence": sent["sequence"]})
+        for receiver in receivers:
             expected.append((sent, receiver))
 
     missing = []
@@ -108,10 +147,11 @@ def analyze(events, event_paths, evidence_errors, manifest, run_id):
         completion_percent = (100 * received_expected / len(topic_expected)) \
             if topic_expected else 0
         topic_verdict = "pass"
-        if evidence_errors or len(topic_sends) < requirement["minimum_sent"]:
+        if errors or len(topic_sends) < requirement["minimum_sent"]:
             topic_verdict = "inconclusive"
         elif topic_missing or topic_duplicates or topic_unexpected \
-                or completion_percent < requirement["completion_threshold_percent"]:
+                or (topic_expected and completion_percent
+                    < requirement["completion_threshold_percent"]):
             topic_verdict = "fail"
         topics[topic] = {
             "verdict": topic_verdict,
@@ -126,7 +166,7 @@ def analyze(events, event_paths, evidence_errors, manifest, run_id):
             "unexpected": len(topic_unexpected),
             "completion_percent": completion_percent,
         }
-    if not event_paths or evidence_errors:
+    if not event_paths or errors:
         verdict = "inconclusive"
     elif any(topic["verdict"] == "fail" for topic in topics.values()):
         verdict = "fail"
@@ -138,13 +178,14 @@ def analyze(events, event_paths, evidence_errors, manifest, run_id):
         "run_id": run_id,
         "verdict": verdict,
         "event_log_paths": [str(path) for path in event_paths],
-        "evidence_errors": evidence_errors,
+        "evidence_errors": errors,
         "sent": len(sends),
         "expected_deliveries": len(expected),
         "received_expected_deliveries": len(expected) - len(missing),
         "missing": missing,
         "duplicates": duplicates,
         "unexpected": unexpected,
+        "not_expected": not_expected,
         "topics": topics,
         "completion_percent": (100 * (len(expected) - len(missing)) / len(expected))
         if expected else 0,
@@ -193,11 +234,15 @@ def main():
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--test-id", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--expectations", required=True)
     arguments = parser.parse_args()
     manifest, manifest_errors = load_manifest(arguments.manifest, arguments.run_id)
+    expectations, expectation_errors = load_expectations(arguments.expectations, manifest,
+                                                          arguments.run_id)
     events, paths, evidence_errors = load_events(arguments.debug_root, arguments.run_id,
                                                  manifest.get("nodes", []))
-    report = analyze(events, paths, evidence_errors + manifest_errors, manifest,
+    report = analyze(events, paths, evidence_errors + manifest_errors + expectation_errors,
+                     manifest, expectations,
                      arguments.run_id)
     report["test_id"] = arguments.test_id
     report_root = Path(arguments.debug_root) / "test_reports"

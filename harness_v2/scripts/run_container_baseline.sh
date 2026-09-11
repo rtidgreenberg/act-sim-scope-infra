@@ -169,6 +169,9 @@ up() {
     done
     printf '],"topics":{"ControlCommand":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformInitStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
         >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
+    python3 "$V2_ROOT/scripts/compile_delivery_expectations.py" \
+        --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json" \
+        --output "$REPO_ROOT/debug/test_controller_debug/expectations.json"
     write_compose
     compose up -d --remove-orphans
     release_audit_start
@@ -212,7 +215,8 @@ audit() {
     [[ -f "$WORKDIR/run_id" ]] || { echo "No run identity at $WORKDIR/run_id" >&2; exit 1; }
     python3 "$V2_ROOT/scripts/delivery_audit_report.py" --debug-root "$REPO_ROOT/debug" \
         --run-id "$(cat "$WORKDIR/run_id")" --test-id "$TEST_ID" \
-        --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json"
+        --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json" \
+        --expectations "$REPO_ROOT/debug/test_controller_debug/expectations.json"
 }
 
 down() {

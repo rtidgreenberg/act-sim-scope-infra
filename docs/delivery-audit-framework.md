@@ -45,14 +45,14 @@ SQLite/DWH files and other lock-sensitive transient state remain under `/tmp`.
 
 ### Current baseline
 
-The implemented container baseline writes a versioned `manifest.json` with the selected
-nodes and minimum evidence requirements for `ControlCommand` and `PlatformInitStatus`.
-The analyzer reads only those nodes' logs, reports each declared topic independently, and
-returns `inconclusive` for malformed/missing evidence or insufficient samples. It currently
-uses fixed recipient rules for those two topics; it does not yet create `expectations.json`,
-derive recipients from route/topology state, calculate latency or ordering, or correlate
-command acknowledgments. Those are Phase 4 requirements below, not properties proven by the
-baseline report.
+The implemented container baseline writes a versioned `manifest.json` and immutable
+`expectations.json` with the selected nodes and minimum evidence requirements for
+`ControlCommand` and `PlatformInitStatus`. The snapshot encodes the current baseline's
+enabled `control_command` destination filter and `platform_init_status` control receiver;
+the analyzer reads only those nodes' logs and uses that snapshot rather than hard-coded
+recipient logic. It reports each declared topic independently and returns `inconclusive` for
+malformed/missing evidence or insufficient samples. Generic route/topology compilation,
+latency/order analysis, and command-ack correlation remain Phase 4 work.
 
 ### Retention
 
