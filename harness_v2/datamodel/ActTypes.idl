@@ -24,6 +24,10 @@ struct control_command {
     @key
     string<100> source;
     string<100> destination;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> command_id;
     string<64> command_type;
     sequence<octet, 100> payload;
@@ -34,6 +38,10 @@ struct control_command_ack {
     @key
     string<100> source;
     string<100> destination;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> command_id;
     boolean accepted;
     string<256> message;
@@ -50,6 +58,10 @@ struct platform_status {
 struct platform_init_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float latitude;
     float longitude;
     float altitude_m;

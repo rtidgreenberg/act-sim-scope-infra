@@ -22,6 +22,8 @@ DESTINATION="Control_20"
 PLATFORM_DOMAIN=""
 ROUTER_NAME=""
 VERBOSITY=2
+RUN_ID=""
+AUDIT_START_FILE=""
 PRINT_CONFIG=false
 
 while [[ $# -gt 0 ]]; do
@@ -31,6 +33,8 @@ while [[ $# -gt 0 ]]; do
         --domain) PLATFORM_DOMAIN="$2"; shift 2 ;;
         --router-name) ROUTER_NAME="$2"; shift 2 ;;
         --verbosity) VERBOSITY="$2"; shift 2 ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        --audit-start-file) AUDIT_START_FILE="$2"; shift 2 ;;
         --print-config) PRINT_CONFIG=true; shift ;;
         --help) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "Error: Unknown option '$1'"; echo "Use --help for usage"; exit 1 ;;
@@ -66,4 +70,6 @@ exec python3 "${V2_ROOT}/sims/platform_sim.py" --qos_profile "${LAN_QOS_PROFILE}
     --source "${ROUTER_NAME}" \
     --destination "${DESTINATION}" \
     --session "${PLATFORM_ID}" \
+    --run-id "${RUN_ID}" \
+    --audit-start-file "${AUDIT_START_FILE}" \
     --verbosity "${VERBOSITY}"

@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:////home/rti/rti_connext_dds-7.7.0/bin/../resource/app/app_support/rtiddsgen/schema/rti_dds_profiles.xsd">
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:////opt/rti.com/rti_connext_dds-7.7.0/bin/../resource/app/app_support/rtiddsgen/schema/rti_dds_profiles.xsd">
 <types>
 <struct name= "control_command">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
   <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="command_id" stringMaxLength="64" type="string"/>
   <member name="command_type" stringMaxLength="64" type="string"/>
   <member name="payload" sequenceMaxLength="100" type="byte"/>
@@ -12,6 +16,10 @@
 <struct name= "control_command_ack">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
   <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="command_id" stringMaxLength="64" type="string"/>
   <member name="accepted" type="boolean"/>
   <member name="message" stringMaxLength="256" type="string"/>
@@ -24,6 +32,10 @@
 </struct>
 <struct name= "platform_init_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="latitude" type="float32"/>
   <member name="longitude" type="float32"/>
   <member name="altitude_m" type="float32"/>

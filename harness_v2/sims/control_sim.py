@@ -15,7 +15,22 @@ import random
 import threading
 import rti.asyncio
 import asyncio
+import os
 import uuid
+from pathlib import Path
+from delivery_audit import DeliveryAudit
+
+RUN_ID = ""
+AUDIT = None
+AUDIT_START_FILE = ""
+
+
+async def wait_for_audit_start():
+    if not AUDIT_START_FILE:
+        return
+    start_file = Path(AUDIT_START_FILE)
+    while not start_file.exists() or start_file.stat().st_size == 0:
+        await asyncio.sleep(0.1)
 
 class C2Sim:
     def __init__(self, args):
@@ -98,7 +113,7 @@ class C2Sim:
     async def read_primary_status_data(self):
       print("Waiting for Primary Status data")
       async for data in self.platform_init_status_reader.take_data_async():
-        print(f'- Received PlatformInitStatus from {data["source"]}')
+                print(f'- Received PlatformInitStatus from {data["source"]}'); AUDIT.log("received", "PlatformInitStatus", data)
        
 
     async def read_detail_status_data(self):
@@ -133,8 +148,13 @@ class C2Sim:
           cmd_sample["command_id"] = f"cmd-{seq}"
           cmd_sample["command_type"] = "STATUS_REQUEST"
           cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
+          cmd_sample["run_id"] = RUN_ID
+          cmd_sample["source_node"] = args.source
+          cmd_sample["audit_sequence"] = seq
+          cmd_sample["sent_at_ns"] = time.time_ns()
           cmd_sample["timestamp"] = int(time.time() * 1_000_000)
           self.control_cmd_writer.write(cmd_sample)
+          AUDIT.log("sent", "ControlCommand", cmd_sample)
           print("Writing to ControlCommand topic")
 
           # Contact report
@@ -158,6 +178,7 @@ class C2Sim:
 
 
     async def run(self) -> None:
+        await wait_for_audit_start()
         await asyncio.gather(
             self.write_cmd(),
             self.read_primary_status_data(),
@@ -192,8 +213,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbosity", type=int, default=1, help="How much debugging output to show | Range: 0-3 | Default: 1",
     )
+    parser.add_argument("--run-id", default="", help="Shared delivery-audit run identity")
+    parser.add_argument("--audit-start-file", default="", help="Publish only after this gate is opened")
 
     args = parser.parse_args()
+    RUN_ID = args.run_id or os.environ.get("ACT_RUN_ID", str(uuid.uuid4()))
+    AUDIT = DeliveryAudit(args.source, RUN_ID)
+    AUDIT_START_FILE = args.audit_start_file
 
     verbosity_levels = {
         0: dds.Verbosity.SILENT,
@@ -207,9 +233,7 @@ if __name__ == "__main__":
 
     dds.Logger.instance.verbosity = verbosity
 
-    try:
-      # Run
-      rti.asyncio.run(C2Sim(args).run())
+    try: simulator = C2Sim(args); Path(os.environ["NODE_DEBUG_DIR"], "simulator_ready").touch(); rti.asyncio.run(simulator.run())
         
     except KeyboardInterrupt:
         pass

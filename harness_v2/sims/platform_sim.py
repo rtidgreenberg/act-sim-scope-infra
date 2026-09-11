@@ -15,7 +15,22 @@ import random
 import threading
 import rti.asyncio
 import asyncio
+import os
 import uuid
+from pathlib import Path
+from delivery_audit import DeliveryAudit
+
+RUN_ID = ""
+AUDIT = None
+AUDIT_START_FILE = ""
+
+
+async def wait_for_audit_start():
+    if not AUDIT_START_FILE:
+        return
+    start_file = Path(AUDIT_START_FILE)
+    while not start_file.exists() or start_file.stat().st_size == 0:
+        await asyncio.sleep(0.1)
 
 class PlatformSim:
     def __init__(self, args):
@@ -169,7 +184,7 @@ class PlatformSim:
     async def read_control_command(self):
       print("Waiting for Control Commands")
       async for data in self.control_cmd_reader.take_data_async():
-        print(f'- Received ControlCommand from {data["msg.source"]}')
+                print(f'- Received ControlCommand from {data["source"]}'); AUDIT.log("received", "ControlCommand", data)
 
     async def read_platform_data(self):
       print("Waiting for Platform Data ")
@@ -181,22 +196,6 @@ class PlatformSim:
       async for data in self.contact_report_reader.take_data_async():
         print(f'- Received ContactReport from {data["source"]}')
 
-
-    async def write_cmd_ack(self):
-      sample = dds.DynamicData(self.control_cmd_ack_type)
-      sample["source"] = args.source
-      sample["destination"] = args.destination
-      seq = 0
-
-      while True:
-          seq += 1
-          sample["command_id"] = f"ack-{seq}"
-          sample["accepted"] = True
-          sample["message"] = "OK"
-          sample["timestamp"] = int(time.time() * 1_000_000)
-          self.control_cmd_ack_writer.write(sample)
-          print("Writing to ControlCommandAck topic")
-          await asyncio.sleep(1)
 
     async def write_primary_status(self):
       import math
@@ -215,8 +214,13 @@ class PlatformSim:
         sample["heading_deg"] = (90.0 + t * 5.0) % 360.0
         sample["speed_knots"] = 8.0 + 2.0 * math.sin(t * 0.5)
         sample["heartbeat_seq"] = seq
+        sample["run_id"] = RUN_ID
+        sample["source_node"] = args.source
+        sample["audit_sequence"] = seq
+        sample["sent_at_ns"] = time.time_ns()
         sample["timestamp"] = int(time.time() * 1_000_000)
         self.platform_init_status_writer.write(sample)
+        AUDIT.log("sent", "PlatformInitStatus", sample)
         print("Writing to PlatformInitStatus topic")
         await asyncio.sleep(1)
 
@@ -394,11 +398,11 @@ class PlatformSim:
           await asyncio.sleep(1)
 
     async def run(self) -> None:
+        await wait_for_audit_start()
         await asyncio.gather(
             self.read_control_command(),
             self.read_platform_data(),
             self.read_contact_report(),
-            self.write_cmd_ack(),
             self.write_primary_status(),
             self.write_detail_status(),
             self.write_mission_status(),
@@ -436,8 +440,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v", "--verbosity", type=int, default=1, help="How much debugging output to show | Range: 0-3 | Default: 1",
     )
+    parser.add_argument("--run-id", default="", help="Shared delivery-audit run identity")
+    parser.add_argument("--audit-start-file", default="", help="Publish only after this gate is opened")
 
     args = parser.parse_args()
+    RUN_ID = args.run_id or os.environ.get("ACT_RUN_ID", str(uuid.uuid4()))
+    AUDIT = DeliveryAudit(args.source, RUN_ID)
+    AUDIT_START_FILE = args.audit_start_file
 
     verbosity_levels = {
         0: dds.Verbosity.SILENT,
@@ -451,9 +460,7 @@ if __name__ == "__main__":
 
     dds.Logger.instance.verbosity = verbosity
 
-    try:
-      # Run
-      rti.asyncio.run(PlatformSim(args).run())
+    try: simulator = PlatformSim(args); Path(os.environ["NODE_DEBUG_DIR"], "simulator_ready").touch(); rti.asyncio.run(simulator.run())
         
     except KeyboardInterrupt:
         pass
