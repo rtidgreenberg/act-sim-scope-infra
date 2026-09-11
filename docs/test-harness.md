@@ -165,6 +165,24 @@ intermittent loss; complete cutout; recovery; and a node kill/restart control ca
 fault action is emitted by the scenario controller with a stable id and expected duration,
 so a run can be replayed and metrics windows can be compared across configurations.
 
+### Application delivery audit
+
+The harness must also produce a message-level completion verdict from simulator send/receive
+logs. Expected receivers are compiled from the effective route, content-filter, partition/team,
+endpoint-match, and lifecycle state at each send timestamp; they are not inferred from a raw
+receive count. The full event contract, expectation rules, artifact layout, JSON output, and
+HTML report requirements are defined in [delivery-audit-framework.md](delivery-audit-framework.md).
+
+The audit harness must isolate each active run with an owned Compose project, work directory,
+and node-artifact directories; it must refuse a conflicting active run before clearing any
+evidence. Before stimulus begins, the controller waits for every selected node's simulator
+endpoints and required route output entities, then waits for their required DDS endpoint
+matches to stabilize. A versioned run manifest declares every required topic, its priority,
+minimum sent sample count, completion threshold, and latency policy. The report shows a verdict
+and denominator for each declared topic; an absent required topic is `inconclusive` or `fail`,
+never hidden by an aggregate percentage. Malformed/truncated JSONL is reported as an
+evidence-quality failure and makes the result `inconclusive`.
+
 - **Result capture & verdict** — per-scenario metric windows, **pass/fail vs thresholds**,
   and an **artifact bundle** (metrics CSV, event log, screenshots, optional pcap). This is the
   actual thesis *evidence* — currently under-specified.

@@ -27,6 +27,17 @@ compose() {
     docker compose -p act-container-baseline -f "$WORKDIR/compose.yaml" "$@"
 }
 
+platform_ids() {
+    seq 30 $((29 + PLATFORMS))
+}
+
+ensure_no_active_baseline() {
+    if docker ps -q --filter label=com.docker.compose.project=act-container-baseline | grep -q .; then
+        echo "Error: an act-container-baseline run is active; run its owned down action first" >&2
+        exit 1
+    fi
+}
+
 render_config() {
     local id="$1" output="$2"
     sed -e "s/Platform_30/Platform_${id}/g" \
@@ -69,7 +80,7 @@ services:
       - ${REPO_ROOT}/debug/control_20_debug:/node-debug
 EOF
     local id
-    for id in $(seq 30 $((29 + PLATFORMS))); do
+    for id in $(platform_ids); do
         cat >> "$compose_file" <<EOF
   platform-${id}:
     image: connext:7.7.0
@@ -108,12 +119,16 @@ release_audit_start() {
     while (( SECONDS < deadline )); do
         ready=true
         [[ -f "$REPO_ROOT/debug/control_20_debug/simulator_ready" ]] || ready=false
-        for id in $(seq 30 $((29 + PLATFORMS))); do
+        for id in $(platform_ids); do
             [[ -f "$REPO_ROOT/debug/platform_${id}_debug/simulator_ready" ]] || ready=false
         done
-        for log in "$REPO_ROOT/debug/control_20_debug/logs/router.log" \
-                   "$REPO_ROOT"/debug/platform_{30..99}_debug/logs/router.log; do
-            [[ -f "$log" ]] || continue
+        local log
+        for log in "$REPO_ROOT/debug/control_20_debug/logs/router.log"; do
+            grep -q 'route_entities_created route=control_command' "$log" 2>/dev/null || ready=false
+            grep -q 'route_entities_created route=platform_init_status' "$log" 2>/dev/null || ready=false
+        done
+        for id in $(platform_ids); do
+            log="$REPO_ROOT/debug/platform_${id}_debug/logs/router.log"
             grep -q 'route_entities_created route=control_command' "$log" 2>/dev/null || ready=false
             grep -q 'route_entities_created route=platform_init_status' "$log" 2>/dev/null || ready=false
         done
@@ -121,8 +136,9 @@ release_audit_start() {
         sleep 1
     done
     [[ "$ready" == true ]] || { echo "Timed out waiting for routers and simulators to become audit-ready" >&2; exit 1; }
+    sleep 2
     printf 'start\n' > "$REPO_ROOT/debug/control_20_debug/audit-start"
-    for id in $(seq 30 $((29 + PLATFORMS))); do
+    for id in $(platform_ids); do
         printf 'start\n' > "$REPO_ROOT/debug/platform_${id}_debug/audit-start"
     done
 }
@@ -133,22 +149,26 @@ up() {
     : "${CONNEXT_SHARED_DIR:?Set CONNEXT_SHARED_DIR to the license directory}"
     [[ -x "$REPO_ROOT/router/build/router_main" ]] || {
         echo "Build router/build/router_main before launching the container baseline" >&2; exit 1; }
+    ensure_no_active_baseline
     rm -rf "$WORKDIR"
     mkdir -p "$WORKDIR" "$REPO_ROOT/debug/control_20_debug" "$REPO_ROOT/debug/test_controller_debug"
     printf 'container-%(%Y%m%dT%H%M%S)T-%s\n' -1 "$$" > "$WORKDIR/run_id"
     find "$REPO_ROOT/debug/control_20_debug" -mindepth 1 -delete
     find "$REPO_ROOT/debug/test_controller_debug" -mindepth 1 -delete
     cp "$WORKDIR/run_id" "$REPO_ROOT/debug/control_20_debug/run_id"
-    printf '{"run_id":"%s","test_id":"%s"}\n' "$(cat "$WORKDIR/run_id")" "$TEST_ID" \
-        > "$REPO_ROOT/debug/test_controller_debug/manifest.json"
+    printf '{"schema_version":1,"run_id":"%s","test_id":"%s","nodes":["control_20"' \
+        "$(cat "$WORKDIR/run_id")" "$TEST_ID" > "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     cp "$REPO_ROOT/router/config/control-platform.yaml" "$WORKDIR/control-platform-20.yaml"
     local id
-    for id in $(seq 30 $((29 + PLATFORMS))); do
+    for id in $(platform_ids); do
         mkdir -p "$REPO_ROOT/debug/platform_${id}_debug"
         find "$REPO_ROOT/debug/platform_${id}_debug" -mindepth 1 -delete
         cp "$WORKDIR/run_id" "$REPO_ROOT/debug/platform_${id}_debug/run_id"
         render_config "$id" "$WORKDIR/control-platform-${id}.yaml"
+        printf ',"platform_%s"' "$id" >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     done
+    printf '],"topics":{"ControlCommand":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformInitStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
+        >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     write_compose
     compose up -d --remove-orphans
     release_audit_start
@@ -163,7 +183,7 @@ render() {
     mkdir -p "$WORKDIR"
     cp "$REPO_ROOT/router/config/control-platform.yaml" "$WORKDIR/control-platform-20.yaml"
     local id
-    for id in $(seq 30 $((29 + PLATFORMS))); do
+    for id in $(platform_ids); do
         render_config "$id" "$WORKDIR/control-platform-${id}.yaml"
     done
     write_compose
@@ -178,7 +198,7 @@ smoke() {
         compose ps >&2; echo "Expected $expected running nodes, found $actual" >&2; exit 1; }
     grep -qx 'control-20' "$WORKDIR/running-services.txt"
     local id
-    for id in $(seq 30 $((29 + PLATFORMS))); do
+    for id in $(platform_ids); do
         grep -qx "platform-${id}" "$WORKDIR/running-services.txt"
         [[ -s "$REPO_ROOT/debug/platform_${id}_debug/logs/router.log" ]] || {
             echo "platform-${id} router log is missing" >&2; exit 1; }
@@ -191,7 +211,8 @@ smoke() {
 audit() {
     [[ -f "$WORKDIR/run_id" ]] || { echo "No run identity at $WORKDIR/run_id" >&2; exit 1; }
     python3 "$V2_ROOT/scripts/delivery_audit_report.py" --debug-root "$REPO_ROOT/debug" \
-        --run-id "$(cat "$WORKDIR/run_id")" --test-id "$TEST_ID"
+        --run-id "$(cat "$WORKDIR/run_id")" --test-id "$TEST_ID" \
+        --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json"
 }
 
 down() {

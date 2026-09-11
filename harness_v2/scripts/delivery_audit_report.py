@@ -16,22 +16,56 @@ AUDITED_RECIPIENTS = {
 }
 
 
-def load_events(debug_root, run_id):
+def load_events(debug_root, run_id, nodes):
     events = []
-    event_paths = sorted(Path(debug_root).glob("*_debug/events.jsonl"))
+    errors = []
+    event_paths = [Path(debug_root) / f"{node}_debug/events.jsonl" for node in nodes]
     for path in event_paths:
+        if not path.exists():
+            errors.append(f"missing event log {path}")
+            continue
         with path.open(encoding="utf-8") as event_file:
             for line_number, line in enumerate(event_file, 1):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError as error:
-                    raise ValueError(f"invalid JSON in {path}:{line_number}") from error
+                    errors.append(f"invalid JSON in {path}:{line_number}: {error.msg}")
+                    continue
                 if event.get("run_id") == run_id:
-                    events.append(event)
-    return events, event_paths
+                    required = {"event", "node", "topic", "source_node", "sequence"}
+                    missing = sorted(required - event.keys())
+                    if missing:
+                        errors.append(f"missing {', '.join(missing)} in {path}:{line_number}")
+                    else:
+                        events.append(event)
+    return events, [path for path in event_paths if path.exists()], errors
 
 
-def analyze(events, event_paths, run_id):
+def load_manifest(path, run_id):
+    try:
+        manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {}, [f"invalid manifest {path}: {error}"]
+    if manifest.get("run_id") != run_id:
+        return {}, [f"manifest run_id does not match {run_id}"]
+    topics = manifest.get("topics")
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list) or not nodes or not all(isinstance(node, str) for node in nodes):
+        return {}, ["manifest has no node list"]
+    if not isinstance(topics, dict) or not topics:
+        return {}, ["manifest has no topic requirements"]
+    for topic, requirement in topics.items():
+        if not isinstance(requirement, dict):
+            return {}, [f"manifest topic {topic} is not an object"]
+        if not isinstance(requirement.get("minimum_sent"), int):
+            return {}, [f"manifest topic {topic} has no integer minimum_sent"]
+        if not isinstance(requirement.get("completion_threshold_percent"), (int, float)):
+            return {}, [f"manifest topic {topic} has no completion threshold"]
+    return {"nodes": nodes, "topics": topics}, []
+
+
+def analyze(events, event_paths, evidence_errors, manifest, run_id):
+    requirements = manifest.get("topics", {})
     sends = [event for event in events if event.get("event") == "sent"
              and event.get("topic") in AUDITED_RECIPIENTS]
     receives = [event for event in events if event.get("event") == "received"
@@ -61,22 +95,57 @@ def analyze(events, event_paths, run_id):
          "receiver_node": receiver, "count": count}
         for (topic, source, sequence, receiver), count in sorted(received_keys.items())
     ]
-    if not event_paths or not sends:
+    topic_names = sorted(requirements)
+    topics = {}
+    for topic in topic_names:
+        requirement = requirements[topic]
+        topic_sends = [event for event in sends if event["topic"] == topic]
+        topic_expected = [item for item in expected if item[0]["topic"] == topic]
+        topic_missing = [item for item in missing if item["topic"] == topic]
+        topic_duplicates = [item for item in duplicates if item["topic"] == topic]
+        topic_unexpected = [item for item in unexpected if item["topic"] == topic]
+        received_expected = len(topic_expected) - len(topic_missing)
+        completion_percent = (100 * received_expected / len(topic_expected)) \
+            if topic_expected else 0
+        topic_verdict = "pass"
+        if evidence_errors or len(topic_sends) < requirement["minimum_sent"]:
+            topic_verdict = "inconclusive"
+        elif topic_missing or topic_duplicates or topic_unexpected \
+                or completion_percent < requirement["completion_threshold_percent"]:
+            topic_verdict = "fail"
+        topics[topic] = {
+            "verdict": topic_verdict,
+            "priority": requirement.get("priority", "unspecified"),
+            "minimum_sent": requirement["minimum_sent"],
+            "completion_threshold_percent": requirement["completion_threshold_percent"],
+            "sent": len(topic_sends),
+            "expected_deliveries": len(topic_expected),
+            "received_expected_deliveries": received_expected,
+            "missing": len(topic_missing),
+            "duplicates": len(topic_duplicates),
+            "unexpected": len(topic_unexpected),
+            "completion_percent": completion_percent,
+        }
+    if not event_paths or evidence_errors:
         verdict = "inconclusive"
-    elif missing or duplicates or unexpected:
+    elif any(topic["verdict"] == "fail" for topic in topics.values()):
         verdict = "fail"
+    elif any(topic["verdict"] == "inconclusive" for topic in topics.values()):
+        verdict = "inconclusive"
     else:
         verdict = "pass"
     return {
         "run_id": run_id,
         "verdict": verdict,
         "event_log_paths": [str(path) for path in event_paths],
+        "evidence_errors": evidence_errors,
         "sent": len(sends),
         "expected_deliveries": len(expected),
         "received_expected_deliveries": len(expected) - len(missing),
         "missing": missing,
         "duplicates": duplicates,
         "unexpected": unexpected,
+        "topics": topics,
         "completion_percent": (100 * (len(expected) - len(missing)) / len(expected))
         if expected else 0,
     }
@@ -103,9 +172,19 @@ def render_html(report):
             ("Unexpected", len(report["unexpected"])),
         ))
     detail = html.escape(json.dumps(report, indent=2, sort_keys=True))
+    topic_rows = "".join(
+        "<tr>" + "".join(
+            f"<td>{html.escape(str(value))}</td>"
+            for value in (topic, summary["verdict"], summary["sent"],
+                          summary["expected_deliveries"],
+                          summary["received_expected_deliveries"],
+                          summary["priority"], f'{summary["completion_percent"]:.1f}%')) + "</tr>"
+        for topic, summary in report["topics"].items())
     return ("<!doctype html><html><head><meta charset=\"utf-8\"><title>Delivery audit</title>"
             "</head><body><h1>Delivery audit</h1><table>" + rows +
-            "</table><h2>Details</h2><pre>" + detail + "</pre></body></html>\n")
+            "</table><h2>Topic Completion</h2><table><tr><th>Topic</th><th>Verdict</th>"
+            "<th>Sent</th><th>Expected</th><th>Received</th><th>Priority</th><th>Completion</th></tr>" +
+            topic_rows + "</table><h2>Details</h2><pre>" + detail + "</pre></body></html>\n")
 
 
 def main():
@@ -113,9 +192,13 @@ def main():
     parser.add_argument("--debug-root", default="debug")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--test-id", required=True)
+    parser.add_argument("--manifest", required=True)
     arguments = parser.parse_args()
-    events, paths = load_events(arguments.debug_root, arguments.run_id)
-    report = analyze(events, paths, arguments.run_id)
+    manifest, manifest_errors = load_manifest(arguments.manifest, arguments.run_id)
+    events, paths, evidence_errors = load_events(arguments.debug_root, arguments.run_id,
+                                                 manifest.get("nodes", []))
+    report = analyze(events, paths, evidence_errors + manifest_errors, manifest,
+                     arguments.run_id)
     report["test_id"] = arguments.test_id
     report_root = Path(arguments.debug_root) / "test_reports"
     atomic_write(report_root / f"{arguments.test_id}.json",
