@@ -22,6 +22,12 @@ export PLATFORM_LAN_PEER3="${PLATFORM_LAN_PEER3:-builtin.shmem://}"
 export CONTROL_LAN_PEER1="${CONTROL_LAN_PEER1:-$LAN_MULTICAST_ADDRESS}"
 export CONTROL_LAN_PEER2="${CONTROL_LAN_PEER2:-builtin.udpv4://127.0.0.1}"
 export CONTROL_LAN_PEER3="${CONTROL_LAN_PEER3:-builtin.shmem://}"
+export WAN_PEER="${WAN_PEER:-builtin.udpv4://127.0.0.1}"
+for _wan_peer_index in $(seq 2 11); do
+	_wan_peer_name="WAN_PEER${_wan_peer_index}"
+	export "${_wan_peer_name}=${!_wan_peer_name:-$WAN_PEER}"
+done
+unset _wan_peer_index _wan_peer_name
 
 : "${NDDSHOME:=/home/rti/rti_connext_dds-7.7.0}"; export NDDSHOME
 : "${RTI_LICENSE_FILE:=${NDDSHOME}/rti_license.dat}"; export RTI_LICENSE_FILE

@@ -73,7 +73,8 @@ def _qos_provider_for(types_xml: Path):
 class DdsBridge:
     """Owns the one DomainParticipant + reader + writer this service needs."""
 
-    def __init__(self, domain_id, types_xml, poll_interval, participant_qos_profile=None):
+    def __init__(self, domain_id, types_xml, poll_interval, participant_qos_profile=None,
+                 traffic_observers=None):
         self.poll_interval = poll_interval
         self.cache = {}          # observer_node -> latest sample dict
         self.platform_cache = {} # platform_node -> latest per-resolution topic samples
@@ -111,7 +112,13 @@ class DdsBridge:
             reader = dds.DynamicData.DataReader(subscriber, topic)
             self.platform_readers.append((level, topic_name, reader))
 
-        self.traffic_cache = {}  # domain_id -> latest sample dict (fed via HTTP POST)
+        self.traffic_cache = {}  # (observer, domain_id) -> latest sample dict
+        self.traffic_observers = set(traffic_observers or [])
+        self.traffic_published_at = {}  # (observer, domain_id) -> timestamp in last aggregate
+        self.latest_traffic_aggregate = []
+        self.emane_cache = {}  # observer -> latest MAC transmit delta
+        self.emane_published_at = {}  # observer -> timestamp in last aggregate
+        self.latest_emane_aggregate = None
 
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
@@ -199,7 +206,135 @@ class DdsBridge:
 
     def traffic_snapshot(self):
         with self.cache_lock:
-            return list(self.traffic_cache.values())
+            return list(self.latest_traffic_aggregate)
+
+    def emane_snapshot(self):
+        with self.cache_lock:
+            return dict(self.latest_emane_aggregate) if self.latest_emane_aggregate else None
+
+    def _aggregate_traffic_locked(self):
+        totals = {}
+        fields = ("discovery_packets", "discovery_bytes", "data_packets", "data_bytes",
+                  "reliability_packets", "reliability_bytes", "mixed_packets", "mixed_bytes",
+                  "unknown_packets", "unknown_bytes", "discovery_tx_packets",
+                  "discovery_tx_bytes", "data_tx_packets", "data_tx_bytes",
+                  "total_packets", "total_bytes")
+        for sample in self.traffic_cache.values():
+            domain_id = sample["domain_id"]
+            total = totals.setdefault(domain_id, {
+                "domain_id": domain_id,
+                "observer": "network",
+                "scope": "network",
+                "capture_timestamp": 0,
+                "interval_ms": sample.get("interval_ms", 0),
+                "contributors": [],
+                "discovery_packets": 0,
+                "discovery_bytes": 0,
+                "data_packets": 0,
+                "data_bytes": 0,
+                "reliability_packets": 0,
+                "reliability_bytes": 0,
+                "mixed_packets": 0,
+                "mixed_bytes": 0,
+                "unknown_packets": 0,
+                "unknown_bytes": 0,
+                "discovery_tx_packets": 0,
+                "discovery_tx_bytes": 0,
+                "data_tx_packets": 0,
+                "data_tx_bytes": 0,
+                "total_packets": 0,
+                "total_bytes": 0,
+            })
+            total["capture_timestamp"] = max(total["capture_timestamp"],
+                                             sample.get("capture_timestamp", 0))
+            total["contributors"].append(sample.get("observer", "unknown"))
+            for field in fields:
+                total[field] += sample.get(field, 0)
+
+        for total in totals.values():
+            observer_count = len(total["contributors"])
+            total["observer_count"] = observer_count
+            # Every EMANE receiver can observe the same multicast RTPS frame. Preserve the
+            # raw sums for diagnostics, but give the UI a rate that is not multiplied by
+            # the number of monitors.
+            for field in fields:
+                total[f"mean_{field}"] = total[field] / observer_count if observer_count else 0
+        return list(totals.values())
+
+    def update_traffic(self, sample):
+        """Store one node interval and return a complete aggregate when available."""
+        domain_id = sample.get("domain_id")
+        observer = sample.get("observer")
+        if domain_id is None or not observer:
+            return None
+        with self.cache_lock:
+            self.traffic_cache[(observer, domain_id)] = sample
+            observers = self.traffic_observers or {
+                name for name, cached_domain in self.traffic_cache if cached_domain == domain_id
+            }
+            keys = {(name, domain_id) for name in observers}
+            if not keys.issubset(self.traffic_cache):
+                return None
+            if any(self.traffic_cache[key].get("capture_timestamp", 0) <=
+                   self.traffic_published_at.get(key, 0) for key in keys):
+                return None
+            self.latest_traffic_aggregate = self._aggregate_traffic_locked()
+            for key in keys:
+                self.traffic_published_at[key] = self.traffic_cache[key].get(
+                    "capture_timestamp", 0)
+            return list(self.latest_traffic_aggregate)
+
+    def update_emane(self, sample):
+        """Store one MAC TX delta and return an all-node aggregate when complete."""
+        observer = sample.get("observer")
+        timestamp = sample.get("capture_timestamp", 0)
+        if not observer or not timestamp:
+            return None
+        fields = ("mac_tx_unicast_bytes", "mac_tx_broadcast_bytes",
+                  "mac_tx_unicast_packets", "mac_tx_broadcast_packets",
+                  "mac_tx_unicast_drops", "mac_tx_broadcast_drops",
+                  "mac_rx_unicast_bytes", "mac_rx_broadcast_bytes",
+                  "mac_rx_unicast_packets", "mac_rx_broadcast_packets",
+                  "mac_rx_unicast_drops", "mac_rx_broadcast_drops")
+        if any(field not in sample for field in fields):
+            return None
+
+        with self.cache_lock:
+            self.emane_cache[observer] = sample
+            observers = self.traffic_observers or set(self.emane_cache)
+            if not observers.issubset(self.emane_cache):
+                return None
+            if any(self.emane_cache[name].get("capture_timestamp", 0) <=
+                   self.emane_published_at.get(name, 0) for name in observers):
+                return None
+
+            aggregate = {
+                "scope": "network",
+                "observer": "network",
+                "capture_timestamp": max(self.emane_cache[name]["capture_timestamp"]
+                                         for name in observers),
+                "interval_ms": max(self.emane_cache[name].get("interval_ms", 0)
+                                   for name in observers),
+                "contributors": sorted(observers),
+            }
+            for field in fields:
+                aggregate[field] = sum(self.emane_cache[name][field] for name in observers)
+            aggregate["mac_tx_bytes"] = (aggregate["mac_tx_unicast_bytes"] +
+                                         aggregate["mac_tx_broadcast_bytes"])
+            aggregate["mac_tx_packets"] = (aggregate["mac_tx_unicast_packets"] +
+                                           aggregate["mac_tx_broadcast_packets"])
+            aggregate["mac_tx_drops"] = (aggregate["mac_tx_unicast_drops"] +
+                                         aggregate["mac_tx_broadcast_drops"])
+            aggregate["mac_rx_bytes"] = (aggregate["mac_rx_unicast_bytes"] +
+                                         aggregate["mac_rx_broadcast_bytes"])
+            aggregate["mac_rx_packets"] = (aggregate["mac_rx_unicast_packets"] +
+                                           aggregate["mac_rx_broadcast_packets"])
+            aggregate["mac_rx_drops"] = (aggregate["mac_rx_unicast_drops"] +
+                                         aggregate["mac_rx_broadcast_drops"])
+            self.latest_emane_aggregate = aggregate
+            for name in observers:
+                self.emane_published_at[name] = self.emane_cache[name]["capture_timestamp"]
+            return dict(aggregate)
 
     def platform_snapshot(self, platform_node=None):
         with self.cache_lock:
@@ -326,27 +461,47 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_traffic_stats(_request):
         return web.json_response(bridge.traffic_snapshot())
 
+    async def get_emane_stats(_request):
+        return web.json_response(bridge.emane_snapshot())
+
     async def post_traffic_stats(request):
-        """Ingest endpoint for debug/scripts/domain_traffic_monitor.py — accepts a JSON array of
-        traffic-stats samples and broadcasts each to WebSocket clients."""
+        """Ingest per-node capture summaries and broadcast network-wide aggregates."""
         try:
             body = await request.json()
         except json.JSONDecodeError:
             return web.Response(status=400, text="expected JSON array")
         samples = body if isinstance(body, list) else [body]
         for sample in samples:
-            domain_id = sample.get("domain_id")
-            if domain_id is None:
-                continue
-            with bridge.cache_lock:
-                bridge.traffic_cache[domain_id] = sample
-            bridge._broadcast({"type": "traffic_stats", "data": sample})
+            bridge._broadcast({"type": "traffic_node_stats", "data": sample})
+            aggregate = bridge.update_traffic(sample)
+            for total in aggregate or []:
+                bridge._broadcast({"type": "traffic_stats", "data": total})
+        return web.Response(status=204)
+
+    async def post_emane_stats(request):
+        try:
+            sample = await request.json()
+        except json.JSONDecodeError:
+            return web.Response(status=400, text="expected JSON object")
+        node_sample = dict(sample)
+        node_sample["mac_tx_bytes"] = (
+            node_sample.get("mac_tx_unicast_bytes", 0) +
+            node_sample.get("mac_tx_broadcast_bytes", 0))
+        node_sample["mac_rx_bytes"] = (
+            node_sample.get("mac_rx_unicast_bytes", 0) +
+            node_sample.get("mac_rx_broadcast_bytes", 0))
+        bridge._broadcast({"type": "emane_node_stats", "data": node_sample})
+        aggregate = bridge.update_emane(sample)
+        if aggregate:
+            bridge._broadcast({"type": "emane_stats", "data": aggregate})
         return web.Response(status=204)
 
     app.router.add_get("/api/mesh_status", get_mesh_status)
     app.router.add_get("/api/platform_status", get_platform_status)
     app.router.add_get("/api/traffic_stats", get_traffic_stats)
+    app.router.add_get("/api/emane_stats", get_emane_stats)
     app.router.add_post("/api/traffic_stats", post_traffic_stats)
+    app.router.add_post("/api/emane_stats", post_emane_stats)
     app.router.add_post("/api/team_assignment", team_assignment)
     app.router.add_post("/api/status_resolution", set_status_resolution)
     app.router.add_get("/ws", websocket_handler)
@@ -367,6 +522,8 @@ def main():
     parser.add_argument("--static-dir", default=str(DEFAULT_STATIC_DIR))
     parser.add_argument("--participant-qos-profile",
                         help="optional DomainParticipant QoS profile")
+    parser.add_argument("--traffic-observers", default="",
+                        help="comma-separated monitors required for an aggregate sample")
     args = parser.parse_args()
 
     os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
@@ -374,7 +531,8 @@ def main():
                            os.path.join(os.environ["NDDSHOME"], "rti_license.dat"))
 
     bridge = DdsBridge(args.domain, Path(args.types_xml), args.poll_interval,
-                       args.participant_qos_profile)
+                       args.participant_qos_profile,
+                       filter(None, args.traffic_observers.split(",")))
     try:
         app = build_app(bridge, Path(args.static_dir))
         web.run_app(app, host=args.host, port=args.port)

@@ -38,11 +38,11 @@
   #legend .arrow.dashed::after { border-left: 6px solid; border-left-color: inherit; }
   #topology-controls label { display: inline-flex; align-items: center; gap: 6px; color: #d5d9df; }
   #topology-controls input { margin: 0; accent-color: #3aa655; }
-  /* team chips are clickable filters; the active ones get a pill highlight */
+  /* Fixed team legend entries are clickable filters. */
   #team-legend span:hover { color: #fff; }
   #team-legend span.active { background: #2c3542; font-weight: 600; }
   /* Taller viewport for the shallow 2-row control/platform layout. */
-  #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 348px; min-height: 440px; }
+  #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 388px; min-height: 440px; }
   /* node detail panel (click a node) */
   #detail { position: fixed; top: 84px; left: 12px; z-index: 11; width: 300px;
             max-height: calc(100% - 100px); overflow-y: auto; display: none;
@@ -68,7 +68,7 @@
   #detail .detail-section-content { display: none; padding-top: 6px; }
   #detail .detail-section.expanded .detail-section-content { display: block; }
   /* Traffic panel — full-width bottom timeline */
-  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 28px; z-index: 10; height: 320px;
+  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 28px; z-index: 10; height: 360px;
             overflow-x: auto; overflow-y: hidden; background: #1c222c;
             border-top: 1px solid #2c3542; display: flex; flex-direction: column; gap: 0;
             font-size: 12px; }
@@ -78,6 +78,10 @@
             justify-content: space-between; align-items: center; }
   #traffic-panel .tp-header .tp-toggle { cursor: pointer; color: #8a94a6; font-size: 14px; }
   #traffic-panel .tp-header .tp-toggle:hover { color: #fff; }
+  #traffic-panel .tp-emane-summary { display: flex; gap: 18px; flex-wrap: wrap; padding: 7px 12px;
+            border-bottom: 1px solid #2c3542; color: #d5d9df; }
+  #traffic-panel .tp-emane-summary strong { color: #e0b84d; }
+  #traffic-panel .tp-emane-summary .muted { color: #8a94a6; }
   #traffic-panel .tp-domain { border-bottom: 1px solid #232a34; padding: 6px 12px; }
   #traffic-panel .tp-domain-title { font-weight: 600; color: #d5d9df; margin-bottom: 4px;
             display: flex; justify-content: space-between; align-items: baseline; }
@@ -85,11 +89,12 @@
   #traffic-panel .tp-subplot-label { color: #8a94a6; font-size: 11px; margin-bottom: 2px;
             display: flex; justify-content: space-between; }
   #traffic-panel .tp-subplot-average { font-size: 16px; font-weight: 700; }
+  #traffic-panel .tp-frame-accounting { color: #8a94a6; font-size: 11px; margin: 2px 0 5px; }
   #traffic-panel canvas { width: 100%; height: 108px; display: block; border-radius: 3px;
             background: #181c24; }
   @media (max-width: 700px) {
-    #graph { bottom: 328px; min-height: 300px; }
-    #traffic-panel { height: 300px; }
+    #graph { bottom: 358px; min-height: 300px; }
+    #traffic-panel { height: 330px; }
     #traffic-panel canvas { height: 96px; }
   }
 </style>
@@ -108,15 +113,19 @@
   <span><i style="background:#3a7bd9"></i> relayed peer</span>
   <span><span class="arrow solid" style="border-color:#3aa655;"></span> direct link</span>
   <span><span class="arrow dashed" style="border-color:#3a7bd9;"></span> relayed link</span>
-  <span><i style="background:transparent;border:2px solid #3a3f4a;width:6px;height:6px;"></i> ring = team</span>
+  <span><i style="background:transparent;border:2px solid #3aa655;width:6px;height:6px;"></i> green ring = direct peer</span>
 </div>
-<div id="team-legend"></div>
+<div id="team-legend">
+  <span data-team="A"><i style="background:#3aa1e6"></i> Team A</span>
+  <span data-team="B"><i style="background:#e6c53a"></i> Team B</span>
+  <span data-team="C"><i style="background:#8a4ae6"></i> Team C</span>
+</div>
 </div>
 <div id="detail"></div>
 <div id="traffic-panel"></div>
 <div id="graph"></div>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js?v=20260910-resolution-badges-v7"></script>
-<script src="traffic_chart.js?v=20260910-peak-reference-v3"></script>
+<script src="mesh_graph.js?v=20260911-paired-kbps-badges-v1"></script>
+<script src="traffic_chart.js?v=20260911-time-windowed-rates-v1"></script>
 </body>
 </html>

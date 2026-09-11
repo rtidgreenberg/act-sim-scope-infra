@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FIXTURE_DIR="$REPO_ROOT/harness_v2/emane_feasibility"
+readonly DEBUG_DIR="$REPO_ROOT/debug/mesh_runs/emane-feasibility"
 readonly PROJECT_NAME="act-emane-feasibility"
 readonly COMPOSE=(docker compose -p "$PROJECT_NAME" -f "$FIXTURE_DIR/compose.yaml")
 
@@ -42,7 +43,8 @@ establish_nominal_link() {
 
 run_probe() {
     local receiver_log receiver_pid
-    receiver_log=$(mktemp /tmp/act-emane-rfpipe-receiver.XXXXXX)
+    mkdir -p "$DEBUG_DIR"
+    receiver_log=$(mktemp "$DEBUG_DIR/receiver.XXXXXX")
     "${COMPOSE[@]}" exec -T node_1 python3 -c '
 import socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

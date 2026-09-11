@@ -111,7 +111,7 @@ stop_children() {
 trap stop_children TERM INT EXIT
 
 "$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
-    --node-name "$NODE_NAME" --name "${NODE_NAME,,}-container" \
+    --node-name "$NODE_NAME" \
     --admin-participant "${NODE_ROLE}_lan" > "$LOG_DIR/router.log" 2>&1 &
 PIDS+=("$!")
 
@@ -123,6 +123,7 @@ if [[ "$NODE_ROLE" == "control" ]]; then
         > "$LOG_DIR/simulator.log" 2>&1 &
     PIDS+=("$!")
 else
+    : "${NODE_ROUTER_NAME:?NODE_ROUTER_NAME is required for platform nodes}"
     bash "$WORKSPACE/harness_v2/scripts/start_platform_sim.sh" --id "$NODE_ID" \
         --destination "${SIM_DESTINATION:-Control_20}" --verbosity "${SIM_VERBOSITY:-1}" \
         --run-id "$RUN_ID" \
@@ -132,7 +133,8 @@ else
 
     NDDS_QOS_PROFILES="${WORKSPACE}/harness_v2/qos/act_qos_profiles.xml;${WORKSPACE}/harness_v2/datamodel/gen/ActTypes.xml" \
         python3 "$WORKSPACE/harness_v2/scripts/platform_mesh_control.py" \
-        --domain "$NODE_ID" --node "$NODE_NAME" > "$LOG_DIR/mesh_control.log" 2>&1 &
+        --domain "$NODE_ID" --node "$NODE_NAME" --router-name "$NODE_ROUTER_NAME" \
+        > "$LOG_DIR/mesh_control.log" 2>&1 &
     PIDS+=("$!")
 fi
 
@@ -140,7 +142,19 @@ if [[ "${MESH_DASHBOARD:-0}" == "1" ]]; then
     python3 "$WORKSPACE/gui/mesh_dashboard/server/mesh_bridge.py" --domain 20 \
         --port "${MESH_DASHBOARD_PORT:-8080}" \
         --participant-qos-profile ACT_QOS_LIB::lan_control_participant \
+        --traffic-observers "${MESH_TRAFFIC_OBSERVERS:-}" \
         > "$LOG_DIR/mesh_dashboard.log" 2>&1 &
+    PIDS+=("$!")
+fi
+
+if [[ "${EMANE_TRAFFIC_MONITOR:-0}" == "1" ]]; then
+    python3 "$WORKSPACE/debug/scripts/domain_traffic_monitor.py" --domains 200 \
+        --interface emane0 --observer "$NODE_NAME" \
+        --emane-nem-id "${EMANE_NEM_ID:?EMANE_NEM_ID is required for EMANE monitoring}" \
+        --dashboard-url "${MESH_DASHBOARD_URL:?MESH_DASHBOARD_URL is required}" \
+        --interval "${EMANE_TRAFFIC_MONITOR_INTERVAL:-1}" \
+        --output "$NODE_DEBUG_DIR/traffic_stats.jsonl" \
+        > "$LOG_DIR/traffic_monitor.log" 2>&1 &
     PIDS+=("$!")
 fi
 

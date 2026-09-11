@@ -27,6 +27,7 @@ debug/pcap/*
 debug/*_debug/
 debug/test_controller_debug/
 debug/test_reports/
+debug/mesh_runs/
 
 # RTI
 rti_license.dat

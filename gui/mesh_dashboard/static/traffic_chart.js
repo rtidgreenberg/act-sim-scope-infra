@@ -2,16 +2,16 @@
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
 // sparkline plots on the right panel, one card per domain ID, each with two subplots:
-// discovery bytes/s (green) and user-data bytes/s (blue).
+// discovery and user-data kilobits/s, with a shared scale per domain.
 
 (function () {
   "use strict";
 
-  const MAX_POINTS = 300;  // rolling window (at 10 Hz = 30 seconds)
+  const MAX_POINTS = 300;  // rolling visual history
   const EMA_ALPHA = 0.1;   // exponential moving average smoothing (lower = smoother)
   const DISCOVERY_COLOR = "#3aa655";
   const DATA_COLOR = "#3a7bd9";
-  const DISPLAY_AVERAGE_POINTS = 100;  // 10-second average at the monitor's 10 Hz rate
+  const DISPLAY_AVERAGE_MS = 10_000;
   const GRID_COLOR = "#232a34";
   const TEXT_COLOR = "#8a94a6";
 
@@ -29,7 +29,7 @@
     if (domains.size === 0) {
       const hdr = document.createElement("div");
       hdr.className = "tp-header";
-      hdr.innerHTML = `<span>WAN Traffic (Domain 200)</span>`;
+      hdr.innerHTML = `<span>WAN RTPS writer transmit total (Domain 200)</span>`;
       panel.appendChild(hdr);
     }
 
@@ -46,8 +46,8 @@
     discSubplot.className = "tp-subplot";
     const discLabelDiv = document.createElement("div");
     discLabelDiv.className = "tp-subplot-label";
-    discLabelDiv.innerHTML = `<span style="color:${DISCOVERY_COLOR}">WAN discovery</span>` +
-      `<span class="tp-subplot-average" style="color:${DISCOVERY_COLOR}">10s avg 0 B/s</span>`;
+    discLabelDiv.innerHTML = `<span style="color:${DISCOVERY_COLOR}">WAN discovery TX</span>` +
+      `<span class="tp-subplot-average" style="color:${DISCOVERY_COLOR}">10s avg 0.0 kb/s</span>`;
     discSubplot.appendChild(discLabelDiv);
     const discCanvas = document.createElement("canvas");
     discCanvas.height = 84;
@@ -59,13 +59,18 @@
     dataSubplot.className = "tp-subplot";
     const dataLabelDiv = document.createElement("div");
     dataLabelDiv.className = "tp-subplot-label";
-    dataLabelDiv.innerHTML = `<span style="color:${DATA_COLOR}">WAN user data</span>` +
-      `<span class="tp-subplot-average" style="color:${DATA_COLOR}">10s avg 0 B/s</span>`;
+    dataLabelDiv.innerHTML = `<span style="color:${DATA_COLOR}">WAN user data TX</span>` +
+      `<span class="tp-subplot-average" style="color:${DATA_COLOR}">10s avg 0.0 kb/s</span>`;
     dataSubplot.appendChild(dataLabelDiv);
     const dataCanvas = document.createElement("canvas");
     dataCanvas.height = 84;
     dataSubplot.appendChild(dataCanvas);
     el.appendChild(dataSubplot);
+
+    const accountingDiv = document.createElement("div");
+    accountingDiv.className = "tp-frame-accounting";
+    accountingDiv.textContent = "Receiver view: control 0 kb/s | bundled 0 kb/s | unknown 0 kb/s";
+    el.appendChild(accountingDiv);
 
     panel.appendChild(el);
 
@@ -73,6 +78,8 @@
       discovery: [],
       data: [],
       total: [],
+      discoverySamples: [],
+      dataSamples: [],
       emaDisc: 0,
       emaData: 0,
       emaTotal: 0,
@@ -81,6 +88,7 @@
       dataCanvas,
       discLabel: discLabelDiv.querySelector("span:last-child"),
       dataLabel: dataLabelDiv.querySelector("span:last-child"),
+      accountingEl: accountingDiv,
         maxDiscovery: 0,
         maxData: 0,
       lastSample: null,
@@ -90,9 +98,7 @@
   }
 
   function formatRate(bytesPerSec) {
-    if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
-    if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-    return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
+    return `${(bytesPerSec * 8 / 1000).toFixed(1)} kb/s`;
   }
 
   function pushPoint(arr, value) {
@@ -100,14 +106,24 @@
     if (arr.length > MAX_POINTS) arr.shift();
   }
 
-  function trailingAverage(points) {
-    const start = Math.max(0, points.length - DISPLAY_AVERAGE_POINTS);
-    const values = points.slice(start);
-    if (!values.length) return 0;
-    return values.reduce((total, value) => total + value, 0) / values.length;
+  function pushRateSample(samples, bytes, intervalMs) {
+    samples.push({ bytes, intervalMs });
+    if (samples.length > MAX_POINTS) samples.shift();
   }
 
-  function drawSparkline(canvas, points, color, eventIndices, peakRate) {
+  function trailingRate(samples) {
+    let bytes = 0;
+    let durationMs = 0;
+    for (let index = samples.length - 1; index >= 0 && durationMs < DISPLAY_AVERAGE_MS; index--) {
+      const sample = samples[index];
+      const includedMs = Math.min(sample.intervalMs, DISPLAY_AVERAGE_MS - durationMs);
+      bytes += sample.bytes * includedMs / sample.intervalMs;
+      durationMs += includedMs;
+    }
+    return durationMs ? bytes * 1000 / durationMs : 0;
+  }
+
+  function drawSparkline(canvas, points, color, eventIndices, peakRate, sharedScaleMax) {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     const w = rect.width * dpr;
@@ -121,27 +137,13 @@
 
     if (points.length < 2) return;
 
-    // Compute y-axis scale — use min/max relative scaling to amplify changes.
-    // Keep a 20% padding above and below, and floor minVal at 0.
-    let minVal = Infinity, maxVal = 0;
+    // Paired discovery/data charts use a shared zero-based scale for comparison.
+    let maxVal = 0;
     for (const p of points) {
-      if (p < minVal) minVal = p;
       if (p > maxVal) maxVal = p;
     }
-    if (minVal === Infinity) minVal = 0;
-    minVal = Math.max(0, minVal);
-    const range = maxVal - minVal;
-    // If range is tiny relative to max (< 5%), use 0-based to avoid noisy zooming
-    const useRelative = range > 0 && maxVal > 0 && (range / maxVal) < 0.5;
-    let scaleMin, scaleMax;
-    if (useRelative && range > 0) {
-      const pad = range * 0.25;
-      scaleMin = Math.max(0, minVal - pad);
-      scaleMax = maxVal + pad;
-    } else {
-      scaleMin = 0;
-      scaleMax = niceNum(maxVal) || 1;
-    }
+    const scaleMin = 0;
+    const scaleMax = sharedScaleMax || niceNum(maxVal) || 1;
     const scaleRange = scaleMax - scaleMin || 1;
 
     const stepX = w / (MAX_POINTS - 1);
@@ -263,6 +265,41 @@
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
   const WS_URL = `${WS_ORIGIN}/ws`;
   const REST_URL = `${location.protocol}//${location.host}/api/traffic_stats`;
+  const EMANE_REST_URL = `${location.protocol}//${location.host}/api/emane_stats`;
+  const RF_PIPE_RATE_BPS = 1000000;
+  let emaneSummaryEl = null;
+
+  function formatBitRate(bitsPerSec) {
+    return `${(bitsPerSec / 1000).toFixed(1)} kb/s`;
+  }
+
+  function ensureEmaneSummary() {
+    if (emaneSummaryEl) return emaneSummaryEl;
+    emaneSummaryEl = document.createElement("div");
+    emaneSummaryEl.className = "tp-emane-summary";
+    panel.prepend(emaneSummaryEl);
+    return emaneSummaryEl;
+  }
+
+  function handleEmaneSample(sample) {
+    if (!sample || sample.scope !== "network") return;
+    const intervalSec = (sample.interval_ms || 1000) / 1000;
+    const txBytes = sample.mac_tx_bytes || 0;
+    const txPackets = sample.mac_tx_packets || 0;
+    const txDrops = sample.mac_tx_drops || 0;
+    const txBitsPerSec = txBytes * 8 / intervalSec;
+    const contributors = (sample.contributors || []).length;
+    const averageNodeBitsPerSec = contributors ? txBitsPerSec / contributors : 0;
+    const averageNodeUtilization = averageNodeBitsPerSec * 100 / RF_PIPE_RATE_BPS;
+    ensureEmaneSummary().innerHTML =
+      `<strong>Mesh RF MAC TX aggregate</strong>` +
+      `<span>${formatBitRate(txBitsPerSec)}</span>` +
+      `<span>avg ${formatBitRate(averageNodeBitsPerSec)}/node ` +
+      `(${averageNodeUtilization.toFixed(1)}% of 1 Mb/s)</span>` +
+      `<span>${(txPackets / intervalSec).toFixed(0)} pkt/s</span>` +
+      `<span>${(txDrops / intervalSec).toFixed(0)} drop/s</span>` +
+      `<span class="muted">${contributors} nodes</span>`;
+  }
 
   // Event markers: track resolution changes as indices into the point arrays.
   // Each entry: { index: <position in MAX_POINTS window>, label: "D"/"M"/"I" }
@@ -294,18 +331,27 @@
   }
 
   function handleTrafficSample(sample) {
+    if (sample.scope && sample.scope !== "network") return;
     const domainId = sample.domain_id;
     if (domainId == null) return;
 
     const intervalSec = (sample.interval_ms || 2000) / 1000;
-    const discRate = (sample.discovery_bytes || 0) / intervalSec;
-    const dataRate = (sample.data_bytes || 0) / intervalSec;
-    const totalRate = (sample.total_bytes || 0) / intervalSec;
+    const meanOrRaw = (field) => sample[`mean_${field}`] ?? sample[field] ?? 0;
+    const discoveryBytes = sample.discovery_tx_bytes ?? meanOrRaw("discovery_bytes");
+    const dataBytes = sample.data_tx_bytes ?? meanOrRaw("data_bytes");
+    const discRate = discoveryBytes / intervalSec;
+    const dataRate = dataBytes / intervalSec;
+    const reliabilityRate = meanOrRaw("reliability_bytes") / intervalSec;
+    const mixedRate = meanOrRaw("mixed_bytes") / intervalSec;
+    const unknownRate = meanOrRaw("unknown_bytes") / intervalSec;
+    const totalRate = meanOrRaw("total_bytes") / intervalSec;
 
     const entry = ensureDomain(domainId);
     pushPoint(entry.discovery, discRate);
     pushPoint(entry.data, dataRate);
     pushPoint(entry.total, totalRate);
+    pushRateSample(entry.discoverySamples, discoveryBytes, sample.interval_ms || 2000);
+    pushRateSample(entry.dataSamples, dataBytes, sample.interval_ms || 2000);
       entry.maxDiscovery = Math.max(entry.maxDiscovery, discRate);
       entry.maxData = Math.max(entry.maxData, dataRate);
     globalPointCount++;
@@ -317,13 +363,19 @@
 
     // Update labels with smoothed EMA rates
     // A 10-second average makes periodic DDS bursts comparable across resolution modes.
-    entry.discLabel.textContent = `10s avg ${formatRate(trailingAverage(entry.discovery))}`;
-    entry.dataLabel.textContent = `10s avg ${formatRate(trailingAverage(entry.data))}`;
+    entry.discLabel.textContent = `10s avg ${formatRate(trailingRate(entry.discoverySamples))}`;
+    entry.dataLabel.textContent = `10s avg ${formatRate(trailingRate(entry.dataSamples))}`;
+    entry.accountingEl.textContent =
+      `Receiver view: control ${formatRate(reliabilityRate)} | bundled ${formatRate(mixedRate)} | ` +
+      `unknown ${formatRate(unknownRate)}`;
 
     // Redraw sparklines with event markers
     const events = getVisibleEvents();
-    drawSparkline(entry.discCanvas, entry.discovery, DISCOVERY_COLOR, events, entry.maxDiscovery);
-    drawSparkline(entry.dataCanvas, entry.data, DATA_COLOR, events, entry.maxData);
+    const sharedScaleMax = niceNum(Math.max(...entry.discovery, ...entry.data)) || 1;
+    drawSparkline(entry.discCanvas, entry.discovery, DISCOVERY_COLOR, events,
+            entry.maxDiscovery, sharedScaleMax);
+    drawSparkline(entry.dataCanvas, entry.data, DATA_COLOR, events,
+            entry.maxData, sharedScaleMax);
   }
 
   function connectTrafficWs() {
@@ -333,6 +385,8 @@
       try { msg = JSON.parse(evt.data); } catch (_) { return; }
       if (msg.type === "traffic_stats" && msg.data) {
         handleTrafficSample(msg.data);
+      } else if (msg.type === "emane_stats" && msg.data) {
+        handleEmaneSample(msg.data);
       } else if (msg.type === "resolution_change") {
         const mode = (msg.resolution_mode || "").toLowerCase();
         const label = MODE_LABELS[mode] || mode.charAt(0).toUpperCase();
@@ -349,6 +403,11 @@
     .then((arr) => {
       if (Array.isArray(arr)) arr.forEach(handleTrafficSample);
     })
+    .catch(() => {});
+
+  fetch(EMANE_REST_URL)
+    .then((r) => r.ok ? r.json() : null)
+    .then(handleEmaneSample)
     .catch(() => {});
 
   connectTrafficWs();

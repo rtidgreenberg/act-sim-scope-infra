@@ -18,6 +18,7 @@ WITH_DASHBOARD=0
 DASHBOARD_PORT=8080
 PLATFORM_IDS=()
 declare -A EMANE_NEM_ID EMANE_IP EMANE_CONTROL_IP
+WAN_PEERS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -76,11 +77,18 @@ load_topology
 
 if [[ -z "$WORKDIR" ]]; then
     if [[ "$EMANE_ENABLED" == 1 ]]; then
-        WORKDIR=/tmp/act_emane_container_baseline
+        WORKDIR="$REPO_ROOT/debug/mesh_runs/emane"
     else
-        WORKDIR=/tmp/act_container_baseline
+        WORKDIR="$REPO_ROOT/debug/mesh_runs/container"
     fi
 fi
+
+WORKDIR="$(realpath -m "$WORKDIR")"
+DEBUG_ROOT="$(realpath -m "$REPO_ROOT/debug")"
+case "$WORKDIR" in
+    "$DEBUG_ROOT"/*) ;;
+    *) echo "--workdir must be beneath $DEBUG_ROOT" >&2; exit 1 ;;
+esac
 
 compose() {
     local project=act-container-baseline
@@ -143,7 +151,19 @@ container_user_yaml() {
 }
 
 wan_peer_yaml() {
-    printf '      WAN_PEER: %s\n' "$wan_peer"
+    local index peer
+    for index in $(seq 1 11); do
+        peer="${WAN_PEERS[$((index - 1))]:-${WAN_PEERS[0]}}"
+        if [[ "$index" == 1 ]]; then
+            printf '      WAN_PEER: %s\n' "$peer"
+        else
+            printf '      WAN_PEER%s: %s\n' "$index" "$peer"
+        fi
+    done
+}
+
+platform_router_name_yaml() {
+    printf '      NODE_ROUTER_NAME: platform-%s-control-platform\n' "$1"
 }
 
 emane_environment_yaml() {
@@ -161,7 +181,18 @@ emane_network_yaml() {
 
 dashboard_environment_yaml() {
     [[ "$WITH_DASHBOARD" == 1 ]] || return 0
-    printf '%s\n' '      MESH_DASHBOARD: "1"' '      MESH_DASHBOARD_PORT: "8080"'
+    local observers=Control_20 id
+    for id in $(platform_ids); do
+        observers+=",Platform_${id}"
+    done
+    printf '%s\n' '      MESH_DASHBOARD: "1"' '      MESH_DASHBOARD_PORT: "8080"' \
+        "      MESH_TRAFFIC_OBSERVERS: ${observers}"
+}
+
+traffic_monitor_environment_yaml() {
+    [[ "$EMANE_ENABLED" == 1 ]] || return 0
+    printf '%s\n' '      EMANE_TRAFFIC_MONITOR: "1"' \
+        "      MESH_DASHBOARD_URL: http://${EMANE_CONTROL_IP[control_20]}:8080"
 }
 
 dashboard_port_yaml() {
@@ -170,8 +201,19 @@ dashboard_port_yaml() {
 }
 
 write_compose() {
-    local compose_file="$WORKDIR/compose.yaml" wan_peer='10@control-20'
-    [[ "$EMANE_ENABLED" == 1 ]] && wan_peer="builtin.udpv4://${EMANE_IP[control_20]}"
+    local compose_file="$WORKDIR/compose.yaml" id
+    WAN_PEERS=()
+    if [[ "$EMANE_ENABLED" == 1 ]]; then
+        WAN_PEERS+=("10@builtin.udpv4://${EMANE_IP[control_20]}")
+        for id in $(platform_ids); do
+            WAN_PEERS+=("10@builtin.udpv4://${EMANE_IP[platform_${id}]}")
+        done
+    else
+        WAN_PEERS+=("10@control-20")
+        for id in $(platform_ids); do
+            WAN_PEERS+=("10@platform-${id}")
+        done
+    fi
     cat > "$compose_file" <<EOF
 services:
   control-20:
@@ -200,6 +242,7 @@ $(wan_peer_yaml)
       WAN_RECEIVE_MULTICAST: "0"
 $(emane_environment_yaml "${EMANE_NEM_ID[control_20]}" "${EMANE_IP[control_20]}")
 $(dashboard_environment_yaml)
+$(traffic_monitor_environment_yaml)
     volumes:
       - ${REPO_ROOT}:/workspace:ro
       - ${CONNEXT_SHARED_DIR:?Set CONNEXT_SHARED_DIR to the license directory}:/shared:ro
@@ -221,6 +264,7 @@ $(container_user_yaml)
       NODE_ROLE: platform
       NODE_ID: "${id}"
       NODE_NAME: Platform_${id}
+$(platform_router_name_yaml "$id")
       NODE_DEBUG_DIR: /node-debug
       NODE_CONFIG_PATH: /run/node-config.yaml
       SIM_DESTINATION: Control_20
@@ -236,6 +280,7 @@ $(container_user_yaml)
 $(wan_peer_yaml)
       WAN_RECEIVE_MULTICAST: "0"
 $(emane_environment_yaml "${EMANE_NEM_ID[platform_${id}]}" "${EMANE_IP[platform_${id}]}")
+$(traffic_monitor_environment_yaml)
     volumes:
       - ${REPO_ROOT}:/workspace:ro
       - ${CONNEXT_SHARED_DIR:?Set CONNEXT_SHARED_DIR to the license directory}:/shared:ro
@@ -473,6 +518,20 @@ down() {
     compose down --remove-orphans
 }
 
+clear() {
+    ensure_no_active_baseline
+    rm -rf "$WORKDIR"
+    clear_debug_dir "$REPO_ROOT/debug/control_20_debug"
+    clear_debug_dir "$REPO_ROOT/debug/test_controller_debug"
+    local id
+    for id in $(platform_ids); do
+        clear_debug_dir "$REPO_ROOT/debug/platform_${id}_debug"
+    done
+    rm -f "$REPO_ROOT/debug/test_reports/${TEST_ID}.json" \
+        "$REPO_ROOT/debug/test_reports/${TEST_ID}.html"
+    echo "Cleared mesh artifacts for $TEST_ID"
+}
+
 case "$ACTION" in
     up) up ;;
     render) render ;;
@@ -480,5 +539,6 @@ case "$ACTION" in
     audit) audit ;;
     isolation) isolation ;;
     down) down ;;
-    *) echo "Usage: $0 {up|render|smoke|audit|isolation|down} [--platforms N] [--workdir DIR] [--test-id ID] [--verbosity 0-3] [--emane]" >&2; exit 1 ;;
+    clear) clear ;;
+    *) echo "Usage: $0 {up|render|smoke|audit|isolation|down|clear} [--platforms N] [--workdir DIR] [--test-id ID] [--verbosity 0-3] [--emane]" >&2; exit 1 ;;
 esac

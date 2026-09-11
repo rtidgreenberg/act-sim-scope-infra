@@ -41,6 +41,7 @@ WAN_QOS_ENV_DEFAULTS = {
     "WAN_HB_PERIOD_SEC": "1", "WAN_HB_RETRIES": "10", "WAN_MAX_BLOCKING_SEC": "1",
     "WAN_TIMEOUT_SEC": "100", "WAN_TTL": "1", "WAN_RECEIVE_MULTICAST": "0",
 }
+WAN_QOS_ENV_DEFAULTS.update({f"WAN_PEER{index}": "127.0.0.1" for index in range(2, 12)})
 
 
 def set_wan_qos_env():

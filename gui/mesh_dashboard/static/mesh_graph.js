@@ -119,6 +119,8 @@
   const PLATFORM_PIN_Y = 35;
   const PLATFORM_PIN_X_SPACING = 210; // 140 * 1.5 (2026-07-23, user ask: widen 50%)
   const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
+  const NODE_DDS_AVERAGE_POINTS = 10;
+  const nodeRates = new Map(); // node name -> latest MAC, DDS writer-TX, and DDS RX rates
   const RESOLUTION_BADGES = {
     init: { label: "INIT", color: "#8a94a6" },
     mission: { label: "MISSION", color: "#e0b84d" },
@@ -126,15 +128,19 @@
   };
 
   function relayoutPlatformRow() {
-    const rowIds = nodes
-      .get({ filter: (n) => n.kind === "peer" || n.kind === "placeholder" })
-      .map((n) => n.id)
-      .sort();
-    const n = rowIds.length;
+    const rowNodes = nodes.get({ filter: (node) => node.kind === "peer" || node.kind === "placeholder" });
+    rowNodes.sort((left, right) => {
+      const leftTeam = (left.teamNames || [])[0] || "";
+      const rightTeam = (right.teamNames || [])[0] || "";
+      if (!leftTeam && rightTeam) return 1;
+      if (leftTeam && !rightTeam) return -1;
+      return leftTeam.localeCompare(rightTeam) || String(left.id).localeCompare(String(right.id));
+    });
+    const n = rowNodes.length;
     if (!n) return;
     nodes.update(
-      rowIds.map((id, i) => ({
-        id,
+      rowNodes.map((node, i) => ({
+        id: node.id,
         x: (i - (n - 1) / 2) * PLATFORM_PIN_X_SPACING,
         y: PLATFORM_PIN_Y,
         fixed: { x: true, y: true },
@@ -157,9 +163,12 @@
     "#e6553a", "#3aa1e6", "#e6c53a", "#8a4ae6",
     "#3ae6a1", "#e63a8a", "#a1e63a", "#3ae6e6",
   ];
+  const FIXED_TEAM_COLORS = { A: "#3aa1e6", B: "#e6c53a", C: "#8a4ae6" };
   const teamColors = new Map(); // team name -> assigned palette color
-  const teamChips = new Map();  // team name -> DOM span element (for pruning)
   const teamLegendEl = document.getElementById("team-legend");
+  const teamChips = new Map(
+    [...teamLegendEl.querySelectorAll("[data-team]")].map((element) => [element.dataset.team, element])
+  );
   const directLinksToggle = document.getElementById("toggle-direct-links");
   const relayedLinksToggle = document.getElementById("toggle-relayed-links");
 
@@ -205,14 +214,13 @@
   function colorForTeam(team) {
     if (teamColors.has(team)) return teamColors.get(team);
     let hash = 0;
-    for (let i = 0; i < team.length; i++) {
-      hash = (hash * 31 + team.charCodeAt(i)) >>> 0;
-    }
-    const color = TEAM_PALETTE[hash % TEAM_PALETTE.length];
+    for (let i = 0; i < team.length; i++) hash = (hash * 31 + team.charCodeAt(i)) >>> 0;
+    const color = FIXED_TEAM_COLORS[team] || TEAM_PALETTE[hash % TEAM_PALETTE.length];
     teamColors.set(team, color);
-    const span = document.createElement("span");
-    span.innerHTML = `<i style="background:${color}"></i> ${team}`;
-    span.style.cursor = "pointer";
+    return color;
+  }
+
+  teamChips.forEach((span, team) => {
     span.addEventListener("click", () => {
       if (activeTeamFilter.has(team)) {
         activeTeamFilter.delete(team);
@@ -223,27 +231,7 @@
       }
       applyViewFilters();
     });
-    teamLegendEl.appendChild(span);
-    teamChips.set(team, span);
-    return color;
-  }
-
-  // Remove team legend chips for teams that no longer have any member nodes.
-  // Called after every sample ingest so the legend stays in sync with the live mesh.
-  function pruneStaleTeams() {
-    const liveTeams = new Set();
-    nodes.get().forEach((n) => {
-      (n.teamNames || []).forEach((t) => liveTeams.add(t));
-    });
-    teamChips.forEach((span, team) => {
-      if (!liveTeams.has(team)) {
-        span.remove();
-        teamChips.delete(team);
-        teamColors.delete(team);
-        activeTeamFilter.delete(team);
-      }
-    });
-  }
+  });
 
   // Dim every node whose team set doesn't intersect the active filter. The observer node
   // (this vantage point) is always kept full — it's "you", relevant regardless of filter.
@@ -291,6 +279,16 @@
     return String(id);
   }
 
+  function platformCircleLabel(id) {
+    const match = /^Platform_(\d+)$/.exec(String(id));
+    return match ? `P${match[1]}` : "";
+  }
+
+  function observerCircleLabel(id) {
+    const match = /^Control_(\d+)$/.exec(String(id));
+    return match ? `C${match[1]}` : "";
+  }
+
   // Every node id in the graph is now just the node name (nodeNameOf, above) -- which is
   // exactly what team_partition's protected/direct-tap entries contain too (D83:
   // "${node.name}"), so this is just "every id currently in the DataSet", no splitting needed.
@@ -312,8 +310,8 @@
     );
   }
 
-  function teamBorder(teamNames) {
-    return teamNames.length ? colorForTeam(teamNames[0]) : NO_TEAM_BORDER;
+  function teamFill(teamNames) {
+    return teamNames.length ? colorForTeam(teamNames[0]) : KNOWN_NODE_COLOR;
   }
 
   const statusEl = document.getElementById("statusbar");
@@ -338,6 +336,35 @@
   // page.evaluate() call network.getPositions() / canvasToDOM() to find node coords.
   window.__network = network;
 
+  function updateNodeRate(sample, field, valueField) {
+    if (!sample || !sample.observer || !sample.interval_ms) return;
+    const bytes = Array.isArray(valueField)
+      ? valueField.reduce((total, name) => total + (sample[name] || 0), 0)
+      : sample[valueField] || 0;
+    const rate = bytes * 8 / (sample.interval_ms / 1000);
+    const rates = nodeRates.get(sample.observer) || {};
+    if (field === "ddsTx" || field === "ddsRx") {
+      const sampleField = `${field}Samples`;
+      rates[sampleField] = rates[sampleField] || [];
+      rates[sampleField].push(rate);
+      if (rates[sampleField].length > NODE_DDS_AVERAGE_POINTS) rates[sampleField].shift();
+      rates[field] = rates[sampleField].reduce((sum, value) => sum + value, 0) /
+        rates[sampleField].length;
+    } else {
+      rates[field] = rate;
+    }
+    nodeRates.set(sample.observer, rates);
+    network.redraw();
+  }
+
+  function formatNodeRate(bitsPerSec) {
+    return `${(bitsPerSec / 1000).toFixed(0)} kb/s`;
+  }
+
+  function formatNodeRatePair(txBitsPerSec, rxBitsPerSec) {
+    return `${(txBitsPerSec / 1000).toFixed(0)}/${(rxBitsPerSec / 1000).toFixed(0)} kbps`;
+  }
+
   network.on("afterDrawing", (ctx) => {
     nodes.get({ filter: (node) => node.kind === "peer" && node.resolutionMode }).forEach((node) => {
       const badge = RESOLUTION_BADGES[node.resolutionMode];
@@ -357,6 +384,52 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(badge.label, position.x, y + height / 2);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "peer" }).forEach((node) => {
+      const label = platformCircleLabel(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!label || !position) return;
+      ctx.save();
+      ctx.font = "bold 10px sans-serif";
+      ctx.fillStyle = "#14181f";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, position.x, position.y);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "observer" }).forEach((node) => {
+      const label = observerCircleLabel(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!label || !position) return;
+      ctx.save();
+      ctx.font = "bold 10px sans-serif";
+      ctx.fillStyle = "#14181f";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, position.x, position.y);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "observer" || node.kind === "peer" }).forEach((node) => {
+      const rates = nodeRates.get(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!rates || !position || rates.macTx == null || rates.macRx == null ||
+          rates.ddsTx == null || rates.ddsRx == null) return;
+      const lines = [
+        `MAC TX/RX ${formatNodeRatePair(rates.macTx, rates.macRx)}`,
+        `DDS TX/RX ${formatNodeRatePair(rates.ddsTx, rates.ddsRx)}`,
+      ];
+      const x = position.x + 25;
+      const y = position.y - 12;
+      ctx.save();
+      ctx.font = "10px monospace";
+      const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 10;
+      ctx.fillStyle = "rgba(24, 28, 36, 0.9)";
+      ctx.fillRect(x, y, width, 28);
+      ctx.fillStyle = "#e0b84d";
+      ctx.fillText(lines[0], x + 5, y + 11);
+      ctx.fillStyle = "#75c991";
+      ctx.fillText(lines[1], x + 5, y + 23);
       ctx.restore();
     });
   });
@@ -679,12 +752,23 @@
   // so no clock-sync assumption either way).
   function upsertEdge(reporterId, subjectId, presence, opts) {
     opts = opts || {};
-    const baseColor = EDGE_SOURCE_COLOR[opts.source] || "#999999";
     const isRelayed = opts.source === "peers_seen";
+    const reporter = nodes.get(reporterId);
+    const subject = nodes.get(subjectId);
+    const isPlatformEdge = reporter && subject && reporter.kind !== "observer" &&
+      subject.kind !== "observer";
+    const sharedTeam = isPlatformEdge && (reporter.teamNames || []).find((team) =>
+      (subject.teamNames || []).includes(team));
+    const baseColor = sharedTeam ? colorForTeam(sharedTeam) :
+      (EDGE_SOURCE_COLOR[opts.source] || "#999999");
+    const curveType = reporterId < subjectId ? "curvedCW" : "curvedCCW";
     edges.update({
       id: `${reporterId}->${subjectId}`, from: subjectId, to: reporterId, arrows: "to",
       label: "",
       dashes: isRelayed ? [8, 6] : false,
+      isPlatformEdge, curveType,
+      smooth: isPlatformEdge ? { enabled: true, type: curveType, roundness: 0.18 } :
+        { enabled: false },
       source: opts.source,
       color: { color: baseColor, opacity: 1 },
       hidden: opts.source ? !edgeVisibleBySource({ source: opts.source }) : false,
@@ -694,17 +778,8 @@
     refreshParallelEdges(subjectId, reporterId);
   }
 
-  // Tried curvedCW/CCW here (2026-07-23) to fan the reciprocal mesh_status/peers_seen pair
-  // between the same two routers apart instead of one drawing on top of the other -- reverted
-  // same day (user ask: straight point-to-point edges only). Also found empirically that
-  // vis's curvedCW/CCW rendering put the arrowhead at the wrong end relative to the DataSet's
-  // own from/to/arrows:"to" (confirmed via a debug dump of the live edge data: `to` was
-  // correctly the receiving node, but the visual arrow tip rendered at the *other* end) -- so
-  // straight edges aren't just simpler here, they're the correct choice. A reciprocal pair
-  // between the same two nodes goes back to drawing as one overlapping line (both edges still
-  // present/correct in the DataSet, reachable via hover/click) -- a known tradeoff of
-  // straight-only, not a bug. Undirected key so it groups a pair regardless of which one is
-  // `from`/`to`.
+  // Platform-to-platform edges arc in opposite deterministic directions so reciprocal peer
+  // observations remain separately visible. Control-to-platform edges remain straight.
   function undirectedPairKey(a, b) {
     return a < b ? `${a} ${b}` : `${b} ${a}`;
   }
@@ -712,7 +787,11 @@
   function refreshParallelEdges(a, b) {
     const key = undirectedPairKey(a, b);
     const siblings = edges.get({ filter: (e) => undirectedPairKey(e.from, e.to) === key });
-    edges.update(siblings.map((e) => ({ id: e.id, smooth: { enabled: false } })));
+    edges.update(siblings.map((e) => ({
+      id: e.id,
+      smooth: e.isPlatformEdge ?
+        { enabled: true, type: e.curveType, roundness: 0.18 } : { enabled: false },
+    })));
   }
 
   // reporterId here matches upsertEdge's reporterId (id/pruning key); the visual `to` field
@@ -756,7 +835,8 @@
     if (!data || !data.observer_node || !data.observer_router) return;
     const observerId = data.observer_node; // already just the node name (RouterMeshStatus)
     nodes.update({ id: observerId, label: routerLabel(observerId), color: OBSERVER_NODE_COLOR,
-                   kind: "observer", ...OBSERVER_PIN_FIELDS });
+             size: 22, font: { color: "transparent" }, kind: "observer",
+             ...OBSERVER_PIN_FIELDS });
 
     const directPeers = new Set();
     const sampleNodeNames = new Set(
@@ -776,8 +856,8 @@
       const teamNames = deriveTeamNames(health, sampleNodeNames);
       nodes.update({
         id: peerId, label: routerLabel(peerId),
-        color: { background: KNOWN_NODE_COLOR, border: teamBorder(teamNames) },
-        borderWidth: 4,
+        color: { background: teamFill(teamNames), border: KNOWN_NODE_COLOR },
+        borderWidth: 4, size: 22, font: { color: "transparent" },
         // Stashed for the detail panel (interactivity) + team filter — read back from the
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
@@ -835,7 +915,6 @@
       }
     });
     if (n) {
-      pruneStaleTeams();                        // remove chips for teams with no members
       applyViewFilters();                      // new nodes respect active filters/highlight
     }
     return n;
@@ -872,7 +951,20 @@
       if (msg.type === "platform_status") {
         if (msg.platform && msg.data) {
           platformStatusCache.set(msg.platform, msg.data);
+          if (selectedId === msg.platform) renderDetail(msg.platform);
         }
+        return;
+      }
+
+      if (msg.type === "traffic_node_stats") {
+        updateNodeRate(msg.data, "ddsTx", ["discovery_tx_bytes", "data_tx_bytes"]);
+        updateNodeRate(msg.data, "ddsRx", "rx_bytes");
+        return;
+      }
+
+      if (msg.type === "emane_node_stats") {
+        updateNodeRate(msg.data, "macTx", "mac_tx_bytes");
+        updateNodeRate(msg.data, "macRx", "mac_rx_bytes");
         return;
       }
 
@@ -963,7 +1055,7 @@
     return el;
   }
 
-  // Inline team-name input modal — replaces window.prompt() which is not supported
+  // Inline team-selection modal — replaces window.prompt() which is not supported
   // in VS Code's Simple Browser (throws "prompt() is not supported").
   const teamInputModal = document.createElement("div");
   teamInputModal.id = "team-input-modal";
@@ -973,9 +1065,10 @@
     `<div style="background:#1e2028;border:1px solid #3a3f4a;border-radius:6px;padding:16px 20px;` +
     `min-width:280px;box-shadow:0 8px 24px rgba(0,0,0,.6);font:13px/1.6 sans-serif;color:#e6e8eb;">` +
     `<div id="team-input-label" style="margin-bottom:8px;"></div>` +
-    `<input id="team-input-field" type="text" style="width:100%;box-sizing:border-box;` +
+    `<select id="team-input-field" style="width:100%;box-sizing:border-box;` +
     `padding:6px 10px;background:#14181f;border:1px solid #3a3f4a;border-radius:4px;` +
-    `color:#e6e8eb;font:13px sans-serif;outline:none;" />` +
+    `color:#e6e8eb;font:13px sans-serif;outline:none;"><option value="A">A</option>` +
+    `<option value="B">B</option><option value="C">C</option></select>` +
     `<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">` +
     `<button id="team-input-cancel" style="padding:4px 14px;background:#2a2d38;border:1px solid #3a3f4a;` +
     `border-radius:4px;color:#e6e8eb;cursor:pointer;font:13px sans-serif;">Cancel</button>` +
@@ -992,7 +1085,7 @@
 
   function showTeamInput(nodeId) {
     teamInputLabel.textContent = `Team name for ${nodeId}:`;
-    teamInputField.value = "";
+    teamInputField.value = (nodes.get(nodeId).teamNames || [])[0] || "A";
     teamInputModal.style.display = "flex";
     teamInputField.focus();
     return new Promise((resolve) => { teamInputResolve = resolve; });

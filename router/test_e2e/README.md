@@ -29,6 +29,11 @@ From the **repo root** (paths in the configs are repo-root-relative):
 pytest router/test_e2e -v
 ```
 
+For a disposable Docker run, mount the checkout read-only and bind only its `debug/`
+directory writable at `/workspace/debug`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`,
+`TMPDIR=/tmp`, and use `-p no:cacheprovider` so interpreter caches and pytest state do
+not become retained run artifacts.
+
 ## What this covers today
 
 Most tests use dedicated trimmed fixtures (`router/config/e2e_*.yaml` — see
@@ -58,6 +63,10 @@ by role exactly as deployed:
   (the `msg.destination` ContentFilteredTopic).
 - **`test_platform_status_route.py`** — platform app publishes `PlatformInitStatus`;
   asserts it's forwarded to the control app.
+- **`test_platform_mesh_control.py`** — dashboard-equivalent `TeamAssignment` and
+  `PlatformStatusMode` samples cross the control routes to the per-platform control
+  process; asserts its local router command is accepted and that Mission, Debug, and
+  Init produce the expected detail/debug route states.
 - **`test_discovery_startup.py`** — regression test for the D52 disabled-startup fix:
   launches the router pair on fresh domains and asserts both sides discover each other's
   participant *promptly* (within 10s, far below the 30s SPDP retry), parametrized over 6
@@ -126,8 +135,12 @@ test-fixture quirks — see `docs/cpp_router/design-decisions.md` D51 for the fu
 ## Notes
 
 - Runtime artifacts (rendered per-test configs, subprocess logs) go under
-  `debug/logs/router_e2e/`
-  — never the repo/share, per the repo's filesystem-safety rule.
+  `debug/logs/router_e2e/`. This is the repository's retained artifact root; tests must
+  not write runtime logs elsewhere in the checkout or under `/tmp`.
+- Disposable container state stays under `/tmp`; it is limited to Python bytecode,
+  pytest cache suppression, package-install state, and other non-retained temporary
+  files. The test command must leave its router logs and rendered configurations in
+  `debug/logs/router_e2e/`.
 - **Test isolation is domain-id-only for now.** Each test gets unique DDS domain ids
   (`conftest.py`'s `unique_domains` fixture) so tests within one pytest run don't collide.
   A stronger, DomainParticipant-level **PARTITION** per test run (an RTI extension to

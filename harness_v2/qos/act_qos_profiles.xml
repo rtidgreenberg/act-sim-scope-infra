@@ -33,6 +33,46 @@
       <value>127.0.0.1</value>
     </element>
     <element>
+      <name>WAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER4</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER5</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER6</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER7</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER8</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER9</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER10</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER11</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
       <name>WAN_HB_RETRIES</name>
       <value>10</value>
     </element>
@@ -371,6 +411,16 @@
         <discovery>
           <initial_peers>
             <element>$(WAN_PEER)</element>
+            <element>$(WAN_PEER2)</element>
+            <element>$(WAN_PEER3)</element>
+            <element>$(WAN_PEER4)</element>
+            <element>$(WAN_PEER5)</element>
+            <element>$(WAN_PEER6)</element>
+            <element>$(WAN_PEER7)</element>
+            <element>$(WAN_PEER8)</element>
+            <element>$(WAN_PEER9)</element>
+            <element>$(WAN_PEER10)</element>
+            <element>$(WAN_PEER11)</element>
           </initial_peers>
 
           <multicast_receive_addresses>

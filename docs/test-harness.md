@@ -45,6 +45,45 @@ also passed the same dashboard, isolation, audit, and cleanup lifecycle. The old
 behavior remains available without `--emane` as a local diagnostic mode. The Compose engine lives
 in `run_container_baseline.sh` as an internal implementation, not a separate harness.
 
+### WAN traffic observability
+
+Every EMANE node starts a passive `tshark` monitor on its own `emane0`, restricted to WAN domain
+`200`. It writes interval totals to `debug/<node>_debug/traffic_stats.jsonl` and POSTs compact
+summaries over the EMANE control bridge to the dashboard in the control node. The dashboard waits
+for one fresh interval from every topology node before emitting a sample, preventing partial
+network totals from appearing as a whole-network sample. The traffic panel sums only locally
+originated discovery-writer and user-data-writer frames, so each transmit is counted once at its
+sender. Its receiver-view accounting line uses the mean per receiver because a multicast frame can
+be observed by every node. Raw per-node records remain available in JSONL for per-node and post-run
+analysis.
+
+The same monitor polls each local RF Pipe MAC through `emanesh` and reports its cumulative-counter
+transmit/receive delta. The dashboard sums fresh MAC TX deltas across every node as **Mesh RF MAC TX aggregate**:
+bytes/s, packets/s, and drops/s. Because this is a sum of independent senders, it can exceed one
+node's configured 1 Mb/s RF Pipe rate; the panel therefore compares the average per reporting node
+to 1 Mb/s. This is the whole-mesh offered-load measure because every transmission is counted once
+at its sender. The separate `tshark` chart is aggregate interface pressure and includes receiver
+copies; it remains useful for DDS discovery-versus-data analysis but is not a channel-load measure.
+
+Aggregate interface bytes intentionally count every observed transmit/receive copy. For example,
+a packet sent once and received by two peers contributes three interface copies. This represents
+aggregate RF interface pressure, not unique application delivery; the sequenced delivery audit is
+the completion authority. Metrics POSTs use the control bridge and are excluded from `emane0`
+measurement, so they do not add RF observer traffic.
+
+All mesh-generated Compose files, rendered router configurations, lifecycle state, node logs,
+pcaps, JSONL monitor records, and audit reports stay beneath the repository `debug/` directory.
+Use `run_mesh.sh clear --emane --topology <file> --test-id <id>` after teardown to remove the
+selected run's generated state and node/audit artifacts. The runner refuses this action while its
+Compose project is active.
+
+Router Python e2e tests follow the same retained-artifact policy: per-test rendered
+configurations and router/process logs are retained in `debug/logs/router_e2e/`, never in
+`/tmp`. A disposable Docker test run mounts the source checkout read-only and binds only
+`debug/` writable at `/workspace/debug`; `/tmp` is reserved for non-retained interpreter
+caches and package-install state. Run pytest with `-p no:cacheprovider` to avoid creating
+`.pytest_cache` in the checkout.
+
 `harness_v2/scripts/run_emane_rfpipe_feasibility.sh run` is a separate, disposable
 two-NEM prerequisite proof. It creates `emane0` in each container, injects a nominal RF
 Pipe pathloss matrix, and sends one UDP datagram between the two RF addresses. It proves

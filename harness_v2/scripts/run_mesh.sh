@@ -9,7 +9,7 @@
 #                    [--workdir <dir>] [--verbosity <0-3>] [--test-id <id>]
 #   ./run_mesh.sh down [--workdir <dir>]
 #
-# Both `up` and `down` default to a fixed WORKDIR (/tmp/act_mesh_run) -- `up` deletes and
+# Both `up` and `down` default to a fixed work directory under debug/mesh_runs -- `up` deletes and
 # recreates it each time, so `down` (with no args) always knows where to look. Override
 # with --workdir <dir> if you need a custom path.
 #
@@ -42,7 +42,7 @@ if [[ " $* " == *" --emane "* ]]; then
 fi
 
 PLATFORMS=""
-WORKDIR="/tmp/act_mesh_run"
+WORKDIR="$REPO_ROOT/debug/mesh_runs/host-process"
 VERBOSITY=2
 WITH_DASHBOARD=true
 DASHBOARD_PORT=8080
@@ -58,6 +58,13 @@ while [[ $# -gt 0 ]]; do
         *) echo "Error: unknown option '$1'" >&2; exit 1 ;;
     esac
 done
+
+WORKDIR="$(realpath -m "$WORKDIR")"
+DEBUG_ROOT="$(realpath -m "$REPO_ROOT/debug")"
+case "$WORKDIR" in
+    "$DEBUG_ROOT"/*) ;;
+    *) echo "--workdir must be beneath $DEBUG_ROOT" >&2; exit 1 ;;
+esac
 
 do_up() {
     # router_main resolves qos_libraries paths relative to the repository root.
@@ -198,6 +205,7 @@ do_up() {
         # NDDS_QOS_PROFILES as the platform_sim (LAN QoS lib + types).
         nohup python3 "$V2_ROOT/scripts/platform_mesh_control.py" \
             --domain "$ID" --node "Platform_${ID}" \
+            --router-name "platform-${ID}-control-platform" \
             > "$LOG_ROOT/platform${ID}_mesh_control.log" 2>&1 &
         echo "platform${ID}_mesh_control $!" >> "$WORKDIR/pids.txt"
     done

@@ -1,5 +1,12 @@
 # WAN Traffic Accounting Design
 
+## Implementation status
+
+This is a future semantic-accounting design, not a description of the currently deployed
+monitor. The live monitor records complete RTPS frame classes and sender/receiver counters in
+`debug/<node>_debug/traffic_stats.jsonl`; it does not yet map endpoints to topics, produce the
+semantic buckets below, or generate the proposed test-report artifacts.
+
 ## Requirement
 
 The test harness must measure WAN cost separately from application delivery. For every test

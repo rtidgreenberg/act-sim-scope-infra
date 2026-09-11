@@ -9,7 +9,8 @@ admin channel (ActRouterCommand).
 Design: docs/cpp_router/team-control-topic-plan.md §3.
 
 Usage:
-    python3 platform_mesh_control.py --domain 30 --node Platform_30
+    python3 platform_mesh_control.py --domain 30 --node Platform_30 \
+        --router-name platform-30-control-platform
 
 Environment:
     NDDSHOME              — Connext install
@@ -39,9 +40,6 @@ REMOVE_PARTICIPANT_PARTITION = 4
 STATUS_INIT = 0
 STATUS_MISSION = 1
 STATUS_DEBUG = 2
-
-ROUTER_NAME_FMT = "platform-{domain}-control-platform"
-
 
 def get_types_xml():
     """Return the committed generated XML type description."""
@@ -77,9 +75,11 @@ def main():
                         help="Platform LAN domain ID (e.g. 30)")
     parser.add_argument("--node", type=str, required=True,
                         help="Platform node name (e.g. Platform_30)")
+    parser.add_argument("--router-name", type=str, required=True,
+                        help="Target router.name from the rendered node config")
     args = parser.parse_args()
 
-    router_name = ROUTER_NAME_FMT.format(domain=args.domain)
+    router_name = args.router_name
 
     # Load committed generated XML types
     types_xml = get_types_xml()

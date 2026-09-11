@@ -34,7 +34,9 @@ container delivery proof remain useful, but neither proves network isolation.
   it is a prerequisite proof. The container baseline's `--emane` mode now proves the
   control-plus-two-platform command/status audit through nominal RF Pipe (`9/9` expected
   deliveries) and bounded per-node captures proving that only WAN domain `200` RTPS appears
-  on `emane0`.
+  on `emane0`. Each EMANE node now records passive domain-200 `emane0` interval counters and
+  sends compact control-bridge summaries to the control dashboard, which publishes only complete
+  all-node aggregate RF-load samples.
 - **Feature-set (control):** introduce a centralized scenario controller with lifecycle
   primitives (`up`, `down`, `reset`, node status) and an append-only run event log. It owns
   Compose/Docker lifecycle and later EMANE events and faults. It is not the per-node
