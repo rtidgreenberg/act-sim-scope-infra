@@ -3,6 +3,9 @@ FROM ubuntu:22.04
 ARG CONNEXT_VERSION=7.7.0
 ARG ACT_REPO_URL=https://github.com/rtidgreenberg/act-sim-scope-infra.git
 ARG ACT_REPO_REF=
+ARG EMANE_VERSION=1.5.3
+ARG EMANE_RELEASE=1
+ARG EMANE_BUNDLE_SHA256=451f513d6dbfe80bbd7b9f5d9ca3ac66046edd593fd2251b8a2d6934a27ab26e
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NDDSHOME=/opt/rti.com/rti_connext_dds-${CONNEXT_VERSION} \
@@ -47,6 +50,16 @@ RUN curl -fsSL -o /usr/share/keyrings/rti-official-archive.gpg \
 
 RUN python3 -m pip install --no-cache-dir \
     "rti.connext==${CONNEXT_VERSION}"
+
+RUN curl -fsSL -o /tmp/emane.tar.gz \
+        "https://adjacentlink.com/downloads/emane/emane-${EMANE_VERSION}-release-${EMANE_RELEASE}.ubuntu-22_04.amd64.tar.gz" \
+    && echo "${EMANE_BUNDLE_SHA256}  /tmp/emane.tar.gz" | sha256sum -c - \
+    && mkdir /tmp/emane \
+    && tar -xzf /tmp/emane.tar.gz -C /tmp/emane \
+    && dpkg -i /tmp/emane/*/debs/ubuntu-22_04/amd64/*.deb || true \
+    && apt-get update \
+    && apt-get install --no-install-recommends -fy \
+    && rm -rf /var/lib/apt/lists/* /tmp/emane /tmp/emane.tar.gz
 
 RUN printf '%s\n' \
     'export NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0' \
