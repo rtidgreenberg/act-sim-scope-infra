@@ -1,12 +1,12 @@
 #!/bin/bash
-# run_mesh.sh — launch/tear down a control node + N platform routers (control-platform.yaml,
-# per-platform domain-substituted per node.README/run-mesh-dashboard skill's step 5c) plus a
-# real platform_sim.py per platform (harness_v2/scripts/start_platform_sim.sh), for exercising
-# the mesh dashboard / router mesh against more than the 1-platform default.
+# run_mesh.sh — canonical topology-driven mesh lifecycle. `--emane` uses Compose-managed EMANE
+# nodes; without it, the historical host-process diagnostic mesh remains available.
 #
 # Usage:
 #   ./run_mesh.sh up --platforms <N> [--workdir <dir>] [--verbosity <0-3>] \
 #                    [--with-dashboard] [--dashboard-port <port>]
+#   ./run_mesh.sh {up|render|smoke|audit|isolation|down} --emane [--platforms <N>] \
+#                    [--workdir <dir>] [--verbosity <0-3>] [--test-id <id>]
 #   ./run_mesh.sh down [--workdir <dir>]
 #
 # Both `up` and `down` default to a fixed WORKDIR (/tmp/act_mesh_run) -- `up` deletes and
@@ -31,6 +31,15 @@ REPO_ROOT="$(cd "${V2_ROOT}/.." && pwd)"
 
 ACTION="${1:-}"
 [[ $# -gt 0 ]] && shift
+
+# The Compose runner owns the EMANE node lifecycle. Keep this established command as the
+# one public entry point while the host-process path remains available for local diagnosis.
+if [[ " $* " == *" --emane "* ]]; then
+    if [[ " $* " != *" --with-dashboard "* ]]; then
+        exec bash "$SCRIPT_DIR/run_container_baseline.sh" "$ACTION" "$@" --with-dashboard
+    fi
+    exec bash "$SCRIPT_DIR/run_container_baseline.sh" "$ACTION" "$@"
+fi
 
 PLATFORMS=""
 WORKDIR="/tmp/act_mesh_run"

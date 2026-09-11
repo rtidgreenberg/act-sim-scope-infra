@@ -1,0 +1,41 @@
+services:
+  node_1:
+    image: connext:7.7.0
+    init: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      NEM_ID: "1"
+      EMANE_IP: 10.88.0.1
+    volumes:
+      - ./node-entrypoint.sh:/opt/act/node-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/opt/act/node-entrypoint.sh"]
+    networks:
+      emane_ctrl:
+        ipv4_address: 172.29.250.11
+
+  node_2:
+    image: connext:7.7.0
+    init: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      NEM_ID: "2"
+      EMANE_IP: 10.88.0.2
+    volumes:
+      - ./node-entrypoint.sh:/opt/act/node-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/opt/act/node-entrypoint.sh"]
+    networks:
+      emane_ctrl:
+        ipv4_address: 172.29.250.12
+
+networks:
+  emane_ctrl:
+    name: ${EMANE_FEASIBILITY_NETWORK:-act-emane-feasibility}
+    ipam:
+      config:
+        - subnet: 172.29.250.0/24

@@ -32,8 +32,8 @@ sniffer's event bus. This keeps the Scope liftable into its own product later.
 docs/EMANE_SIMULATION_PLAN.md        # architecture and roadmap
 docker/connext-7.7/                  # Ubuntu 22.04 Connext/EMANE node image
 harness_v2/                          # active harness, data model, QoS, simulators, scripts
-  scripts/run_mesh.sh                # host-process diagnostic mesh
-  scripts/run_container_baseline.sh  # Docker-bridge delivery-audit baseline
+  scripts/run_mesh.sh                # canonical topology-driven mesh lifecycle
+  topologies/                        # explicit EMANE mesh topology definitions
 gui/mesh_dashboard/                  # Scope dashboard implementation
 router/                              # C++ DynamicData router and tests
 ```

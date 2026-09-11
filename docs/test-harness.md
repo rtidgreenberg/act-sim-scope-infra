@@ -31,13 +31,25 @@ This doc covers the harness's topology, node anatomy, control surface, and requi
 
 ### Current baseline
 
-`harness_v2/scripts/run_mesh.sh` is the host-process diagnostic mesh.
-`harness_v2/scripts/run_container_baseline.sh` is the implemented Compose baseline: it
-starts a control node and selected platform nodes on a plain Docker bridge, records
-node-owned delivery-audit evidence, and proves the current command/status paths. It does
-not create `emane0`, run EMANE, pin WAN traffic to an interface, or create `emane_ctrl`.
-Those isolation and RF properties remain Phase 0.5/3 work and must not be inferred from
-the plain-bridge result.
+`harness_v2/scripts/run_mesh.sh --emane` is the canonical nominal-RF mesh entry point. It starts
+a control node and selected platforms from a versioned topology JSON file. Each node record
+declares its role, LAN domain, NEM ID, RF address, and EMANE-control-network address. The runner
+uses those records to render Compose and router configuration, establish RF links, wait for
+interfaces, capture `emane0`, and compile delivery expectations. WAN participants are pinned to
+`emane0`; LAN participants remain on UDP loopback. The dashboard runs with the control node's
+loopback LAN participant QoS and is exposed through the mesh-owned HTTP port.
+
+The supplied three-node topology passed delivery audit and bounded per-node captures requiring
+decoded RTPS on `emane0` to contain only WAN domain `200`. A non-sequential `Platform_32` topology
+also passed the same dashboard, isolation, audit, and cleanup lifecycle. The old host-process
+behavior remains available without `--emane` as a local diagnostic mode. The Compose engine lives
+in `run_container_baseline.sh` as an internal implementation, not a separate harness.
+
+`harness_v2/scripts/run_emane_rfpipe_feasibility.sh run` is a separate, disposable
+two-NEM prerequisite proof. It creates `emane0` in each container, injects a nominal RF
+Pipe pathloss matrix, and sends one UDP datagram between the two RF addresses. It proves
+the image, container privileges, virtual transport, OTA bridge, and RF Pipe path, but it
+does not run Routing Service, DDS, or any ACT simulator.
 
 ## 4. Node container anatomy
 

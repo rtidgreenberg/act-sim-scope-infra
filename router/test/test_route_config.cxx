@@ -110,7 +110,7 @@ int main() {
         CHECK(validate_qos_aliases(cfg, qos_err));
         CHECK(qos_err.empty());
 
-        CHECK(cfg.qos_profiles.size() == 5);
+        CHECK(cfg.qos_profiles.size() == 6);
         CHECK(cfg.qos_profiles.at("wan_event") == "ACT_QOS_LIB::wan_event");
         CHECK(cfg.qos_profiles.at("wan_status") == "ACT_QOS_LIB::wan_status");
         // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md
@@ -120,6 +120,8 @@ int main() {
               == "ACT_QOS_LIB::lan_router_participant");
           CHECK(cfg.qos_profiles.at("wan_participant")
               == "ACT_QOS_LIB::wan_router_participant");
+          CHECK(cfg.qos_profiles.at("wan_participant_emane")
+              == "ACT_QOS_LIB::wan_router_participant_emane");
     }
 
     // --- config_hash (D80): SHA-256 over the file's raw bytes, full lowercase hex ---

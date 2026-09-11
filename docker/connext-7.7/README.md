@@ -67,32 +67,30 @@ cmake -S router -B router/build -DCONNEXTDDS_ARCH=x64Linux4gcc8.5.0
 cmake --build router/build -j"$(nproc)"
 ```
 
-The host-process diagnostic mesh launches one control node, one platform router, and one
-platform simulator. Its runtime files are under `/tmp`:
-
-```bash
-bash harness_v2/scripts/run_mesh.sh up --platforms 1
-```
-
-When finished, tear down every process tracked by the harness:
-
-```bash
-bash harness_v2/scripts/run_mesh.sh down
-```
-
-The current Docker-bridge container delivery-audit baseline is separate:
+The canonical EMANE mesh launches its Compose-managed nodes from an explicit topology file.
+Every node's WAN DDS participant uses its `emane0` interface; the dashboard is served from
+the control node:
 
 ```bash
 CONNEXT_SHARED_DIR=/path/to/license-dir \
-bash harness_v2/scripts/run_container_baseline.sh up --platforms 2
-CONNEXT_SHARED_DIR=/path/to/license-dir \
-bash harness_v2/scripts/run_container_baseline.sh audit
-CONNEXT_SHARED_DIR=/path/to/license-dir \
-bash harness_v2/scripts/run_container_baseline.sh down
+bash harness_v2/scripts/run_mesh.sh up --emane \
+	--topology harness_v2/topologies/three_node_emane.json --dashboard-port 8080
 ```
 
-It proves the present container command/status paths only. It does not start EMANE, create
-`emane0`, or prove RF interface isolation.
+Validate delivery and RF interface isolation, then tear down the owned topology:
+
+```bash
+CONNEXT_SHARED_DIR=/path/to/license-dir \
+bash harness_v2/scripts/run_mesh.sh isolation --emane \
+	--topology harness_v2/topologies/three_node_emane.json
+CONNEXT_SHARED_DIR=/path/to/license-dir \
+bash harness_v2/scripts/run_mesh.sh down --emane \
+	--topology harness_v2/topologies/three_node_emane.json
+```
+
+Without `--emane`, `run_mesh.sh` retains the host-process mesh as a legacy local diagnostic
+mode. `run_container_baseline.sh` is the internal Compose implementation, not a second public
+harness.
 
 To use different host directories:
 

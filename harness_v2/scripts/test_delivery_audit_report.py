@@ -22,12 +22,12 @@ MANIFEST = {
 }
 EXPECTATIONS = {
     "ControlCommand": {
-        "enabled": True, "source_nodes": ["control_20"],
-        "recipient_rule": {"kind": "sample_destination", "nodes": ["platform_30"]},
+        "enabled": True, "source_nodes": ["Control_20"],
+        "recipient_rule": {"kind": "sample_destination", "nodes": ["Platform_30"]},
     },
     "PlatformInitStatus": {
-        "enabled": True, "source_nodes": ["platform_30"],
-        "recipient_rule": {"kind": "fixed_nodes", "nodes": ["control_20"]},
+        "enabled": True, "source_nodes": ["Platform_30"],
+        "recipient_rule": {"kind": "fixed_nodes", "nodes": ["Control_20"]},
     },
 }
 
@@ -43,11 +43,11 @@ class DeliveryAuditExpectationTests(unittest.TestCase):
 
     def test_targeted_command_uses_snapshot_destination_rule(self):
         report = self.analyze([
-            event("sent", "ControlCommand", "control_20", 1, "control_20",
-                  destination="platform_30"),
-            event("received", "ControlCommand", "control_20", 1, "platform_30"),
-            event("sent", "PlatformInitStatus", "platform_30", 1, "platform_30"),
-            event("received", "PlatformInitStatus", "platform_30", 1, "control_20"),
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_30"),
+            event("received", "ControlCommand", "Control_20", 1, "Platform_30"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
         ])
         self.assertEqual("pass", report["verdict"])
 
@@ -55,21 +55,21 @@ class DeliveryAuditExpectationTests(unittest.TestCase):
         expectations = {**EXPECTATIONS, "ControlCommand": {**EXPECTATIONS["ControlCommand"],
                         "enabled": False}}
         report = self.analyze([
-            event("sent", "ControlCommand", "control_20", 1, "control_20",
-                  destination="platform_99"),
-            event("sent", "PlatformInitStatus", "platform_30", 1, "platform_30"),
-            event("received", "PlatformInitStatus", "platform_30", 1, "control_20"),
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_99"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
         ], expectations)
         self.assertEqual(1, len(report["not_expected"]))
         self.assertEqual("pass", report["verdict"])
 
     def test_receive_outside_snapshot_is_unexpected(self):
         report = self.analyze([
-            event("sent", "ControlCommand", "control_20", 1, "control_20",
-                  destination="platform_30"),
-            event("received", "ControlCommand", "control_20", 1, "control_20"),
-            event("sent", "PlatformInitStatus", "platform_30", 1, "platform_30"),
-            event("received", "PlatformInitStatus", "platform_30", 1, "control_20"),
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_30"),
+            event("received", "ControlCommand", "Control_20", 1, "Control_20"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
         ])
         self.assertEqual("fail", report["verdict"])
         self.assertEqual(1, len(report["unexpected"]))

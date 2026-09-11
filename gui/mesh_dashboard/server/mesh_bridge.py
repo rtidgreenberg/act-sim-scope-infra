@@ -73,7 +73,7 @@ def _qos_provider_for(types_xml: Path):
 class DdsBridge:
     """Owns the one DomainParticipant + reader + writer this service needs."""
 
-    def __init__(self, domain_id, types_xml, poll_interval):
+    def __init__(self, domain_id, types_xml, poll_interval, participant_qos_profile=None):
         self.poll_interval = poll_interval
         self.cache = {}          # observer_node -> latest sample dict
         self.platform_cache = {} # platform_node -> latest per-resolution topic samples
@@ -87,7 +87,8 @@ class DdsBridge:
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
         status_mode_type = qp.type(STATUS_MODE_TYPE)
 
-        pqos = dds.DomainParticipant.default_participant_qos
+        pqos = (qp.participant_qos_from_profile(participant_qos_profile)
+            if participant_qos_profile else dds.DomainParticipant.default_participant_qos)
         self.participant = dds.DomainParticipant(domain_id, pqos)
 
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
@@ -364,13 +365,16 @@ def main():
                          help="seconds between reader.take() polls")
     parser.add_argument("--types-xml", default=str(DEFAULT_TYPES_XML))
     parser.add_argument("--static-dir", default=str(DEFAULT_STATIC_DIR))
+    parser.add_argument("--participant-qos-profile",
+                        help="optional DomainParticipant QoS profile")
     args = parser.parse_args()
 
     os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
     os.environ.setdefault("RTI_LICENSE_FILE",
                            os.path.join(os.environ["NDDSHOME"], "rti_license.dat"))
 
-    bridge = DdsBridge(args.domain, Path(args.types_xml), args.poll_interval)
+    bridge = DdsBridge(args.domain, Path(args.types_xml), args.poll_interval,
+                       args.participant_qos_profile)
     try:
         app = build_app(bridge, Path(args.static_dir))
         web.run_app(app, host=args.host, port=args.port)

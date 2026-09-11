@@ -47,6 +47,7 @@ qos_libraries:
 qos_profiles:
   router_lan_participant: ACT_QOS_LIB::lan_router_participant
   wan_participant: ACT_QOS_LIB::wan_router_participant
+  wan_participant_emane: ACT_QOS_LIB::wan_router_participant_emane
   wan_event: ACT_QOS_LIB::wan_event
   wan_status: ACT_QOS_LIB::wan_status
   lan_status_1hz: ACT_QOS_LIB::lan_status_1s

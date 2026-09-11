@@ -66,7 +66,20 @@
     ____________________________________________________________________________
     -->
 
-    <qos_profile name="lan_router_participant">
+    <qos_profile name="lan_transport_loopback">
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+          <udpv4>
+            <allow_interfaces_list>
+              <element>127.0.0.1</element>
+            </allow_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_router_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
       <domain_participant_qos>
         <discovery_config>
           <request_types_filter>*</request_types_filter>
@@ -74,7 +87,7 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="lan_platform_participant">
+    <qos_profile name="lan_platform_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
 
       <domain_participant_qos>
 
@@ -91,7 +104,7 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="lan_control_participant">
+    <qos_profile name="lan_control_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
 
       <domain_participant_qos>
 
@@ -366,6 +379,19 @@
         </discovery>
       </domain_participant_qos>
 
+    </qos_profile>
+
+    <qos_profile name="wan_router_participant_emane"
+                 base_name="ACT_QOS_LIB::wan_router_participant">
+      <domain_participant_qos>
+        <transport_builtin>
+          <udpv4>
+            <allow_interfaces_list>
+              <element>emane0</element>
+            </allow_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
     </qos_profile>
 
     <qos_profile name="wan_status" base_name="BuiltinQosLib::Generic.Common">

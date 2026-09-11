@@ -29,7 +29,12 @@ container delivery proof remain useful, but neither proves network isolation.
   EMANE OTA/Event Service traffic and management. Define each node's future WAN contract
   as `emane0`; do **not** carry direct WAN DDS on the Docker bridge, because that would
   bypass EMANE in Phase 3. Preserve node-local LAN traffic on loopback until LAN UDP-only
-  pinning lands with EMANE.
+  pinning lands with EMANE. A two-NEM RF Pipe feasibility fixture now proves container
+  privileges, `emane0`, OTA multicast, nominal pathloss events, and bounded UDP transport;
+  it is a prerequisite proof. The container baseline's `--emane` mode now proves the
+  control-plus-two-platform command/status audit through nominal RF Pipe (`9/9` expected
+  deliveries) and bounded per-node captures proving that only WAN domain `200` RTPS appears
+  on `emane0`.
 - **Feature-set (control):** introduce a centralized scenario controller with lifecycle
   primitives (`up`, `down`, `reset`, node status) and an append-only run event log. It owns
   Compose/Docker lifecycle and later EMANE events and faults. It is not the per-node

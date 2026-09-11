@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -16,12 +17,23 @@ def atomic_write(path, content):
     os.replace(temporary_name, path)
 
 
+def event_node_name(node):
+    match = re.fullmatch(r"(control|platform)_(\d+)", node)
+    if not match:
+        raise ValueError(f"invalid baseline node identifier: {node}")
+    return f"{match.group(1).title()}_{match.group(2)}"
+
+
 def compile_expectations(manifest):
     nodes = manifest["nodes"]
-    control_nodes = [node for node in nodes if node == "control_20"]
-    platform_nodes = [node for node in nodes if node.startswith("platform_")]
-    if control_nodes != ["control_20"] or not platform_nodes:
+    if len(nodes) != len(set(nodes)):
+        raise ValueError("baseline topology contains duplicate node identifiers")
+    control_ids = [node for node in nodes if node == "control_20"]
+    platform_ids = [node for node in nodes if node.startswith("platform_")]
+    if control_ids != ["control_20"] or not platform_ids:
         raise ValueError("baseline topology needs control_20 and at least one platform node")
+    control_nodes = [event_node_name(node) for node in control_ids]
+    platform_nodes = [event_node_name(node) for node in platform_ids]
     required_topics = manifest["topics"]
     expected_topics = {"ControlCommand", "PlatformInitStatus"}
     if set(required_topics) != expected_topics:
