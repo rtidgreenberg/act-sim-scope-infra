@@ -4,10 +4,10 @@ Private sim/test infrastructure and the **Scope** live-monitoring tool for the
 [RTI ACT](https://github.com/rticommunity/rticonnextdds-usecases-act) (Autonomous
 Collaborative Teaming) reference architecture.
 
-> **Status:** Planning / early scaffold. The authoritative design is
+> **Status:** Early implementation. The authoritative design is
 > **[docs/EMANE_SIMULATION_PLAN.md](docs/EMANE_SIMULATION_PLAN.md)** — read it first.
-> The `harness/docker` + `harness/compose` files are early drafts and are **not yet
-> buildable** (they predate the ACT-submodule + overrides layout; see plan §2.4).
+> The current container baseline is under `harness_v2/`; the EMANE image package is
+> prepared, but the RF topology has not yet been validated.
 
 ## What this is
 
@@ -20,28 +20,26 @@ DDS + Routing Service C2 over DDIL networks) — with live visualization and met
 | Package | Product | Nature |
 |---|---|---|
 | **`scope/`** | **Scope** — passive, **read-only** live monitoring & visualization (node graph, message flow, endpoint inspector, dashboards) fed by the RTPS Analyzer "sniffer" | Deployable standalone — even against a customer's live DDS network |
-| **`harness/`** | **Test/Sim Harness** — EMANE, container orchestration, scenario runner, fault injection, manual RF/DDS control, NiceGUI control console | Internal test tooling only |
+| **`harness_v2/`** | **Test/Sim Harness** — container orchestration, EMANE, scenario runner, fault injection, manual RF/DDS control, and the control console | Internal test tooling only |
 
-**Rule:** `scope/` imports nothing from `harness/`. The harness may import the shared
+**Rule:** `scope/` imports nothing from `harness_v2/`. The harness may import the shared
 aggregation library from `scope/` (one-way), and both subscribe independently to the
 sniffer's event bus. This keeps the Scope liftable into its own product later.
 
 ## Layout
 
 ```
-docs/EMANE_SIMULATION_PLAN.md   # the plan (source of truth)
-scope/                          # Scope backend + Cytoscape frontend + Analyzer integration + observability
-harness/
-  act/                          # (TODO) git submodule → public rticonnextdds-usecases-act
-  overrides/                    # (TODO) private QoS/sim overrides (UDP-only, seq/ts, emane0 pinning)
-  docker/                       # node image, entrypoint, remote-admin (reference)
-  compose/                      # docker-compose (M0 plain bridge; EMANE later)
-  emane/ backend/ gui/ scenarios/   # (TODO)
+docs/EMANE_SIMULATION_PLAN.md        # architecture and roadmap
+docker/connext-7.7/                  # Ubuntu 22.04 Connext/EMANE node image
+harness_v2/                          # active harness, data model, QoS, simulators, scripts
+  scripts/run_mesh.sh                # host-process diagnostic mesh
+  scripts/run_container_baseline.sh  # Docker-bridge delivery-audit baseline
+gui/mesh_dashboard/                  # Scope dashboard implementation
+router/                              # C++ DynamicData router and tests
 ```
 
-## Next steps (from the plan)
+## Fresh VM setup
 
-1. Add public ACT as a submodule: `git submodule add https://github.com/rticommunity/rticonnextdds-usecases-act harness/act`
-2. Wire `harness/docker/Dockerfile.node` COPY paths to `act/…` + `overrides/…`.
-3. M0: bring the DDS node stack up in containers over a plain bridge (no EMANE).
-4. See the plan's milestones M0–M4.
+For a reproducible Ubuntu 22.04 or 24.04 host, Docker data-root sizing, license handling, image
+verification, and router tests, follow [docs/fresh-instance.md](docs/fresh-instance.md).
+The bootstrap entry point is `scripts/setup_instance.sh`.

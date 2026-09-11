@@ -9,7 +9,7 @@
 | Decision | Choice |
 |---|---|
 | RTI packaging | **Current router-mesh image:** Ubuntu 22.04 + RTI's public Debian repository (`rti-connext-dds-7.7.0`) + pinned PyPI `rti.connext`; license mounted at runtime. The image build needs access to `packages.rti.com` and PyPI but no host Connext installation. Remote admin remains Python (`rti.connext` ServiceAdmin request/reply); the C++ `remote_admin` tool + `Dockerfile.remote-admin` are **reference-only, off the critical path**. |
-| EMANE source | Upstream **[adjacentlink/emane](https://github.com/adjacentlink/emane)** — prebuilt `.deb` packages on GitHub Releases (+ RF Pipe model, `emane-model-rfpipe`) install cleanly on the Debian/Ubuntu node image |
+| EMANE source | Upstream **[adjacentlink/emane](https://github.com/adjacentlink/emane)** — the image downloads the checksum-pinned Adjacent Link Ubuntu 22.04 EMANE 1.5.3 bundle from `adjacentlink.com` and installs its `.deb`s. Package preparation is committed; `emane --version` and RF topology remain unvalidated until Docker storage is migrated. |
 | EMANE RF model | **CommEffect + RF Pipe** — CommEffect for precise manual/scenario impairment (exact per-link loss / latency / jitter / bandwidth directives); RF Pipe for realistic range / pathloss / mobility. Pick per scenario. |
 | Initial scale | **2–5 nodes** (e.g. 1 Control + 2–4 Platforms) |
 | Orchestration | **docker-compose**, single host |

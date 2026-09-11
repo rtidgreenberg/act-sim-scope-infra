@@ -11,7 +11,7 @@ and imports [Scope](scope.md)'s shared aggregation lib one-way. Phased build + s
 SDT3d live in [roadmap.md](roadmap.md); repo/override strategy in [architecture.md](architecture.md).
 This doc covers the harness's topology, node anatomy, control surface, and required QoS/code changes.
 
-## 3. Target topology (initial)
+## 3. Target EMANE topology
 
 ```
                  Control_20                Platform_30           Platform_31
@@ -28,6 +28,16 @@ This doc covers the harness's topology, node anatomy, control surface, and requi
    WAN DDS (domain 200) rides emane0  →  EMANE RF Pipe applies bw/delay/loss/pathloss
    LAN DDS (domain 20/30) stays inside the container (loopback/shmem) — never crosses RF
 ```
+
+### Current baseline
+
+`harness_v2/scripts/run_mesh.sh` is the host-process diagnostic mesh.
+`harness_v2/scripts/run_container_baseline.sh` is the implemented Compose baseline: it
+starts a control node and selected platform nodes on a plain Docker bridge, records
+node-owned delivery-audit evidence, and proves the current command/status paths. It does
+not create `emane0`, run EMANE, pin WAN traffic to an interface, or create `emane_ctrl`.
+Those isolation and RF properties remain Phase 0.5/3 work and must not be inferred from
+the plain-bridge result.
 
 ## 4. Node container anatomy
 

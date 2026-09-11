@@ -12,14 +12,17 @@ deployment tier (Phase 9) — see the DDS-Security decision in [decisions-and-ri
 Milestone tags (M0–M4) map to the original plan milestones.
 
 ## Phase 0 — Node stack in containers, plain bridge  · **[M0]**
+- **Status:** implemented as a Docker-bridge delivery-audit baseline for one control plus
+  selected platforms. The validated proof currently covers `ControlCommand` and
+  `PlatformInitStatus`; it does not yet demonstrate every ACT channel.
 - **Feature-set (harness):** one role-selected node image (`ROLE=platform|control`) = Routing Service + Python sim; `docker-compose` (1 control + N platforms) on a plain docker bridge; health-gated entrypoint (RS → sim); license mounted at runtime; env-parameterized (`ROLE`, `ID`, domains, peers).
 - **Tests:** containers start; DDS discovery over the bridge; **all ACT channels flow** (commands / status / events / team); no EMANE.
 - **Exit:** the ACT stack runs containerized end-to-end without EMANE. *(Foundational; can proceed in parallel with Phase 1.)*
 
 ## Phase 0.5 — Container isolation baseline & scenario control contract  · **[M0]**
-Bridge the working host-process harness to the EMANE architecture before introducing
-impairment. The current DDS-domain isolation remains useful for test allocation, but it
-does not prove network isolation.
+Bridge the working host-process harness and implemented Docker-bridge delivery baseline to
+the EMANE architecture before introducing impairment. The current DDS-domain isolation and
+container delivery proof remain useful, but neither proves network isolation.
 
 - **Feature-set (harness):** replace host-launched node processes with Compose-managed
   control and platform containers. Create an `emane_ctrl` Docker bridge used only for
@@ -31,8 +34,8 @@ does not prove network isolation.
   primitives (`up`, `down`, `reset`, node status) and an append-only run event log. It owns
   Compose/Docker lifecycle and later EMANE events and faults. It is not the per-node
   mission orchestrator: per-node policy continues to command only its local router.
-- **Tests:** start one control plus two platforms; prove all expected WAN-domain traffic
-  is absent from the Docker bridge until `emane0` exists; prove container lifecycle actions
+- **Tests:** start one control plus two platforms; after `emane0` exists, prove WAN DDS has
+  no direct Docker-bridge path; prove container lifecycle actions
   are recorded with run id, timestamp, target, request, and result; reset returns to a
   clean baseline with no residual containers, ports, or DDS shared-memory entries.
 - **Exit:** a repeatable container baseline and a narrow controller contract exist without
@@ -58,6 +61,10 @@ De-risk the linchpin of the transparent-relay strategy **before** building the e
 - **Exit:** full stack over emulated RF, observed on `emane0`.
 
 ## Phase 4 — Instrumentation, decode & metrics  · **[M2]**
+- **Status:** partial baseline landed: sequenced audit fields, node-owned JSONL logs,
+  manifest-declared topic minima/thresholds, and compact per-test JSON/HTML reports. Route-
+  derived expectations, latency/order/ack analysis, packet accounting, and observability
+  remain Phase 4 work.
 - **Feature-set (DDS + sniffer + scope):** seq#/timestamp payloads (app e2e latency/loss); one read-write, container-mounted node directory per control/platform under `debug/<node>_debug`, cleared before every run and containing only current JSONL send/receive audit events and node logs; immutable per-run expectation snapshots derived from routes, filters, partitions, endpoint matches, and lifecycle; compact latest-per-test HTML/JSON completion reports retained as `debug/test_reports/<test_id>.*`; **RTI Observability** (Monitoring Lib 2.0 → `collector-service` → Prometheus/Loki/Grafana), telemetry **pinned off the RF**; `emanesh` PHY exporter; packet accounting on `emane0` for payload, application/router control, DDS discovery/reliability, and unresolved traffic, with per-node interval JSONL logs; **sniffer decode stage** (command-gated, `act_types.xml`) → **endpoint inspector** live decoded samples. Add bounded control-side replay for the existing `ActRouterControllerJournal` ledger: an analysis client requests the last $K$ records, or records after an event sequence, from one target router and receives a correlated finite reply stream. The delivery-audit contract is in [delivery-audit-framework.md](delivery-audit-framework.md); WAN accounting is in [traffic-accounting-design.md](traffic-accounting-design.md).
 - **Tests:** per-channel latency (p50/p95) + delivery ratio; completion percentage by route/topic/receiver from expected-recipient rules; targeted-command filtering, team isolation, disabled-route, duplicate, and missing-sequence audit cases; bytes/s and bytes-per-delivered-payload-byte by RTPS class; **observer-off vs observer-on** credibility check; decode-set gating + rate-cap; **capture throughput** (signal drops, don't under-count); cross-layer loss (app seq-gaps vs `emanesh`); time-aligned raw per-peer DDS protocol counters against a labeled fault schedule; a late control-side analysis client requests the last $K$ ledger records and receives ordered, gap-explicit results without enabling durable replay on the WAN.
 - **Exit:** quantitative metrics, route-derived message completion report, and live decoded inspector, trustworthy under load, with enough raw evidence to begin the Phase 5 impairment-correlation experiment.

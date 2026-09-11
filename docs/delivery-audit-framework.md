@@ -22,16 +22,15 @@ summary is keyed by stable `test_id`:
 debug/
   control_20_debug/
     events.jsonl
-    router.log
+    logs/router.log
   platform_30_debug/
     events.jsonl
-    router.log
+    logs/router.log
   platform_31_debug/
     events.jsonl
-    router.log
+    logs/router.log
   test_controller_debug/
     manifest.json
-    expectations.json
   test_reports/
     <test_id>.json
     <test_id>.html
@@ -43,6 +42,17 @@ captures but cannot alter another node's evidence. The test controller owns
 `debug/test_controller_debug`, reads every node directory after the run, and writes the compact
 summary to `debug/test_reports/<test_id>.json` and `debug/test_reports/<test_id>.html`.
 SQLite/DWH files and other lock-sensitive transient state remain under `/tmp`.
+
+### Current baseline
+
+The implemented container baseline writes a versioned `manifest.json` with the selected
+nodes and minimum evidence requirements for `ControlCommand` and `PlatformInitStatus`.
+The analyzer reads only those nodes' logs, reports each declared topic independently, and
+returns `inconclusive` for malformed/missing evidence or insufficient samples. It currently
+uses fixed recipient rules for those two topics; it does not yet create `expectations.json`,
+derive recipients from route/topology state, calculate latency or ordering, or correlate
+command acknowledgments. Those are Phase 4 requirements below, not properties proven by the
+baseline report.
 
 ### Retention
 
@@ -73,12 +83,11 @@ Each simulator appends JSONL records synchronously enough for test use:
 {"event":"received","run_id":"...","node":"Platform_30","topic":"ControlCommand","source_node":"Control_20","sequence":42,"received_at_ns":456}
 ```
 
-Records also include `destination`, `team`, `command_id`, and a canonical payload hash when
-those fields apply. Commands record their correlated acknowledgment as a separate received
-event, retaining the same `command_id`. The analyzer never infers a message identity from
-payload values alone.
+The current events include destination and audit identity fields. Phase 4 records also include
+team, `command_id`, canonical payload hash, receive timestamp, and correlated command
+acknowledgments. The analyzer must never infer message identity from payload values alone.
 
-## Expected Recipients
+## Phase 4 Expected Recipients
 
 At run setup, the scenario controller compiles `expectations.json` from the effective route
 configuration, the initial topology, and each timestamped control action. Expectations are
@@ -99,7 +108,7 @@ The compiler must account for route enable/disable, participant partition change
 parameters, discovered endpoint matching, and node lifecycle. A route's `samples_forwarded`
 counter is diagnostic evidence only; it is not the expectation source or delivery verdict.
 
-## Analysis And Verdict
+## Phase 4 Analysis And Verdict
 
 The analyzer joins sends and receives by:
 
@@ -129,9 +138,9 @@ A verdict is `pass`, `fail`, or `inconclusive`:
 - `inconclusive`: logs, expectation snapshots, or required endpoint/topology observations are
   missing; never silently score this as delivery loss.
 
-## Reports
+## Phase 4 Reports
 
-`report.json` is the machine-readable source of truth. `report.html` is a self-contained test
+`<test_id>.json` is the machine-readable source of truth. `<test_id>.html` is a self-contained test
 artifact with run metadata, an overall completion summary, per-topic verdict/completion tables,
 per-route tables, latency
 percentiles, and drill-down lists for missing, duplicate, unexpected, and late sequences.
