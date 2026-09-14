@@ -52,6 +52,14 @@ DEBUG_STATUS_TOPICS = {
     "PlatformThrusterStatus": "platform_thruster_status",
     "PlatformPowerStatus": "platform_power_status",
 }
+MISSION_MODE_TOPICS = set(MISSION_STATUS_TOPICS)
+DEBUG_MODE_TOPICS = set(DEBUG_STATUS_TOPICS)
+FIXED_CONTROL_RECIPIENT_TOPICS = {
+    "PlatformInitStatus", "PlatformDetailStatus", "PlatformMissionStatus",
+    "PlatformWaypointStatus", "PlatformDebugStatus", "PlatformThrusterStatus",
+    "PlatformPowerStatus", "PlatformCommandAck", "ContactReport",
+}
+PERCENTAGE_MIN_SAMPLES = 30
 
 
 def _qos_provider_for(types_xml: Path):
@@ -119,6 +127,12 @@ class DdsBridge:
         self.emane_cache = {}  # observer -> latest MAC transmit delta
         self.emane_published_at = {}  # observer -> timestamp in last aggregate
         self.latest_emane_aggregate = None
+        self.audit_offsets = {}  # events.jsonl path -> consumed byte offset
+        self.audit_sent = {}  # (run_id, topic, source, sequence) -> sent event
+        self.audit_received = {}  # (run_id, topic, source, sequence, receiver) -> receive event
+        self.audit_versions = {}  # (topic, source, recipient) -> [sent, received]
+        self.platform_status_modes = {}  # platform_node -> init|mission|debug
+        self.platform_status_mode_changed_ns = {}  # platform_node -> monotonic mode-change cutoff
 
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
@@ -182,6 +196,9 @@ class DdsBridge:
 
                     self._broadcast(payload)
 
+            if self.poll_audit_events():
+                self._broadcast({"type": "delivery_stats", "data": self.delivery_snapshot()})
+
             self._stop.wait(self.poll_interval)
 
     def _broadcast(self, payload):
@@ -211,6 +228,148 @@ class DdsBridge:
     def emane_snapshot(self):
         with self.cache_lock:
             return dict(self.latest_emane_aggregate) if self.latest_emane_aggregate else None
+
+    def _platform_topic_expected(self, source_node, topic, sent_at_ns):
+        if not source_node.startswith("Platform_"):
+            return True
+        mode = self.platform_status_modes.get(source_node, "init")
+        cutoff_ns = self.platform_status_mode_changed_ns.get(source_node, 0)
+        if topic in MISSION_MODE_TOPICS | DEBUG_MODE_TOPICS and sent_at_ns < cutoff_ns:
+            return False
+        if topic in DEBUG_MODE_TOPICS:
+            return mode == "debug"
+        if topic in MISSION_MODE_TOPICS:
+            return mode in ("mission", "debug")
+        return True
+
+    def _expected_recipients(self, event):
+        if event["topic"] == "ControlCommand":
+            return [event["destination"]] if event.get("destination") else []
+        if event["topic"] in FIXED_CONTROL_RECIPIENT_TOPICS \
+                and event["source_node"].startswith("Platform_"):
+            sent_at_ns = int(event.get("sent_at_ns", 0))
+            if not self._platform_topic_expected(event["source_node"], event["topic"], sent_at_ns):
+                return []
+            return ["Control_20"]
+        return []
+
+    def _audit_version(self, flow):
+        return self.audit_versions.setdefault(flow, [0, 0])
+
+    def _prune_audit_events(self, earliest_ns):
+        self.audit_sent = {
+            key: event for key, event in self.audit_sent.items()
+            if event["sent_at_ns"] >= earliest_ns
+        }
+        self.audit_received = {
+            key: event for key, event in self.audit_received.items()
+            if event["sent_at_ns"] >= earliest_ns
+        }
+
+    def _required_samples_for_full_set(self, rate_hz, window_ms):
+        if rate_hz is None or rate_hz <= 0:
+            return PERCENTAGE_MIN_SAMPLES
+        return max(1, int(round(rate_hz * (window_ms / 1000.0))))
+
+    def poll_audit_events(self):
+        changed = False
+        debug_root = _THIS_FILE.parents[3] / "debug"
+        for path in debug_root.glob("*_debug/events.jsonl"):
+            offset = self.audit_offsets.get(path, 0)
+            if path.stat().st_size < offset:
+                offset = 0
+            with path.open(encoding="utf-8") as event_file:
+                event_file.seek(offset)
+                while True:
+                    start = event_file.tell()
+                    line = event_file.readline()
+                    if not line:
+                        break
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        if not line.endswith("\n"):
+                            event_file.seek(start)
+                            break
+                        self.audit_offsets[path] = event_file.tell()
+                        continue
+                    self.audit_offsets[path] = event_file.tell()
+                    required = {"event", "run_id", "node", "topic", "source_node", "sequence", "sent_at_ns"}
+                    if not required.issubset(event):
+                        continue
+                    key = (event["run_id"], event["topic"], event["source_node"], event["sequence"])
+                    with self.cache_lock:
+                        if event["event"] == "sent":
+                            if key in self.audit_sent:
+                                continue
+                            self.audit_sent[key] = event
+                            for recipient in self._expected_recipients(event):
+                                version = self._audit_version((event["topic"], event["source_node"], recipient))
+                                version[0] += 1
+                                if key + (recipient,) in self.audit_received:
+                                    version[1] += 1
+                            changed = True
+                        elif event["event"] == "received":
+                            received_key = key + (event["node"],)
+                            if received_key in self.audit_received:
+                                continue
+                            self.audit_received[received_key] = event
+                            sent = self.audit_sent.get(key)
+                            if sent and event["node"] in self._expected_recipients(sent):
+                                self._audit_version((sent["topic"], sent["source_node"], event["node"]))[1] += 1
+                            changed = True
+                with self.cache_lock:
+                    self._prune_audit_events(time.time_ns() - 60_000_000_000)
+        return changed
+
+    def delivery_snapshot(self, window_ms=30_000):
+        earliest_ns = time.time_ns() - window_ms * 1_000_000
+        with self.cache_lock:
+            flows = {}
+            node_modes = {}
+            for key, sent in self.audit_sent.items():
+                if sent["sent_at_ns"] < earliest_ns:
+                    continue
+                for recipient in self._expected_recipients(sent):
+                    flows.setdefault((sent["topic"], sent["source_node"], recipient), []).append((key, sent))
+            rows = []
+            for (topic, source, recipient), events in flows.items():
+                if source.startswith("Platform_"):
+                    node_modes[source] = self.platform_status_modes.get(source, "init")
+                events.sort(key=lambda item: item[1]["sent_at_ns"])
+                received = sum((key + (recipient,)) in self.audit_received for key, _ in events)
+                rate_hz = None
+                if len(events) > 1:
+                    elapsed_ns = events[-1][1]["sent_at_ns"] - events[0][1]["sent_at_ns"]
+                    if elapsed_ns > 0:
+                        rate_hz = (len(events) - 1) * 1_000_000_000 / elapsed_ns
+                sent_version, received_version = self._audit_version((topic, source, recipient))
+                required_samples = self._required_samples_for_full_set(rate_hz, window_ms)
+                percentage_ready = len(events) >= required_samples
+                percentage = 100.0
+                if percentage_ready:
+                    percentage = 100 * received / len(events)
+                rows.append({
+                    "topic": topic,
+                    "source": source,
+                    "recipient": recipient,
+                    "expected": len(events),
+                    "received": received,
+                    "missing": len(events) - received,
+                    "percentage": percentage,
+                    "percentage_ready": percentage_ready,
+                    "percentage_min_samples": PERCENTAGE_MIN_SAMPLES,
+                    "percentage_required_samples": required_samples,
+                    "send_rate_hz": rate_hz,
+                    "sent_event_version": sent_version,
+                    "received_event_version": received_version,
+                    "last_updated_ms": events[-1][1]["sent_at_ns"] // 1_000_000,
+                })
+            return {
+                "window_ms": window_ms,
+                "node_modes": node_modes,
+                "rows": sorted(rows, key=lambda row: (row["topic"], row["source"], row["recipient"])),
+            }
 
     def _aggregate_traffic_locked(self):
         totals = {}
@@ -350,19 +509,20 @@ class DdsBridge:
         sample["team_name"] = team_name
         self.writer.write(sample)
 
-    def write_status_mode(self, platform_node, resolution_mode):
+    def write_status_mode(self, platform_node, mode):
         mode_map = {
             "init": 0,
             "mission": 1,
             "debug": 2,
         }
-        mode = mode_map.get(str(resolution_mode).lower())
-        if mode is None:
-            raise ValueError("resolution_mode must be one of: init, mission, debug")
+        mode_value = mode_map.get(str(mode).lower())
+        if mode_value is None:
+            raise ValueError("mode must be one of: init, mission, debug")
+        mode_label = str(mode).lower()
 
         sample = dds.DynamicData(self.status_mode_type)
         sample["platform_node"] = platform_node
-        sample["resolution_mode"] = mode
+        sample["resolution_mode"] = mode_value
         sample["request_id"] = f"ui-{int(time.time() * 1000)}"
         self.status_mode_writer.write(sample)
 
@@ -374,9 +534,11 @@ class DdsBridge:
             2: [],                     # DEBUG: clear nothing
         }
         with self.cache_lock:
+            self.platform_status_modes[platform_node] = mode_label
+            self.platform_status_mode_changed_ns[platform_node] = time.time_ns()
             entry = self.platform_cache.get(platform_node)
             if entry:
-                for lvl in levels_to_clear.get(mode, []):
+                for lvl in levels_to_clear.get(mode_value, []):
                     entry[lvl] = {}
                     entry[f"{lvl}_updated_at"] = 0
                 payload = {
@@ -421,21 +583,24 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
         try:
             body = await request.json()
             platform_node = body["platform_node"]
-            resolution_mode = body["resolution_mode"]
+            mode = body.get("mode", body.get("resolution_mode"))
+            if mode is None:
+                raise KeyError("mode")
         except (json.JSONDecodeError, KeyError):
             return web.Response(status=400,
-                                text="expected JSON {platform_node, resolution_mode}")
+                                text="expected JSON {platform_node, mode}")
 
         try:
             await asyncio.get_running_loop().run_in_executor(
-                None, bridge.write_status_mode, platform_node, resolution_mode)
+                None, bridge.write_status_mode, platform_node, mode)
         except ValueError as exc:
             return web.Response(status=400, text=str(exc))
-        # Broadcast resolution change event for traffic chart annotations
+        # Broadcast mode change event for traffic chart annotations.
         bridge._broadcast({
             "type": "resolution_change",
             "platform": platform_node,
-            "resolution_mode": str(resolution_mode),
+            "mode": str(mode),
+            "resolution_mode": str(mode),
             "timestamp": int(time.time() * 1000),
         })
         return web.Response(status=204)
@@ -463,6 +628,15 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
 
     async def get_emane_stats(_request):
         return web.json_response(bridge.emane_snapshot())
+
+    async def get_delivery_stats(request):
+        try:
+            window_ms = int(request.rel_url.query.get("window_ms", "30000"))
+        except ValueError:
+            return web.Response(status=400, text="window_ms must be an integer")
+        if window_ms < 1_000 or window_ms > 60_000:
+            return web.Response(status=400, text="window_ms must be between 1000 and 60000")
+        return web.json_response(bridge.delivery_snapshot(window_ms))
 
     async def post_traffic_stats(request):
         """Ingest per-node capture summaries and broadcast network-wide aggregates."""
@@ -500,6 +674,7 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_get("/api/platform_status", get_platform_status)
     app.router.add_get("/api/traffic_stats", get_traffic_stats)
     app.router.add_get("/api/emane_stats", get_emane_stats)
+    app.router.add_get("/api/delivery_stats", get_delivery_stats)
     app.router.add_post("/api/traffic_stats", post_traffic_stats)
     app.router.add_post("/api/emane_stats", post_emane_stats)
     app.router.add_post("/api/team_assignment", team_assignment)
