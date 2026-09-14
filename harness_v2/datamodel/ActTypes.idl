@@ -74,6 +74,10 @@ struct platform_init_status {
 struct platform_detail_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float roll_deg;
     float pitch_deg;
     float yaw_deg;
@@ -86,6 +90,10 @@ struct platform_detail_status {
 struct platform_mission_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> mission_id;
     string<32> mission_phase;
     uint16 waypoint_index;
@@ -99,6 +107,10 @@ struct platform_mission_status {
 struct platform_waypoint_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint16 waypoint_id;
     float wp_latitude;
     float wp_longitude;
@@ -112,6 +124,10 @@ struct platform_waypoint_status {
 struct platform_debug_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint32 cpu_usage_pct;
     uint32 mem_usage_pct;
     uint32 disk_usage_pct;
@@ -126,6 +142,10 @@ struct platform_debug_status {
 struct platform_thruster_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint8 thruster_id;
     float rpm;
     float commanded_rpm;
@@ -138,6 +158,10 @@ struct platform_thruster_status {
 struct platform_power_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float bus_voltage;
     float bus_current;
     float battery_voltage;
@@ -152,6 +176,10 @@ struct platform_power_status {
 struct platform_data {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<32> sensor_id;
     float water_temperature_c;
     float salinity_psu;
@@ -167,6 +195,10 @@ struct platform_data {
 struct contact_report {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<32> contact_id;
     string<32> classification;
     float bearing_deg;

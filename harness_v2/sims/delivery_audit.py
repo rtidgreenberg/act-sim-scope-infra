@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import time
@@ -34,7 +33,5 @@ class DeliveryAudit:
                 if error.__class__.__name__ != "InvalidArgumentError":
                     raise
                 pass
-        record["payload_hash"] = hashlib.sha256(
-            json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
         with self.path.open("a", encoding="utf-8") as events:
             events.write(json.dumps(record, sort_keys=True) + "\n")

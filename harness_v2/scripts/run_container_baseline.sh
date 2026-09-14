@@ -141,7 +141,7 @@ render_control_config() {
 
 emane_runtime_yaml() {
     [[ "$EMANE_ENABLED" == 1 ]] || return 0
-    printf '%s\n' '    cap_add:' '      - NET_ADMIN' '    devices:' '      - /dev/net/tun:/dev/net/tun'
+    printf '%s\n' '    cap_add:' '      - NET_ADMIN' '      - SYS_NICE' '    devices:' '      - /dev/net/tun:/dev/net/tun'
 }
 
 container_user_yaml() {

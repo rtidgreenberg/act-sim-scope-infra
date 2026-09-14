@@ -185,16 +185,29 @@ class PlatformSim:
       print("Waiting for Control Commands")
       async for data in self.control_cmd_reader.take_data_async():
                 print(f'- Received ControlCommand from {data["source"]}'); AUDIT.log("received", "ControlCommand", data)
+                ack = dds.DynamicData(self.control_cmd_ack_type)
+                ack["source"] = args.source
+                ack["destination"] = data["source"]
+                ack["run_id"] = data["run_id"]
+                ack["source_node"] = args.source
+                ack["audit_sequence"] = data["audit_sequence"]
+                ack["sent_at_ns"] = data["sent_at_ns"]
+                ack["command_id"] = data["command_id"]
+                ack["accepted"] = True
+                ack["message"] = "received"
+                ack["timestamp"] = int(time.time() * 1_000_000)
+                self.control_cmd_ack_writer.write(ack)
+                AUDIT.log("sent", "PlatformCommandAck", ack)
 
     async def read_platform_data(self):
       print("Waiting for Platform Data ")
       async for data in self.platform_data_reader.take_data_async():
-        print(f'- Received PlatformData from {data["source"]}')
+                print(f'- Received PlatformData from {data["source"]}'); AUDIT.log("received", "PlatformData", data)
 
     async def read_contact_report(self):
       print("Waiting for Contact Report")
       async for data in self.contact_report_reader.take_data_async():
-        print(f'- Received ContactReport from {data["source"]}')
+                print(f'- Received ContactReport from {data["source"]}'); AUDIT.log("received", "ContactReport", data)
 
 
     async def write_primary_status(self):
@@ -239,8 +252,13 @@ class PlatformSim:
         sample["depth_m"] = 50.0 + 5.0 * math.sin(t * 0.1)
         sample["battery_pct"] = max(0.0, 95.0 - seq * 0.01)
         sample["comms_link_quality"] = min(100, 85 + random.randint(-5, 5))
+        sample["run_id"] = RUN_ID
+        sample["source_node"] = args.source
+        sample["audit_sequence"] = seq
+        sample["sent_at_ns"] = time.time_ns()
         sample["timestamp"] = int(time.time() * 1_000_000)
         self.platform_detail_status_writer.write(sample)
+        AUDIT.log("sent", "PlatformDetailStatus", sample)
         print("Writing to PlatformDetailStatus topic")
         await asyncio.sleep(1)
 
@@ -259,10 +277,15 @@ class PlatformSim:
             sample["distance_to_waypoint_m"] = max(0.0, 500.0 - (seq % 30) * 17.0)
             sample["mission_elapsed_s"] = float(seq)
             sample["mission_fuel_remaining_pct"] = max(0.0, 100.0 - seq * 0.05)
+            sample["run_id"] = RUN_ID
+            sample["source_node"] = args.source
+            sample["audit_sequence"] = seq
+            sample["sent_at_ns"] = time.time_ns()
             if seq % 30 == 0:
                 sample["mission_phase"] = random.choice(["TRANSIT", "LOITER", "EXECUTE", "RTB"])
             sample["timestamp"] = int(time.time() * 1_000_000)
             self.platform_mission_status_writer.write(sample)
+            AUDIT.log("sent", "PlatformMissionStatus", sample)
             print("Writing to PlatformMissionStatus topic")
             await asyncio.sleep(1)
 
@@ -284,8 +307,13 @@ class PlatformSim:
             sample["wp_speed_knots"] = 6.0 + wp_id * 0.5
             sample["eta_s"] = max(0.0, 300.0 - (seq % 20) * 15.0)
             sample["achieved"] = (seq % 20) == 0
+            sample["run_id"] = RUN_ID
+            sample["source_node"] = args.source
+            sample["audit_sequence"] = seq
+            sample["sent_at_ns"] = time.time_ns()
             sample["timestamp"] = int(time.time() * 1_000_000)
             self.platform_waypoint_status_writer.write(sample)
+            AUDIT.log("sent", "PlatformWaypointStatus", sample)
             print("Writing to PlatformWaypointStatus topic")
             await asyncio.sleep(1)
 
@@ -304,8 +332,13 @@ class PlatformSim:
             sample["error_count"] = random.randint(0, 3)
             sample["warning_count"] = random.randint(0, 10)
             sample["last_error_msg"] = "" if random.random() > 0.1 else "sensor timeout"
+            sample["run_id"] = RUN_ID
+            sample["source_node"] = args.source
+            sample["audit_sequence"] = seq
+            sample["sent_at_ns"] = time.time_ns()
             sample["timestamp"] = int(time.time() * 1_000_000)
             self.platform_debug_status_writer.write(sample)
+            AUDIT.log("sent", "PlatformDebugStatus", sample)
             print("Writing to PlatformDebugStatus topic")
             await asyncio.sleep(1)
 
@@ -322,8 +355,13 @@ class PlatformSim:
             sample["current_amps"] = 12.0 + random.uniform(-1, 2)
             sample["temperature_c"] = 45.0 + random.uniform(-3, 8)
             sample["fault"] = random.random() < 0.02
+            sample["run_id"] = RUN_ID
+            sample["source_node"] = args.source
+            sample["audit_sequence"] = seq
+            sample["sent_at_ns"] = time.time_ns()
             sample["timestamp"] = int(time.time() * 1_000_000)
             self.platform_thruster_status_writer.write(sample)
+            AUDIT.log("sent", "PlatformThrusterStatus", sample)
             print("Writing to PlatformThrusterStatus topic")
             await asyncio.sleep(1)
 
@@ -342,8 +380,13 @@ class PlatformSim:
             sample["energy_consumed_wh"] = seq * 0.2
             sample["charging"] = False
             sample["time_remaining_min"] = max(0, int(480 - seq * 0.1))
+            sample["run_id"] = RUN_ID
+            sample["source_node"] = args.source
+            sample["audit_sequence"] = seq
+            sample["sent_at_ns"] = time.time_ns()
             sample["timestamp"] = int(time.time() * 1_000_000)
             self.platform_power_status_writer.write(sample)
+            AUDIT.log("sent", "PlatformPowerStatus", sample)
             print("Writing to PlatformPowerStatus topic")
             await asyncio.sleep(1)
             await asyncio.sleep(1)
@@ -366,8 +409,13 @@ class PlatformSim:
         sample["visibility_m"] = 15.0 + 5.0 * math.sin(t * 0.15)
         sample["sea_state"] = min(9, max(0, 3 + random.randint(-1, 1)))
         sample["ambient_noise_db"] = 60.0 + random.uniform(-5, 5)
+        sample["run_id"] = RUN_ID
+        sample["source_node"] = args.source
+        sample["audit_sequence"] = seq
+        sample["sent_at_ns"] = time.time_ns()
         sample["timestamp"] = int(time.time() * 1_000_000)
         self.platform_data_writer.write(sample)
+        AUDIT.log("sent", "PlatformData", sample)
         print("Writing to PlatformData topic")
         await asyncio.sleep(1)
 
@@ -392,8 +440,13 @@ class PlatformSim:
           sample["latitude"] = 33.0 + 0.01 * math.sin(t * 0.05)
           sample["longitude"] = -117.0 + 0.01 * math.cos(t * 0.05)
           sample["lost"] = random.random() < 0.05
+          sample["run_id"] = RUN_ID
+          sample["source_node"] = args.source
+          sample["audit_sequence"] = seq
+          sample["sent_at_ns"] = time.time_ns()
           sample["timestamp"] = int(time.time() * 1_000_000)
           self.contact_report_writer.write(sample)
+          AUDIT.log("sent", "ContactReport", sample)
           print("Writing to ContactReport topic")
           await asyncio.sleep(1)
 

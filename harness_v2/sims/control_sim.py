@@ -32,149 +32,236 @@ async def wait_for_audit_start():
     while not start_file.exists() or start_file.stat().st_size == 0:
         await asyncio.sleep(0.1)
 
+
 class C2Sim:
     def __init__(self, args):
 
-      # Load QoS/Types from XML files (uses NDDS_QOS_PROFILES env var)
-      self.qos_provider = dds.QosProvider.default
+        # Load QoS/Types from XML files (uses NDDS_QOS_PROFILES env var)
+        self.qos_provider = dds.QosProvider.default
 
-      # Create a Participant from specific QOS Profile
-      self.participant = dds.DomainParticipant(
-          args.domain_id, self.qos_provider.participant_qos_from_profile(
-              args.qos_profile)
-      )
+        # Create a Participant from specific QOS Profile
+        self.participant = dds.DomainParticipant(
+            args.domain_id,
+            self.qos_provider.participant_qos_from_profile(args.qos_profile),
+        )
 
-      #Pull in DynamicData types
-      self.control_cmd_type = self.qos_provider.type("control_command")
-      self.control_cmd_ack_type = self.qos_provider.type("control_command_ack")
-      self.platform_init_status_type = self.qos_provider.type("platform_init_status")
-      self.platform_detail_status_type = self.qos_provider.type("platform_detail_status")
-      self.contact_report_type = self.qos_provider.type("contact_report")
+        # Pull in DynamicData types.
+        self.control_cmd_type = self.qos_provider.type("control_command")
+        self.control_cmd_ack_type = self.qos_provider.type("control_command_ack")
+        self.platform_init_status_type = self.qos_provider.type("platform_init_status")
+        self.platform_detail_status_type = self.qos_provider.type("platform_detail_status")
+        self.platform_mission_status_type = self.qos_provider.type("platform_mission_status")
+        self.platform_waypoint_status_type = self.qos_provider.type("platform_waypoint_status")
+        self.platform_debug_status_type = self.qos_provider.type("platform_debug_status")
+        self.platform_thruster_status_type = self.qos_provider.type("platform_thruster_status")
+        self.platform_power_status_type = self.qos_provider.type("platform_power_status")
+        self.contact_report_type = self.qos_provider.type("contact_report")
 
+        # Create Topics and associate with types.
+        self.control_cmd_topic = dds.DynamicData.Topic(
+            self.participant,
+            "ControlCommand",
+            self.control_cmd_type,
+        )
+        self.platform_cmd_ack_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformCommandAck",
+            self.control_cmd_ack_type,
+        )
+        self.platform_init_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformInitStatus",
+            self.platform_init_status_type,
+        )
+        self.platform_detail_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformDetailStatus",
+            self.platform_detail_status_type,
+        )
+        self.platform_mission_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformMissionStatus",
+            self.platform_mission_status_type,
+        )
+        self.platform_waypoint_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformWaypointStatus",
+            self.platform_waypoint_status_type,
+        )
+        self.platform_debug_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformDebugStatus",
+            self.platform_debug_status_type,
+        )
+        self.platform_thruster_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformThrusterStatus",
+            self.platform_thruster_status_type,
+        )
+        self.platform_power_status_topic = dds.DynamicData.Topic(
+            self.participant,
+            "PlatformPowerStatus",
+            self.platform_power_status_type,
+        )
+        self.contact_report_topic = dds.DynamicData.Topic(
+            self.participant,
+            "ContactReport",
+            self.contact_report_type,
+        )
 
-      # Create Topics and associate with types
-      self.control_cmd_topic = dds.DynamicData.Topic(
-          self.participant,
-          "ControlCommand",
-          self.control_cmd_type
-      )
-      self.platform_cmd_ack_topic = dds.DynamicData.Topic(
-          self.participant,
-          "PlatformCommandAck",
-          self.control_cmd_ack_type
-      )
-      self.platform_init_status_topic = dds.DynamicData.Topic(
-          self.participant,
-          "PlatformInitStatus",
-          self.platform_init_status_type
-      )
-      self.platform_detail_status_topic = dds.DynamicData.Topic(
-          self.participant,
-          "PlatformDetailStatus",
-          self.platform_detail_status_type
-      )
+        # Create DataWriters/DataReaders with the specified QoS profiles.
+        self.control_cmd_writer = dds.DynamicData.DataWriter(
+            self.control_cmd_topic,
+            self.qos_provider.datawriter_qos_from_profile(args.qos_profile),
+        )
+        self.control_contact_report_writer = dds.DynamicData.DataWriter(
+            self.contact_report_topic,
+            self.qos_provider.datawriter_qos_from_profile(args.qos_profile),
+        )
+        self.platform_cmd_ack_reader = dds.DynamicData.DataReader(
+            self.platform_cmd_ack_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_init_status_reader = dds.DynamicData.DataReader(
+            self.platform_init_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_detail_status_reader = dds.DynamicData.DataReader(
+            self.platform_detail_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_mission_status_reader = dds.DynamicData.DataReader(
+            self.platform_mission_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_waypoint_status_reader = dds.DynamicData.DataReader(
+            self.platform_waypoint_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_debug_status_reader = dds.DynamicData.DataReader(
+            self.platform_debug_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_thruster_status_reader = dds.DynamicData.DataReader(
+            self.platform_thruster_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.platform_power_status_reader = dds.DynamicData.DataReader(
+            self.platform_power_status_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
+        self.contact_report_reader = dds.DynamicData.DataReader(
+            self.contact_report_topic,
+            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+        )
 
-      self.contact_report_topic = dds.DynamicData.Topic(
-          self.participant,
-          "ContactReport",
-          self.contact_report_type
-      )
-
-      # Create DataWriters/DataReaders with the specified QoS profiles
-      self.control_cmd_writer = dds.DynamicData.DataWriter(
-          self.control_cmd_topic,
-          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
-      )
-      self.control_contact_report_writer = dds.DynamicData.DataWriter(
-          self.contact_report_topic,
-          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
-      )
-      self.platform_cmd_ack_reader = dds.DynamicData.DataReader(
-          self.platform_cmd_ack_topic,
-          self.qos_provider.datareader_qos_from_profile(args.qos_profile)
-      )
-      self.platform_init_status_reader = dds.DynamicData.DataReader(
-          self.platform_init_status_topic,
-          self.qos_provider.datareader_qos_from_profile(args.qos_profile)
-      )
-      self.platform_detail_status_reader = dds.DynamicData.DataReader(
-          self.platform_detail_status_topic,
-          self.qos_provider.datareader_qos_from_profile(args.qos_profile)
-      )
-      self.contact_report_reader = dds.DynamicData.DataReader(
-          self.contact_report_topic,
-          self.qos_provider.datareader_qos_from_profile(args.qos_profile)
-      )
-
-      print("ignoring self published ContactReports")
-      self.participant.ignore_datawriter(
-          self.control_contact_report_writer.instance_handle)
+        print("ignoring self published ContactReports")
+        self.participant.ignore_datawriter(self.control_contact_report_writer.instance_handle)
 
     async def read_primary_status_data(self):
-      print("Waiting for Primary Status data")
-      async for data in self.platform_init_status_reader.take_data_async():
-                print(f'- Received PlatformInitStatus from {data["source"]}'); AUDIT.log("received", "PlatformInitStatus", data)
-       
+        print("Waiting for Primary Status data")
+        async for data in self.platform_init_status_reader.take_data_async():
+            print(f'- Received PlatformInitStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformInitStatus", data)
 
     async def read_detail_status_data(self):
-      print("Waiting for Detail Status data")
-      async for data in self.platform_detail_status_reader.take_data_async():
-        print(f'- Received PlatformDetailStatus from {data["source"]}')
+        print("Waiting for Detail Status data")
+        async for data in self.platform_detail_status_reader.take_data_async():
+            print(f'- Received PlatformDetailStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformDetailStatus", data)
+
+    async def read_mission_status_data(self):
+        print("Waiting for Mission Status data")
+        async for data in self.platform_mission_status_reader.take_data_async():
+            print(f'- Received PlatformMissionStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformMissionStatus", data)
+
+    async def read_waypoint_status_data(self):
+        print("Waiting for Waypoint Status data")
+        async for data in self.platform_waypoint_status_reader.take_data_async():
+            print(f'- Received PlatformWaypointStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformWaypointStatus", data)
+
+    async def read_debug_status_data(self):
+        print("Waiting for Debug Status data")
+        async for data in self.platform_debug_status_reader.take_data_async():
+            print(f'- Received PlatformDebugStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformDebugStatus", data)
+
+    async def read_thruster_status_data(self):
+        print("Waiting for Thruster Status data")
+        async for data in self.platform_thruster_status_reader.take_data_async():
+            print(f'- Received PlatformThrusterStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformThrusterStatus", data)
+
+    async def read_power_status_data(self):
+        print("Waiting for Power Status data")
+        async for data in self.platform_power_status_reader.take_data_async():
+            print(f'- Received PlatformPowerStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformPowerStatus", data)
 
     async def read_cmd_ack_data(self):
-      print("Waiting for CommandAck data")
-      async for data in self.platform_cmd_ack_reader.take_data_async():
-        print(f'- Received PlatformCommandAck from {data["source"]}')
+        print("Waiting for CommandAck data")
+        async for data in self.platform_cmd_ack_reader.take_data_async():
+            print(f'- Received PlatformCommandAck from {data["source"]}')
+            AUDIT.log("received", "PlatformCommandAck", data)
 
     async def read_contact_report_data(self):
-      print("Waiting for ContactReport data")
-      async for data in self.contact_report_reader.take_data_async():
-        print(f'- Received ContactReport from {data["source"]}')
+        print("Waiting for ContactReport data")
+        async for data in self.contact_report_reader.take_data_async():
+            print(f'- Received ContactReport from {data["source"]}')
+            AUDIT.log("received", "ContactReport", data)
 
     async def write_cmd(self):
-      import math
-      cmd_sample = dds.DynamicData(self.control_cmd_type)
-      cmd_sample["source"] = args.source
-      cmd_sample["destination"] = args.destination
+        import math
 
-      contact_sample = dds.DynamicData(self.contact_report_type)
-      contact_sample["source"] = args.source
-      seq = 0
+        cmd_sample = dds.DynamicData(self.control_cmd_type)
+        cmd_sample["source"] = args.source
+        cmd_sample["destination"] = args.destination
 
-      while True:
-          seq += 1
-          t = seq * 0.2
-          # Control command
-          cmd_sample["command_id"] = f"cmd-{seq}"
-          cmd_sample["command_type"] = "STATUS_REQUEST"
-          cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
-          cmd_sample["run_id"] = RUN_ID
-          cmd_sample["source_node"] = args.source
-          cmd_sample["audit_sequence"] = seq
-          cmd_sample["sent_at_ns"] = time.time_ns()
-          cmd_sample["timestamp"] = int(time.time() * 1_000_000)
-          self.control_cmd_writer.write(cmd_sample)
-          AUDIT.log("sent", "ControlCommand", cmd_sample)
-          print("Writing to ControlCommand topic")
+        contact_sample = dds.DynamicData(self.contact_report_type)
+        contact_sample["source"] = args.source
+        seq = 0
 
-          # Contact report
-          contact_sample["contact_id"] = f"C2-{(seq // 20) % 3:03d}"
-          contact_sample["classification"] = random.choice(["FRIENDLY", "UNKNOWN", "HOSTILE"])
-          contact_sample["bearing_deg"] = (90.0 + t * 2.0) % 360.0
-          contact_sample["range_m"] = 5000.0 + 1000.0 * math.sin(t * 0.1)
-          contact_sample["course_deg"] = (200.0 + t) % 360.0
-          contact_sample["speed_knots"] = 12.0 + 2.0 * math.sin(t * 0.3)
-          contact_sample["depth_m"] = 0.0
-          contact_sample["confidence_pct"] = min(99.0, 70.0 + seq * 0.05)
-          contact_sample["sensor_type"] = "RADAR"
-          contact_sample["latitude"] = 33.5 + 0.01 * math.sin(t * 0.05)
-          contact_sample["longitude"] = -117.5 + 0.01 * math.cos(t * 0.05)
-          contact_sample["lost"] = False
-          contact_sample["timestamp"] = int(time.time() * 1_000_000)
-          self.control_contact_report_writer.write(contact_sample)
-          print("Writing to ContactReport topic")
+        while True:
+            seq += 1
+            t = seq * 0.2
+            # Control command
+            cmd_sample["command_id"] = f"cmd-{seq}"
+            cmd_sample["command_type"] = "STATUS_REQUEST"
+            cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
+            cmd_sample["run_id"] = RUN_ID
+            cmd_sample["source_node"] = args.source
+            cmd_sample["audit_sequence"] = seq
+            cmd_sample["sent_at_ns"] = time.time_ns()
+            cmd_sample["timestamp"] = int(time.time() * 1_000_000)
+            self.control_cmd_writer.write(cmd_sample)
+            AUDIT.log("sent", "ControlCommand", cmd_sample)
+            print("Writing to ControlCommand topic")
 
-          await asyncio.sleep(1)
+            # Contact report
+            contact_sample["contact_id"] = f"C2-{(seq // 20) % 3:03d}"
+            contact_sample["classification"] = random.choice(["FRIENDLY", "UNKNOWN", "HOSTILE"])
+            contact_sample["bearing_deg"] = (90.0 + t * 2.0) % 360.0
+            contact_sample["range_m"] = 5000.0 + 1000.0 * math.sin(t * 0.1)
+            contact_sample["course_deg"] = (200.0 + t) % 360.0
+            contact_sample["speed_knots"] = 12.0 + 2.0 * math.sin(t * 0.3)
+            contact_sample["depth_m"] = 0.0
+            contact_sample["confidence_pct"] = min(99.0, 70.0 + seq * 0.05)
+            contact_sample["run_id"] = RUN_ID
+            contact_sample["source_node"] = args.source
+            contact_sample["audit_sequence"] = seq
+            contact_sample["sent_at_ns"] = time.time_ns()
+            contact_sample["sensor_type"] = "RADAR"
+            contact_sample["latitude"] = 33.5 + 0.01 * math.sin(t * 0.05)
+            contact_sample["longitude"] = -117.5 + 0.01 * math.cos(t * 0.05)
+            contact_sample["lost"] = False
+            contact_sample["timestamp"] = int(time.time() * 1_000_000)
+            self.control_contact_report_writer.write(contact_sample)
+            AUDIT.log("sent", "ContactReport", contact_sample)
+            print("Writing to ContactReport topic")
+
+            await asyncio.sleep(1)
 
 
     async def run(self) -> None:
@@ -183,9 +270,14 @@ class C2Sim:
             self.write_cmd(),
             self.read_primary_status_data(),
             self.read_detail_status_data(),
+            self.read_mission_status_data(),
+            self.read_waypoint_status_data(),
+            self.read_debug_status_data(),
+            self.read_thruster_status_data(),
+            self.read_power_status_data(),
             self.read_cmd_ack_data(),
-            self.read_contact_report_data()
-            )
+            self.read_contact_report_data(),
+        )
 
 
 
@@ -233,8 +325,10 @@ if __name__ == "__main__":
 
     dds.Logger.instance.verbosity = verbosity
 
-    try: simulator = C2Sim(args); Path(os.environ["NODE_DEBUG_DIR"], "simulator_ready").touch(); rti.asyncio.run(simulator.run())
-        
+    try:
+        simulator = C2Sim(args)
+        Path(os.environ["NODE_DEBUG_DIR"], "simulator_ready").touch()
+        rti.asyncio.run(simulator.run())
     except KeyboardInterrupt:
         pass
 

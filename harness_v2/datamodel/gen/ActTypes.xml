@@ -25,6 +25,17 @@
   <member name="message" stringMaxLength="256" type="string"/>
   <member name="timestamp" type="int64"/>
 </struct>
+<struct name= "control_command_receipt">
+  <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="destination" stringMaxLength="100" type="string"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
+  <member name="received_at_ns" type="int64"/>
+  <member name="command_id" stringMaxLength="64" type="string"/>
+  <member name="timestamp" type="int64"/>
+</struct>
 <struct name= "platform_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
   <member name="status_text" stringMaxLength="256" type="string"/>
@@ -46,6 +57,10 @@
 </struct>
 <struct name= "platform_detail_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="roll_deg" type="float32"/>
   <member name="pitch_deg" type="float32"/>
   <member name="yaw_deg" type="float32"/>
@@ -56,6 +71,10 @@
 </struct>
 <struct name= "platform_mission_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="mission_id" stringMaxLength="64" type="string"/>
   <member name="mission_phase" stringMaxLength="32" type="string"/>
   <member name="waypoint_index" type="uint16"/>
@@ -67,6 +86,10 @@
 </struct>
 <struct name= "platform_waypoint_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="waypoint_id" type="uint16"/>
   <member name="wp_latitude" type="float32"/>
   <member name="wp_longitude" type="float32"/>
@@ -78,6 +101,10 @@
 </struct>
 <struct name= "platform_debug_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="cpu_usage_pct" type="uint32"/>
   <member name="mem_usage_pct" type="uint32"/>
   <member name="disk_usage_pct" type="uint32"/>
@@ -90,6 +117,10 @@
 </struct>
 <struct name= "platform_thruster_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="thruster_id" type="uint8"/>
   <member name="rpm" type="float32"/>
   <member name="commanded_rpm" type="float32"/>
@@ -100,6 +131,10 @@
 </struct>
 <struct name= "platform_power_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="bus_voltage" type="float32"/>
   <member name="bus_current" type="float32"/>
   <member name="battery_voltage" type="float32"/>
@@ -112,6 +147,10 @@
 </struct>
 <struct name= "platform_data">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="sensor_id" stringMaxLength="32" type="string"/>
   <member name="water_temperature_c" type="float32"/>
   <member name="salinity_psu" type="float32"/>
@@ -125,6 +164,10 @@
 </struct>
 <struct name= "contact_report">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
+  <member name="run_id" stringMaxLength="64" type="string"/>
+  <member name="source_node" stringMaxLength="100" type="string"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
   <member name="contact_id" stringMaxLength="32" type="string"/>
   <member name="classification" stringMaxLength="32" type="string"/>
   <member name="bearing_deg" type="float32"/>
