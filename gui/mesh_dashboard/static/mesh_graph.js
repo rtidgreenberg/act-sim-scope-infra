@@ -365,6 +365,15 @@
     return `${(txBitsPerSec / 1000).toFixed(0)}/${(rxBitsPerSec / 1000).toFixed(0)} kbps`;
   }
 
+  function nodeRateOverlayPosition(node, position, width, height) {
+    if (node.kind === "observer") {
+      // Keep C2 stats above the control node and out of the link fan-out.
+      return { x: position.x - width / 2, y: position.y - (height + 30) };
+    }
+    // Keep platform stats below the node with extra clearance from curved peer links.
+    return { x: position.x - width / 2, y: position.y + 34 };
+  }
+
   network.on("afterDrawing", (ctx) => {
     nodes.get({ filter: (node) => node.kind === "peer" && node.resolutionMode }).forEach((node) => {
       const badge = RESOLUTION_BADGES[node.resolutionMode];
@@ -419,13 +428,15 @@
         `MAC TX/RX ${formatNodeRatePair(rates.macTx, rates.macRx)}`,
         `DDS TX/RX ${formatNodeRatePair(rates.ddsTx, rates.ddsRx)}`,
       ];
-      const x = position.x + 25;
-      const y = position.y - 12;
       ctx.save();
       ctx.font = "10px monospace";
       const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 10;
+      const height = 28;
+      const overlayPos = nodeRateOverlayPosition(node, position, width, height);
+      const x = overlayPos.x;
+      const y = overlayPos.y;
       ctx.fillStyle = "rgba(24, 28, 36, 0.9)";
-      ctx.fillRect(x, y, width, 28);
+      ctx.fillRect(x, y, width, height);
       ctx.fillStyle = "#e0b84d";
       ctx.fillText(lines[0], x + 5, y + 11);
       ctx.fillStyle = "#75c991";
@@ -1003,18 +1014,18 @@
     });
   }
 
-  function publishStatusResolution(platformNode, resolutionMode) {
-    const sample = { platform_node: platformNode, resolution_mode: resolutionMode };
+  function publishStatusResolution(platformNode, mode) {
+    const sample = { platform_node: platformNode, mode };
     return fetch(STATUS_MODE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sample),
     }).then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setStatus(`Resolution ${platformNode} → ${resolutionMode}`);
+      setStatus(`Mode ${platformNode} → ${mode}`);
       refreshPlatformStatus(platformNode);
     }).catch((err) => {
-      setStatus(`Status resolution failed: ${err}`);
+      setStatus(`Status mode update failed: ${err}`);
     });
   }
 
@@ -1119,17 +1130,17 @@
     ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
       publishTeamAssignment(nodeId, "");
     }));
-    ctxMenu.appendChild(ctxItem("Resolution: Init", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Init", (nodeId) => {
       publishStatusResolution(nodeId, "init");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);
     }));
-    ctxMenu.appendChild(ctxItem("Resolution: Mission", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Mission", (nodeId) => {
       publishStatusResolution(nodeId, "mission");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);
     }));
-    ctxMenu.appendChild(ctxItem("Resolution: Debug", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Debug", (nodeId) => {
       publishStatusResolution(nodeId, "debug");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);

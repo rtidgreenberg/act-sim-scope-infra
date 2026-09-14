@@ -1,8 +1,8 @@
 // traffic_chart.js — WAN DDS traffic time-series sparklines (domain 200).
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
-// sparkline plots on the right panel, one card per domain ID, each with two subplots:
-// discovery and user-data kilobits/s, with a shared scale per domain.
+// sparkline plots on the right panel, one card per domain ID, with discovery and user-data
+// kilobits/s overlaid in a single shared-scale graph.
 
 (function () {
   "use strict";
@@ -16,22 +16,24 @@
   const TEXT_COLOR = "#8a94a6";
 
   const panel = document.getElementById("traffic-panel");
+  const graphEl = document.getElementById("graph");
+  const statusbarEl = document.getElementById("statusbar");
   if (!panel) return;
 
+  function syncGraphBottomToPanel() {
+    if (!graphEl) return;
+    const statusHeight = statusbarEl ? statusbarEl.getBoundingClientRect().height : 0;
+    const panelHeight = panel.children.length ? panel.getBoundingClientRect().height : 0;
+    const bottom = Math.max(0, Math.ceil(panelHeight - statusHeight));
+    graphEl.style.bottom = `${bottom}px`;
+  }
+
   // domain_id -> { discovery: [{t, bytes}], data: [{t, bytes}], total: [{t, bytes}],
-  //                el, discCanvas, dataCanvas, discLabel, dataLabel, rateEl, lastSample }
+  //                el, chartCanvas, discLabel, dataLabel, rateEl, lastSample }
   const domains = new Map();
 
   function ensureDomain(domainId) {
     if (domains.has(domainId)) return domains.get(domainId);
-
-    // Build header on first domain
-    if (domains.size === 0) {
-      const hdr = document.createElement("div");
-      hdr.className = "tp-header";
-      hdr.innerHTML = `<span>WAN RTPS writer transmit total (Domain 200)</span>`;
-      panel.appendChild(hdr);
-    }
 
     const el = document.createElement("div");
     el.className = "tp-domain";
@@ -41,31 +43,20 @@
     titleDiv.innerHTML = `<span>WAN Domain ${domainId}</span>`;
     el.appendChild(titleDiv);
 
-    // Discovery subplot
-    const discSubplot = document.createElement("div");
-    discSubplot.className = "tp-subplot";
-    const discLabelDiv = document.createElement("div");
-    discLabelDiv.className = "tp-subplot-label";
-    discLabelDiv.innerHTML = `<span style="color:${DISCOVERY_COLOR}">WAN discovery TX</span>` +
-      `<span class="tp-subplot-average" style="color:${DISCOVERY_COLOR}">10s avg 0.0 kb/s</span>`;
-    discSubplot.appendChild(discLabelDiv);
-    const discCanvas = document.createElement("canvas");
-    discCanvas.height = 84;
-    discSubplot.appendChild(discCanvas);
-    el.appendChild(discSubplot);
-
-    // User-data subplot
-    const dataSubplot = document.createElement("div");
-    dataSubplot.className = "tp-subplot";
-    const dataLabelDiv = document.createElement("div");
-    dataLabelDiv.className = "tp-subplot-label";
-    dataLabelDiv.innerHTML = `<span style="color:${DATA_COLOR}">WAN user data TX</span>` +
-      `<span class="tp-subplot-average" style="color:${DATA_COLOR}">10s avg 0.0 kb/s</span>`;
-    dataSubplot.appendChild(dataLabelDiv);
-    const dataCanvas = document.createElement("canvas");
-    dataCanvas.height = 84;
-    dataSubplot.appendChild(dataCanvas);
-    el.appendChild(dataSubplot);
+    const combinedSubplot = document.createElement("div");
+    combinedSubplot.className = "tp-subplot";
+    const legendDiv = document.createElement("div");
+    legendDiv.className = "tp-subplot-label";
+    legendDiv.innerHTML =
+      `<span><span style="color:${DISCOVERY_COLOR}">WAN discovery TX</span> ` +
+      `<span class="tp-subplot-average" style="color:${DISCOVERY_COLOR}">10s avg 0.0 kb/s</span></span>` +
+      `<span><span style="color:${DATA_COLOR}">WAN user data TX</span> ` +
+      `<span class="tp-subplot-average" style="color:${DATA_COLOR}">10s avg 0.0 kb/s</span></span>`;
+    combinedSubplot.appendChild(legendDiv);
+    const chartCanvas = document.createElement("canvas");
+    chartCanvas.height = 132;
+    combinedSubplot.appendChild(chartCanvas);
+    el.appendChild(combinedSubplot);
 
     const accountingDiv = document.createElement("div");
     accountingDiv.className = "tp-frame-accounting";
@@ -84,16 +75,16 @@
       emaData: 0,
       emaTotal: 0,
       el,
-      discCanvas,
-      dataCanvas,
-      discLabel: discLabelDiv.querySelector("span:last-child"),
-      dataLabel: dataLabelDiv.querySelector("span:last-child"),
+      chartCanvas,
+      discLabel: legendDiv.querySelector("span:first-child .tp-subplot-average"),
+      dataLabel: legendDiv.querySelector("span:last-child .tp-subplot-average"),
       accountingEl: accountingDiv,
         maxDiscovery: 0,
         maxData: 0,
       lastSample: null,
     };
     domains.set(domainId, entry);
+    syncGraphBottomToPanel();
     return entry;
   }
 
@@ -123,7 +114,7 @@
     return durationMs ? bytes * 1000 / durationMs : 0;
   }
 
-  function drawSparkline(canvas, points, color, eventIndices, peakRate, sharedScaleMax) {
+  function drawCombinedSparkline(canvas, series, eventIndices, sharedScaleMax) {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     const w = rect.width * dpr;
@@ -135,19 +126,20 @@
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, w, h);
 
-    if (points.length < 2) return;
+    if (!series.length || series.every((s) => s.points.length < 2)) return;
 
-    // Paired discovery/data charts use a shared zero-based scale for comparison.
+    // Discovery and user-data share a zero-based scale for direct comparison.
     let maxVal = 0;
-    for (const p of points) {
-      if (p > maxVal) maxVal = p;
+    for (const s of series) {
+      for (const p of s.points) {
+        if (p > maxVal) maxVal = p;
+      }
     }
     const scaleMin = 0;
     const scaleMax = sharedScaleMax || niceNum(maxVal) || 1;
     const scaleRange = scaleMax - scaleMin || 1;
 
     const stepX = w / (MAX_POINTS - 1);
-    const startIdx = MAX_POINTS - points.length;
     const topPad = 12 * dpr;
 
     // Draw event markers first (behind the line)
@@ -187,10 +179,11 @@
       ctx.stroke();
     }
 
-      if (peakRate > 0 && peakRate >= scaleMin && peakRate <= scaleMax) {
-        const peakY = h - ((peakRate - scaleMin) / scaleRange) * (h - topPad);
+      for (const s of series) {
+        if (!(s.peakRate > 0 && s.peakRate >= scaleMin && s.peakRate <= scaleMax)) continue;
+        const peakY = h - ((s.peakRate - scaleMin) / scaleRange) * (h - topPad);
         ctx.save();
-        ctx.strokeStyle = color;
+        ctx.strokeStyle = s.color;
         ctx.globalAlpha = 0.65;
         ctx.lineWidth = dpr;
         ctx.setLineDash([4 * dpr, 3 * dpr]);
@@ -199,10 +192,10 @@
         ctx.lineTo(w, peakY);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = color;
+        ctx.fillStyle = s.color;
         ctx.font = `bold ${8 * dpr}px sans-serif`;
         ctx.textAlign = "left";
-        ctx.fillText(`peak ${formatRate(peakRate)}`, 3 * dpr, Math.max(topPad + 8 * dpr, peakY - 3 * dpr));
+        ctx.fillText(`${s.label} peak ${formatRate(s.peakRate)}`, 3 * dpr, Math.max(topPad + 8 * dpr, peakY - 3 * dpr));
         ctx.restore();
       }
 
@@ -219,29 +212,34 @@
       return h - ((val - scaleMin) / scaleRange) * (h - topPad);
     }
 
-    // Fill area under curve
-    ctx.beginPath();
-    const firstX = startIdx * stepX;
-    ctx.moveTo(firstX, h);
-    for (let i = 0; i < points.length; i++) {
-      ctx.lineTo((startIdx + i) * stepX, yOf(points[i]));
-    }
-    ctx.lineTo((startIdx + points.length - 1) * stepX, h);
-    ctx.closePath();
-    ctx.fillStyle = color + "1a";
-    ctx.fill();
+    for (const s of series) {
+      if (s.points.length < 2) continue;
+      const seriesStartIdx = MAX_POINTS - s.points.length;
 
-    // Stroke the line
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    for (let i = 0; i < points.length; i++) {
-      const x = (startIdx + i) * stepX;
-      if (i === 0) ctx.moveTo(x, yOf(points[i]));
-      else ctx.lineTo(x, yOf(points[i]));
+      // Fill area under each curve with light transparency.
+      ctx.beginPath();
+      const firstX = seriesStartIdx * stepX;
+      ctx.moveTo(firstX, h);
+      for (let i = 0; i < s.points.length; i++) {
+        ctx.lineTo((seriesStartIdx + i) * stepX, yOf(s.points[i]));
+      }
+      ctx.lineTo((seriesStartIdx + s.points.length - 1) * stepX, h);
+      ctx.closePath();
+      ctx.fillStyle = s.color + "14";
+      ctx.fill();
+
+      // Stroke the series line.
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      for (let i = 0; i < s.points.length; i++) {
+        const x = (seriesStartIdx + i) * stepX;
+        if (i === 0) ctx.moveTo(x, yOf(s.points[i]));
+        else ctx.lineTo(x, yOf(s.points[i]));
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
   }
 
   function niceNum(val) {
@@ -370,12 +368,12 @@
       `unknown ${formatRate(unknownRate)}`;
 
     // Redraw sparklines with event markers
-    const events = getVisibleEvents();
-    const sharedScaleMax = niceNum(Math.max(...entry.discovery, ...entry.data)) || 1;
-    drawSparkline(entry.discCanvas, entry.discovery, DISCOVERY_COLOR, events,
-            entry.maxDiscovery, sharedScaleMax);
-    drawSparkline(entry.dataCanvas, entry.data, DATA_COLOR, events,
-            entry.maxData, sharedScaleMax);
+        const events = getVisibleEvents();
+        const sharedScaleMax = niceNum(Math.max(...entry.discovery, ...entry.data)) || 1;
+        drawCombinedSparkline(entry.chartCanvas, [
+          { label: "disc", points: entry.discovery, color: DISCOVERY_COLOR, peakRate: entry.maxDiscovery },
+          { label: "data", points: entry.data, color: DATA_COLOR, peakRate: entry.maxData },
+        ], events, sharedScaleMax);
   }
 
   function connectTrafficWs() {
@@ -409,6 +407,9 @@
     .then((r) => r.ok ? r.json() : null)
     .then(handleEmaneSample)
     .catch(() => {});
+
+  window.addEventListener("resize", syncGraphBottomToPanel);
+  syncGraphBottomToPanel();
 
   connectTrafficWs();
 })();
