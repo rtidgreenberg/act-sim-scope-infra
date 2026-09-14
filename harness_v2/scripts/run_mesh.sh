@@ -93,6 +93,9 @@ do_up() {
     LOG_ROOT="$REPO_ROOT/debug/logs/mesh"
     rm -rf "$LOG_ROOT"
     mkdir -p "$LOG_ROOT"
+    JOURNAL_ROOT="$REPO_ROOT/debug/logs/journal"
+    rm -rf "$JOURNAL_ROOT"
+    mkdir -p "$JOURNAL_ROOT"
     NETWORK_LOG_ROOT="$REPO_ROOT/debug/logs/network_monitor"
     mkdir -p "$NETWORK_LOG_ROOT"
     find "$NETWORK_LOG_ROOT" -type f ! -name .gitkeep -delete
@@ -208,6 +211,19 @@ do_up() {
             --router-name "platform-${ID}-control-platform" \
             > "$LOG_ROOT/platform${ID}_mesh_control.log" 2>&1 &
         echo "platform${ID}_mesh_control $!" >> "$WORKDIR/pids.txt"
+    done
+
+    # Capture each node's controller journal and status streams as flushed JSONL for
+    # postmortem debugging without requiring a live DDS reader.
+    nohup python3 "$REPO_ROOT/debug/scripts/router_journal_subscriber.py" \
+        --domain 20 --output "$JOURNAL_ROOT/control.jsonl" \
+        > "$LOG_ROOT/control_journal.log" 2>&1 &
+    echo "control_journal $!" >> "$WORKDIR/pids.txt"
+    for ID in $(seq 30 "$LAST_ID"); do
+        nohup python3 "$REPO_ROOT/debug/scripts/router_journal_subscriber.py" \
+            --domain "$ID" --output "$JOURNAL_ROOT/platform${ID}.jsonl" \
+            > "$LOG_ROOT/platform${ID}_journal.log" 2>&1 &
+        echo "platform${ID}_journal $!" >> "$WORKDIR/pids.txt"
     done
 
     if [[ "$WITH_DASHBOARD" == true ]]; then

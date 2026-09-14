@@ -87,9 +87,9 @@ Use the repository debug tree as the first place to look for runtime evidence:
 - `debug/logs/network_monitor/traffic_stats.jsonl`: append-only WAN traffic samples from
   the dashboard monitor. The monitor watches DDS domain `200` only and splits discovery
   and user-data packet counts and bytes.
-- `debug/logs/journal/router_journal.jsonl`: JSONL samples from the router journal/status
-  subscriber, containing `ActRouterControllerJournal` route decisions and
-  `ActRouterStatus` snapshots.
+- `debug/logs/journal/control.jsonl` and `platform<ID>.jsonl`: JSONL samples captured by
+  the canonical mesh lifecycle from each node's journal/status subscriber, containing
+  `ActRouterControllerJournal` route decisions and `ActRouterStatus` snapshots.
 - `debug/logs/router_e2e/<test-name>/`: rendered e2e configs and subprocess logs. Test
   failures expose the exact `log_path` to inspect.
 - `debug/pcap/<application>/`: raw packet captures. Use `debug/pcap/router/` for the
