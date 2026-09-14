@@ -54,6 +54,67 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - Prefer unit tests and builds for controller/UI diagnostic changes. Do not launch a live mesh
   solely to validate code that can be exercised in-process.
 
+## Mesh dashboard frontend debugging (lessons learned)
+
+- **Treat static JS as cache-sensitive.** After changing `gui/mesh_dashboard/static/*.js`, bump
+  the version query in `gui/mesh_dashboard/static/index.html` script tags (for example
+  `mesh_graph.js?v=...`, `traffic_chart.js?v=...`, `operator_tabs.js?v=...`) so the browser
+  does not keep executing stale code.
+- If the UI still shows old labels/behavior (for example "Resolution" after a rename to
+  "Mode"), verify which asset revision is actually loaded in the page before changing logic.
+  In browser devtools/automation, inspect `document.querySelectorAll('script[src]')` and
+  confirm the expected `?v=` token is present.
+- For dashboard layout edits, treat `#graph` and `#traffic-panel` as coupled. A fixed
+  `#traffic-panel` height with a mismatched `#graph` bottom offset creates blank gaps or
+  overlap. Keep them synchronized.
+- Prefer content-sized bottom panels for WAN charts and compute `#graph` bottom spacing from
+  the rendered panel height (minus status bar height), then update that spacing on resize.
+- After merging stacked WAN charts into a single canvas, remove obsolete fixed-height
+  assumptions and validate there is no empty panel space at the bottom.
+- When validating GUI fixes, verify both source and runtime behavior:
+  1. no syntax/lint errors,
+  2. expected script revision loaded,
+  3. live DOM/layout metrics (`getBoundingClientRect`) match intent,
+  4. interactive labels/context menus show updated wording.
+
+## Debugging Workflow
+
+Use the repository debug tree as the first place to look for runtime evidence:
+
+- `debug/logs/mesh/`: canonical mesh application logs, including `control.log`,
+  `platform<ID>.log`, simulator and mesh-control logs, `mesh_bridge.log`, and
+  `traffic_monitor.log`.
+- `debug/logs/network_monitor/traffic_stats.jsonl`: append-only WAN traffic samples from
+  the dashboard monitor. The monitor watches DDS domain `200` only and splits discovery
+  and user-data packet counts and bytes.
+- `debug/logs/journal/router_journal.jsonl`: JSONL samples from the router journal/status
+  subscriber, containing `ActRouterControllerJournal` route decisions and
+  `ActRouterStatus` snapshots.
+- `debug/logs/router_e2e/<test-name>/`: rendered e2e configs and subprocess logs. Test
+  failures expose the exact `log_path` to inspect.
+- `debug/pcap/<application>/`: raw packet captures. Use `debug/pcap/router/` for the
+  planned in-process Connext network capture and application-specific subdirectories for
+  other capture tools.
+- `debug/scripts/`: diagnostic tools; keep generated output in the matching `debug/logs/`
+  or `debug/pcap/` application directory.
+
+Recommended triage order:
+
+1. Check `debug/logs/mesh/` for process startup, shutdown, DDS discovery, and router
+   errors.
+2. Check `debug/logs/journal/router_journal.jsonl` for the controller event, decision,
+   pre/post `state_revision`, and status-publish action.
+3. Check `debug/logs/network_monitor/traffic_stats.jsonl` for WAN discovery versus
+   user-data activity and whether dashboard posting succeeded.
+4. Run `python3 debug/scripts/dds_type_probe.py --domain 20 --wait 5` when a LAN endpoint or
+  inline TypeObject is missing. Use the WAN traffic monitor for domain `200`; do not infer
+  WAN discovery health from a probe that is not configured for the WAN discovery protocol.
+5. Use the live dashboard only after confirming the bridge log and local HTTP endpoint;
+   a blank Dev Tunnel page can be a forwarding problem rather than a WebSocket failure.
+
+The `/clear` prompt removes generated logs and captures while preserving `.gitkeep`
+directory markers. Stop the associated mesh, test, or capture process before clearing.
+
 ## Connext environment (this VM)
 
 - `NDDSHOME=/home/rti/rti_connext_dds-7.7.0`, arch **`x64Linux4gcc7.3.0`**, Connext
@@ -212,8 +273,8 @@ as `/workspace`, rebuild inside that environment, and run the tests there.
   Key utility: `dds_probe.Probe` (UDPv4-only participant), `AdminChannel` (status reader +
   command writer + ack collector), `write_until_seen` (poll-with-timeout).
 
-- **Type probe** (`harness_v2/scripts/dds_type_probe.py`): standalone diagnostic —
-  `python3 harness_v2/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
+- **Type probe** (`debug/scripts/dds_type_probe.py`): standalone diagnostic —
+  `python3 debug/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
   [--wait 5]` — lists every discovered publication/subscription on a domain (topic, type,
   owning participant, name) and whether its inline TypeObject resolved. Surfaces exactly
   the fact `DiscoveryDispatcher.maybe_learn_type()` gates on, so a topic stuck in
@@ -223,7 +284,8 @@ as `/workspace`, rebuild inside that environment, and run the tests there.
 - **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
   (control + platform routers + platform sims + platform_mesh_control processes) with optional
   WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
-  `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
+  `test_team_assignment_e2e.py` script. Logs in `debug/logs/mesh/` and generated lifecycle
+  state in the selected workdir. Tear down with
   `run_mesh.sh down`.
 
 ## Data model
