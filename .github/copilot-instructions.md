@@ -56,12 +56,56 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - For EMANE RF Pipe discovery tests, preserve the validated pathloss-event invocation in
   `harness_v2/scripts/run_container_baseline.sh`: use the range form
   `emaneevent-pathloss ... "${source_nem}:${target_nem}" 0`. The installed utility also
-  documents `source 0 --target target`, but that form caused this harness to lose all RF
-  receive traffic and Domain 200 discovery; verify packet counters before changing it.
-- EMANE pathloss is directional in this harness. A nominal multi-node RF setup must install
-  both directions for every intended pair before judging DDS unicast discovery. A running
-  container with zero `emane_mac_rx_*` and zero Domain 200 discovery packets is an RF/event
-  path failure, not evidence of a DDS QoS mismatch.
+  documents target/reference controls, but validate packet counters before changing the
+  harness's nominal RF setup.
+- In this installed EMANE utility, the valid ascending range form `low_nem:high_nem` creates
+  the bidirectional receiver/transmitter matrix for that contiguous NEM range; reversed ranges
+  such as `2:1` are invalid, and wide ranges such as `1:4` affect every NEM pair in the range,
+  not only the selected endpoints. For GUI one-way impairment, use the validated pair-specific form
+  `emaneevent-pathloss -i eth0 -g 224.1.2.8 -p 45702 <tx_nem> <db> -t <rx_nem> -r <tx_nem>`.
+  The same form with `0` resets that direction. A running container with zero
+  `emane_mac_rx_*` and zero Domain 200 discovery packets is an RF/event path failure, not
+  evidence of a DDS QoS mismatch.
+- A successful `emaneevent-pathloss` exit status is not sufficient validation: the incomplete
+  target form `source db --target target` accepted an impairment command yet removed Platform
+  31/32 DDS peers. Validate EMANE RX/drops, Domain 200 discovery/data counters, route delivery
+  percentage, and all expected `PRESENCE_ALIVE`/`ROUTER_OK` peers after every GUI impairment
+  and reset. A good live GUI check is: apply `100 dB` to one direction, observe that only the
+  selected route's delivery drops, reset that same direction to `0 dB`, wait for the delivery
+  window to roll forward, and confirm delivery returns to 100% with all unrelated peers alive.
+- RF Pipe pathloss is not a smooth application-delivery percentage knob in the current config:
+  with `txpower=0 dBm`, `bandwidth=1 MHz`, `systemnoisefigure=4 dB`, and the packaged PCR
+  curve, `90 dB` still maps to about 100% probability of reception while `100 dB` maps to the
+  lossy region. See [`docs/emane/pathloss-scale-and-gui-control.md`](../docs/emane/pathloss-scale-and-gui-control.md)
+  before interpreting or changing dashboard dB controls.
+- For predictable dashboard latency, loss, and bandwidth controls, use CommEffect, not raw
+  RF Pipe pathloss. CommEffect must be present as a shim in each generated EMANE NEM, and this
+  installed EMANE version accepts `defaultconnectivitymode` (not `defaultconnectivity`) plus
+  `enablepromiscuousmode`. Keep `defaultconnectivitymode=on` so nominal traffic flows before
+  the first CommEffectEvent; with it off, startup traffic can drop as `No Profile`. Validate
+  event processing with `shim0 EventReceptionTable` event `103` on every affected NEM. Reset
+  with zero values; `unicast=0` and `broadcast=0` mean no bitrate limit. After a receiver
+  processes a CommEffect event, omitted transmitters can be dropped as `No Profile`, so GUI
+  pair controls must seed zero-effect profiles for all known transmitter NEMs on each affected
+  receiver before overlaying the selected pair's impairment. See
+  [`docs/emane/pathloss-scale-and-gui-control.md`](../docs/emane/pathloss-scale-and-gui-control.md)
+  for the validated command form and status checks.
+- Treat CommEffect state as directional (`tx_nem -> rx_nem`), even when the GUI presents a
+  bidirectional pair. A bidirectional apply must record and reset both directional profiles;
+  otherwise a later one-way reset can leave the reverse path impaired while the dashboard shows
+  only the last zeroed command. This especially affects reliable DDS because ACKNACK/NACK and
+  heartbeat repair traffic needs the reverse WAN path to get through.
+- Delivery dashboard counts are sequence-matched app-level audit facts from `events.jsonl`, not
+  inferred packet counters: sent/received keys are `(run_id, topic, source_node, sequence)` plus
+  receiver. `ControlCommand` and `PlatformCommandAck` use a 15 s grace window before missing
+  samples count as lost; periodic status/report topics use 2 s. A 100% loss row under sustained
+  bidirectional impairment can be real app-level non-delivery while DDS repair traffic is itself
+  impaired, not necessarily a dashboard accounting bug.
+- When an EMANE experiment disrupts mesh discovery, do not attempt incremental manual repairs
+  or recreate one router. Recreating only `control-20` can leave DDS discovery empty even when
+  EMANE telemetry is fresh. Use the owned `run_container_baseline.sh down` then `up` lifecycle
+  to rebuild the nominal RF matrix and wait for every peer in `/api/mesh_status`; process uptime
+  or the harness smoke check alone does not prove all platforms rediscovered.
 - The WAN discovery design is explicit unicast UDPv4: Domain 200 uses `initial_peers`, the
   WAN transport mask is `UDPv4`, and `WAN_RECEIVE_MULTICAST=0`. When peers disappear, first
   compare EMANE TX/RX and `traffic_stats.jsonl` discovery counters, then inspect Connext
@@ -93,6 +137,15 @@ across forced termination; use the owned harness lifecycle for cleanup.
   2. expected script revision loaded,
   3. live DOM/layout metrics (`getBoundingClientRect`) match intent,
   4. interactive labels/context menus show updated wording.
+- For the Experiment tab specifically, verify the live browser has loaded the current
+  `operator_tabs.js?v=...`, source/destination options come from `/api/mesh_status`, the
+  controller status comes from `/api/emane_controller`, and apply/reset behavior is validated
+  through the GUI path, not only by manually running `emaneevent-pathloss` in a container.
+- After changing Delivery tab metric semantics, update the definitions text box below the table
+  in `gui/mesh_dashboard/static/index.html` in the same change and browser-verify the rendered
+  labels. Current definitions: `Sent` is rolling-window sends, `Received` is rolling-window
+  destination receives, and `Lost` is only messages outside the topic grace period that have not
+  been received.
 
 ## Debugging Workflow
 
