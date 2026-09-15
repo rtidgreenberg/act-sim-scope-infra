@@ -112,7 +112,7 @@ class C2Sim:
         # Create DataWriters/DataReaders with the specified QoS profiles.
         self.control_cmd_writer = dds.DynamicData.DataWriter(
             self.control_cmd_topic,
-            self.qos_provider.datawriter_qos_from_profile(args.qos_profile),
+            self.qos_provider.datawriter_qos_from_profile("ACT_QOS_LIB::lan_event"),
         )
         self.control_contact_report_writer = dds.DynamicData.DataWriter(
             self.contact_report_topic,
@@ -120,7 +120,7 @@ class C2Sim:
         )
         self.platform_cmd_ack_reader = dds.DynamicData.DataReader(
             self.platform_cmd_ack_topic,
-            self.qos_provider.datareader_qos_from_profile(args.qos_profile),
+            self.qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::lan_event"),
         )
         self.platform_init_status_reader = dds.DynamicData.DataReader(
             self.platform_init_status_topic,
@@ -222,22 +222,25 @@ class C2Sim:
         contact_sample = dds.DynamicData(self.contact_report_type)
         contact_sample["source"] = args.source
         seq = 0
+        command_seq = 0
+        command_interval_s = 5
 
         while True:
             seq += 1
             t = seq * 0.2
-            # Control command
-            cmd_sample["command_id"] = f"cmd-{seq}"
-            cmd_sample["command_type"] = "STATUS_REQUEST"
-            cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
-            cmd_sample["run_id"] = RUN_ID
-            cmd_sample["source_node"] = args.source
-            cmd_sample["audit_sequence"] = seq
-            cmd_sample["sent_at_ns"] = time.time_ns()
-            cmd_sample["timestamp"] = int(time.time() * 1_000_000)
-            self.control_cmd_writer.write(cmd_sample)
-            AUDIT.log("sent", "ControlCommand", cmd_sample)
-            print("Writing to ControlCommand topic")
+            if (seq - 1) % command_interval_s == 0:
+                command_seq += 1
+                cmd_sample["command_id"] = f"cmd-{command_seq}"
+                cmd_sample["command_type"] = "STATUS_REQUEST"
+                cmd_sample["payload"] = [random.randrange(0, 10, 2) for _ in range(16)]
+                cmd_sample["run_id"] = RUN_ID
+                cmd_sample["source_node"] = args.source
+                cmd_sample["audit_sequence"] = command_seq
+                cmd_sample["sent_at_ns"] = time.time_ns()
+                cmd_sample["timestamp"] = int(time.time() * 1_000_000)
+                self.control_cmd_writer.write(cmd_sample)
+                AUDIT.log("sent", "ControlCommand", cmd_sample)
+                print("Writing to ControlCommand topic")
 
             # Contact report
             contact_sample["contact_id"] = f"C2-{(seq // 20) % 3:03d}"

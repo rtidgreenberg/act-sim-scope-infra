@@ -50,6 +50,7 @@ qos_profiles:
   wan_participant_emane: ACT_QOS_LIB::wan_router_participant_emane
   wan_event: ACT_QOS_LIB::wan_event
   wan_status: ACT_QOS_LIB::wan_status
+  lan_event: ACT_QOS_LIB::lan_event
   lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 
 participants:
@@ -115,6 +116,7 @@ routes:
     source_side:
       input:
         participant: control_lan
+        reader_qos: lan_event
       output:
         participant: control_wan
         writer_qos: wan_event
@@ -129,6 +131,7 @@ routes:
           parameters: ["${node.name}"]
       output:
         participant: platform_lan
+        writer_qos: lan_event
 
   # Unfiltered control→platform event route (team-control-topic-plan.md). Same shape as
   # control_command but NO CFT filter — all platforms receive all samples. Used for
@@ -257,13 +260,36 @@ routes:
       output:
         participant: control_lan
 
-  - name: platform_events
+  - name: platform_command_ack
     enabled: true
     forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
       - name: PlatformCommandAck
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: lan_event
+      output:
+        participant: platform_wan
+        writer_qos: wan_event
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_event
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan
+        writer_qos: lan_event
+
+  - name: platform_events
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
       - name: ContactReport
     source_side:
       input:

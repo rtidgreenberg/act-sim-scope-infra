@@ -16,9 +16,20 @@
   const experimentSource = document.getElementById("experiment-source");
   const experimentDestination = document.getElementById("experiment-destination");
   const experimentDirection = document.getElementById("experiment-direction");
+  const experimentKind = document.getElementById("experiment-kind");
   const experimentPathloss = document.getElementById("experiment-pathloss");
+  const experimentLatency = document.getElementById("experiment-latency");
+  const experimentJitter = document.getElementById("experiment-jitter");
+  const experimentUnicast = document.getElementById("experiment-unicast");
+  const experimentBroadcast = document.getElementById("experiment-broadcast");
+  const experimentLoss = document.getElementById("experiment-loss");
+  const experimentDuplicate = document.getElementById("experiment-duplicate");
   const experimentApply = document.getElementById("experiment-apply");
   const experimentReset = document.getElementById("experiment-reset");
+  const experimentCurrentPath = document.getElementById("experiment-current-path");
+  const experimentCurrentPathloss = document.getElementById("experiment-current-pathloss");
+  const experimentCurrentUpdated = document.getElementById("experiment-current-updated");
+  const experimentCurrentNetwork = document.getElementById("experiment-current-network");
   const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
 
   const MISSION_TOPICS = new Set(["PlatformDetailStatus", "PlatformMissionStatus", "PlatformWaypointStatus"]);
@@ -110,7 +121,7 @@
       const groupRow = document.createElement("tr");
       groupRow.className = "delivery-route-group";
       const groupCell = document.createElement("td");
-      groupCell.colSpan = 6;
+      groupCell.colSpan = 4;
       groupCell.textContent = `${routeGroup} (${groupRows.length} topics)`;
       groupRow.appendChild(groupCell);
       deliveryBody.appendChild(groupRow);
@@ -125,16 +136,13 @@
       flow.textContent = row.topic;
       tableRow.appendChild(flow);
       const flowKey = `${row.topic}|${row.source}|${row.recipient}`;
-      const expected = document.createElement("td");
-      expected.textContent = String(row.expected);
+      const sent = document.createElement("td");
+      sent.textContent = String(row.sent ?? row.expected ?? 0);
       const previous = deliveryVersions.get(flowKey);
       if (previous && previous.sent < row.sent_event_version) {
-        expected.className = "delivery-new";
+        sent.className = "delivery-new";
       }
-      tableRow.appendChild(expected);
-      const sendRate = document.createElement("td");
-      sendRate.textContent = row.send_rate_hz == null ? "-" : `${row.send_rate_hz.toFixed(1)} Hz`;
-      tableRow.appendChild(sendRate);
+      tableRow.appendChild(sent);
       const received = document.createElement("td");
       received.textContent = String(row.received);
       if (previous && previous.received < row.received_event_version) {
@@ -142,24 +150,12 @@
       }
       tableRow.appendChild(received);
       const missing = document.createElement("td");
-      missing.textContent = String(row.missing);
+      missing.textContent = String(row.lost ?? row.missing);
       tableRow.appendChild(missing);
       deliveryVersions.set(flowKey, {
         sent: row.sent_event_version,
         received: row.received_event_version,
       });
-      const percentage = document.createElement("td");
-      const minSamples = Number(row.percentage_required_samples ?? row.percentage_min_samples ?? 30);
-      const expectedSamples = Number(row.expected ?? 0);
-      const percentageReady = Boolean(row.percentage_ready);
-      if (!percentageReady) {
-        percentage.className = "delivery-rate warn";
-        percentage.textContent = `Calculating (${expectedSamples}/${minSamples}) until full set`;
-      } else {
-        percentage.className = `delivery-rate ${percentClass(row.percentage ?? 0)}`;
-        percentage.textContent = row.percentage == null ? "-" : `${row.percentage.toFixed(1)}%`;
-      }
-      tableRow.appendChild(percentage);
       deliveryBody.appendChild(tableRow);
       }
       groupRow.addEventListener("click", () => {
@@ -186,34 +182,137 @@
     if (name === "experiment") refreshExperimentController();
   }
 
-  function setExperimentEnabled(enabled) {
+  function setExperimentEnabled(enabled, unavailableReason) {
     experimentApply.disabled = !enabled;
     experimentReset.disabled = !enabled;
     experimentSource.disabled = !enabled;
     experimentDestination.disabled = !enabled;
     experimentDirection.disabled = !enabled;
+    experimentKind.disabled = !enabled;
     experimentPathloss.disabled = !enabled;
-    experimentState.textContent = enabled ? "Controller ready" : "Controller unavailable";
+    experimentLatency.disabled = !enabled;
+    experimentJitter.disabled = !enabled;
+    experimentUnicast.disabled = !enabled;
+    experimentBroadcast.disabled = !enabled;
+    experimentLoss.disabled = !enabled;
+    experimentDuplicate.disabled = !enabled;
+    experimentState.textContent = enabled ? "Controller ready" : (unavailableReason || "Controller unavailable");
     experimentState.classList.toggle("ready", enabled);
   }
 
   function refreshExperimentController() {
-    fetch(controllerUrl).then((response) => response.json()).then((status) => {
-      setExperimentEnabled(Boolean(status.available));
+    Promise.all([
+      fetch(controllerUrl).then((response) => response.json()),
+      fetch(`${location.protocol}//${location.host}/api/mesh_status`).then((response) => response.json()),
+    ]).then(([status, mesh]) => {
+      rebuildExperimentNodeOptions(mesh);
+      setExperimentEnabled(Boolean(status.available), status.unavailable_reason);
+      renderExperimentState(status);
     }).catch(() => setExperimentEnabled(false));
   }
 
-  async function sendExperiment(pathlossDb) {
+  function rebuildExperimentNodeOptions(mesh) {
+    const previousSource = experimentSource.value || "Platform_30";
+    const previousDestination = experimentDestination.value || "Control_20";
+    const nodes = new Set(["Control_20"]);
+    for (const row of mesh || []) {
+      const data = row.data || {};
+      if (data.observer_node) nodes.add(data.observer_node);
+      for (const peer of data.peers || []) {
+        const router = peer.health?.router || "";
+        const node = router.split("/")[0];
+        if (node) nodes.add(node);
+      }
+    }
+    const sorted = [...nodes].sort();
+    for (const select of [experimentSource, experimentDestination]) {
+      select.replaceChildren();
+      for (const node of sorted) {
+        const option = document.createElement("option");
+        option.value = node;
+        option.textContent = node;
+        select.appendChild(option);
+      }
+    }
+    experimentSource.value = sorted.includes(previousSource) ? previousSource : sorted.find((node) => node !== "Control_20") || sorted[0];
+    experimentDestination.value = sorted.includes(previousDestination) ? previousDestination : "Control_20";
+    if (experimentSource.value === experimentDestination.value && sorted.length > 1) {
+      experimentDestination.value = sorted.find((node) => node !== experimentSource.value) || sorted[0];
+    }
+  }
+
+  function renderExperimentState(status) {
+    const impairments = status.impairments || [];
+    const current = impairments.at(-1);
+    if (current) {
+      experimentCurrentPath.textContent = `${current.source} -> ${current.destination} (${current.direction})`;
+      experimentCurrentPathloss.textContent = current.kind === "commeffect"
+        ? `latency ${Number(current.latency_ms).toFixed(1)} ms, jitter ${Number(current.jitter_ms).toFixed(1)} ms, unicast ${current.unicast_bps} bps, broadcast ${current.broadcast_bps} bps, loss ${Number(current.loss_percent).toFixed(1)}%, duplicate ${Number(current.duplicate_percent).toFixed(1)}%`
+        : `${Number(current.pathloss_db).toFixed(1)} dB`;
+      experimentCurrentUpdated.textContent = new Date(current.updated_at).toLocaleTimeString();
+    } else {
+      experimentCurrentPath.textContent = "No impairment command recorded";
+      experimentCurrentPathloss.textContent = "-";
+      experimentCurrentUpdated.textContent = "-";
+    }
+    const observed = status.observed_network;
+    experimentCurrentNetwork.textContent = observed
+      ? `All nodes, ${observed.interval_ms} ms: TX ${observed.mac_tx_packets} packets, RX ${observed.mac_rx_packets} packets, drops ${observed.mac_rx_drops + observed.mac_tx_drops}`
+      : "Waiting for EMANE counters";
+  }
+
+  async function sendExperiment(pathlossDb, resetScenario = false) {
+    const kind = experimentKind.value;
+    const body = {
+      kind,
+      source: experimentSource.value,
+      destination: experimentDestination.value,
+      direction: resetScenario ? "bidirectional" : experimentDirection.value,
+      pathloss_db: pathlossDb,
+      latency_ms: Number(experimentLatency.value),
+      jitter_ms: Number(experimentJitter.value),
+      unicast_bps: Number(experimentUnicast.value),
+      broadcast_bps: Number(experimentBroadcast.value),
+      loss_percent: Number(experimentLoss.value),
+      duplicate_percent: Number(experimentDuplicate.value),
+    };
+    if (pathlossDb === 0) {
+      body.latency_ms = 0;
+      body.jitter_ms = 0;
+      body.unicast_bps = 0;
+      body.broadcast_bps = 0;
+      body.loss_percent = 0;
+      body.duplicate_percent = 0;
+    }
     const response = await fetch(controllerUrl, {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        source: experimentSource.value, destination: experimentDestination.value,
-        direction: experimentDirection.value, pathloss_db: pathlossDb,
-      }),
+      body: JSON.stringify(body),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "EMANE controller request failed");
-    experimentState.textContent = pathlossDb === 0 ? "Scenario reset" : `Applied ${pathlossDb} dB pathloss`;
+    renderExperimentState(result);
+    experimentState.textContent = pathlossDb === 0
+      ? "Scenario reset"
+      : (kind === "commeffect" ? "Applied CommEffect" : `Applied ${pathlossDb} dB pathloss`);
+    if (pathlossDb === 0) {
+      experimentPathloss.value = "0";
+      experimentLatency.value = "0";
+      experimentJitter.value = "0";
+      experimentUnicast.value = "0";
+      experimentBroadcast.value = "0";
+      experimentLoss.value = "0";
+      experimentDuplicate.value = "0";
+    }
+  }
+
+  function updateExperimentKindFields() {
+    const isCommEffect = experimentKind.value === "commeffect";
+    for (const element of document.querySelectorAll(".experiment-commeffect-field")) {
+      element.hidden = !isCommEffect;
+    }
+    for (const element of document.querySelectorAll(".experiment-pathloss-field")) {
+      element.hidden = isCommEffect;
+    }
   }
 
   experimentApply.addEventListener("click", () => {
@@ -222,10 +321,11 @@
     });
   });
   experimentReset.addEventListener("click", () => {
-    sendExperiment(0).catch((error) => {
+    sendExperiment(0, true).catch((error) => {
       experimentState.textContent = error.message;
     });
   });
+  experimentKind.addEventListener("change", updateExperimentKindFields);
 
   for (const tab of tabs) {
     tab.addEventListener("click", () => selectTab(tab.dataset.tab));
@@ -236,6 +336,7 @@
   });
   deliveryResolutionFilter.addEventListener("change", () => renderDelivery(latestSnapshot));
   selectTab("mesh");
+  updateExperimentKindFields();
 
   function connectDeliverySocket() {
     const socket = new WebSocket(websocketUrl);

@@ -43,6 +43,7 @@ EOF
 <!DOCTYPE nem SYSTEM "file:///usr/share/emane/dtd/nem.dtd">
 <nem name="${NODE_NAME} RF Pipe NEM">
     <transport definition="transvirtual.xml"/>
+    <shim definition="commeffectshim.xml"/>
     <mac definition="rfpipemac.xml"/>
     <phy>
         <param name="fixedantennagain" value="0.0"/>
@@ -66,6 +67,14 @@ EOF
     <param name="address" value="$EMANE_IP"/>
     <param name="mask" value="255.255.255.0"/>
 </transport>
+EOF
+    cat > "$config_dir/commeffectshim.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE shim SYSTEM "file:///usr/share/emane/dtd/shim.dtd">
+<shim name="CommEffect shim" library="commeffectshim">
+    <param name="defaultconnectivitymode" value="on"/>
+    <param name="enablepromiscuousmode" value="off"/>
+</shim>
 EOF
         cat > "$config_dir/rfpipemac.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>

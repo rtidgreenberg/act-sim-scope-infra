@@ -222,6 +222,23 @@
 
     <qos_profile name="lan_event" base_name="BuiltinQosLib::Generic.Common">
       <!-- Update here per an Aperiodic Command Data Pattern/your system -->
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+      </datareader_qos>
 
     </qos_profile>
 

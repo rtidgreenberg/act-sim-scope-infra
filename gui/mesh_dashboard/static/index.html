@@ -128,6 +128,11 @@
                              font-weight: 600; cursor: pointer; }
   .delivery-route-group td::before { content: '▸'; display: inline-block; margin-right: 8px; color: #8a94a6; }
   .delivery-route-group.expanded td::before { transform: rotate(90deg); }
+  .delivery-definitions { width: min(1100px, 100%); margin: 12px auto 0; padding: 12px 14px;
+                          box-sizing: border-box; background: #1c222c; border: 1px solid #2c3542;
+                          border-radius: 6px; color: #a7b0c0; font-size: 12px; line-height: 1.5; }
+  .delivery-definitions div + div { margin-top: 4px; }
+  .delivery-definitions strong { color: #e6e8eb; }
   .delivery-topic-row[data-route-group] td:first-child { padding-left: 28px; }
   .delivery-rate { color: #75c991; font-weight: 700; }
   .delivery-rate.warn { color: #e0b84d; }
@@ -148,7 +153,18 @@
                       border: 1px solid #2c3542; border-radius: 4px; padding: 8px; font: inherit; }
   .experiment-actions { display: flex; gap: 8px; margin-top: 16px; }
   .experiment-actions button { border: 1px solid #2c3542; border-radius: 4px; padding: 8px 12px;
-                      background: #252c37; color: #8a94a6; font: inherit; cursor: not-allowed; }
+                       background: #252c37; color: #8a94a6; font: inherit; cursor: not-allowed; }
+    .experiment-field[hidden] { display: none; }
+  .experiment-actions button:not(:disabled) { background: #276b8f; border-color: #3aa1e6;
+                      color: #fff; cursor: pointer; }
+  .experiment-actions button:not(:disabled):hover { background: #3285ad; }
+  .experiment-current { margin-top: 16px; padding-top: 14px; border-top: 1px solid #2c3542; }
+  .experiment-current h2 { margin: 0 0 8px; font-size: 13px; }
+  .experiment-current p { margin: 0 0 8px; color: #a7b0c0; font-size: 12px; line-height: 1.45; }
+  .experiment-current dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px;
+                           margin: 0; font-size: 12px; }
+  .experiment-current dt { color: #8a94a6; }
+  .experiment-current dd { margin: 0; color: #e6e8eb; }
   @media (max-width: 700px) { .experiment-grid { grid-template-columns: 1fr; } }
   @media (max-width: 700px) {
     #graph { min-height: 300px; }
@@ -205,9 +221,15 @@
   </div>
   <div id="delivery-empty" class="delivery-empty">Waiting for status samples.</div>
   <table id="delivery-table" class="delivery-table" hidden>
-    <thead><tr><th>Route / topic</th><th>Expected</th><th>Send rate</th><th>Received</th><th>Missing</th><th>Received %</th></tr></thead>
+    <thead><tr><th>Route / topic</th><th>Sent</th><th>Received</th><th>Lost</th></tr></thead>
     <tbody></tbody>
   </table>
+  <div class="delivery-definitions">
+    <div><strong>Sent</strong>: messages observed in the rolling window.</div>
+    <div><strong>Received</strong>: messages observed at the expected destination in the rolling window.</div>
+    <div><strong>Lost</strong>: messages older than the grace period that have not been received.</div>
+    <div><strong>Grace period</strong>: 15 s for ControlCommand and PlatformCommandAck, 2 s for periodic status/report topics.</div>
+  </div>
 </main>
 <main id="experiment-panel" class="workspace-panel">
   <div class="experiment-heading"><h1>EMANE Experiment Controller</h1><span id="experiment-state" class="experiment-state">Checking controller…</span></div>
@@ -220,13 +242,31 @@
         <select id="experiment-destination"><option>Control_20</option></select>
       </label>
       <label class="experiment-field">Direction
-        <select id="experiment-direction"><option value="bidirectional">Bidirectional</option><option value="forward">Source to destination</option><option value="reverse">Destination to source</option></select>
+        <select id="experiment-direction"><option value="bidirectional">Both directions</option><option value="forward">Source to destination</option><option value="reverse">Destination to source</option></select>
       </label>
       <label class="experiment-field">Impairment
-        <select disabled><option>Pathloss</option></select>
+        <select id="experiment-kind"><option value="commeffect">CommEffect</option><option value="pathloss">Pathloss</option></select>
       </label>
-      <label class="experiment-field">Value
+      <label class="experiment-field experiment-pathloss-field">Pathloss dB
         <input id="experiment-pathloss" type="number" value="100" min="0" max="200">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Latency ms
+        <input id="experiment-latency" type="number" value="0" min="0" max="60000">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Jitter ms
+        <input id="experiment-jitter" type="number" value="0" min="0" max="60000">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Unicast bps
+        <input id="experiment-unicast" type="number" value="0" min="0" max="1000000000">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Broadcast bps
+        <input id="experiment-broadcast" type="number" value="0" min="0" max="1000000000">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Loss %
+        <input id="experiment-loss" type="number" value="0" min="0" max="100" step="0.1">
+      </label>
+      <label class="experiment-field experiment-commeffect-field">Duplicate %
+        <input id="experiment-duplicate" type="number" value="0" min="0" max="100" step="0.1">
       </label>
       <label class="experiment-field">Duration
         <input disabled value="Until reset">
@@ -236,11 +276,21 @@
       <button id="experiment-apply" type="button" disabled>Apply impairment</button>
       <button id="experiment-reset" type="button" disabled>Reset scenario</button>
     </div>
+    <section class="experiment-current" aria-live="polite">
+      <h2>Current EMANE State</h2>
+      <p>CommEffect applies latency, bandwidth, and loss to the selected direction. Pathloss remains available for RF threshold/cutoff checks.</p>
+      <dl>
+        <dt>Commanded path</dt><dd id="experiment-current-path">No impairment command recorded</dd>
+        <dt>Applied impairment</dt><dd id="experiment-current-pathloss">-</dd>
+        <dt>Last command</dt><dd id="experiment-current-updated">-</dd>
+        <dt>Observed network</dt><dd id="experiment-current-network">Waiting for EMANE counters</dd>
+      </dl>
+    </section>
   </div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
 <script src="mesh_graph.js?v=20260914-layout-bottom-v1"></script>
 <script src="traffic_chart.js?v=20260914-merged-wan-graph-v4"></script>
-<script src="operator_tabs.js?v=20260915-delivery-experiment-tabs-v1"></script>
+<script src="operator_tabs.js?v=20260915-directional-reset-v1"></script>
 </body>
 </html>

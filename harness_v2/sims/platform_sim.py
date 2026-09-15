@@ -119,7 +119,7 @@ class PlatformSim:
       # Create DataWriters/DataReaders with the specified QoS profiles
       self.control_cmd_reader = dds.DynamicData.DataReader(
           self.control_cmd_topic,
-          self.qos_provider.datareader_qos_from_profile(args.qos_profile)
+          self.qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::lan_event")
       )
       self.platform_data_reader = dds.DynamicData.DataReader(
           self.platform_data_topic,
@@ -131,7 +131,7 @@ class PlatformSim:
       )
       self.control_cmd_ack_writer = dds.DynamicData.DataWriter(
           self.control_cmd_ack_topic,
-          self.qos_provider.datawriter_qos_from_profile(args.qos_profile)
+          self.qos_provider.datawriter_qos_from_profile("ACT_QOS_LIB::lan_event")
       )
       self.platform_init_status_writer = dds.DynamicData.DataWriter(
           self.platform_init_status_topic,

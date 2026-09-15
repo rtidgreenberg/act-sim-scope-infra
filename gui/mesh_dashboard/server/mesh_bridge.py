@@ -63,9 +63,15 @@ FIXED_CONTROL_RECIPIENT_TOPICS = {
     "PlatformPowerStatus", "PlatformCommandAck", "ContactReport",
 }
 PERCENTAGE_MIN_SAMPLES = 30
+DELIVERY_SETTLE_MS = 2_000
+RELIABLE_DELIVERY_SETTLE_MS = 15_000
+RELIABLE_DELIVERY_TOPICS = {"ControlCommand", "PlatformCommandAck"}
 EMANE_EVENT_GROUP = "224.1.2.8"
 EMANE_EVENT_PORT = "45702"
 EMANE_PATHLOSS_MAX_DB = 200
+EMANE_CONTROLLER_ENABLED = True
+EMANE_COMMEFFECT_MAX_LATENCY_MS = 60_000
+EMANE_COMMEFFECT_MAX_BANDWIDTH_BPS = 1_000_000_000
 
 
 def _qos_provider_for(types_xml: Path):
@@ -278,6 +284,11 @@ class DdsBridge:
             return PERCENTAGE_MIN_SAMPLES
         return max(1, int(round(rate_hz * (window_ms / 1000.0))))
 
+    def _delivery_settle_ms(self, topic):
+        if topic in RELIABLE_DELIVERY_TOPICS:
+            return RELIABLE_DELIVERY_SETTLE_MS
+        return DELIVERY_SETTLE_MS
+
     def poll_audit_events(self):
         changed = False
         debug_root = _THIS_FILE.parents[3] / "debug"
@@ -330,7 +341,8 @@ class DdsBridge:
         return changed
 
     def delivery_snapshot(self, window_ms=30_000):
-        earliest_ns = time.time_ns() - window_ms * 1_000_000
+        now_ns = time.time_ns()
+        earliest_ns = now_ns - window_ms * 1_000_000
         with self.cache_lock:
             flows = {}
             node_modes = {}
@@ -343,30 +355,51 @@ class DdsBridge:
             for (topic, source, recipient), events in flows.items():
                 if source.startswith("Platform_"):
                     node_modes[source] = self.platform_status_modes.get(source, "init")
+                settle_ms = self._delivery_settle_ms(topic)
+                settled_cutoff_ns = now_ns - settle_ms * 1_000_000
                 events.sort(key=lambda item: item[1]["sent_at_ns"])
+                settled_events = [(key, event) for key, event in events
+                                  if event["sent_at_ns"] <= settled_cutoff_ns]
+                settled_keys = {key for key, _ in settled_events}
+                pending = sum((key + (recipient,)) not in self.audit_received
+                              for key, _ in events if key not in settled_keys)
                 received = sum((key + (recipient,)) in self.audit_received for key, _ in events)
+                settled_received = sum((key + (recipient,)) in self.audit_received for key, _ in settled_events)
+                lost = len(settled_events) - settled_received
                 rate_hz = None
                 if len(events) > 1:
                     elapsed_ns = events[-1][1]["sent_at_ns"] - events[0][1]["sent_at_ns"]
                     if elapsed_ns > 0:
                         rate_hz = (len(events) - 1) * 1_000_000_000 / elapsed_ns
                 sent_version, received_version = self._audit_version((topic, source, recipient))
-                required_samples = self._required_samples_for_full_set(rate_hz, window_ms)
-                percentage_ready = len(events) >= required_samples
-                percentage = 100.0
+                settled_window_ms = max(1, window_ms - settle_ms)
+                required_samples = self._required_samples_for_full_set(rate_hz, settled_window_ms)
+                percentage_ready = len(settled_events) >= required_samples
+                delivery_percentage = 100.0
+                loss_percentage = 0.0
                 if percentage_ready:
-                    percentage = 100 * received / len(events)
+                    delivery_percentage = 100 * settled_received / len(settled_events)
+                    loss_percentage = 100 * lost / len(settled_events)
                 rows.append({
                     "topic": topic,
                     "source": source,
                     "recipient": recipient,
-                    "expected": len(events),
+                    "expected": len(settled_events),
+                    "settled": len(settled_events),
+                    "sent": len(events),
                     "received": received,
-                    "missing": len(events) - received,
-                    "percentage": percentage,
+                    "settled_received": settled_received,
+                    "missing": lost,
+                    "lost": lost,
+                    "pending": pending,
+                    "percentage": delivery_percentage,
+                    "delivery_percentage": delivery_percentage,
+                    "loss_percentage": loss_percentage,
                     "percentage_ready": percentage_ready,
                     "percentage_min_samples": PERCENTAGE_MIN_SAMPLES,
                     "percentage_required_samples": required_samples,
+                    "settle_ms": settle_ms,
+                    "settled_window_ms": settled_window_ms,
                     "send_rate_hz": rate_hz,
                     "sent_event_version": sent_version,
                     "received_event_version": received_version,
@@ -575,40 +608,157 @@ class DdsBridge:
         return platform_id - 28
 
     def emane_controller_status(self):
+        missing_tools = [tool for tool in ("emaneevent-pathloss", "emaneevent-commeffect")
+                         if shutil.which(tool) is None]
+        with self.cache_lock:
+            observed = (dict(self.latest_emane_aggregate)
+                        if self.latest_emane_aggregate else None)
         return {
-            "available": shutil.which("emaneevent-pathloss") is not None,
+            "available": EMANE_CONTROLLER_ENABLED and not missing_tools,
+            "unavailable_reason": (None if not missing_tools
+                                   else f"missing EMANE tools: {', '.join(missing_tools)}"),
             "event_group": EMANE_EVENT_GROUP,
             "event_port": int(EMANE_EVENT_PORT),
             "impairments": list(self.emane_impairments.values()),
+            "observed_network": observed,
         }
 
-    def set_emane_pathloss(self, source, destination, direction, pathloss_db):
+    def _emane_pairs(self, source, destination, direction):
         if direction not in {"forward", "reverse", "bidirectional"}:
             raise ValueError("direction must be forward, reverse, or bidirectional")
         if source == destination:
             raise ValueError("source and destination must differ")
         source_nem = self._nem_id(source)
         destination_nem = self._nem_id(destination)
-        if pathloss_db < 0 or pathloss_db > EMANE_PATHLOSS_MAX_DB:
-            raise ValueError(f"pathloss_db must be between 0 and {EMANE_PATHLOSS_MAX_DB}")
-        executable = shutil.which("emaneevent-pathloss")
-        if executable is None:
-            raise RuntimeError("emaneevent-pathloss is unavailable in this dashboard container")
-        pairs = [(source_nem, destination_nem)]
+        pairs = []
+        if direction in {"forward", "bidirectional"}:
+            pairs.append((source_nem, destination_nem))
         if direction in {"reverse", "bidirectional"}:
             pairs.append((destination_nem, source_nem))
-        for from_nem, to_nem in pairs:
-            result = subprocess.run(
-                [executable, str(from_nem), str(pathloss_db), "--target", str(to_nem)],
-                check=False, capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout).strip()
-                raise RuntimeError(f"EMANE pathloss event failed: {detail or result.returncode}")
-        key = f"{source}->{destination}"
-        self.emane_impairments[key] = {
-            "source": source, "destination": destination, "direction": direction,
-            "pathloss_db": pathloss_db, "updated_at": int(time.time() * 1000),
-        }
+        return pairs
+
+    def _emane_node_pairs(self, source, destination, direction):
+        pairs = []
+        if direction in {"forward", "bidirectional"}:
+            pairs.append((source, destination))
+        if direction in {"reverse", "bidirectional"}:
+            pairs.append((destination, source))
+        return pairs
+
+    def _known_emane_nems(self, source, destination):
+        nodes = {source, destination}
+        with self.cache_lock:
+            observed = dict(self.latest_emane_aggregate) if self.latest_emane_aggregate else {}
+            nodes.update(observed.get("contributors", []))
+            for sample in self.cache.values():
+                if sample.get("observer_node"):
+                    nodes.add(sample["observer_node"])
+                for peer in sample.get("peers", []):
+                    router = peer.get("health", {}).get("router", "")
+                    if router:
+                        nodes.add(router.split("/")[0])
+        nems = set()
+        for node in nodes:
+            try:
+                nems.add(self._nem_id(node))
+            except ValueError:
+                continue
+        return sorted(nems)
+
+    def _run_emane_event(self, executable_name, args):
+        executable = shutil.which(executable_name)
+        if executable is None:
+            raise RuntimeError(f"{executable_name} is unavailable in this dashboard container")
+        result = subprocess.run(
+            [executable, "-i", "eth0", "-g", EMANE_EVENT_GROUP,
+             "-p", str(EMANE_EVENT_PORT), *args],
+            check=False, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"{executable_name} event failed: {detail or result.returncode}")
+
+    def set_emane_impairment(self, source, destination, direction, kind, values):
+        if not EMANE_CONTROLLER_ENABLED:
+            raise RuntimeError("EMANE impairment commands are disabled")
+        if kind not in {"pathloss", "commeffect"}:
+            raise ValueError("kind must be pathloss or commeffect")
+        pairs = self._emane_pairs(source, destination, direction)
+        node_pairs = self._emane_node_pairs(source, destination, direction)
+        if kind == "pathloss":
+            return self._set_emane_pathloss(source, destination, direction, pairs, node_pairs, values)
+        return self._set_emane_commeffect(source, destination, direction, pairs, node_pairs, values)
+
+    def _set_emane_pathloss(self, source, destination, direction, pairs, node_pairs, values):
+        pathloss_db = float(values.get("pathloss_db", 0))
+        if pathloss_db < 0 or pathloss_db > EMANE_PATHLOSS_MAX_DB:
+            raise ValueError(f"pathloss_db must be between 0 and {EMANE_PATHLOSS_MAX_DB}")
+        for transmitter_nem, receiver_nem in pairs:
+            self._run_emane_event("emaneevent-pathloss",
+                                  [str(transmitter_nem), str(pathloss_db),
+                                   "-t", str(receiver_nem), "-r", str(transmitter_nem)])
+        updated_at = int(time.time() * 1000)
+        with self.cache_lock:
+            for transmitter_node, receiver_node in node_pairs:
+                key = f"pathloss:{transmitter_node}->{receiver_node}"
+                if pathloss_db == 0:
+                    self.emane_impairments.pop(key, None)
+                else:
+                    self.emane_impairments[key] = {
+                        "kind": "pathloss", "source": transmitter_node, "destination": receiver_node,
+                        "direction": "forward", "pathloss_db": pathloss_db, "updated_at": updated_at,
+                    }
+        return self.emane_controller_status()
+
+    def _set_emane_commeffect(self, source, destination, direction, pairs, node_pairs, values):
+        latency_ms = float(values.get("latency_ms", 0))
+        jitter_ms = float(values.get("jitter_ms", 0))
+        loss_percent = float(values.get("loss_percent", 0))
+        duplicate_percent = float(values.get("duplicate_percent", 0))
+        unicast_bps = int(values.get("unicast_bps", 0))
+        broadcast_bps = int(values.get("broadcast_bps", 0))
+        if latency_ms < 0 or latency_ms > EMANE_COMMEFFECT_MAX_LATENCY_MS:
+            raise ValueError(f"latency_ms must be between 0 and {EMANE_COMMEFFECT_MAX_LATENCY_MS}")
+        if jitter_ms < 0 or jitter_ms > EMANE_COMMEFFECT_MAX_LATENCY_MS:
+            raise ValueError(f"jitter_ms must be between 0 and {EMANE_COMMEFFECT_MAX_LATENCY_MS}")
+        for name, value in (("loss_percent", loss_percent), ("duplicate_percent", duplicate_percent)):
+            if value < 0 or value > 100:
+                raise ValueError(f"{name} must be between 0 and 100")
+        for name, value in (("unicast_bps", unicast_bps), ("broadcast_bps", broadcast_bps)):
+            if value < 0 or value > EMANE_COMMEFFECT_MAX_BANDWIDTH_BPS:
+                raise ValueError(f"{name} must be between 0 and {EMANE_COMMEFFECT_MAX_BANDWIDTH_BPS}")
+        effects = [
+            f"latency={latency_ms / 1000.0}", f"jitter={jitter_ms / 1000.0}",
+            f"loss={loss_percent}", f"duplicate={duplicate_percent}",
+            f"unicast={unicast_bps}", f"broadcast={broadcast_bps}",
+        ]
+        reset_effects = ["latency=0", "jitter=0", "loss=0", "duplicate=0", "unicast=0", "broadcast=0"]
+        known_nems = self._known_emane_nems(source, destination)
+        affected_receivers = {receiver_nem for _, receiver_nem in pairs}
+        for receiver_nem in affected_receivers:
+            for transmitter_nem in known_nems:
+                if transmitter_nem != receiver_nem:
+                    self._run_emane_event("emaneevent-commeffect",
+                                          [str(transmitter_nem), *reset_effects,
+                                           "-t", str(receiver_nem)])
+        for transmitter_nem, receiver_nem in pairs:
+            self._run_emane_event("emaneevent-commeffect",
+                                  [str(transmitter_nem), *effects,
+                                   "-t", str(receiver_nem), "-r", str(transmitter_nem)])
+        active = any((latency_ms, jitter_ms, loss_percent, duplicate_percent, unicast_bps, broadcast_bps))
+        updated_at = int(time.time() * 1000)
+        with self.cache_lock:
+            for transmitter_node, receiver_node in node_pairs:
+                key = f"commeffect:{transmitter_node}->{receiver_node}"
+                if not active:
+                    self.emane_impairments.pop(key, None)
+                else:
+                    self.emane_impairments[key] = {
+                        "kind": "commeffect", "source": transmitter_node, "destination": receiver_node,
+                        "direction": "forward", "latency_ms": latency_ms, "jitter_ms": jitter_ms,
+                        "loss_percent": loss_percent, "duplicate_percent": duplicate_percent,
+                        "unicast_bps": unicast_bps, "broadcast_bps": broadcast_bps,
+                        "updated_at": updated_at,
+                    }
         return self.emane_controller_status()
 
 
@@ -691,9 +841,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def post_emane_controller(request):
         try:
             body = await request.json()
-            result = bridge.set_emane_pathloss(
+            result = bridge.set_emane_impairment(
                 body["source"], body["destination"], body.get("direction", "bidirectional"),
-                float(body.get("pathloss_db", 0)))
+                body.get("kind", "pathloss"), body)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
