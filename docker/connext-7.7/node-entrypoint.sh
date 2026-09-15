@@ -115,6 +115,12 @@ trap stop_children TERM INT EXIT
     --admin-participant "${NODE_ROLE}_lan" > "$LOG_DIR/router.log" 2>&1 &
 PIDS+=("$!")
 
+python3 "$WORKSPACE/debug/scripts/router_journal_subscriber.py" \
+    --domain "$NODE_ID" --node-name "$NODE_NAME" \
+    --output "$NODE_DEBUG_DIR/journal.jsonl" \
+    > "$LOG_DIR/journal_subscriber.log" 2>&1 &
+PIDS+=("$!")
+
 if [[ "$NODE_ROLE" == "control" ]]; then
     bash "$WORKSPACE/harness_v2/scripts/start_control_sim.sh" --id "$NODE_ID" \
         --destination "${SIM_DESTINATION:-Platform_30}" --verbosity "${SIM_VERBOSITY:-1}" \

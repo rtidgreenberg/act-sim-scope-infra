@@ -22,6 +22,7 @@ DEFAULT_OUTPUT = REPO_ROOT / "debug" / "logs" / "journal" / "router_journal.json
 TOPICS = (
     ("ActRouterControllerJournal", "ControllerJournalRecord", True),
     ("ActRouterStatus", "RouterStatus", False),
+    ("ActRouterLinkStats", "RouterLinkStats", True),
 )
 
 
@@ -44,6 +45,8 @@ def main():
                         help="Seconds to wait for discovery before reading (default: 2)")
     parser.add_argument("--duration", type=float, default=0.0,
                         help="Seconds to capture; 0 means run until interrupted")
+    parser.add_argument("--node-name", default="",
+                        help="Logical node name to include in each envelope")
     args = parser.parse_args()
 
     if not TYPES_XML.is_file():
@@ -89,6 +92,8 @@ def main():
                         "topic": topic_name,
                         "sample": json.loads(data.to_json()),
                     }
+                    if args.node_name:
+                        record["node"] = args.node_name
                     output.write(json.dumps(record, separators=(",", ":")) + "\n")
                     output.flush()
                     count += 1

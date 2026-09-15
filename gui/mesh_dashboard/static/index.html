@@ -99,11 +99,15 @@
   #traffic-panel .tp-frame-accounting { color: #8a94a6; font-size: 11px; margin: 2px 0 5px; }
   #traffic-panel canvas { width: 100%; height: 108px; display: block; border-radius: 3px;
             background: #181c24; }
-  #experiment-panel { display: none; position: absolute; inset: 37px 0 28px; overflow: auto;
-                       background: #14181f; padding: 24px; box-sizing: border-box; }
+  .workspace-panel { display: none; position: absolute; inset: 37px 0 28px; overflow: auto;
+                     background: #14181f; padding: 24px; box-sizing: border-box; }
+  body[data-active-tab="delivery"] #graph, body[data-active-tab="delivery"] #traffic-panel,
+  body[data-active-tab="delivery"] #detail, body[data-active-tab="delivery"] #topology-controls,
+  body[data-active-tab="delivery"] #right-panel,
   body[data-active-tab="experiment"] #graph, body[data-active-tab="experiment"] #traffic-panel,
   body[data-active-tab="experiment"] #detail, body[data-active-tab="experiment"] #topology-controls,
   body[data-active-tab="experiment"] #right-panel { display: none; }
+  body[data-active-tab="delivery"] #delivery-panel,
   body[data-active-tab="experiment"] #experiment-panel { display: block; }
   .experiment-heading { display: flex; justify-content: space-between; align-items: baseline;
                         max-width: 1100px; margin: 0 auto 18px; }
@@ -120,12 +124,32 @@
   .delivery-table th, .delivery-table td { padding: 11px 12px; border-bottom: 1px solid #2c3542; text-align: right; }
   .delivery-table th:first-child, .delivery-table td:first-child { text-align: left; }
   .delivery-table th { color: #8a94a6; font-size: 11px; font-weight: 600; }
+  .delivery-route-group td { padding: 9px 12px; background: #252c37; color: #e6e8eb; text-align: left;
+                             font-weight: 600; cursor: pointer; }
+  .delivery-route-group td::before { content: '▸'; display: inline-block; margin-right: 8px; color: #8a94a6; }
+  .delivery-route-group.expanded td::before { transform: rotate(90deg); }
+  .delivery-topic-row[data-route-group] td:first-child { padding-left: 28px; }
   .delivery-rate { color: #75c991; font-weight: 700; }
   .delivery-rate.warn { color: #e0b84d; }
   .delivery-rate.bad { color: #e6553a; }
   .delivery-new { animation: delivery-new 700ms ease-out; }
   @keyframes delivery-new { 0% { color: #b8f3ca; background: #26543c; } 100% { color: inherit; background: transparent; } }
   .delivery-empty { width: min(1100px, 100%); margin: 0 auto; color: #8a94a6; padding: 18px 0; }
+  .experiment-card { width: min(1100px, 100%); margin: 0 auto; background: #1c222c;
+                     border: 1px solid #2c3542; border-radius: 6px; padding: 16px; box-sizing: border-box; }
+  .experiment-state { display: inline-flex; align-items: center; gap: 8px; color: #e0b84d;
+                      font-size: 12px; }
+  .experiment-state::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #e0b84d; }
+  .experiment-state.ready { color: #75c991; }
+  .experiment-state.ready::before { background: #3aa655; }
+  .experiment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+  .experiment-field { display: flex; flex-direction: column; gap: 6px; color: #8a94a6; font-size: 12px; }
+  .experiment-field select, .experiment-field input { background: #14181f; color: #8a94a6;
+                      border: 1px solid #2c3542; border-radius: 4px; padding: 8px; font: inherit; }
+  .experiment-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .experiment-actions button { border: 1px solid #2c3542; border-radius: 4px; padding: 8px 12px;
+                      background: #252c37; color: #8a94a6; font: inherit; cursor: not-allowed; }
+  @media (max-width: 700px) { .experiment-grid { grid-template-columns: 1fr; } }
   @media (max-width: 700px) {
     #graph { min-height: 300px; }
     #traffic-panel canvas { height: 96px; }
@@ -136,6 +160,7 @@
 <div id="title">Connext Mesh Network</div>
 <nav id="app-tabs" aria-label="Operator workspace">
   <button type="button" data-tab="mesh" aria-selected="true">Mesh</button>
+  <button type="button" data-tab="delivery" aria-selected="false">Delivery</button>
   <button type="button" data-tab="experiment" aria-selected="false">Experiment</button>
 </nav>
 <div id="statusbar">connecting…</div>
@@ -161,7 +186,7 @@
 <div id="detail"></div>
 <div id="traffic-panel"></div>
 <div id="graph"></div>
-<main id="experiment-panel">
+<main id="delivery-panel" class="workspace-panel">
   <div class="experiment-heading"><h1>Delivery Performance</h1><span id="delivery-window">Rolling 30 s</span></div>
   <div class="experiment-filters">
     <label>Node
@@ -180,13 +205,42 @@
   </div>
   <div id="delivery-empty" class="delivery-empty">Waiting for status samples.</div>
   <table id="delivery-table" class="delivery-table" hidden>
-    <thead><tr><th>Flow</th><th>Expected</th><th>Send rate</th><th>Received</th><th>Missing</th><th>Received %</th></tr></thead>
+    <thead><tr><th>Route / topic</th><th>Expected</th><th>Send rate</th><th>Received</th><th>Missing</th><th>Received %</th></tr></thead>
     <tbody></tbody>
   </table>
+</main>
+<main id="experiment-panel" class="workspace-panel">
+  <div class="experiment-heading"><h1>EMANE Experiment Controller</h1><span id="experiment-state" class="experiment-state">Checking controller…</span></div>
+  <div class="experiment-card">
+    <div class="experiment-grid">
+      <label class="experiment-field">Source node
+        <select id="experiment-source"><option>Platform_30</option></select>
+      </label>
+      <label class="experiment-field">Destination node
+        <select id="experiment-destination"><option>Control_20</option></select>
+      </label>
+      <label class="experiment-field">Direction
+        <select id="experiment-direction"><option value="bidirectional">Bidirectional</option><option value="forward">Source to destination</option><option value="reverse">Destination to source</option></select>
+      </label>
+      <label class="experiment-field">Impairment
+        <select disabled><option>Pathloss</option></select>
+      </label>
+      <label class="experiment-field">Value
+        <input id="experiment-pathloss" type="number" value="100" min="0" max="200">
+      </label>
+      <label class="experiment-field">Duration
+        <input disabled value="Until reset">
+      </label>
+    </div>
+    <div class="experiment-actions">
+      <button id="experiment-apply" type="button" disabled>Apply impairment</button>
+      <button id="experiment-reset" type="button" disabled>Reset scenario</button>
+    </div>
+  </div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
 <script src="mesh_graph.js?v=20260914-layout-bottom-v1"></script>
 <script src="traffic_chart.js?v=20260914-merged-wan-graph-v4"></script>
-<script src="operator_tabs.js?v=20260914-mode-label-v1"></script>
+<script src="operator_tabs.js?v=20260915-delivery-experiment-tabs-v1"></script>
 </body>
 </html>

@@ -12,6 +12,14 @@
   let latestSnapshot = { rows: [], node_modes: {}, window_ms: 30_000 };
   const deliveryUrl = `${location.protocol}//${location.host}/api/delivery_stats`;
   const websocketUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+  const experimentState = document.getElementById("experiment-state");
+  const experimentSource = document.getElementById("experiment-source");
+  const experimentDestination = document.getElementById("experiment-destination");
+  const experimentDirection = document.getElementById("experiment-direction");
+  const experimentPathloss = document.getElementById("experiment-pathloss");
+  const experimentApply = document.getElementById("experiment-apply");
+  const experimentReset = document.getElementById("experiment-reset");
+  const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
 
   const MISSION_TOPICS = new Set(["PlatformDetailStatus", "PlatformMissionStatus", "PlatformWaypointStatus"]);
   const DEBUG_TOPICS = new Set(["PlatformDebugStatus", "PlatformThrusterStatus", "PlatformPowerStatus"]);
@@ -91,10 +99,30 @@
       deliveryEmpty.textContent = "Waiting for status samples.";
     }
 
+    const routeGroups = new Map();
     for (const row of filteredRows) {
+      const routeGroup = `${row.source || "Unknown"} -> ${row.recipient || "Control_20"}`;
+      if (!routeGroups.has(routeGroup)) routeGroups.set(routeGroup, []);
+      routeGroups.get(routeGroup).push(row);
+    }
+
+    for (const [routeGroup, groupRows] of routeGroups) {
+      const groupRow = document.createElement("tr");
+      groupRow.className = "delivery-route-group";
+      const groupCell = document.createElement("td");
+      groupCell.colSpan = 6;
+      groupCell.textContent = `${routeGroup} (${groupRows.length} topics)`;
+      groupRow.appendChild(groupCell);
+      deliveryBody.appendChild(groupRow);
+      const groupKey = routeGroup.replace(/[^a-zA-Z0-9_-]/g, "_");
+      let expanded = true;
+      groupRow.classList.add("expanded");
+      for (const row of groupRows) {
       const tableRow = document.createElement("tr");
+      tableRow.className = "delivery-topic-row";
+      tableRow.dataset.routeGroup = groupKey;
       const flow = document.createElement("td");
-      flow.textContent = `${row.topic}: ${row.source} -> ${row.recipient || "Control_20"}`;
+      flow.textContent = row.topic;
       tableRow.appendChild(flow);
       const flowKey = `${row.topic}|${row.source}|${row.recipient}`;
       const expected = document.createElement("td");
@@ -133,6 +161,14 @@
       }
       tableRow.appendChild(percentage);
       deliveryBody.appendChild(tableRow);
+      }
+      groupRow.addEventListener("click", () => {
+        expanded = !expanded;
+        groupRow.classList.toggle("expanded", expanded);
+        for (const topicRow of deliveryBody.querySelectorAll(`tr[data-route-group="${groupKey}"]`)) {
+          topicRow.hidden = !expanded;
+        }
+      });
     }
   }
 
@@ -141,13 +177,55 @@
     for (const tab of tabs) {
       tab.setAttribute("aria-selected", String(tab.dataset.tab === name));
     }
-    if (name === "experiment") {
+    if (name === "delivery") {
       fetch(deliveryUrl)
         .then((response) => response.ok ? response.json() : Promise.reject(response.status))
         .then(renderDelivery)
         .catch(() => {});
     }
+    if (name === "experiment") refreshExperimentController();
   }
+
+  function setExperimentEnabled(enabled) {
+    experimentApply.disabled = !enabled;
+    experimentReset.disabled = !enabled;
+    experimentSource.disabled = !enabled;
+    experimentDestination.disabled = !enabled;
+    experimentDirection.disabled = !enabled;
+    experimentPathloss.disabled = !enabled;
+    experimentState.textContent = enabled ? "Controller ready" : "Controller unavailable";
+    experimentState.classList.toggle("ready", enabled);
+  }
+
+  function refreshExperimentController() {
+    fetch(controllerUrl).then((response) => response.json()).then((status) => {
+      setExperimentEnabled(Boolean(status.available));
+    }).catch(() => setExperimentEnabled(false));
+  }
+
+  async function sendExperiment(pathlossDb) {
+    const response = await fetch(controllerUrl, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        source: experimentSource.value, destination: experimentDestination.value,
+        direction: experimentDirection.value, pathloss_db: pathlossDb,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "EMANE controller request failed");
+    experimentState.textContent = pathlossDb === 0 ? "Scenario reset" : `Applied ${pathlossDb} dB pathloss`;
+  }
+
+  experimentApply.addEventListener("click", () => {
+    sendExperiment(Number(experimentPathloss.value)).catch((error) => {
+      experimentState.textContent = error.message;
+    });
+  });
+  experimentReset.addEventListener("click", () => {
+    sendExperiment(0).catch((error) => {
+      experimentState.textContent = error.message;
+    });
+  });
 
   for (const tab of tabs) {
     tab.addEventListener("click", () => selectTab(tab.dataset.tab));

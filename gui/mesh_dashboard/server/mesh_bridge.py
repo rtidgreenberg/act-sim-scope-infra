@@ -19,6 +19,9 @@ import argparse
 import asyncio
 import json
 import os
+import re
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -60,6 +63,9 @@ FIXED_CONTROL_RECIPIENT_TOPICS = {
     "PlatformPowerStatus", "PlatformCommandAck", "ContactReport",
 }
 PERCENTAGE_MIN_SAMPLES = 30
+EMANE_EVENT_GROUP = "224.1.2.8"
+EMANE_EVENT_PORT = "45702"
+EMANE_PATHLOSS_MAX_DB = 200
 
 
 def _qos_provider_for(types_xml: Path):
@@ -133,6 +139,7 @@ class DdsBridge:
         self.audit_versions = {}  # (topic, source, recipient) -> [sent, received]
         self.platform_status_modes = {}  # platform_node -> init|mission|debug
         self.platform_status_mode_changed_ns = {}  # platform_node -> monotonic mode-change cutoff
+        self.emane_impairments = {}
 
         # TeamAssignmentWriterQos equivalent: VOLATILE + RELIABLE.
         team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
@@ -555,6 +562,55 @@ class DdsBridge:
         self._stop.set()
         self.participant.close()
 
+    @staticmethod
+    def _nem_id(node):
+        if node == "Control_20":
+            return 1
+        match = re.fullmatch(r"Platform_(\d+)", str(node))
+        if not match:
+            raise ValueError(f"invalid node name: {node}")
+        platform_id = int(match.group(1))
+        if platform_id < 30 or platform_id > 99:
+            raise ValueError(f"platform id out of range: {platform_id}")
+        return platform_id - 28
+
+    def emane_controller_status(self):
+        return {
+            "available": shutil.which("emaneevent-pathloss") is not None,
+            "event_group": EMANE_EVENT_GROUP,
+            "event_port": int(EMANE_EVENT_PORT),
+            "impairments": list(self.emane_impairments.values()),
+        }
+
+    def set_emane_pathloss(self, source, destination, direction, pathloss_db):
+        if direction not in {"forward", "reverse", "bidirectional"}:
+            raise ValueError("direction must be forward, reverse, or bidirectional")
+        if source == destination:
+            raise ValueError("source and destination must differ")
+        source_nem = self._nem_id(source)
+        destination_nem = self._nem_id(destination)
+        if pathloss_db < 0 or pathloss_db > EMANE_PATHLOSS_MAX_DB:
+            raise ValueError(f"pathloss_db must be between 0 and {EMANE_PATHLOSS_MAX_DB}")
+        executable = shutil.which("emaneevent-pathloss")
+        if executable is None:
+            raise RuntimeError("emaneevent-pathloss is unavailable in this dashboard container")
+        pairs = [(source_nem, destination_nem)]
+        if direction in {"reverse", "bidirectional"}:
+            pairs.append((destination_nem, source_nem))
+        for from_nem, to_nem in pairs:
+            result = subprocess.run(
+                [executable, str(from_nem), str(pathloss_db), "--target", str(to_nem)],
+                check=False, capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                raise RuntimeError(f"EMANE pathloss event failed: {detail or result.returncode}")
+        key = f"{source}->{destination}"
+        self.emane_impairments[key] = {
+            "source": source, "destination": destination, "direction": direction,
+            "pathloss_db": pathloss_db, "updated_at": int(time.time() * 1000),
+        }
+        return self.emane_controller_status()
+
 
 def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app = web.Application()
@@ -629,6 +685,21 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_emane_stats(_request):
         return web.json_response(bridge.emane_snapshot())
 
+    async def get_emane_controller(_request):
+        return web.json_response(bridge.emane_controller_status())
+
+    async def post_emane_controller(request):
+        try:
+            body = await request.json()
+            result = bridge.set_emane_pathloss(
+                body["source"], body["destination"], body.get("direction", "bidirectional"),
+                float(body.get("pathloss_db", 0)))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+        return web.json_response(result)
+
     async def get_delivery_stats(request):
         try:
             window_ms = int(request.rel_url.query.get("window_ms", "30000"))
@@ -674,6 +745,8 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_get("/api/platform_status", get_platform_status)
     app.router.add_get("/api/traffic_stats", get_traffic_stats)
     app.router.add_get("/api/emane_stats", get_emane_stats)
+    app.router.add_get("/api/emane_controller", get_emane_controller)
+    app.router.add_post("/api/emane_controller", post_emane_controller)
     app.router.add_get("/api/delivery_stats", get_delivery_stats)
     app.router.add_post("/api/traffic_stats", post_traffic_stats)
     app.router.add_post("/api/emane_stats", post_emane_stats)
