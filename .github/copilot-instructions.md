@@ -53,6 +53,23 @@ across forced termination; use the owned harness lifecycle for cleanup.
   another DDS run.
 - Prefer unit tests and builds for controller/UI diagnostic changes. Do not launch a live mesh
   solely to validate code that can be exercised in-process.
+- For EMANE RF Pipe discovery tests, preserve the validated pathloss-event invocation in
+  `harness_v2/scripts/run_container_baseline.sh`: use the range form
+  `emaneevent-pathloss ... "${source_nem}:${target_nem}" 0`. The installed utility also
+  documents `source 0 --target target`, but that form caused this harness to lose all RF
+  receive traffic and Domain 200 discovery; verify packet counters before changing it.
+- EMANE pathloss is directional in this harness. A nominal multi-node RF setup must install
+  both directions for every intended pair before judging DDS unicast discovery. A running
+  container with zero `emane_mac_rx_*` and zero Domain 200 discovery packets is an RF/event
+  path failure, not evidence of a DDS QoS mismatch.
+- The WAN discovery design is explicit unicast UDPv4: Domain 200 uses `initial_peers`, the
+  WAN transport mask is `UDPv4`, and `WAN_RECEIVE_MULTICAST=0`. When peers disappear, first
+  compare EMANE TX/RX and `traffic_stats.jsonl` discovery counters, then inspect Connext
+  matched-participant warnings; do not treat repeated `Failed to get discovered_participant_data`
+  messages as the root cause until RF receive traffic is present.
+- A fixed EMANE `subid` combined with `excludesamesubidfromfilterenable=on` is suspicious,
+  but changing sub-IDs alone did not restore this mesh. Keep the sub-ID experiment separate
+  from pathloss-event and RF-interface diagnostics so A/B results remain attributable.
 
 ## Mesh dashboard frontend debugging (lessons learned)
 
@@ -111,6 +128,11 @@ Recommended triage order:
   WAN discovery health from a probe that is not configured for the WAN discovery protocol.
 5. Use the live dashboard only after confirming the bridge log and local HTTP endpoint;
    a blank Dev Tunnel page can be a forwarding problem rather than a WebSocket failure.
+6. For an EMANE mesh with no peers, inspect `debug/<node>_debug/traffic_stats.jsonl` and
+  `debug/<node>_debug/logs/emane.log` before changing DDS QoS. Confirm nonzero RF RX,
+  Domain 200 discovery counters, and the generated `WAN_PEER*`/`WAN_RECEIVE_MULTICAST`
+  values. The router's `Failed to get discovered_participant_data` warnings are often a
+  downstream symptom of missing or unstable RF discovery traffic.
 
 The `/clear` prompt removes generated logs and captures while preserving `.gitkeep`
 directory markers. Stop the associated mesh, test, or capture process before clearing.
