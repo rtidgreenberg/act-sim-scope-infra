@@ -100,12 +100,18 @@ across forced termination; use the owned harness lifecycle for cleanup.
   otherwise a later one-way reset can leave the reverse path impaired while the dashboard shows
   only the last zeroed command. This especially affects reliable DDS because ACKNACK/NACK and
   heartbeat repair traffic needs the reverse WAN path to get through.
-- Delivery dashboard counts are sequence-matched app-level audit facts from `events.jsonl`, not
-  inferred packet counters: sent/received keys are `(run_id, topic, source_node, sequence)` plus
-  receiver. `ControlCommand` and `PlatformCommandAck` use a 15 s grace window before missing
-  samples count as lost; periodic status/report topics use 2 s. A 100% loss row under sustained
-  bidirectional impairment can be real app-level non-delivery while DDS repair traffic is itself
-  impaired, not necessarily a dashboard accounting bug.
+- Delivery dashboard counts are sequence-matched audit facts from `events.jsonl`, not inferred
+  packet counters: sent/received keys are `(run_id, topic, source_node, sequence)` plus receiver.
+  `ControlCommand`, `PlatformCommandAck`, and `RouterHealth` use a 15 s grace window before
+  missing samples count as lost; periodic status/report topics use 2 s. A 100% loss row under
+  sustained bidirectional impairment can be real app-level non-delivery while DDS repair traffic is
+  itself impaired, not necessarily a dashboard accounting bug.
+- `RouterHealth` is now emitted into the same delivery-audit stream by the C++ router presence
+  path, not by the Python sims: `heartbeat_seq` is the audit `sequence`, `send_timestamp` is
+  `sent_at_ns`, and `source_node` is the node prefix before `/` in the router identity. The
+  dashboard should expect control-to-platform and platform-to-control health flows; do not infer
+  all platform-to-platform RouterHealth deliveries unless that routing/visibility is explicitly
+  added and verified.
 - When an EMANE experiment disrupts mesh discovery, do not attempt incremental manual repairs
   or recreate one router. Recreating only `control-20` can leave DDS discovery empty even when
   EMANE telemetry is fresh. Use the owned `run_container_baseline.sh down` then `up` lifecycle
@@ -149,16 +155,29 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - After changing Delivery tab metric semantics, update the definitions text box below the table
   in `gui/mesh_dashboard/static/index.html` in the same change and browser-verify the rendered
   labels. Current definitions: `Sent` is rolling-window sends, `Received` is rolling-window
-  destination receives, and `Lost` is only messages outside the topic grace period that have not
-  been received.
+  destination receives, `Lost` is only messages outside the topic grace period that have not been
+  received, and the grace period calls out reliable command/health topics versus periodic
+  status/report topics.
+- When diagnosing mesh graph color, separate topology evidence from link health: solid/dashed
+  edges come from `ActRouterMeshStatus`/`peers_seen`, while orange/red health should come from
+  `ActRouterLinkStats` counters and freshness. Under lossy CommEffect, app/status samples can keep
+  arriving while the `RouterHealth` topic misses its presence deadline; that means degraded health,
+  not necessarily a complete WAN outage.
+- `RouterHealth` presence timing is intentionally slacker than the 1 s heartbeat for lossy EMANE
+  runs: the current XML/code pairing is 8 s deadline (STALE) and 12 s automatic liveliness lease
+  (DEAD). If changing these, update both `harness_v2/qos/act_qos_profiles.xml` and
+  `router/src/core/PresenceMonitor.hpp`, then rebuild/restart the routers; a browser reload alone
+  only picks up static dashboard changes.
 
 ## Debugging Workflow
 
 Use the repository debug tree as the first place to look for runtime evidence:
 
-- `debug/logs/mesh/`: canonical mesh application logs, including `control.log`,
+- `debug/logs/mesh/`: host-process mesh application logs, including `control.log`,
   `platform<ID>.log`, simulator and mesh-control logs, `mesh_bridge.log`, and
-  `traffic_monitor.log`.
+  `traffic_monitor.log`. For the containerized EMANE mesh, prefer the live per-node logs under
+  `debug/<node>_debug/logs/` (`router.log`, `mesh_dashboard.log`, `traffic_monitor.log`, etc.);
+  `debug/logs/mesh/` may be stale from an older host-process run.
 - `debug/logs/network_monitor/traffic_stats.jsonl`: append-only WAN traffic samples from
   the dashboard monitor. The monitor watches DDS domain `200` only and splits discovery
   and user-data packet counts and bytes.
@@ -175,8 +194,9 @@ Use the repository debug tree as the first place to look for runtime evidence:
 
 Recommended triage order:
 
-1. Check `debug/logs/mesh/` for process startup, shutdown, DDS discovery, and router
-   errors.
+1. Check the active lifecycle's router logs for process startup, shutdown, DDS discovery, and
+  router errors: `debug/<node>_debug/logs/router.log` for container EMANE runs, or
+  `debug/logs/mesh/` for host-process runs.
 2. Check `debug/logs/journal/router_journal.jsonl` for the controller event, decision,
    pre/post `state_revision`, and status-publish action.
 3. Check `debug/logs/network_monitor/traffic_stats.jsonl` for WAN discovery versus

@@ -36,13 +36,18 @@
   const STATUS_MODE_URL = `${HTTP_ORIGIN}/api/status_resolution`;
   const PLATFORM_STATUS_URL = `${HTTP_ORIGIN}/api/platform_status`;
 
-  // Edge color encodes source, not presence (2026-07-23) -- green for a direct mesh_status
-  // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
-  // reported roster, one hop further out). Presence still surfaces via decay/opacity, the
-  // edge label/title, and the node detail panel -- it just no longer has its own hue.
+  // Topology source is line style / metadata; edge color carries observed link state from
+  // ActRouterLinkStats so operators can tell who is receiving traffic and whether counters
+  // show degradation.
   const EDGE_SOURCE_COLOR = {
     mesh_status: "#3aa655",
     peers_seen: "#3a7bd9",
+  };
+  const EDGE_HEALTH_COLOR = {
+    healthy: "#75c991",
+    degraded: "#e0b84d",
+    impaired: "#e6553a",
+    unknown: "#8a94a6",
   };
   // Node color reuses the exact same hue mapping as edge color (2026-07-23, user ask): green
   // always means "direct" (this dashboard has the node's own RouterHealth, same as a
@@ -54,9 +59,11 @@
   const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
   const STATUS_LEVEL_FRESH_MS = 5000;
+  const LINK_MESSAGE_AGE_WARN_MS = 5000;
 
   const platformStatusCache = new Map(); // nodeId -> {primary, detail, debug, updated_at}
   let latestLinkStatsRows = [];
+  const knownLinkPairs = new Map();
   const MAX_ACTIVITY_ENTRIES = 100;
   const ACTIVITY_SAMPLE_LIMIT = 500;
   const ACTIVITY_STORAGE_KEY = "act.mesh.linkActivity.v1";
@@ -69,11 +76,11 @@
   let activityPlatformFilter = "all";
 
   // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
-  // at EDGE_DECAY_WINDOW_MS -- deliberately the same 3s window as the AUTOMATIC liveliness
+  // at EDGE_DECAY_WINDOW_MS -- deliberately the same window as the AUTOMATIC liveliness
   // lease (D75), so a fully-faded edge lines up with when presence itself would flip to
   // STALE/DEAD. asOfMs is the wall-clock point the edge's data was last known-current, not
   // "when the browser happened to receive a message" -- see the two upsertEdge call sites.
-  const EDGE_DECAY_WINDOW_MS = 3000;
+  const EDGE_DECAY_WINDOW_MS = 12000;
   const EDGE_MIN_OPACITY = 0.15;
   const EDGE_DECAY_TICK_MS = 300;
 
@@ -191,6 +198,7 @@
   const activeTeamFilter = new Set();
   let selectedId = null;
   let selectedEdgeId = null;
+  let selectedLinkKey = null;
   const DIM_OPACITY = 0.2;
   const HIGHLIGHT_DIM_OPACITY = 0.18;
 
@@ -198,6 +206,18 @@
     if (edge.source === "mesh_status") return directLinksToggle.checked;
     if (edge.source === "peers_seen") return relayedLinksToggle.checked;
     return true;
+  }
+
+  function minOpacityForHealth(state) {
+    if (state === "impaired") return 0.75;
+    if (state === "degraded") return 0.55;
+    return EDGE_MIN_OPACITY;
+  }
+
+  function widthForHealth(state) {
+    if (state === "impaired") return 4;
+    if (state === "degraded") return 3;
+    return 2;
   }
 
   function selectedNeighborhood() {
@@ -270,10 +290,113 @@
         id: e.id,
         hidden: !(sourceVisible && selectedVisible),
         color: { color: e.baseColor, opacity: sourceVisible && selectedVisible ? e.currentOpacity || 1 : HIGHLIGHT_DIM_OPACITY },
+        width: widthForHealth(e.healthState),
       });
     });
     if (nodeUpdates.length) nodes.update(nodeUpdates);
     if (edgeUpdates.length) edges.update(edgeUpdates);
+  }
+
+  function pairMatches(a, b, source, destination) {
+    return (source === a && destination === b) || (source === b && destination === a);
+  }
+
+  function linkStatsIssueScore(row) {
+    const rejects = Number(row.samples_rejected_local || 0) + Number(row.samples_rejected_remote || 0) + Number(row.out_of_range_rejected || 0);
+    const nacks = Number(row.nacks_sent || 0) + Number(row.nacks_received || 0) + Number(row.nack_frags_received || 0);
+    if (rejects > 0 || row.rediscovery_in_interval) return 2;
+    if (nacks > 0 || Number(row.pulled_samples || 0) > 0 || Number(row.duplicates_received || 0) > 0 || Number(row.uncommitted_samples || 0) > 0) return 1;
+    return 0;
+  }
+
+  function receivedCount(row) {
+    return Number(row.samples_received || 0) + Number(row.heartbeats_received || 0);
+  }
+
+  function sentCount(row) {
+    return Number(row.pushed_samples || 0) + Number(row.heartbeats_sent || 0);
+  }
+
+  function directionSummariesForPair(a, b) {
+    return linkRowsForPair(a, b).map((row) => {
+      const observer = nodeNameOf(row.observer_router || "?");
+      const peer = nodeNameOf(row.peer_router || "?");
+      const issues = linkStatsIssueScore(row);
+      const received = receivedCount(row);
+      const sent = sentCount(row);
+      const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+      return { observer, peer, issues, received, sent, ageMs, row };
+    });
+  }
+
+  function directionSummaryText(summary) {
+    const state = summary.received > 0 ? "receiving" : "no receives this interval";
+    const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
+    const ageText = summary.ageMs == null ? "" : `, age ${summary.ageMs} ms`;
+    return `${summary.observer} received from ${summary.peer}: ${summary.received} rx, ${summary.sent} tx${issueText}${ageText} (${state})`;
+  }
+
+  function directionSummaryHtml(summary) {
+    const state = summary.received > 0 ? "receiving" : "no receives this interval";
+    const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
+    const ageText = summary.ageMs == null
+      ? ""
+      : `, <span class="message-age${summary.ageMs > LINK_MESSAGE_AGE_WARN_MS ? " warn" : ""}">age ${escHtml(summary.ageMs)} ms</span>`;
+    return `${escHtml(summary.observer)} received from ${escHtml(summary.peer)}: ${escHtml(summary.received)} rx, ${escHtml(summary.sent)} tx${escHtml(issueText)}${ageText} (${escHtml(state)})`;
+  }
+
+  function healthForPair(a, b) {
+    const directions = directionSummariesForPair(a, b);
+    if (!directions.length) return { state: "unknown", color: EDGE_HEALTH_COLOR.unknown, label: "no link stats yet" };
+    const maxIssue = Math.max(...directions.map((direction) => direction.issues));
+    const staleDirections = directions.filter((direction) => direction.ageMs != null && direction.ageMs > LINK_MESSAGE_AGE_WARN_MS).length;
+    const receivingDirections = directions.filter((direction) => direction.received > 0).length;
+    const directionCount = directions.length;
+    if (receivingDirections === 0) return { state: "impaired", color: EDGE_HEALTH_COLOR.impaired, label: "no observed receives" };
+    if (maxIssue >= 2) return { state: "impaired", color: EDGE_HEALTH_COLOR.impaired, label: `${receivingDirections}/${directionCount} directions receiving, errors/rediscovery` };
+    if (maxIssue === 1 || receivingDirections < directionCount || staleDirections > 0) {
+      return { state: "degraded", color: EDGE_HEALTH_COLOR.degraded, label: `${receivingDirections}/${directionCount} directions receiving, degraded` };
+    }
+    return { state: "healthy", color: EDGE_HEALTH_COLOR.healthy, label: `${receivingDirections}/${directionCount} directions receiving` };
+  }
+
+  function topologyEvidenceForPair(a, b) {
+    const sources = new Set();
+    edges.get().forEach((edge) => {
+      if (pairMatches(a, b, String(edge.from), String(edge.to)) && edge.source) sources.add(edge.source);
+    });
+    return sources;
+  }
+
+  function topologySourceLabel(source) {
+    if (source === "mesh_status") return "direct mesh_status";
+    if (source === "peers_seen") return "relayed peers_seen";
+    return source || "link";
+  }
+
+  function edgeTitle(a, b, source) {
+    const health = healthForPair(a, b);
+    const directions = directionSummariesForPair(a, b);
+    const directionText = directions.length ? `\n${directions.map(directionSummaryText).join("\n")}` : "";
+    return `${a} <-> ${b}\nobserved health: ${health.label}\ntopology evidence: ${topologySourceLabel(source)}${directionText}`;
+  }
+
+  function restyleEdgesForHealth() {
+    const updates = edges.get().map((edge) => {
+      const health = healthForPair(String(edge.from), String(edge.to));
+      return {
+        id: edge.id,
+        baseColor: health.color,
+        healthState: health.state,
+        healthLabel: health.label,
+        title: edgeTitle(String(edge.from), String(edge.to), edge.source),
+        currentOpacity: Math.max(edge.currentOpacity || 1, minOpacityForHealth(health.state)),
+        color: { color: health.color, opacity: Math.max(edge.currentOpacity || 1, minOpacityForHealth(health.state)) },
+        width: widthForHealth(health.state),
+      };
+    });
+    if (updates.length) edges.update(updates);
+    applyViewFilters();
   }
 
   // The wire's RouterHealth.router / observer_node+observer_router carry the full D79
@@ -766,11 +889,30 @@
   const edgeDetailEl = document.getElementById("edge-detail");
   const activityPanelEl = document.getElementById("activity-panel");
   const activityLogEl = document.getElementById("activity-log");
+  const activityToggleEl = document.getElementById("activity-toggle");
+  const activityLinkSelectEl = document.getElementById("activity-link-select");
   const activityFilterEl = document.getElementById("activity-filter");
   const activityTopicFilterEl = document.getElementById("activity-topic-filter");
   const activityPlatformFilterEl = document.getElementById("activity-platform-filter");
   const activityCountEl = document.getElementById("activity-count");
   const trafficPanelEl = document.getElementById("traffic-panel");
+
+  function linkPairKey(a, b) {
+    const left = String(a);
+    const right = String(b);
+    return left < right ? `${left}|${right}` : `${right}|${left}`;
+  }
+
+  function rememberLinkPair(a, b, source) {
+    const key = linkPairKey(a, b);
+    const existing = knownLinkPairs.get(key) || {};
+    knownLinkPairs.set(key, { key, a: existing.a || String(a), b: existing.b || String(b), source: source || existing.source || "link" });
+    return key;
+  }
+
+  function linkLabel(pair) {
+    return `${pair.a} <-> ${pair.b}`;
+  }
 
   function syncEdgeDetailHeight() {
     if (!edgeDetailEl) return;
@@ -790,15 +932,17 @@
     activityLogEl.style.setProperty("--activity-log-height", `${height}px`);
   }
 
-  function linkRowsForEdge(edge) {
-    if (!edge) return [];
-    const a = String(edge.from);
-    const b = String(edge.to);
+  function linkRowsForPair(a, b) {
     return latestLinkStatsRows.filter((row) => {
       const observer = nodeNameOf(row.observer_router || "");
       const peer = nodeNameOf(row.peer_router || "");
       return (observer === a && peer === b) || (observer === b && peer === a);
     }).sort((left, right) => String(left.observer_router).localeCompare(String(right.observer_router)));
+  }
+
+  function linkRowsForEdge(edge) {
+    if (!edge) return [];
+    return linkRowsForPair(String(edge.from), String(edge.to));
   }
 
   function renderStatsSection(row) {
@@ -826,7 +970,7 @@
         edgeDetailRow("RTT mean", formatRtt(row.rtt_mean_us)) +
         edgeDetailRow("RTT min/max", `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}`) +
         edgeDetailRow("rediscovery", row.rediscovery_in_interval ? "yes" : "no", row.rediscovery_in_interval ? "bad" : "") +
-        edgeDetailRow("age", ageMs == null ? "-" : `${ageMs} ms`) +
+        edgeDetailRow("age", ageMs == null ? "-" : `${ageMs} ms`, ageMs != null && ageMs > LINK_MESSAGE_AGE_WARN_MS ? "warn" : "") +
       `</div>` +
       (nacks > 0 ? `<div class="edge-detail-subtitle" style="margin-top:6px;color:#e0b84d;">NACK/repair activity in the latest interval.</div>` : "") +
       `</section>`;
@@ -969,6 +1113,15 @@
     activityPlatformFilter = setSelectOptions(activityPlatformFilterEl, platforms, "All platforms", activityPlatformFilter);
   }
 
+  function syncLinkInspectorOptions() {
+    if (!activityLinkSelectEl) return;
+    const pairs = Array.from(knownLinkPairs.values()).sort((left, right) => linkLabel(left).localeCompare(linkLabel(right)));
+    const keepValue = selectedLinkKey && knownLinkPairs.has(selectedLinkKey) ? selectedLinkKey : "";
+    activityLinkSelectEl.innerHTML = `<option value="">Inspect link</option>` +
+      pairs.map((pair) => `<option value="${escHtml(pair.key)}">${escHtml(linkLabel(pair))}</option>`).join("");
+    activityLinkSelectEl.value = keepValue;
+  }
+
   function renderActivityLog() {
     if (!activityLogEl) return;
     syncActivityFilterOptions();
@@ -1029,23 +1182,33 @@
     renderActivityLog();
   }
 
-  function renderEdgeDetail(edgeId) {
-    selectedEdgeId = edgeId;
-    const edge = edges.get(edgeId);
-    if (!edge) {
+  function renderLinkDetail(pair, source) {
+    if (!pair) {
       hideEdgeDetail();
       return;
     }
-    const a = String(edge.from);
-    const b = String(edge.to);
-    const rows = linkRowsForEdge(edge);
+    selectedLinkKey = pair.key;
+    selectedEdgeId = null;
+    const a = String(pair.a);
+    const b = String(pair.b);
+    const rows = linkRowsForPair(a, b);
+    const health = healthForPair(a, b);
+    const evidence = topologyEvidenceForPair(a, b);
+    const evidenceText = evidence.size ? Array.from(evidence).map(topologySourceLabel).join(", ") : "no current topology edge";
+    const directions = directionSummariesForPair(a, b);
     const statsHtml = rows.length
       ? rows.map(renderStatsSection).join("")
       : `<div class="edge-detail-empty">No ActRouterLinkStats sample has arrived yet for ${escHtml(a)} <-> ${escHtml(b)}.</div>`;
     edgeDetailEl.innerHTML =
       `<section class="edge-detail-section">` +
         `<div class="edge-detail-title">${escHtml(a)} <span class="edge-detail-subtitle"><-></span> ${escHtml(b)}</div>` +
-        `<div class="edge-detail-subtitle">${escHtml(edge.source || "link")} · ActRouterLinkStats only</div>` +
+        `<div class="edge-detail-grid">` +
+          edgeDetailRow("health", health.label, health.state === "healthy" ? "" : health.state === "impaired" ? "bad" : "warn") +
+          edgeDetailRow("topology evidence", evidenceText) +
+        `</div>` +
+        (directions.length
+          ? `<div class="edge-detail-subtitle" style="margin-top:6px;">${directions.map(directionSummaryHtml).join("; ")}</div>`
+          : `<div class="edge-detail-subtitle" style="margin-top:6px;">No directional receive counters observed for this pair.</div>`) +
       `</section>` +
       statsHtml +
       `<section class="edge-detail-section">` +
@@ -1053,13 +1216,33 @@
         renderTopicStatsTable(rows) +
       `</section>`;
     edgeDetailPanelEl.style.display = "block";
+    syncLinkInspectorOptions();
     syncEdgeDetailHeight();
+  }
+
+  function renderEdgeDetail(edgeId) {
+    selectedEdgeId = edgeId;
+    const edge = edges.get(edgeId);
+    if (!edge) {
+      hideEdgeDetail();
+      return;
+    }
+    const key = rememberLinkPair(edge.from, edge.to, edge.source);
+    selectedEdgeId = edgeId;
+    renderLinkDetail(knownLinkPairs.get(key), edge.source);
   }
 
   function ingestLinkStats(snapshot) {
     ingestLinkActivity(snapshot);
     latestLinkStatsRows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
-    if (selectedEdgeId) renderEdgeDetail(selectedEdgeId);
+    latestLinkStatsRows.forEach((row) => {
+      const observer = nodeNameOf(row.observer_router || "");
+      const peer = nodeNameOf(row.peer_router || "");
+      if (observer && peer) rememberLinkPair(observer, peer, row.network || "link");
+    });
+    syncLinkInspectorOptions();
+    if (selectedLinkKey) renderLinkDetail(knownLinkPairs.get(selectedLinkKey));
+    restyleEdgesForHealth();
   }
 
   window.addEventListener("resize", syncEdgeDetailHeight);
@@ -1089,12 +1272,34 @@
       renderActivityLog();
     });
   }
+  if (activityLinkSelectEl) {
+    activityLinkSelectEl.addEventListener("change", () => {
+      const key = activityLinkSelectEl.value;
+      if (!key) {
+        hideEdgeDetail();
+        return;
+      }
+      hideDetail();
+      renderLinkDetail(knownLinkPairs.get(key));
+    });
+  }
+  if (activityToggleEl) {
+    activityToggleEl.addEventListener("click", () => {
+      const collapsed = !activityPanelEl.classList.contains("collapsed");
+      activityPanelEl.classList.toggle("collapsed", collapsed);
+      activityToggleEl.textContent = collapsed ? "▸" : "▾";
+      activityToggleEl.title = collapsed ? "expand" : "collapse";
+      syncActivityLogHeight();
+    });
+  }
   renderActivityLog();
 
   function hideEdgeDetail() {
     selectedEdgeId = null;
+    selectedLinkKey = null;
     edgeDetailEl.innerHTML = "";
     edgeDetailPanelEl.style.display = "none";
+    if (activityLinkSelectEl) activityLinkSelectEl.value = "";
     syncEdgeDetailHeight();
   }
 
@@ -1157,8 +1362,8 @@
       subject.kind !== "observer";
     const sharedTeam = isPlatformEdge && (reporter.teamNames || []).find((team) =>
       (subject.teamNames || []).includes(team));
-    const baseColor = sharedTeam ? colorForTeam(sharedTeam) :
-      (EDGE_SOURCE_COLOR[opts.source] || "#999999");
+    const health = healthForPair(reporterId, subjectId);
+    const baseColor = health.color;
     const curveType = reporterId < subjectId ? "curvedCW" : "curvedCCW";
     edges.update({
       id: `${reporterId}->${subjectId}`, from: subjectId, to: reporterId, arrows: "to",
@@ -1168,7 +1373,12 @@
       smooth: isPlatformEdge ? { enabled: true, type: curveType, roundness: 0.18 } :
         { enabled: false },
       source: opts.source,
+      topologyColor: sharedTeam ? colorForTeam(sharedTeam) : (EDGE_SOURCE_COLOR[opts.source] || "#999999"),
+      healthState: health.state,
+      healthLabel: health.label,
+      width: widthForHealth(health.state),
       color: { color: baseColor, opacity: 1 },
+      title: edgeTitle(reporterId, subjectId, opts.source),
       hidden: opts.source ? !edgeVisibleBySource({ source: opts.source }) : false,
       baseColor, asOfMs: opts.asOfMs != null ? opts.asOfMs : Date.now(),
       currentOpacity: 1,
@@ -1187,8 +1397,9 @@
     const siblings = edges.get({ filter: (e) => undirectedPairKey(e.from, e.to) === key });
     edges.update(siblings.map((e) => ({
       id: e.id,
-      smooth: e.isPlatformEdge ?
-        { enabled: true, type: e.curveType, roundness: 0.18 } : { enabled: false },
+      smooth: siblings.length > 1 && e.isPlatformEdge ?
+        { enabled: true, type: e.curveType, roundness: e.isPlatformEdge ? 0.18 : 0.14 } :
+        { enabled: false },
     })));
   }
 
@@ -1216,10 +1427,12 @@
     edges.get().forEach((e) => {
       if (e.asOfMs == null || !e.baseColor) return;
       const frac = Math.max(0, Math.min(1, (now - e.asOfMs) / EDGE_DECAY_WINDOW_MS));
+      const opacity = Math.max(1 - frac * (1 - EDGE_MIN_OPACITY), minOpacityForHealth(e.healthState));
       updates.push({
         id: e.id,
-        currentOpacity: 1 - frac * (1 - EDGE_MIN_OPACITY),
-        color: { color: e.baseColor, opacity: 1 - frac * (1 - EDGE_MIN_OPACITY) },
+        currentOpacity: opacity,
+        color: { color: e.baseColor, opacity },
+        width: widthForHealth(e.healthState),
       });
     });
     if (updates.length) edges.update(updates);

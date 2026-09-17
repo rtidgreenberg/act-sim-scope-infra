@@ -119,19 +119,28 @@ stop_children() {
 }
 trap stop_children TERM INT EXIT
 
-"$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
+bash -c 'exec -a "$0" "$@"' "${NODE_NAME}-router-main" \
+    "$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
     --node-name "$NODE_NAME" \
     --admin-participant "${NODE_ROLE}_lan" > "$LOG_DIR/router.log" 2>&1 &
 PIDS+=("$!")
 
-python3 "$WORKSPACE/debug/scripts/router_journal_subscriber.py" \
+ACT_PARTICIPANT_NAME="${NODE_NAME}/router_journal_subscriber" \
+ACT_PARTICIPANT_ROLE="act.journal_subscriber" \
+    bash -c 'exec -a "$0" python3 "$@"' "${NODE_NAME}-journal-subscriber" \
+    "$WORKSPACE/debug/scripts/router_journal_subscriber.py" \
     --domain "$NODE_ID" --node-name "$NODE_NAME" \
+    --participant-name "${NODE_NAME}/router_journal_subscriber" \
+    --participant-role "act.journal_subscriber" \
     --output "$NODE_DEBUG_DIR/journal.jsonl" \
     > "$LOG_DIR/journal_subscriber.log" 2>&1 &
 PIDS+=("$!")
 
 if [[ "$NODE_ROLE" == "control" ]]; then
-    bash "$WORKSPACE/harness_v2/scripts/start_control_sim.sh" --id "$NODE_ID" \
+    ACT_PROCESS_NAME="${NODE_NAME}-control-sim" \
+    ACT_PARTICIPANT_NAME="${NODE_NAME}/control_sim" \
+    ACT_PARTICIPANT_ROLE="act.control_sim" \
+        bash "$WORKSPACE/harness_v2/scripts/start_control_sim.sh" --id "$NODE_ID" \
         --destination "${SIM_DESTINATION:-Platform_30}" --verbosity "${SIM_VERBOSITY:-1}" \
         --run-id "$RUN_ID" \
         --audit-start-file "$NODE_DEBUG_DIR/audit-start" \
@@ -139,7 +148,10 @@ if [[ "$NODE_ROLE" == "control" ]]; then
     PIDS+=("$!")
 else
     : "${NODE_ROUTER_NAME:?NODE_ROUTER_NAME is required for platform nodes}"
-    bash "$WORKSPACE/harness_v2/scripts/start_platform_sim.sh" --id "$NODE_ID" \
+    ACT_PROCESS_NAME="${NODE_NAME}-platform-sim" \
+    ACT_PARTICIPANT_NAME="${NODE_NAME}/platform_sim" \
+    ACT_PARTICIPANT_ROLE="act.platform_sim" \
+        bash "$WORKSPACE/harness_v2/scripts/start_platform_sim.sh" --id "$NODE_ID" \
         --destination "${SIM_DESTINATION:-Control_20}" --verbosity "${SIM_VERBOSITY:-1}" \
         --run-id "$RUN_ID" \
         --audit-start-file "$NODE_DEBUG_DIR/audit-start" \
@@ -147,14 +159,20 @@ else
     PIDS+=("$!")
 
     NDDS_QOS_PROFILES="${WORKSPACE}/harness_v2/qos/act_qos_profiles.xml;${WORKSPACE}/harness_v2/datamodel/gen/ActTypes.xml" \
-        python3 "$WORKSPACE/harness_v2/scripts/platform_mesh_control.py" \
+    ACT_PARTICIPANT_NAME="${NODE_NAME}/platform_mesh_control" \
+    ACT_PARTICIPANT_ROLE="act.platform_mesh_control" \
+        bash -c 'exec -a "$0" python3 "$@"' "${NODE_NAME}-mesh-control" \
+        "$WORKSPACE/harness_v2/scripts/platform_mesh_control.py" \
         --domain "$NODE_ID" --node "$NODE_NAME" --router-name "$NODE_ROUTER_NAME" \
         > "$LOG_DIR/mesh_control.log" 2>&1 &
     PIDS+=("$!")
 fi
 
 if [[ "${MESH_DASHBOARD:-0}" == "1" ]]; then
-    python3 "$WORKSPACE/gui/mesh_dashboard/server/mesh_bridge.py" --domain 20 \
+    ACT_PARTICIPANT_NAME="${NODE_NAME}/mesh_dashboard_bridge" \
+    ACT_PARTICIPANT_ROLE="act.mesh_dashboard_bridge" \
+        bash -c 'exec -a "$0" python3 "$@"' "${NODE_NAME}-mesh-dashboard" \
+        "$WORKSPACE/gui/mesh_dashboard/server/mesh_bridge.py" --domain 20 \
         --port "${MESH_DASHBOARD_PORT:-8080}" \
         --participant-qos-profile ACT_QOS_LIB::lan_control_participant \
         --traffic-observers "${MESH_TRAFFIC_OBSERVERS:-}" \

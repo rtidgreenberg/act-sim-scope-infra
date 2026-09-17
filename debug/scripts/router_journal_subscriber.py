@@ -47,6 +47,10 @@ def main():
                         help="Seconds to capture; 0 means run until interrupted")
     parser.add_argument("--node-name", default="",
                         help="Logical node name to include in each envelope")
+    parser.add_argument("--participant-name", default="",
+                        help="DDS participant EntityName.name for discovery tools")
+    parser.add_argument("--participant-role", default="act.journal_subscriber",
+                        help="DDS participant EntityName.role_name for discovery tools")
     args = parser.parse_args()
 
     if not TYPES_XML.is_file():
@@ -56,6 +60,13 @@ def main():
     provider = dds.QosProvider(str(TYPES_XML))
     participant_qos = dds.DomainParticipant.default_participant_qos
     participant_qos.transport_builtin = dds.TransportBuiltin.udpv4
+    if args.participant_name or args.participant_role:
+        entity_name = participant_qos.participant_name
+        if args.participant_name:
+            entity_name.name = args.participant_name
+        if args.participant_role:
+            entity_name.role_name = args.participant_role
+        participant_qos.participant_name = entity_name
     participant = dds.DomainParticipant(args.domain, participant_qos)
     subscriber = dds.Subscriber(participant)
     readers = []

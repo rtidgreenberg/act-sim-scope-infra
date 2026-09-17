@@ -52,6 +52,10 @@ fi
 
 LAN_QOS_PROFILE="ACT_QOS_LIB::lan_platform_participant"
 DOMAIN_ID=$PLATFORM_DOMAIN
+: "${ACT_PROCESS_NAME:=${ROUTER_NAME}-platform-sim}"
+: "${ACT_PARTICIPANT_NAME:=${ROUTER_NAME}/platform_sim}"
+: "${ACT_PARTICIPANT_ROLE:=act.platform_sim}"
+export ACT_PARTICIPANT_NAME ACT_PARTICIPANT_ROLE
 
 echo "
 ================================ PLATFORM SIM CONFIG ================================
@@ -62,10 +66,13 @@ DESTINATION:       $DESTINATION
 LAN_QOS_PROFILE:   $LAN_QOS_PROFILE
 NDDS_QOS_PROFILES: $NDDS_QOS_PROFILES
 VERBOSITY:         $VERBOSITY
+PROCESS_NAME:      $ACT_PROCESS_NAME
+PARTICIPANT_NAME:  $ACT_PARTICIPANT_NAME
+PARTICIPANT_ROLE:  $ACT_PARTICIPANT_ROLE
 ===================================================================================="
 [[ "$PRINT_CONFIG" == true ]] && exit 0
 
-exec python3 "${V2_ROOT}/sims/platform_sim.py" --qos_profile "${LAN_QOS_PROFILE}" \
+exec -a "$ACT_PROCESS_NAME" python3 "${V2_ROOT}/sims/platform_sim.py" --qos_profile "${LAN_QOS_PROFILE}" \
     --domain_id "${DOMAIN_ID}" \
     --source "${ROUTER_NAME}" \
     --destination "${DESTINATION}" \

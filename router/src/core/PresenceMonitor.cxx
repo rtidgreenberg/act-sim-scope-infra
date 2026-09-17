@@ -4,6 +4,8 @@
 #include "Log.hpp"
 
 #include <dds/sub/ddssub.hpp>
+#include <cstdlib>
+#include <fstream>
 #include <iterator> // std::next (prune_dead_locked's handle sweep)
 #include <sstream>
 
@@ -18,6 +20,55 @@ const char *presence_name(RouterPresenceState s) {
     case RouterPresenceState::PRESENCE_DEAD:  return "DEAD";
     }
     return "?";
+}
+
+std::int64_t now_unix_ns() {
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string trim_newline(std::string value) {
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string read_run_id(const std::string &debug_dir) {
+    const char *env = std::getenv("ACT_RUN_ID");
+    if (env != nullptr && *env != '\0') {
+        return env;
+    }
+    if (debug_dir.empty()) {
+        return "";
+    }
+    std::ifstream input(debug_dir + "/run_id");
+    std::string value;
+    std::getline(input, value);
+    return trim_newline(value);
+}
+
+std::string json_escape(const std::string &value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '"': out += "\\\""; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+std::string node_from_router(const std::string &router) {
+    const std::string::size_type slash = router.find('/');
+    return slash == std::string::npos ? router : router.substr(0, slash);
 }
 
 } // namespace
@@ -47,6 +98,13 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           mesh_topic_(lan_participant, mesh_topic),
           mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos),
           shut_down_(false) {
+    const char *debug_dir = std::getenv("NODE_DEBUG_DIR");
+    if (debug_dir != nullptr && *debug_dir != '\0') {
+        audit_run_id_ = read_run_id(debug_dir);
+        if (!audit_run_id_.empty()) {
+            audit_path_ = std::string(debug_dir) + "/events.jsonl";
+        }
+    }
     // Heartbeat data (valid + instance-state transitions -> ALIVE/DEAD).
     dds::sub::cond::ReadCondition data_cond(
             health_reader_, dds::sub::status::DataState::any(),
@@ -140,6 +198,7 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     }
     try {
         health_writer_.write(out);
+        log_router_health_audit("sent", out);
     } catch (const dds::core::NotEnabledError &) {
         // Defensive symmetry with DdsStatusPublisher (D52): ticks only start after
         // enable_all(), so this should not happen in practice.
@@ -258,6 +317,7 @@ void PresenceMonitor::on_health_data() {
                 // peers_seen's existing 100-cap, so keeping it costs nothing D77 was
                 // guarding against.
                 e.last_seen = std::chrono::steady_clock::now();
+                log_router_health_audit("received", ev.hb);
             } else {
                 // Liveliness lost or participant purged -> DEAD (the roster passes
                 // through STALE first on a real crash — deadline fires before the
@@ -288,6 +348,31 @@ void PresenceMonitor::on_health_data() {
     if (changed) {
         publish_mesh();
     }
+}
+
+void PresenceMonitor::log_router_health_audit(const std::string &event,
+                                              const RouterHealth &hb) {
+    if (audit_path_.empty() || audit_run_id_.empty()) {
+        return;
+    }
+    const std::string source_node = node_from_router(hb.router);
+    if (source_node.empty() || hb.heartbeat_seq == 0 || hb.send_timestamp == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(audit_mutex_);
+    std::ofstream output(audit_path_, std::ios::app);
+    if (!output) {
+        return;
+    }
+    output << "{\"event\":\"" << json_escape(event)
+           << "\",\"node\":\"" << json_escape(node_name_)
+           << "\",\"recorded_at_ns\":" << now_unix_ns()
+           << ",\"run_id\":\"" << json_escape(audit_run_id_)
+           << "\",\"sent_at_ns\":" << hb.send_timestamp
+           << ",\"sequence\":" << hb.heartbeat_seq
+           << ",\"source\":\"" << json_escape(hb.router)
+           << "\",\"source_node\":\"" << json_escape(source_node)
+           << "\",\"topic\":\"RouterHealth\"}\n";
 }
 
 void PresenceMonitor::on_health_reader_status() {

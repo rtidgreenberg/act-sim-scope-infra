@@ -31,6 +31,7 @@
   const experimentCurrentUpdated = document.getElementById("experiment-current-updated");
   const experimentCurrentNetwork = document.getElementById("experiment-current-network");
   const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
+  const EXPERIMENT_REFRESH_MS = 2000;
 
   const MISSION_TOPICS = new Set(["PlatformDetailStatus", "PlatformMissionStatus", "PlatformWaypointStatus"]);
   const DEBUG_TOPICS = new Set(["PlatformDebugStatus", "PlatformThrusterStatus", "PlatformPowerStatus"]);
@@ -243,13 +244,16 @@
 
   function renderExperimentState(status) {
     const impairments = status.impairments || [];
-    const current = impairments.at(-1);
-    if (current) {
-      experimentCurrentPath.textContent = `${current.source} -> ${current.destination} (${current.direction})`;
-      experimentCurrentPathloss.textContent = current.kind === "commeffect"
-        ? `latency ${Number(current.latency_ms).toFixed(1)} ms, jitter ${Number(current.jitter_ms).toFixed(1)} ms, unicast ${current.unicast_bps} bps, broadcast ${current.broadcast_bps} bps, loss ${Number(current.loss_percent).toFixed(1)}%, duplicate ${Number(current.duplicate_percent).toFixed(1)}%`
-        : `${Number(current.pathloss_db).toFixed(1)} dB`;
-      experimentCurrentUpdated.textContent = new Date(current.updated_at).toLocaleTimeString();
+    if (impairments.length > 0) {
+      experimentCurrentPath.textContent = impairments
+        .map((impairment) => `${impairment.source} -> ${impairment.destination}`)
+        .join("; ");
+      experimentCurrentPathloss.textContent = impairments
+        .map((impairment) => impairment.kind === "commeffect"
+          ? `${impairment.source} -> ${impairment.destination}: latency ${Number(impairment.latency_ms).toFixed(1)} ms, jitter ${Number(impairment.jitter_ms).toFixed(1)} ms, unicast ${impairment.unicast_bps} bps, broadcast ${impairment.broadcast_bps} bps, loss ${Number(impairment.loss_percent).toFixed(1)}%, duplicate ${Number(impairment.duplicate_percent).toFixed(1)}%`
+          : `${impairment.source} -> ${impairment.destination}: ${Number(impairment.pathloss_db).toFixed(1)} dB`)
+        .join("; ");
+      experimentCurrentUpdated.textContent = new Date(Math.max(...impairments.map((impairment) => impairment.updated_at || 0))).toLocaleTimeString();
     } else {
       experimentCurrentPath.textContent = "No impairment command recorded";
       experimentCurrentPathloss.textContent = "-";
@@ -270,6 +274,7 @@
       source,
       destination,
       direction: resetScenario ? "bidirectional" : experimentDirection.value,
+      reset_all: resetScenario,
       pathloss_db: pathlossDb,
       latency_ms: Number(experimentLatency.value),
       jitter_ms: Number(experimentJitter.value),
@@ -354,4 +359,9 @@
   }
 
   connectDeliverySocket();
+  setInterval(() => {
+    if (document.body.dataset.activeTab === "experiment") {
+      refreshExperimentController();
+    }
+  }, EXPERIMENT_REFRESH_MS);
 })();

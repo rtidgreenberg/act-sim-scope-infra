@@ -67,7 +67,7 @@ FIXED_CONTROL_RECIPIENT_TOPICS = {
 PERCENTAGE_MIN_SAMPLES = 30
 DELIVERY_SETTLE_MS = 2_000
 RELIABLE_DELIVERY_SETTLE_MS = 15_000
-RELIABLE_DELIVERY_TOPICS = {"ControlCommand", "PlatformCommandAck"}
+RELIABLE_DELIVERY_TOPICS = {"ControlCommand", "PlatformCommandAck", "RouterHealth"}
 EMANE_EVENT_GROUP = "224.1.2.8"
 EMANE_EVENT_PORT = "45702"
 EMANE_PATHLOSS_MAX_DB = 200
@@ -292,9 +292,30 @@ class DdsBridge:
             return mode in ("mission", "debug")
         return True
 
+    def _audit_nodes_for_run(self, run_id):
+        nodes = []
+        debug_root = _THIS_FILE.parents[3] / "debug"
+        for path in debug_root.glob("*_debug/run_id"):
+            try:
+                if path.read_text(encoding="utf-8").strip() != run_id:
+                    continue
+            except OSError:
+                continue
+            match = re.fullmatch(r"(control|platform)_(\d+)_debug", path.parent.name)
+            if match:
+                nodes.append(f"{match.group(1).title()}_{match.group(2)}")
+        return sorted(set(nodes))
+
     def _expected_recipients(self, event):
         if event["topic"] == "ControlCommand":
             return [event["destination"]] if event.get("destination") else []
+        if event["topic"] == "RouterHealth":
+            run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
+            if event["source_node"] == "Control_20":
+                return [node for node in run_nodes if node.startswith("Platform_")]
+            if event["source_node"].startswith("Platform_"):
+                return ["Control_20"] if "Control_20" in run_nodes else []
+            return []
         if event["topic"] in FIXED_CONTROL_RECIPIENT_TOPICS \
                 and event["source_node"].startswith("Platform_"):
             sent_at_ns = int(event.get("sent_at_ns", 0))
@@ -725,6 +746,24 @@ class DdsBridge:
             return self._set_emane_pathloss(source, destination, direction, pairs, node_pairs, values)
         return self._set_emane_commeffect(source, destination, direction, pairs, node_pairs, values)
 
+    def reset_all_emane_impairments(self):
+        with self.cache_lock:
+            impairments = list(self.emane_impairments.values())
+        for impairment in impairments:
+            values = {
+                "pathloss_db": 0,
+                "latency_ms": 0,
+                "jitter_ms": 0,
+                "unicast_bps": 0,
+                "broadcast_bps": 0,
+                "loss_percent": 0,
+                "duplicate_percent": 0,
+            }
+            self.set_emane_impairment(
+                impairment["source"], impairment["destination"], "forward",
+                impairment.get("kind", "pathloss"), values)
+        return self.emane_controller_status()
+
     def _set_emane_pathloss(self, source, destination, direction, pairs, node_pairs, values):
         pathloss_db = float(values.get("pathloss_db", 0))
         if pathloss_db < 0 or pathloss_db > EMANE_PATHLOSS_MAX_DB:
@@ -881,9 +920,12 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def post_emane_controller(request):
         try:
             body = await request.json()
-            result = bridge.set_emane_impairment(
-                body["source"], body["destination"], body.get("direction", "bidirectional"),
-                body.get("kind", "pathloss"), body)
+            if body.get("reset_all"):
+                result = bridge.reset_all_emane_impairments()
+            else:
+                result = bridge.set_emane_impairment(
+                    body["source"], body["destination"], body.get("direction", "bidirectional"),
+                    body.get("kind", "pathloss"), body)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:

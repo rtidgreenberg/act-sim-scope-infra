@@ -34,8 +34,13 @@
             box-shadow: 0 4px 16px rgba(0,0,0,0.24); pointer-events: auto; }
   #activity-panel .activity-header { padding: 8px 12px; display: flex; justify-content: space-between;
             align-items: center; gap: 10px; color: #e6e8eb; font-weight: 600; border-bottom: 1px solid #2c3542; }
+  #activity-panel.collapsed #activity-log, #activity-panel.collapsed .activity-controls { display: none; }
+  #activity-panel .activity-title { display: inline-flex; align-items: center; gap: 8px; }
+  #activity-toggle { border: 0; background: transparent; color: #8a94a6; cursor: pointer;
+            font: inherit; font-size: 14px; padding: 0; }
+  #activity-toggle:hover { color: #fff; }
   #activity-panel .activity-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  #activity-filter, #activity-topic-filter, #activity-platform-filter { background: #14181f; color: #d5d9df; border: 1px solid #2c3542;
+  #activity-filter, #activity-topic-filter, #activity-platform-filter, #activity-link-select { background: #14181f; color: #d5d9df; border: 1px solid #2c3542;
             border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11px; }
   #activity-panel .activity-count { color: #8a94a6; font-weight: 500; }
   #activity-log { height: var(--activity-log-height, 260px); max-height: var(--activity-log-height, 260px); overflow-y: auto; }
@@ -66,6 +71,7 @@
   .edge-detail-row .v { color: #e6e8eb; font-weight: 600; text-align: right; white-space: nowrap; }
   .edge-detail-row.warn .v { color: #e0b84d; }
   .edge-detail-row.bad .v { color: #e6553a; }
+  .message-age.warn { color: #e0b84d; font-weight: 700; }
   .edge-detail-table { width: 100%; border-collapse: collapse; color: #d5d9df; }
   .edge-detail-table th, .edge-detail-table td { border-bottom: 1px solid #252c37; padding: 4px 6px; text-align: right; }
   .edge-detail-table th:first-child, .edge-detail-table td:first-child { text-align: left; }
@@ -231,8 +237,11 @@
   <span><i style="background:#e0b84d"></i> observer</span>
   <span><i style="background:#3aa655"></i> direct peer</span>
   <span><i style="background:#3a7bd9"></i> relayed peer</span>
-  <span><span class="arrow solid" style="border-color:#3aa655;"></span> direct link</span>
-  <span><span class="arrow dashed" style="border-color:#3a7bd9;"></span> relayed link</span>
+  <span><i style="background:#75c991"></i> receiving</span>
+  <span><i style="background:#e0b84d"></i> degraded</span>
+  <span><i style="background:#e6553a"></i> no receives/errors</span>
+  <span><span class="arrow solid" style="border-color:#8a94a6;"></span> direct roster</span>
+  <span><span class="arrow dashed" style="border-color:#8a94a6;"></span> peers_seen</span>
   <span><i style="background:transparent;border:2px solid #3aa655;width:6px;height:6px;"></i> green ring = direct peer</span>
 </div>
 <div id="team-legend">
@@ -241,7 +250,7 @@
   <span data-team="C"><i style="background:#8a4ae6"></i> Team C</span>
 </div>
 <section id="activity-panel" aria-live="polite">
-  <div class="activity-header"><span>Link activity</span><span class="activity-controls"><select id="activity-filter"><option value="all">All</option><option value="sample">Samples</option><option value="hb">Heartbeats</option><option value="nack">NACKs</option><option value="repair">Repair</option><option value="issue">Issues</option></select><select id="activity-topic-filter"><option value="all">All topics</option></select><select id="activity-platform-filter"><option value="all">All platforms</option></select><span id="activity-count" class="activity-count">0</span></span></div>
+  <div class="activity-header"><span class="activity-title"><button id="activity-toggle" type="button" title="collapse">▾</button>Link activity</span><span class="activity-controls"><select id="activity-link-select"><option value="">Inspect link</option></select><select id="activity-filter"><option value="all">All</option><option value="sample">Samples</option><option value="hb">Heartbeats</option><option value="nack">NACKs</option><option value="repair">Repair</option><option value="issue">Issues</option></select><select id="activity-topic-filter"><option value="all">All topics</option></select><select id="activity-platform-filter"><option value="all">All platforms</option></select><span id="activity-count" class="activity-count">0</span></span></div>
   <div id="activity-log"><div class="activity-empty">Waiting for link activity.</div></div>
 </section>
 </div>
@@ -278,7 +287,7 @@
     <div><strong>Sent</strong>: messages observed in the rolling window.</div>
     <div><strong>Received</strong>: messages observed at the expected destination in the rolling window.</div>
     <div><strong>Lost</strong>: messages older than the grace period that have not been received.</div>
-    <div><strong>Grace period</strong>: 15 s for ControlCommand and PlatformCommandAck, 2 s for periodic status/report topics.</div>
+    <div><strong>Grace period</strong>: 15 s for reliable command/health topics, 2 s for periodic status/report topics.</div>
   </div>
 </main>
 <main id="experiment-panel" class="workspace-panel">
@@ -339,8 +348,8 @@
   </div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js?v=20260917-activity-log-v7"></script>
+  <script src="mesh_graph.js?v=20260917-health-slack-v1"></script>
 <script src="traffic_chart.js?v=20260914-merged-wan-graph-v4"></script>
-<script src="operator_tabs.js?v=20260916-edge-detail-v1"></script>
+  <script src="operator_tabs.js?v=20260917-experiment-refresh-v2"></script>
 </body>
 </html>

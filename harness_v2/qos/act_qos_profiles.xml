@@ -5,6 +5,14 @@
 
   <configuration_variables>
     <element>
+      <name>ACT_PARTICIPANT_NAME</name>
+      <value>act-process</value>
+    </element>
+    <element>
+      <name>ACT_PARTICIPANT_ROLE</name>
+      <value>act.process</value>
+    </element>
+    <element>
       <name>CONTROL_LAN_PEER1</name>
       <value>127.0.0.1</value>
     </element>
@@ -138,6 +146,10 @@
     <qos_profile name="lan_platform_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
 
       <domain_participant_qos>
+        <participant_name>
+          <name>$(ACT_PARTICIPANT_NAME)</name>
+          <role_name>$(ACT_PARTICIPANT_ROLE)</role_name>
+        </participant_name>
 
         <!-- Match QoS in your Platform LAN -->
 
@@ -153,7 +165,12 @@
     </qos_profile>
 
     <qos_profile name="lan_control_participant">
-      <domain_participant_qos/>
+      <domain_participant_qos>
+        <participant_name>
+          <name>$(ACT_PARTICIPANT_NAME)</name>
+          <role_name>$(ACT_PARTICIPANT_ROLE)</role_name>
+        </participant_name>
+      </domain_participant_qos>
     </qos_profile>
 
     <qos_profile name="lan_status" base_name="BuiltinQosLib::Generic.Common">

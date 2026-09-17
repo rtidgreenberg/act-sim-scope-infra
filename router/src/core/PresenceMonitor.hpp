@@ -70,13 +70,13 @@
 //   instance NOT_ALIVE_NO_WRITERS           -> DEAD  (liveliness lost / participant purge)
 //   DEAD for longer than kDeadPeerRetentionMs -> forgotten (erased from the roster;
 //     review 2026-08-11 H4 — before this, nothing ever removed a roster entry)
-// A real crash cascades STALE -> DEAD (the 2s deadline fires before the 3s liveliness
+// A real crash cascades STALE -> DEAD (the 8s deadline fires before the 12s liveliness
 // lease) — normal, not an anomaly (D75).
 //
 // Pinned demo numbers (D75; D16 ordering: the WAN participant lease must stay LONGER
 // than kLivelinessLease — the participant lease comes from the WAN participant profile,
 // so record both knobs when retuning): heartbeat 1 s (router_main passes
-// kHeartbeatPeriodMs to DrainThread), DEADLINE 2 s, AUTOMATIC liveliness lease 3 s.
+// kHeartbeatPeriodMs to DrainThread), DEADLINE 8 s, AUTOMATIC liveliness lease 12 s.
 // MeshTick (D98) is a separate 0.5 s knob (kMeshPublishPeriodMs, also passed to
 // DrainThread) — independent of the heartbeat/DEADLINE/lease numbers above.
 //
@@ -106,10 +106,10 @@
 
 namespace router {
 
-// The D75-pinned demo numbers.
+// The D75-pinned demo numbers, slackened for lossy CommEffect runs.
 const int kHeartbeatPeriodMs = 1000;
-const int kHealthDeadlineMs = 2000;       // 2x heartbeat period
-const int kHealthLivelinessLeaseMs = 3000; // 3x heartbeat period (AUTOMATIC)
+const int kHealthDeadlineMs = 8000;        // 8x heartbeat period
+const int kHealthLivelinessLeaseMs = 12000; // 12x heartbeat period (AUTOMATIC)
 // D98: the LAN mesh-dashboard republish cadence — independent of the WAN heartbeat
 // numbers above (see MeshTick in RouterEvents.hpp / DrainThread.hpp).
 const int kMeshPublishPeriodMs = 500;
@@ -123,7 +123,7 @@ const int kMeshPublishPeriodMs = 500;
 // displace live peers once the roster passed 100 names.
 //
 // Measured from last_seen (the last valid heartbeat), so the clock starts when the peer
-// actually went quiet, not when we noticed. Deliberately much longer than the 3 s
+// actually went quiet, not when we noticed. Deliberately much longer than the 12 s
 // liveliness lease: a DEAD transition is information an operator should have time to see
 // on the dashboard before it disappears. Rejoin needs no special handling — the roster is
 // name-keyed, so a returning peer simply re-enters as ALIVE.
@@ -191,6 +191,7 @@ private:
 
     void on_health_data();
     void on_health_reader_status();
+    void log_router_health_audit(const std::string &event, const RouterHealth &hb);
     // Drop DEAD peers quiet for longer than kDeadPeerRetentionMs, along with their
     // handle_to_name_ entries (H4). Returns true if anything was removed — the caller
     // (publish_mesh) then bumps mesh_revision_, since forgetting a peer IS a roster
@@ -221,6 +222,10 @@ private:
     dds::pub::Publisher lan_publisher_;
     dds::topic::Topic<RouterMeshStatus> mesh_topic_;
     dds::pub::DataWriter<RouterMeshStatus> mesh_writer_;
+
+    std::mutex audit_mutex_;
+    std::string audit_path_;
+    std::string audit_run_id_;
 
     mutable std::mutex roster_mutex_;
     std::map<std::string, PeerEntry> roster_; // keyed by the peer's router name (D79)

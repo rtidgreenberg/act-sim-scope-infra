@@ -218,6 +218,7 @@ write_compose() {
 services:
   control-20:
     image: connext:7.7.0
+    hostname: control-20
     init: true
 $(emane_runtime_yaml)
 $(container_user_yaml)
@@ -256,6 +257,7 @@ EOF
         cat >> "$compose_file" <<EOF
   platform-${id}:
     image: connext:7.7.0
+    hostname: platform-${id}
     init: true
 $(emane_runtime_yaml)
 $(container_user_yaml)
