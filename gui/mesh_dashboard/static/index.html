@@ -20,14 +20,56 @@
                background: #1c222c; border-top: 1px solid #2c3542; font-size: 12px;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8a94a6; }
   #right-panel { position: fixed; right: 0; top: 0; z-index: 10; display: flex;
-            flex-direction: column; align-items: flex-end; }
+            flex-direction: column; align-items: flex-end; pointer-events: none; }
   #legend { padding: 8px 14px;
             background: #1c222c; border-bottom: 1px solid #2c3542; border-left: 1px solid #2c3542;
-            font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40vw; }
+            font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40vw; pointer-events: auto; }
   #team-legend { padding: 0;
             background: #1c222c; border-left: 1px solid #2c3542;
-            font-size: 12px; display: flex; flex-direction: column; gap: 0; min-width: 120px; }
+            font-size: 12px; display: flex; flex-direction: column; gap: 0; min-width: 120px; pointer-events: auto; }
   #team-legend:empty { display: none; }
+  #activity-panel { width: 430px; max-width: 42vw; margin-top: 8px;
+            background: #1c222c; border: 1px solid #2c3542; border-right: 0;
+            border-radius: 6px 0 0 6px; font-size: 12px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.24); pointer-events: auto; }
+  #activity-panel .activity-header { padding: 8px 12px; display: flex; justify-content: space-between;
+            align-items: center; gap: 10px; color: #e6e8eb; font-weight: 600; border-bottom: 1px solid #2c3542; }
+  #activity-panel .activity-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  #activity-filter, #activity-topic-filter, #activity-platform-filter { background: #14181f; color: #d5d9df; border: 1px solid #2c3542;
+            border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11px; }
+  #activity-panel .activity-count { color: #8a94a6; font-weight: 500; }
+  #activity-log { height: var(--activity-log-height, 260px); max-height: var(--activity-log-height, 260px); overflow-y: auto; }
+  .activity-empty { padding: 10px 12px; color: #8a94a6; line-height: 1.4; }
+  .activity-entry { padding: 7px 12px; border-bottom: 1px solid #232a34; }
+  .activity-entry .activity-main { display: flex; justify-content: space-between; gap: 8px; color: #e6e8eb; }
+  .activity-entry .activity-topic { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .activity-entry .activity-value { color: #75c991; font-weight: 700; white-space: nowrap; }
+  .activity-entry.warn .activity-value { color: #e0b84d; }
+  .activity-entry.bad .activity-value { color: #e6553a; }
+  .activity-entry .activity-meta { margin-top: 3px; color: #8a94a6; font-size: 11px; }
+  #edge-detail-panel { position: fixed; top: 84px; left: 12px; z-index: 11; width: 430px;
+            max-width: min(430px, calc(100vw - 24px)); display: none;
+            background: #1c222c; border: 1px solid #2c3542; border-radius: 6px;
+            font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+  #edge-detail-panel .ed-header { padding: 8px 12px; display: flex; justify-content: space-between;
+            color: #e6e8eb; font-weight: 600; border-bottom: 1px solid #2c3542; }
+  #edge-detail-panel .ed-close { cursor: pointer; color: #8a94a6; font-size: 16px; line-height: 1; }
+  #edge-detail-panel .ed-close:hover { color: #fff; }
+  #edge-detail { height: var(--edge-detail-height, 390px); max-height: var(--edge-detail-height, 390px); overflow-y: auto; }
+  .edge-detail-empty { padding: 10px 12px; color: #8a94a6; line-height: 1.4; }
+  .edge-detail-section { padding: 9px 12px; border-bottom: 1px solid #232a34; }
+  .edge-detail-title { color: #e6e8eb; font-weight: 700; margin-bottom: 6px; }
+  .edge-detail-subtitle { color: #8a94a6; font-weight: 500; }
+  .edge-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+  .edge-detail-row { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid #252c37; padding: 3px 0; }
+  .edge-detail-row .k { color: #8a94a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .edge-detail-row .v { color: #e6e8eb; font-weight: 600; text-align: right; white-space: nowrap; }
+  .edge-detail-row.warn .v { color: #e0b84d; }
+  .edge-detail-row.bad .v { color: #e6553a; }
+  .edge-detail-table { width: 100%; border-collapse: collapse; color: #d5d9df; }
+  .edge-detail-table th, .edge-detail-table td { border-bottom: 1px solid #252c37; padding: 4px 6px; text-align: right; }
+  .edge-detail-table th:first-child, .edge-detail-table td:first-child { text-align: left; }
+  .edge-detail-table th { color: #8a94a6; font-size: 11px; font-weight: 600; }
   #topology-controls { position: fixed; left: 0; top: 38px; z-index: 10; padding: 8px 14px;
             background: #1c222c; border-right: 1px solid #2c3542; border-bottom: 1px solid #2c3542;
             font-size: 12px; display: flex; gap: 14px; align-items: center; }
@@ -103,10 +145,10 @@
                      background: #14181f; padding: 24px; box-sizing: border-box; }
   body[data-active-tab="delivery"] #graph, body[data-active-tab="delivery"] #traffic-panel,
   body[data-active-tab="delivery"] #detail, body[data-active-tab="delivery"] #topology-controls,
-  body[data-active-tab="delivery"] #right-panel,
+  body[data-active-tab="delivery"] #right-panel, body[data-active-tab="delivery"] #edge-detail-panel,
   body[data-active-tab="experiment"] #graph, body[data-active-tab="experiment"] #traffic-panel,
   body[data-active-tab="experiment"] #detail, body[data-active-tab="experiment"] #topology-controls,
-  body[data-active-tab="experiment"] #right-panel { display: none; }
+  body[data-active-tab="experiment"] #right-panel, body[data-active-tab="experiment"] #edge-detail-panel { display: none; }
   body[data-active-tab="delivery"] #delivery-panel,
   body[data-active-tab="experiment"] #experiment-panel { display: block; }
   .experiment-heading { display: flex; justify-content: space-between; align-items: baseline;
@@ -198,8 +240,16 @@
   <span data-team="B"><i style="background:#e6c53a"></i> Team B</span>
   <span data-team="C"><i style="background:#8a4ae6"></i> Team C</span>
 </div>
+<section id="activity-panel" aria-live="polite">
+  <div class="activity-header"><span>Link activity</span><span class="activity-controls"><select id="activity-filter"><option value="all">All</option><option value="sample">Samples</option><option value="hb">Heartbeats</option><option value="nack">NACKs</option><option value="repair">Repair</option><option value="issue">Issues</option></select><select id="activity-topic-filter"><option value="all">All topics</option></select><select id="activity-platform-filter"><option value="all">All platforms</option></select><span id="activity-count" class="activity-count">0</span></span></div>
+  <div id="activity-log"><div class="activity-empty">Waiting for link activity.</div></div>
+</section>
 </div>
 <div id="detail"></div>
+<section id="edge-detail-panel" aria-live="polite">
+  <div class="ed-header"><span>Link detail</span><span class="ed-close" title="close">×</span></div>
+  <div id="edge-detail"></div>
+</section>
 <div id="traffic-panel"></div>
 <div id="graph"></div>
 <main id="delivery-panel" class="workspace-panel">
@@ -289,8 +339,8 @@
   </div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
-<script src="mesh_graph.js?v=20260914-layout-bottom-v1"></script>
+<script src="mesh_graph.js?v=20260917-activity-log-v7"></script>
 <script src="traffic_chart.js?v=20260914-merged-wan-graph-v4"></script>
-<script src="operator_tabs.js?v=20260915-directional-reset-v1"></script>
+<script src="operator_tabs.js?v=20260916-edge-detail-v1"></script>
 </body>
 </html>

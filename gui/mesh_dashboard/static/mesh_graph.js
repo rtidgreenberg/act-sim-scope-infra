@@ -30,6 +30,7 @@
   const HTTP_ORIGIN = `${location.protocol}//${location.host}`;
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
   const REST_URL = `${HTTP_ORIGIN}/api/mesh_status`;
+  const LINK_STATS_URL = `${HTTP_ORIGIN}/api/link_stats`;
   const WS_URL = `${WS_ORIGIN}/ws`;
   const ASSIGN_URL = `${HTTP_ORIGIN}/api/team_assignment`;
   const STATUS_MODE_URL = `${HTTP_ORIGIN}/api/status_resolution`;
@@ -55,6 +56,17 @@
   const STATUS_LEVEL_FRESH_MS = 5000;
 
   const platformStatusCache = new Map(); // nodeId -> {primary, detail, debug, updated_at}
+  let latestLinkStatsRows = [];
+  const MAX_ACTIVITY_ENTRIES = 100;
+  const ACTIVITY_SAMPLE_LIMIT = 500;
+  const ACTIVITY_STORAGE_KEY = "act.mesh.linkActivity.v1";
+  const activityEntries = loadPersistedActivity();
+  const seenActivitySamples = new Set(activityEntries.map((entry) => entry.sampleKey).filter(Boolean));
+  const seenActivityTopics = new Set(activityEntries.map((entry) => entry.topicName).filter(Boolean));
+  let activitySequence = activityEntries.reduce((maxId, entry) => Math.max(maxId, Number(entry.id || 0)), 0);
+  let activityFilter = "all";
+  let activityTopicFilter = "all";
+  let activityPlatformFilter = "all";
 
   // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
   // at EDGE_DECAY_WINDOW_MS -- deliberately the same 3s window as the AUTOMATIC liveliness
@@ -178,6 +190,7 @@
   // client-side view over the same samples — it never changes what's subscribed.
   const activeTeamFilter = new Set();
   let selectedId = null;
+  let selectedEdgeId = null;
   const DIM_OPACITY = 0.2;
   const HIGHLIGHT_DIM_OPACITY = 0.18;
 
@@ -329,7 +342,7 @@
       nodes: { shape: "dot", size: 16, font: { size: 13, color: "#e6e8eb" } },
       edges: { width: 2, smooth: { enabled: false } },
       physics: { enabled: false },
-      interaction: { hover: false },
+      interaction: { hover: false, selectConnectedEdges: false },
     }
   );
   // Expose for headless Playwright e2e tests (test_team_assignment_e2e.py) — lets
@@ -461,6 +474,28 @@
   function detailRow(k, v) {
     return `<div class="detail-row"><span class="k">${k}</span>` +
            `<span class="v">${v}</span></div>`;
+  }
+
+  function edgeDetailRow(k, v, stateClass) {
+    return `<div class="edge-detail-row${stateClass ? ` ${stateClass}` : ""}">` +
+           `<span class="k">${escHtml(k)}</span><span class="v">${escHtml(v)}</span></div>`;
+  }
+
+  function formatCount(value) {
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? n.toLocaleString() : "0";
+  }
+
+  function formatRtt(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return "-";
+    if (n >= 1000) return `${(n / 1000).toFixed(1)} ms`;
+    return `${Math.round(n)} us`;
+  }
+
+  function statsClass(value) {
+    const n = Number(value || 0);
+    return n > 0 ? "warn" : "";
   }
 
   function detailSection(nodeId, sectionId, title, content) {
@@ -727,14 +762,366 @@
     applyViewFilters();
   }
 
+  const edgeDetailPanelEl = document.getElementById("edge-detail-panel");
+  const edgeDetailEl = document.getElementById("edge-detail");
+  const activityPanelEl = document.getElementById("activity-panel");
+  const activityLogEl = document.getElementById("activity-log");
+  const activityFilterEl = document.getElementById("activity-filter");
+  const activityTopicFilterEl = document.getElementById("activity-topic-filter");
+  const activityPlatformFilterEl = document.getElementById("activity-platform-filter");
+  const activityCountEl = document.getElementById("activity-count");
+  const trafficPanelEl = document.getElementById("traffic-panel");
+
+  function syncEdgeDetailHeight() {
+    if (!edgeDetailEl) return;
+    const detailTop = edgeDetailEl.getBoundingClientRect().top;
+    const trafficTop = trafficPanelEl && trafficPanelEl.children.length
+      ? trafficPanelEl.getBoundingClientRect().top : window.innerHeight;
+    const height = Math.max(180, Math.floor(trafficTop - detailTop - 8));
+    edgeDetailEl.style.setProperty("--edge-detail-height", `${height}px`);
+  }
+
+  function syncActivityLogHeight() {
+    if (!activityPanelEl || !activityLogEl) return;
+    const logTop = activityLogEl.getBoundingClientRect().top;
+    const trafficTop = trafficPanelEl && trafficPanelEl.children.length
+      ? trafficPanelEl.getBoundingClientRect().top : window.innerHeight;
+    const height = Math.max(180, Math.floor(trafficTop - logTop - 8));
+    activityLogEl.style.setProperty("--activity-log-height", `${height}px`);
+  }
+
+  function linkRowsForEdge(edge) {
+    if (!edge) return [];
+    const a = String(edge.from);
+    const b = String(edge.to);
+    return latestLinkStatsRows.filter((row) => {
+      const observer = nodeNameOf(row.observer_router || "");
+      const peer = nodeNameOf(row.peer_router || "");
+      return (observer === a && peer === b) || (observer === b && peer === a);
+    }).sort((left, right) => String(left.observer_router).localeCompare(String(right.observer_router)));
+  }
+
+  function renderStatsSection(row) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+    const title = `${observer} -> ${peer}`;
+    const nacks = Number(row.nacks_received || 0) + Number(row.nacks_sent || 0) + Number(row.nack_frags_received || 0);
+    const rejects = Number(row.samples_rejected_local || 0) + Number(row.samples_rejected_remote || 0) + Number(row.out_of_range_rejected || 0);
+    return `<section class="edge-detail-section">` +
+      `<div class="edge-detail-title">${escHtml(title)} <span class="edge-detail-subtitle">${escHtml(row.network || "wan")}</span></div>` +
+      `<div class="edge-detail-grid">` +
+        edgeDetailRow("pushed", formatCount(row.pushed_samples)) +
+        edgeDetailRow("pulled/repair", formatCount(row.pulled_samples), statsClass(row.pulled_samples)) +
+        edgeDetailRow("NACKs received", formatCount(row.nacks_received), statsClass(row.nacks_received)) +
+        edgeDetailRow("NACK frags", formatCount(row.nack_frags_received), statsClass(row.nack_frags_received)) +
+        edgeDetailRow("heartbeats sent", formatCount(row.heartbeats_sent)) +
+        edgeDetailRow("remote rejects", formatCount(row.samples_rejected_remote), statsClass(row.samples_rejected_remote)) +
+        edgeDetailRow("received", formatCount(row.samples_received)) +
+        edgeDetailRow("duplicates", formatCount(row.duplicates_received), statsClass(row.duplicates_received)) +
+        edgeDetailRow("NACKs sent", formatCount(row.nacks_sent), statsClass(row.nacks_sent)) +
+        edgeDetailRow("uncommitted", formatCount(row.uncommitted_samples), statsClass(row.uncommitted_samples)) +
+        edgeDetailRow("heartbeats received", formatCount(row.heartbeats_received)) +
+        edgeDetailRow("local rejects", formatCount(rejects), statsClass(rejects)) +
+        edgeDetailRow("RTT mean", formatRtt(row.rtt_mean_us)) +
+        edgeDetailRow("RTT min/max", `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}`) +
+        edgeDetailRow("rediscovery", row.rediscovery_in_interval ? "yes" : "no", row.rediscovery_in_interval ? "bad" : "") +
+        edgeDetailRow("age", ageMs == null ? "-" : `${ageMs} ms`) +
+      `</div>` +
+      (nacks > 0 ? `<div class="edge-detail-subtitle" style="margin-top:6px;color:#e0b84d;">NACK/repair activity in the latest interval.</div>` : "") +
+      `</section>`;
+  }
+
+  function topicStatTotal(row, fields) {
+    return fields.reduce((sum, field) => sum + Number(row[field] || 0), 0);
+  }
+
+  function renderTopicStatsTable(linkRows) {
+    const topicRows = [];
+    linkRows.forEach((linkRow) => {
+      (linkRow.topic_stats || []).forEach((topicRow) => {
+        const direction = topicRow.direction || "";
+        const suffix = direction === "writer" ? " (w)" : direction === "reader" ? " (r)" : "";
+        topicRows.push({
+          topic: `${topicRow.topic_name || "-"}${suffix}`,
+          nacks: topicStatTotal(topicRow, ["nacks_received", "nack_frags_received", "nacks_sent"]),
+          repair: topicStatTotal(topicRow, ["pulled_samples", "duplicates_received"]),
+          heartbeats: topicStatTotal(topicRow, ["heartbeats_sent", "heartbeats_received"]),
+          samples: topicStatTotal(topicRow, ["pushed_samples", "samples_received"]),
+          uncommitted: Number(topicRow.uncommitted_samples || 0),
+        });
+      });
+    });
+    if (!topicRows.length) {
+      return `<div class="edge-detail-empty">Per-topic link counters have not arrived on ActRouterLinkStats yet.</div>`;
+    }
+    const body = topicRows.map((row) => `<tr><td>${escHtml(row.topic)}</td>` +
+      `<td>${formatCount(row.samples)}</td><td>${formatCount(row.nacks)}</td>` +
+      `<td>${formatCount(row.repair)}</td><td>${formatCount(row.heartbeats)}</td>` +
+      `<td>${formatCount(row.uncommitted)}</td></tr>`).join("");
+    return `<table class="edge-detail-table"><thead><tr><th>Topic</th><th>Samples</th><th>NACK</th><th>Repair</th><th>HB</th>` +
+      `<th>Uncommitted</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function loadPersistedActivity() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(ACTIVITY_STORAGE_KEY) || "[]");
+      return Array.isArray(parsed) ? pruneActivityArchive(parsed) : [];
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  function pruneActivityArchive(entries) {
+    const countsByTopic = new Map();
+    return entries.filter((entry) => {
+      const topic = entry.topicName || "-";
+      const count = countsByTopic.get(topic) || 0;
+      if (count >= MAX_ACTIVITY_ENTRIES) return false;
+      countsByTopic.set(topic, count + 1);
+      return true;
+    });
+  }
+
+  function persistActivityLog() {
+    try {
+      localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(pruneActivityArchive(activityEntries)));
+    } catch (_err) {
+      // Activity history is best-effort UI state.
+    }
+  }
+
+  function activityTimestamp(row) {
+    const timestamp = Number(row.capture_timestamp || 0);
+    return timestamp > 0 ? new Date(timestamp / 1_000_000).toLocaleTimeString() : new Date().toLocaleTimeString();
+  }
+
+  function activityDirection(row, topicRow) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    return topicRow.direction === "reader" ? `${peer} -> ${observer}` : `${observer} -> ${peer}`;
+  }
+
+  function activityEndpoints(row, topicRow) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    return topicRow.direction === "reader" ? { source: peer, destination: observer } : { source: observer, destination: peer };
+  }
+
+  function activityTopicLabel(topicRow) {
+    const suffix = topicRow.direction === "writer" ? " (w)" : topicRow.direction === "reader" ? " (r)" : "";
+    return `${topicRow.topic_name || "-"}${suffix}`;
+  }
+
+  function topicActivityBuckets(topicRow) {
+    const nacks = topicStatTotal(topicRow, ["nacks_received", "nack_frags_received", "nacks_sent"]);
+    const repair = topicStatTotal(topicRow, ["pulled_samples", "duplicates_received"]);
+    const rejected = topicStatTotal(topicRow, ["samples_rejected_remote", "out_of_range_rejected", "samples_rejected_local"]);
+    const buckets = [
+      { label: "sample", value: topicStatTotal(topicRow, ["pushed_samples", "samples_received"]) },
+      { label: "hb", value: topicStatTotal(topicRow, ["heartbeats_sent", "heartbeats_received"]) },
+      { label: "nack", value: nacks, state: "bad" },
+      { label: "repair", value: repair, state: repair > 0 ? "warn" : "" },
+      { label: "reject", value: rejected, state: "bad" },
+      { label: "uncommitted", value: Number(topicRow.uncommitted_samples || 0), state: "warn" },
+    ];
+    if (topicRow.rediscovery_in_interval) buckets.push({ label: "rediscovery", value: 1, state: "warn" });
+    return buckets.filter((bucket) => bucket.value > 0);
+  }
+
+  function appendActivityEntry(row, topicRow, bucket) {
+    const endpoints = activityEndpoints(row, topicRow);
+    activityEntries.unshift({
+      id: ++activitySequence,
+      sampleKey: [row.observer_router, row.peer_router, row.network, row.capture_timestamp].join("|"),
+      topicName: topicRow.topic_name || "-",
+      topic: activityTopicLabel(topicRow),
+      metric: bucket.label,
+      filterGroup: bucket.filterGroup || bucket.label,
+      value: bucket.value,
+      state: bucket.state || "",
+      direction: `${endpoints.source} -> ${endpoints.destination}`,
+      source: endpoints.source,
+      destination: endpoints.destination,
+      network: row.network || "wan",
+      time: activityTimestamp(row),
+    });
+    activityEntries.splice(0, activityEntries.length, ...pruneActivityArchive(activityEntries));
+  }
+
+  function setSelectOptions(selectEl, values, allLabel, currentValue) {
+    if (!selectEl) return "all";
+    const sorted = Array.from(values).sort((left, right) => left.localeCompare(right));
+    const nextValue = currentValue !== "all" && values.has(currentValue) ? currentValue : "all";
+    selectEl.innerHTML = `<option value="all">${escHtml(allLabel)}</option>` +
+      sorted.map((value) => `<option value="${escHtml(value)}">${escHtml(value)}</option>`).join("");
+    selectEl.value = nextValue;
+    return nextValue;
+  }
+
+  function syncActivityFilterOptions() {
+    const platforms = new Set();
+    activityEntries.forEach((entry) => {
+      if (entry.source) platforms.add(entry.source);
+      if (entry.destination) platforms.add(entry.destination);
+    });
+    activityTopicFilter = setSelectOptions(activityTopicFilterEl, seenActivityTopics, "All topics", activityTopicFilter);
+    activityPlatformFilter = setSelectOptions(activityPlatformFilterEl, platforms, "All platforms", activityPlatformFilter);
+  }
+
+  function renderActivityLog() {
+    if (!activityLogEl) return;
+    syncActivityFilterOptions();
+    const matching = activityEntries.filter((entry) => {
+      if (activityFilter === "all") return true;
+      if (activityFilter === "issue") return entry.state === "bad" || entry.state === "warn";
+      return entry.filterGroup === activityFilter;
+    }).filter((entry) => {
+      if (activityTopicFilter !== "all" && entry.topicName !== activityTopicFilter) return false;
+      if (activityPlatformFilter !== "all" && entry.source !== activityPlatformFilter && entry.destination !== activityPlatformFilter) return false;
+      return true;
+    });
+    const filtered = matching.slice(0, MAX_ACTIVITY_ENTRIES);
+    if (activityCountEl) {
+      const hasActiveFilter = activityFilter !== "all" || activityTopicFilter !== "all" || activityPlatformFilter !== "all";
+      activityCountEl.textContent = !hasActiveFilter
+        ? String(filtered.length) : `${filtered.length}/${matching.length}`;
+    }
+    if (!activityEntries.length) {
+      activityLogEl.innerHTML = `<div class="activity-empty">Waiting for link activity.</div>`;
+      syncActivityLogHeight();
+      return;
+    }
+    if (!filtered.length) {
+      activityLogEl.innerHTML = `<div class="activity-empty">No matching link activity.</div>`;
+      syncActivityLogHeight();
+      return;
+    }
+    activityLogEl.innerHTML = filtered.map((entry) =>
+      `<div class="activity-entry${entry.state ? ` ${entry.state}` : ""}">` +
+        `<div class="activity-main"><span class="activity-topic">${escHtml(entry.topic)} ${escHtml(entry.metric)}</span>` +
+        `<span class="activity-value">${formatCount(entry.value)}</span></div>` +
+        `<div class="activity-meta">${escHtml(entry.direction)} · ${escHtml(entry.network)} · ${escHtml(entry.time)}</div>` +
+      `</div>`
+    ).join("");
+    syncActivityLogHeight();
+  }
+
+  function ingestLinkActivity(snapshot) {
+    let changed = false;
+    (snapshot?.rows || []).forEach((row) => {
+      const sampleKey = [row.observer_router, row.peer_router, row.network, row.capture_timestamp].join("|");
+      if (seenActivitySamples.has(sampleKey)) return;
+      seenActivitySamples.add(sampleKey);
+      if (seenActivitySamples.size > ACTIVITY_SAMPLE_LIMIT) {
+        const oldest = seenActivitySamples.values().next().value;
+        seenActivitySamples.delete(oldest);
+      }
+      (row.topic_stats || []).forEach((topicRow) => {
+        if (topicRow.topic_name) seenActivityTopics.add(topicRow.topic_name);
+        topicActivityBuckets(topicRow).forEach((bucket) => {
+          appendActivityEntry(row, topicRow, bucket);
+          changed = true;
+        });
+      });
+    });
+    if (changed) persistActivityLog();
+    renderActivityLog();
+  }
+
+  function renderEdgeDetail(edgeId) {
+    selectedEdgeId = edgeId;
+    const edge = edges.get(edgeId);
+    if (!edge) {
+      hideEdgeDetail();
+      return;
+    }
+    const a = String(edge.from);
+    const b = String(edge.to);
+    const rows = linkRowsForEdge(edge);
+    const statsHtml = rows.length
+      ? rows.map(renderStatsSection).join("")
+      : `<div class="edge-detail-empty">No ActRouterLinkStats sample has arrived yet for ${escHtml(a)} <-> ${escHtml(b)}.</div>`;
+    edgeDetailEl.innerHTML =
+      `<section class="edge-detail-section">` +
+        `<div class="edge-detail-title">${escHtml(a)} <span class="edge-detail-subtitle"><-></span> ${escHtml(b)}</div>` +
+        `<div class="edge-detail-subtitle">${escHtml(edge.source || "link")} · ActRouterLinkStats only</div>` +
+      `</section>` +
+      statsHtml +
+      `<section class="edge-detail-section">` +
+        `<div class="edge-detail-title">Per-topic link counters</div>` +
+        renderTopicStatsTable(rows) +
+      `</section>`;
+    edgeDetailPanelEl.style.display = "block";
+    syncEdgeDetailHeight();
+  }
+
+  function ingestLinkStats(snapshot) {
+    ingestLinkActivity(snapshot);
+    latestLinkStatsRows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+    if (selectedEdgeId) renderEdgeDetail(selectedEdgeId);
+  }
+
+  window.addEventListener("resize", syncEdgeDetailHeight);
+  window.addEventListener("resize", syncActivityLogHeight);
+  if (trafficPanelEl && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(syncEdgeDetailHeight).observe(trafficPanelEl);
+    new ResizeObserver(syncActivityLogHeight).observe(trafficPanelEl);
+  }
+  syncEdgeDetailHeight();
+  syncActivityLogHeight();
+
+  if (activityFilterEl) {
+    activityFilterEl.addEventListener("change", () => {
+      activityFilter = activityFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  if (activityTopicFilterEl) {
+    activityTopicFilterEl.addEventListener("change", () => {
+      activityTopicFilter = activityTopicFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  if (activityPlatformFilterEl) {
+    activityPlatformFilterEl.addEventListener("change", () => {
+      activityPlatformFilter = activityPlatformFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  renderActivityLog();
+
+  function hideEdgeDetail() {
+    selectedEdgeId = null;
+    edgeDetailEl.innerHTML = "";
+    edgeDetailPanelEl.style.display = "none";
+    syncEdgeDetailHeight();
+  }
+
+  const edgeDetailClose = edgeDetailPanelEl.querySelector(".ed-close");
+  if (edgeDetailClose) edgeDetailClose.addEventListener("click", hideEdgeDetail);
+
   network.on("selectNode", (p) => {
     if (p.nodes.length) {
+      hideEdgeDetail();
       renderDetail(p.nodes[0]);
       refreshPlatformStatus(p.nodes[0]);
       applyViewFilters();
     }
   });
   network.on("deselectNode", () => hideDetail());
+
+  network.on("selectEdge", (p) => {
+    if (p.nodes && p.nodes.length) return;
+    if (p.edges.length) {
+      hideDetail();
+      renderEdgeDetail(p.edges[0]);
+      applyViewFilters();
+    }
+  });
+  network.on("deselectEdge", () => {
+    if (!network.getSelection().edges.length) hideEdgeDetail();
+  });
 
   directLinksToggle.addEventListener("change", applyViewFilters);
   relayedLinksToggle.addEventListener("change", applyViewFilters);
@@ -979,6 +1366,11 @@
         return;
       }
 
+      if (msg.type === "link_stats") {
+        ingestLinkStats(msg.data);
+        return;
+      }
+
       const meshWrapped = (msg.type === "mesh_status") ? { data: msg.data } : msg;
       if (ingestSampleArray([meshWrapped])) {
         setStatus(`${topologyStatus} · ${new Date().toLocaleTimeString()} · ` +
@@ -1150,5 +1542,7 @@
     ctxMenu.style.display = "block";
   });
 
+  fetch(LINK_STATS_URL).then((resp) => resp.ok ? resp.json() : null)
+    .then(ingestLinkStats).catch(() => {});
   seedFromRest().then(connectWebSocket);
 })();

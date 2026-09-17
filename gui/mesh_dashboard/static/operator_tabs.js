@@ -263,10 +263,12 @@
 
   async function sendExperiment(pathlossDb, resetScenario = false) {
     const kind = experimentKind.value;
+    const source = experimentSource.value;
+    const destination = experimentDestination.value;
     const body = {
       kind,
-      source: experimentSource.value,
-      destination: experimentDestination.value,
+      source,
+      destination,
       direction: resetScenario ? "bidirectional" : experimentDirection.value,
       pathloss_db: pathlossDb,
       latency_ms: Number(experimentLatency.value),
@@ -289,7 +291,9 @@
       body: JSON.stringify(body),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "EMANE controller request failed");
+    if (!response.ok) {
+      throw new Error(result.error || "EMANE controller request failed");
+    }
     renderExperimentState(result);
     experimentState.textContent = pathlossDb === 0
       ? "Scenario reset"

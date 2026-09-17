@@ -36,6 +36,8 @@ DEFAULT_STATIC_DIR = _THIS_FILE.parents[1] / "static"
 
 MESH_STATUS_TOPIC = "ActRouterMeshStatus"
 MESH_STATUS_TYPE = "RouterMeshStatus"
+LINK_STATS_TOPIC = "ActRouterLinkStats"
+LINK_STATS_TYPE = "RouterLinkStats"
 TEAM_ASSIGNMENT_TOPIC = "ActTeamAssignment"
 TEAM_ASSIGNMENT_TYPE = "TeamAssignment"
 STATUS_MODE_TOPIC = "ActPlatformStatusMode"
@@ -105,6 +107,7 @@ class DdsBridge:
 
         qp = _qos_provider_for(types_xml)
         mesh_type = qp.type(MESH_STATUS_TYPE)
+        link_stats_type = qp.type(LINK_STATS_TYPE)
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
         status_mode_type = qp.type(STATUS_MODE_TYPE)
 
@@ -115,6 +118,17 @@ class DdsBridge:
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
         subscriber = dds.Subscriber(self.participant)
         self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic)
+        link_stats_topic = dds.DynamicData.Topic(self.participant, LINK_STATS_TOPIC,
+                                                 link_stats_type)
+        link_stats_qos = dds.DataReaderQos()
+        link_stats_qos.reliability = dds.Reliability(
+            kind=dds.ReliabilityKind.RELIABLE)
+        link_stats_qos.durability = dds.Durability(
+            kind=dds.DurabilityKind.TRANSIENT_LOCAL)
+        link_stats_qos.history = dds.History.keep_all
+        self.link_stats_reader = dds.DynamicData.DataReader(
+            subscriber, link_stats_topic, link_stats_qos)
+        self.link_stats_cache = {}
 
         # Platform status readers (all best-effort + volatile on control_lan).
         self.platform_readers = []
@@ -209,6 +223,19 @@ class DdsBridge:
 
                     self._broadcast(payload)
 
+                for data, info in self.link_stats_reader.take():
+                    if not info.valid:
+                        continue
+                    sample = json.loads(data.to_json())
+                    key = (
+                        sample.get("observer_router", ""),
+                        sample.get("peer_router", ""),
+                        sample.get("network", ""),
+                    )
+                    with self.cache_lock:
+                        self.link_stats_cache[key] = sample
+                    self._broadcast({"type": "link_stats", "data": self.link_stats_snapshot()})
+
             if self.poll_audit_events():
                 self._broadcast({"type": "delivery_stats", "data": self.delivery_snapshot()})
 
@@ -241,6 +268,16 @@ class DdsBridge:
     def emane_snapshot(self):
         with self.cache_lock:
             return dict(self.latest_emane_aggregate) if self.latest_emane_aggregate else None
+
+    def link_stats_snapshot(self):
+        with self.cache_lock:
+            rows = list(self.link_stats_cache.values())
+        rows.sort(key=lambda row: (
+            row.get("observer_router", ""),
+            row.get("peer_router", ""),
+            row.get("network", ""),
+        ))
+        return {"rows": rows}
 
     def _platform_topic_expected(self, source_node, topic, sent_at_ns):
         if not source_node.startswith("Platform_"):
@@ -835,6 +872,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_emane_stats(_request):
         return web.json_response(bridge.emane_snapshot())
 
+    async def get_link_stats(_request):
+        return web.json_response(bridge.link_stats_snapshot())
+
     async def get_emane_controller(_request):
         return web.json_response(bridge.emane_controller_status())
 
@@ -895,6 +935,7 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_get("/api/platform_status", get_platform_status)
     app.router.add_get("/api/traffic_stats", get_traffic_stats)
     app.router.add_get("/api/emane_stats", get_emane_stats)
+    app.router.add_get("/api/link_stats", get_link_stats)
     app.router.add_get("/api/emane_controller", get_emane_controller)
     app.router.add_post("/api/emane_controller", post_emane_controller)
     app.router.add_get("/api/delivery_stats", get_delivery_stats)
