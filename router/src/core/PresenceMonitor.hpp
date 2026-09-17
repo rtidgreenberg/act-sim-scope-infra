@@ -156,6 +156,9 @@ public:
                     dds::domain::DomainParticipant lan_participant,
                     const std::string &node_name,
                     const std::string &router_name,
+                    const dds::sub::qos::DataReaderQos &health_reader_qos,
+                    const dds::pub::qos::DataWriterQos &health_writer_qos,
+                    const dds::pub::qos::DataWriterQos &mesh_writer_qos,
                     dds::domain::DomainParticipant team_scoped_participant = dds::core::null,
                     const std::string &health_topic = "RouterHealth",
                     const std::string &mesh_topic = "ActRouterMeshStatus");

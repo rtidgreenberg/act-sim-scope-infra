@@ -25,17 +25,6 @@
   <member name="message" stringMaxLength="256" type="string"/>
   <member name="timestamp" type="int64"/>
 </struct>
-<struct name= "control_command_receipt">
-  <member name="source" stringMaxLength="100" type="string" key="true"/>
-  <member name="destination" stringMaxLength="100" type="string"/>
-  <member name="run_id" stringMaxLength="64" type="string"/>
-  <member name="source_node" stringMaxLength="100" type="string"/>
-  <member name="audit_sequence" type="uint64"/>
-  <member name="sent_at_ns" type="int64"/>
-  <member name="received_at_ns" type="int64"/>
-  <member name="command_id" stringMaxLength="64" type="string"/>
-  <member name="timestamp" type="int64"/>
-</struct>
 <struct name= "platform_status">
   <member name="source" stringMaxLength="100" type="string" key="true"/>
   <member name="status_text" stringMaxLength="256" type="string"/>
@@ -385,6 +374,27 @@
   <member name="probe_seq" type="uint64"/>
   <member name="send_timestamp" type="int64"/>
 </struct>
+<struct name= "RouterLinkTopicStats">
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="topic_name" stringMaxLength="255" type="string"/>
+  <member name="direction" stringMaxLength="255" type="string"/>
+  <member name="rediscovery_in_interval" type="boolean"/>
+  <member name="pushed_samples" type="uint64"/>
+  <member name="pushed_fragment_bytes" type="uint64"/>
+  <member name="pulled_samples" type="uint64"/>
+  <member name="pulled_fragment_bytes" type="uint64"/>
+  <member name="nacks_received" type="uint64"/>
+  <member name="nack_frags_received" type="uint64"/>
+  <member name="heartbeats_sent" type="uint64"/>
+  <member name="samples_rejected_remote" type="uint64"/>
+  <member name="samples_received" type="uint64"/>
+  <member name="duplicates_received" type="uint64"/>
+  <member name="heartbeats_received" type="uint64"/>
+  <member name="nacks_sent" type="uint64"/>
+  <member name="out_of_range_rejected" type="uint64"/>
+  <member name="samples_rejected_local" type="uint64"/>
+  <member name="uncommitted_samples" type="uint32"/>
+</struct>
 <struct name= "RouterLinkStats">
   <member name="observer_router" stringMaxLength="255" type="string" key="true"/>
   <member name="peer_router" stringMaxLength="255" type="string" key="true"/>
@@ -412,6 +422,7 @@
   <member name="rtt_min_us" type="uint32"/>
   <member name="rtt_mean_us" type="uint32"/>
   <member name="rtt_max_us" type="uint32"/>
+  <member name="topic_stats" sequenceMaxLength="128" type="nonBasic"  nonBasicTypeName= "RouterLinkTopicStats"/>
 </struct>
 <struct name= "DomainTrafficStats">
   <member name="domain_id" type="int32" key="true"/>

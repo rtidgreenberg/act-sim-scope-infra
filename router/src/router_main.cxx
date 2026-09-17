@@ -57,6 +57,15 @@ using namespace router;
 
 namespace {
 
+const char *kAdminStatusProfile = "ACT_QOS_LIB::router_admin_status";
+const char *kAdminCommandProfile = "ACT_QOS_LIB::router_admin_command";
+const char *kAdminCommandAckProfile = "ACT_QOS_LIB::router_admin_command_ack";
+const char *kControllerJournalProfile = "ACT_QOS_LIB::router_controller_journal";
+const char *kRouterHealthProfile = "ACT_QOS_LIB::router_health";
+const char *kRouterMeshStatusProfile = "ACT_QOS_LIB::router_mesh_status";
+const char *kRouterLinkProbeProfile = "ACT_QOS_LIB::router_link_probe";
+const char *kRouterLinkStatsProfile = "ACT_QOS_LIB::router_link_stats";
+
 void print_usage() {
     Log::info("router.usage",
               {{"invocation",
@@ -297,7 +306,6 @@ int main(int argc, char **argv) {
             // Only on_wan reaches the registry (WAN-leg link-stats detection); team_scoped is
             // consumed on ParticipantState (protected-identity partition) and never needed here.
             pc.on_wan = p.on_wan;
-            pc.use_spdp2 = p.use_spdp2;
             pc.partition_names = p.participant_partition;
             if (!p.qos_profile_alias.empty()) {
                 auto it = cfg.qos_profiles.find(p.qos_profile_alias);
@@ -382,7 +390,39 @@ int main(int argc, char **argv) {
         ParticipantRegistry registry(participant_configs, /*autoenable=*/false, qos_provider);
 
         dds::domain::DomainParticipant admin_dp = registry.get(admin_participant_name);
-        DdsStatusPublisher status_pub(admin_dp, "ActRouterStatus");
+
+        dds::pub::qos::DataWriterQos status_writer_qos;
+        dds::pub::qos::DataWriterQos command_ack_writer_qos;
+        dds::sub::qos::DataReaderQos command_reader_qos;
+        dds::pub::qos::DataWriterQos journal_writer_qos;
+        dds::sub::qos::DataReaderQos health_reader_qos;
+        dds::pub::qos::DataWriterQos health_writer_qos;
+        dds::pub::qos::DataWriterQos mesh_writer_qos;
+        dds::pub::qos::DataWriterQos link_probe_writer_qos;
+        dds::sub::qos::DataReaderQos link_probe_reader_qos;
+        dds::pub::qos::DataWriterQos link_stats_writer_qos;
+        try {
+            if (!qos_provider) {
+                throw std::runtime_error("qos_libraries is required for router internal QoS");
+            }
+            status_writer_qos = qos_provider->datawriter_qos(kAdminStatusProfile);
+            command_ack_writer_qos = qos_provider->datawriter_qos(kAdminCommandAckProfile);
+            command_reader_qos = qos_provider->datareader_qos(kAdminCommandProfile);
+            journal_writer_qos = qos_provider->datawriter_qos(kControllerJournalProfile);
+            health_reader_qos = qos_provider->datareader_qos(kRouterHealthProfile);
+            health_writer_qos = qos_provider->datawriter_qos(kRouterHealthProfile);
+            mesh_writer_qos = qos_provider->datawriter_qos(kRouterMeshStatusProfile);
+            link_probe_writer_qos = qos_provider->datawriter_qos(kRouterLinkProbeProfile);
+            link_probe_reader_qos = qos_provider->datareader_qos(kRouterLinkProbeProfile);
+            link_stats_writer_qos = qos_provider->datawriter_qos(kRouterLinkStatsProfile);
+        } catch (const std::exception &e) {
+            Log::error("router.config.internal_qos_profile_unresolvable",
+                      {{"config", config_path}, {"error", e.what()}});
+            return 2;
+        }
+
+        DdsStatusPublisher status_pub(admin_dp, status_writer_qos,
+                                      command_ack_writer_qos, "ActRouterStatus");
 
         rti::core::cond::AsyncWaitSet aws;
         AsyncWaitSetDispatcher route_disp(aws);
@@ -392,7 +432,7 @@ int main(int argc, char **argv) {
         // attaches to the AWS here, before aws.start()/enable_all() (D52). The writer is
         // always created; it emits no data traffic until a recorder reader matches. Declared
         // before ctrl so ctrl can hold the IControllerJournal seam (D55).
-        ControllerJournalPublisher journal_pub(admin_dp, aws);
+        ControllerJournalPublisher journal_pub(admin_dp, aws, journal_writer_qos);
 
         // Phase 8 (D75): presence monitor — RouterHealth heartbeat pair on the presence
         // (WAN) participant, ActRouterMeshStatus aggregate on the admin (LAN)
@@ -421,7 +461,8 @@ int main(int argc, char **argv) {
         if (!cfg.presence_participant.empty()) {
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
-                    cfg.node_name, cfg.router_name, team_scoped_participant));
+                    cfg.node_name, cfg.router_name, health_reader_qos, health_writer_qos,
+                    mesh_writer_qos, team_scoped_participant));
         }
 
         // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the
@@ -438,6 +479,7 @@ int main(int argc, char **argv) {
             link_stats.reset(new LinkStatsCollector(
                     aws, registry.get(cfg.presence_participant), admin_dp,
                     router_identity, cfg.presence_participant,
+                    link_probe_writer_qos, link_probe_reader_qos, link_stats_writer_qos,
                     cfg.link_stats_period_ms));
             route_disp.set_stats_registry(link_stats.get());
             link_stats->register_source(presence.get());
@@ -463,7 +505,8 @@ int main(int argc, char **argv) {
         // The D47 CFT keys on this router's own identity, so only commands addressed here
         // reach the callback; the controller runs the state machine and DdsStatusPublisher
         // writes the ack.
-        CommandReader command_reader(aws, ctrl, admin_dp, cfg.node_name, cfg.router_name);
+        CommandReader command_reader(aws, ctrl, admin_dp, command_reader_qos,
+                         cfg.node_name, cfg.router_name);
         aws.start();
 
         // D52: only now, with every builtin-reader condition attached and the

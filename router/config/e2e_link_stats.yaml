@@ -42,6 +42,7 @@ qos_profiles:
   wan_participant: ACT_QOS_LIB::wan_router_participant
   wan_status: ACT_QOS_LIB::wan_status
   wan_event: ACT_QOS_LIB::wan_event
+  router_health: ACT_QOS_LIB::router_health
 
 participants:
   control_lan:
@@ -53,7 +54,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
-    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
@@ -63,7 +63,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
-    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
   # STATUS leg — BEST_EFFORT (production platform_init_status uses wan_status). A

@@ -183,7 +183,7 @@ public:
             const bool writer_on_wan = registry_.on_wan(view.spec.output.participant);
 
             std::unique_ptr<RouteTopicRuntimeBase> runtime(
-                    new RouteTopicRuntime<T>(reader, writer, publisher, subscriber, cft,
+                    new RouteTopicRuntime<T>(route, topic_name, reader, writer, publisher, subscriber, cft,
                                              on_warning, manual_liveliness, on_match,
                                              reader_on_wan, writer_on_wan));
 

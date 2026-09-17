@@ -1,20 +1,8 @@
 // QosResolver.hpp — asymmetric route-entity QoS (Phase 5, D39/D42/D45; D19) plus named
 // XML-alias resolution (Phase 7a, D60).
 //
-// The auto ("" alias) contract is asymmetric and static:
-//   - INPUT reader: one fixed weakest-request profile — BEST_EFFORT + VOLATILE +
-//     default deadline/latency_budget/liveliness/destination_order/presentation,
-//     DataRepresentation = union {XCDR, XCDR2}. By RxO construction it matches EVERY
-//     discovered writer, so reader-side QoS immutability stops mattering (D39).
-//   - OUTPUT writer: fixed strong baseline — RELIABLE + TRANSIENT_LOCAL (the TL offer
-//     is already the durability auto-match, D42) — plus two policies derived from the
-//     matched local readers at creation: deadline (min requested period; mutable, so
-//     later tightening happens in place) and liveliness kind+lease (max kind / min
-//     lease; immutable, derived once — D42).
-// History and resource limits are always alias/default-supplied, never derived — they
-// are not propagated in discovery (D19). The router's default history is KEEP_LAST(16)
-// on both auto profiles (the same depth the "default" alias uses; on the writer it is
-// also the TRANSIENT_LOCAL late-joiner cache depth).
+// Empty/default route QoS resolves to XML profiles rather than constructing policies in
+// code: ACT_QOS_LIB::router_default_reader and ACT_QOS_LIB::router_default_writer.
 //
 // "default" resolves to a built-in profile (RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(16)).
 // Any other named alias is looked up in the qos_profiles: map (alias -> "LIB::Profile")
@@ -123,6 +111,14 @@ bool try_apply_qos(Entity &entity, Qos &qos, ApplyFn apply,
 
 class QosResolver {
 public:
+    static const char *default_reader_profile() {
+        return "ACT_QOS_LIB::router_default_reader";
+    }
+
+    static const char *default_writer_profile() {
+        return "ACT_QOS_LIB::router_default_writer";
+    }
+
     QosResolver() = default;
 
     // provider may be null (no qos_libraries: configured) — then only ""/"default" resolve,
@@ -138,19 +134,8 @@ public:
             // Named XML profile fully specifies the endpoint QoS (D60).
             return provider_->datareader_qos(qos_profiles_.at(alias));
         }
-        dds::sub::qos::DataReaderQos qos;
-        if (alias.empty()) {
-            // Weakest-request input profile (D39).
-            qos << dds::core::policy::Reliability::BestEffort();
-            qos << dds::core::policy::Durability::Volatile();
-            qos << dds::core::policy::DataRepresentation(
-                    {dds::core::policy::DataRepresentation::xcdr(),
-                     dds::core::policy::DataRepresentation::xcdr2()});
-            qos << dds::core::policy::History::KeepLast(16); // router default (D19)
-        } else {
-            apply_default_profile(qos);
-        }
-        return qos;
+        ensure_provider(alias.empty() ? "" : "default");
+        return provider_->datareader_qos(default_reader_profile());
     }
 
     dds::pub::qos::DataWriterQos writer_qos(const std::string &alias,
@@ -162,27 +147,9 @@ public:
             // D39/D42 auto-derivation entirely, no baseline-then-derive (D60).
             return provider_->datawriter_qos(qos_profiles_.at(alias));
         }
-        dds::pub::qos::DataWriterQos qos;
-        apply_default_profile(qos); // strong baseline == "default" alias (D39/D42)
-        if (alias.empty() && derived.derive) {
-            qos << dds::core::policy::Deadline(
-                    duration_from_nanos(derived.deadline_nanos));
-            dds::core::policy::Liveliness liveliness;
-            switch (derived.liveliness_kind) {
-            case LivelinessKindPod::Automatic:
-                liveliness = dds::core::policy::Liveliness::Automatic();
-                break;
-            case LivelinessKindPod::ManualByParticipant:
-                liveliness = dds::core::policy::Liveliness::ManualByParticipant();
-                break;
-            case LivelinessKindPod::ManualByTopic:
-                liveliness = dds::core::policy::Liveliness::ManualByTopic();
-                break;
-            }
-            liveliness.lease_duration(duration_from_nanos(derived.lease_nanos));
-            qos << liveliness;
-        }
-        return qos;
+        (void)derived;
+        ensure_provider(alias.empty() ? "" : "default");
+        return provider_->datawriter_qos(default_writer_profile());
     }
 
     // --- Resolved-QoS summaries for status (D45). Stable, human-readable, compact. ---
@@ -216,24 +183,20 @@ private:
                     + "' (not \"\", \"default\", or a declared qos_profiles: key)");
         }
         if (!alias.empty() && alias != "default" && !provider_) {
-            // qos_profiles_ has the alias but no QosProvider was built (no qos_libraries:
-            // configured) — should not happen via router_main (D65), but fail clearly
-            // rather than dereference a null provider_ below.
+            ensure_provider(alias);
+        }
+    }
+
+    void ensure_provider(const std::string &alias) const {
+        if (!provider_) {
             throw std::runtime_error(
-                    "QoS alias '" + alias + "' is declared but no QosProvider is loaded "
-                    "(qos_libraries: missing?)");
+                    "QoS alias '" + alias + "' requires qos_libraries; router QoS must "
+                    "come from external XML profiles");
         }
     }
 
     std::shared_ptr<dds::core::QosProvider> provider_;
     std::map<std::string, std::string> qos_profiles_;
-
-    template <typename QosT>
-    static void apply_default_profile(QosT &qos) {
-        qos << dds::core::policy::Reliability::Reliable();
-        qos << dds::core::policy::Durability::TransientLocal();
-        qos << dds::core::policy::History::KeepLast(16);
-    }
 
     static const char *reliability_str(const dds::core::policy::Reliability &r) {
         return r.kind() == dds::core::policy::ReliabilityKind::RELIABLE

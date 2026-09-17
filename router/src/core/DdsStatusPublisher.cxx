@@ -7,37 +7,16 @@
 
 namespace router {
 
-namespace {
-
-dds::pub::qos::DataWriterQos make_writer_qos(const dds::pub::Publisher &publisher) {
-    dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::TransientLocal();
-    qos << dds::core::policy::History::KeepLast(1);
-    return qos;
-}
-
-// Command-ack writer QoS (D48): RELIABLE + VOLATILE + KEEP_LAST(16). No durability — a
-// resent command_id gets its cached ack republished by the controller (D4), so DDS history
-// replay is not needed.
-dds::pub::qos::DataWriterQos make_ack_writer_qos(const dds::pub::Publisher &publisher) {
-    dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::Volatile();
-    qos << dds::core::policy::History::KeepLast(16);
-    return qos;
-}
-
-} // namespace
-
 DdsStatusPublisher::DdsStatusPublisher(dds::domain::DomainParticipant participant,
+                                       const dds::pub::qos::DataWriterQos &status_writer_qos,
+                                       const dds::pub::qos::DataWriterQos &ack_writer_qos,
                                        const std::string &status_topic,
                                        const std::string &ack_topic)
         : publisher_(participant),
             topic_(participant, status_topic),
-            writer_(publisher_, topic_, make_writer_qos(publisher_)),
+            writer_(publisher_, topic_, status_writer_qos),
             ack_topic_(participant, ack_topic),
-            ack_writer_(publisher_, ack_topic_, make_ack_writer_qos(publisher_)) {
+            ack_writer_(publisher_, ack_topic_, ack_writer_qos) {
     Log::info("status_publisher_ready",
               {{"status_topic", status_topic}, {"ack_topic", ack_topic}});
 }

@@ -50,7 +50,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
-    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
@@ -60,7 +59,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
-    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
   - name: control_command

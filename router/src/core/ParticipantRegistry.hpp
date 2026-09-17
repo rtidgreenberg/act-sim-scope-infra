@@ -58,14 +58,7 @@ public:
         // post-D103; team_wan before it was retired). The registry does NOT carry the
         // team_scoped flag — that concept (protected-identity partition) lives on
         // ParticipantState and never reaches here.
-        // NOTE: this does NOT select SPDP2 — that is `use_spdp2` below (decoupled).
         bool on_wan = false;
-        // D78 (reinstated; D87 retraction reversed by the D92 CORRECTION 2026-07-22): select
-        // discovery_config.builtin_discovery_plugins = SPDP2 | SEDP in make_participant_qos().
-        // Set for every WAN-facing participant (control_wan/platform_wan post-D103) via YAML
-        // `spdp2: true`. Independent of is_wan so all WAN participants get SPDP2 while only
-        // team-scoped ones take the D83 partition. LAN participants leave it false (plain SPDP).
-        bool use_spdp2 = false;
     };
 
     // autoenable=false creates participants disabled for the D52 disabled-startup

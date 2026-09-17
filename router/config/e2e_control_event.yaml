@@ -44,7 +44,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true
-    spdp2: true
   platform_lan:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
@@ -54,7 +53,6 @@ participants:
     domain: __DOMAIN_WAN__
     qos: wan_participant
     on_wan: true
-    spdp2: true
 
 routes:
   - name: control_event

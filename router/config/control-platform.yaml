@@ -46,9 +46,11 @@ qos_libraries:
 
 qos_profiles:
   router_lan_participant: ACT_QOS_LIB::lan_router_participant
+  control_router_lan_participant: ACT_QOS_LIB::lan_control_router_participant
   wan_participant: ACT_QOS_LIB::wan_router_participant
   wan_participant_emane: ACT_QOS_LIB::wan_router_participant_emane
   wan_event: ACT_QOS_LIB::wan_event
+  router_health: ACT_QOS_LIB::router_health
   wan_status: ACT_QOS_LIB::wan_status
   lan_event: ACT_QOS_LIB::lan_event
   lan_status_1hz: ACT_QOS_LIB::lan_status_1s
@@ -57,14 +59,13 @@ participants:
   control_lan:
     role: control
     domain: 20
-    qos: router_lan_participant
+    qos: control_router_lan_participant
   control_wan:
     role: control
     domain: 200
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage: this participant's route legs are on the
                    # WAN, so the LinkStatsCollector polls them (is_wan decomposition).
-    spdp2: true    # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
     # D103: platform_wan is now team_scoped (see below), so it's no longer on the free
     # default ("") partition D87 relied on for unconditional control<->platform matching.
     # control_wan gets a standing, PROTECTED (non-removable) wildcard entry instead —
@@ -99,7 +100,6 @@ participants:
     on_wan: true       # link-stats WAN-leg coverage (is_wan decomposition) — carries the
                        # platform<->C2 status/event/command data legs AND platform<->
                        # platform team traffic (D103).
-    spdp2: true        # D78 (reinstated): SPDP2|SEDP for this WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (D83 — "team disabled by default" falls out of the shared config itself).
     # Team membership / direct-peer taps are added at runtime via

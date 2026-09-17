@@ -75,6 +75,9 @@ public:
                        dds::domain::DomainParticipant lan_participant,
                        const std::string &observer_router, // "<node>/<router>" (D79)
                        const std::string &network,         // local WAN participant name
+                       const dds::pub::qos::DataWriterQos &probe_writer_qos,
+                       const dds::sub::qos::DataReaderQos &probe_reader_qos,
+                       const dds::pub::qos::DataWriterQos &stats_writer_qos,
                        int period_ms = kLinkStatsPeriodMs, // configured tick cadence
                        const std::string &probe_topic = "RouterLinkProbe",
                        const std::string &stats_topic = "ActRouterLinkStats");

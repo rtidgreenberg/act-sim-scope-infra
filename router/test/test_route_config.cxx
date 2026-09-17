@@ -98,8 +98,7 @@ int main() {
     }
 
     // --- QoS alias resolution (Phase 7a, D60) ---
-    // control-platform.yaml declares every alias it uses (wan_event, wan_status,
-    // lan_status_1hz, router_lan_participant, wan_participant) in its own
+    // control-platform.yaml declares every route/participant QoS alias it uses in its own
     // qos_profiles: map, so validate_qos_aliases now passes (it once rejected this file
     // during the Phase-5-interim gap, before qos_profiles: parsing existed).
     {
@@ -110,18 +109,22 @@ int main() {
         CHECK(validate_qos_aliases(cfg, qos_err));
         CHECK(qos_err.empty());
 
-        CHECK(cfg.qos_profiles.size() == 6);
+                CHECK(cfg.qos_profiles.size() == 9);
         CHECK(cfg.qos_profiles.at("wan_event") == "ACT_QOS_LIB::wan_event");
         CHECK(cfg.qos_profiles.at("wan_status") == "ACT_QOS_LIB::wan_status");
+                CHECK(cfg.qos_profiles.at("router_health") == "ACT_QOS_LIB::router_health");
+                CHECK(cfg.qos_profiles.at("lan_event") == "ACT_QOS_LIB::lan_event");
         // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md
         // finding 3): must point at the profile the lib actually defines.
         CHECK(cfg.qos_profiles.at("lan_status_1hz") == "ACT_QOS_LIB::lan_status_1s");
-          CHECK(cfg.qos_profiles.at("router_lan_participant")
-              == "ACT_QOS_LIB::lan_router_participant");
-          CHECK(cfg.qos_profiles.at("wan_participant")
-              == "ACT_QOS_LIB::wan_router_participant");
-          CHECK(cfg.qos_profiles.at("wan_participant_emane")
-              == "ACT_QOS_LIB::wan_router_participant_emane");
+        CHECK(cfg.qos_profiles.at("router_lan_participant")
+            == "ACT_QOS_LIB::lan_router_participant");
+        CHECK(cfg.qos_profiles.at("control_router_lan_participant")
+            == "ACT_QOS_LIB::lan_control_router_participant");
+        CHECK(cfg.qos_profiles.at("wan_participant")
+            == "ACT_QOS_LIB::wan_router_participant");
+        CHECK(cfg.qos_profiles.at("wan_participant_emane")
+            == "ACT_QOS_LIB::wan_router_participant_emane");
     }
 
     // --- config_hash (D80): SHA-256 over the file's raw bytes, full lowercase hex ---

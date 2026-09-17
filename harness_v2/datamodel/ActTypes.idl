@@ -486,6 +486,26 @@ struct RouterLinkProbe {
     int64  send_timestamp;
 };
 
+struct RouterLinkTopicStats {
+    string route_name;
+    string topic_name;
+    string direction;
+    boolean rediscovery_in_interval;
+
+    uint64 pushed_samples;   uint64 pushed_fragment_bytes;
+    uint64 pulled_samples;   uint64 pulled_fragment_bytes;
+    uint64 nacks_received;   uint64 nack_frags_received;
+    uint64 heartbeats_sent;
+    uint64 samples_rejected_remote;
+
+    uint64 samples_received; uint64 duplicates_received;
+    uint64 heartbeats_received;
+    uint64 nacks_sent;
+    uint64 out_of_range_rejected;
+    uint64 samples_rejected_local;
+    uint32 uncommitted_samples;
+};
+
 struct RouterLinkStats {
     @key
     string observer_router;
@@ -512,6 +532,8 @@ struct RouterLinkStats {
 
     uint32 rtt_count;
     uint32 rtt_min_us;  uint32 rtt_mean_us;  uint32 rtt_max_us;
+
+    sequence<RouterLinkTopicStats, 128> topic_stats;
 };
 
 // ============================================================================

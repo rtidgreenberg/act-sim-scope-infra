@@ -127,6 +127,14 @@
       </domain_participant_qos>
     </qos_profile>
 
+    <qos_profile name="lan_control_router_participant">
+      <domain_participant_qos>
+        <discovery_config>
+          <request_types_filter>*</request_types_filter>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
     <qos_profile name="lan_platform_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
 
       <domain_participant_qos>
@@ -144,21 +152,8 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="lan_control_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
-
-      <domain_participant_qos>
-
-        <!-- Match QoS in your Control LAN -->
-
-        <discovery>
-          <initial_peers>
-            <element>$(CONTROL_LAN_PEER1)</element>
-            <element>$(CONTROL_LAN_PEER2)</element>
-            <element>$(CONTROL_LAN_PEER3)</element>
-          </initial_peers>
-        </discovery>
-
-      </domain_participant_qos>
+    <qos_profile name="lan_control_participant">
+      <domain_participant_qos/>
     </qos_profile>
 
     <qos_profile name="lan_status" base_name="BuiltinQosLib::Generic.Common">
@@ -275,6 +270,8 @@
 
 
         <discovery_config>
+          <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
+
           <!-- Router WAN legs create DynamicData routes from discovered TypeObjects. -->
           <request_types_filter>*</request_types_filter>
 
@@ -622,6 +619,243 @@
 
       </datareader_qos>
 
+    </qos_profile>
+
+    <qos_profile name="router_health" base_name="ACT_QOS_LIB::wan_event">
+      <!--
+        RouterHealth presence heartbeat on the WAN participant.
+
+        Inherits wan_event's reliable WAN protocol tuning, including the XML-controlled
+        RTPS reliable-writer heartbeat periods. Presence-specific cache/deadline/liveliness
+        settings live here so the router does not mutate endpoint QoS in code.
+      -->
+
+      <datawriter_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+        <deadline>
+          <period>
+            <sec>2</sec>
+            <nanosec>0</nanosec>
+          </period>
+        </deadline>
+
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration>
+            <sec>3</sec>
+            <nanosec>0</nanosec>
+          </lease_duration>
+        </liveliness>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+        <deadline>
+          <period>
+            <sec>2</sec>
+            <nanosec>0</nanosec>
+          </period>
+        </deadline>
+
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration>
+            <sec>3</sec>
+            <nanosec>0</nanosec>
+          </lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_mesh_status" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+        </publish_mode>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_status" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_default_reader" base_name="BuiltinQosLib::Generic.Common">
+      <datareader_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_default_writer" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_command" base_name="BuiltinQosLib::Generic.Common">
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_command_ack" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_controller_journal" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>256</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_writer>
+            <min_send_window_size>-1</min_send_window_size>
+            <max_send_window_size>-1</max_send_window_size>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_link_probe" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <acknowledgment_kind>APPLICATION_AUTO_ACKNOWLEDGMENT_MODE</acknowledgment_kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_writer>
+            <min_send_window_size>1</min_send_window_size>
+            <max_send_window_size>1</max_send_window_size>
+            <heartbeats_per_max_samples>1</heartbeats_per_max_samples>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <acknowledgment_kind>APPLICATION_AUTO_ACKNOWLEDGMENT_MODE</acknowledgment_kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_reader>
+            <min_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_heartbeat_response_delay>
+            <max_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_heartbeat_response_delay>
+          </rtps_reliable_reader>
+        </protocol>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_link_stats" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>8</depth>
+        </history>
+      </datawriter_qos>
     </qos_profile>
 
 

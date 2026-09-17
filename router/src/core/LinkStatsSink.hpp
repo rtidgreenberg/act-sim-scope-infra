@@ -60,6 +60,10 @@ public:
                             bool rematch) = 0;
     virtual void add_reader(const std::string &peer, const ReaderLinkDeltas &d,
                             bool rematch) = 0;
+    virtual void add_writer_topic(const std::string &, const std::string &, const std::string &,
+                                  const WriterLinkDeltas &, bool) {}
+    virtual void add_reader_topic(const std::string &, const std::string &, const std::string &,
+                                  const ReaderLinkDeltas &, bool) {}
 };
 
 // A WAN endpoint pair the collector polls each tick. Implemented by RouteTopicRuntime<T>

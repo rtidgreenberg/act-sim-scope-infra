@@ -44,8 +44,13 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - Treat a running mesh as immutable during diagnosis: inspect logs, bridge JSON, and code
   read-only first. Do not patch a generated config or manually kill/relaunch one router in a
   live mesh.
-- Use `harness_v2/scripts/run_mesh.sh up` and `down` as the only normal mesh lifecycle
-  commands. The runner owns its PIDs and cleanup; do not bypass it with ad hoc restarts.
+- Use `harness_v2/scripts/run_mesh.sh up --emane` and `down --emane` as the default live-mesh
+  lifecycle. The containerized EMANE path is the normal launch mode for dashboard and mesh
+  validation; use the host-process path only when explicitly requested or when debugging the
+  host harness itself. The runner owns its PIDs and cleanup; do not bypass it with ad hoc
+  restarts. Set `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0` for the license-only
+  mount before EMANE container lifecycle commands unless a different readable license directory
+  is explicitly provided.
 - Reproduce a configuration failure in a fresh, isolated `/tmp` workdir with **one** platform
   first. Scale to a multi-boat mesh only after that reproduction is understood and torn down.
 - Before starting any new mesh, verify no prior mesh processes and no `/dev/shm/RTI*` or
@@ -241,6 +246,26 @@ directory markers. Stop the associated mesh, test, or capture process before cle
   source. The verified clean baseline is `bash router/run_tests.sh` with 4/4 tests passing
   and `python3 -m pytest -q -p no:cacheprovider router/test_e2e` with 27 tests passing.
 
+## DDS QoS authoring rule
+
+- **All fixed DDS QoS must be authored in external XML profiles.** Do not construct or tune
+  reliability, durability, history, deadline, liveliness, publish mode, RTPS protocol, data
+  representation, transport, discovery, resource-limit, or application-ack behavior in C++
+  or Python code. Add or update profiles in `harness_v2/qos/act_qos_profiles.xml`, then load
+  them through `dds::core::QosProvider` / `QosResolver`.
+- Route endpoint aliases such as `wan_event`, `wan_status`, and internal profiles such as
+  `router_health`, `router_link_probe`, `router_link_stats`, `router_mesh_status`,
+  `router_admin_status`, `router_admin_command`, `router_admin_command_ack`,
+  `router_controller_journal`, `router_default_reader`, and `router_default_writer` are the
+  pattern to follow.
+- Runtime identity/routing state and lifecycle mechanics that are inherently data-dependent,
+  such as `EntityName` from the node/router name, partition membership from operator
+  team/route commands, and the temporary manually-enabled participant factory setting used for
+  disabled-startup ordering, are explicit exceptions. Keep them narrowly scoped and do not use
+  those exceptions to smuggle fixed QoS policy choices back into code.
+- After XML QoS edits, validate with the installed Connext `QosProvider` or XML validator and
+  rebuild `router/build` before relying on the change.
+
 ## Validate Connext specifics — don't guess
 
 A `connext` MCP server is available. Use it instead of relying on memory for Connext APIs,
@@ -356,12 +381,14 @@ as `/workspace`, rebuild inside that environment, and run the tests there.
   `TOPIC_IDLE` because no publication propagates an inline TypeObject (e.g. WIS writers)
   is immediately visible instead of requiring log-grepping.
 
-- **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
-  (control + platform routers + platform sims + platform_mesh_control processes) with optional
-  WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
-  `test_team_assignment_e2e.py` script. Logs in `debug/logs/mesh/` and generated lifecycle
-  state in the selected workdir. Tear down with
-  `run_mesh.sh down`.
+- **Live mesh** (`harness_v2/scripts/run_mesh.sh --emane`): default launcher for a full
+  N-platform router mesh in containers with EMANE, platform sims, mesh-control helpers, and the
+  dashboard (`--with-dashboard`). Use this path for normal live dashboard/mesh runs, e.g.
+  `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh up --emane --platforms 8 --with-dashboard`,
+  and tear down with
+  `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh down --emane`.
+  The host-process path without `--emane` is for explicit host-only diagnostics. Logs in
+  `debug/logs/mesh/` and generated lifecycle state in the selected workdir.
 
 ## Data model
 

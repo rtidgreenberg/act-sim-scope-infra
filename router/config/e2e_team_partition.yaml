@@ -45,7 +45,6 @@ participants:
     qos: wan_participant
     team_scoped: true  # D83: protected-identity partition (renamed from `wan:`)
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
-    spdp2: true    # D94: WAN participant uses SPDP2|SEDP
 
 routes:
   - name: platform_team_to_wan

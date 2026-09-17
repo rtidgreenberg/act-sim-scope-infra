@@ -98,7 +98,8 @@ public:
     // reader_on_wan/writer_on_wan (Phase 9, D81): set by the factory when the endpoint's
     // participant is the WAN participant — collect_wan_stats then polls that leg's
     // per-matched-endpoint protocol statuses. Both false = never registered (no WAN leg).
-    RouteTopicRuntime(dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
+    RouteTopicRuntime(const std::string &route_name, const std::string &topic_name,
+                      dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
                       dds::pub::Publisher publisher, dds::sub::Subscriber subscriber,
                       dds::topic::ContentFilteredTopic<T> cft = dds::core::null,
                       std::function<void(const std::string &)> on_qos_warning
@@ -107,7 +108,9 @@ public:
                       std::function<void(bool, std::int32_t)> on_match
                               = std::function<void(bool, std::int32_t)>(),
                       bool reader_on_wan = false, bool writer_on_wan = false)
-        : reader_(reader),
+                : route_name_(route_name),
+                    topic_name_(topic_name),
+                    reader_(reader),
           writer_(writer),
           publisher_(publisher),
           subscriber_(subscriber),
@@ -145,10 +148,10 @@ public:
     // the AWS worker never touches them.
     void collect_wan_stats(LinkStatsSink &sink) override {
         if (writer_on_wan_) {
-            poll_writer_wan_stats(writer_, writer_prev_, sink);
+            poll_writer_wan_stats(writer_, writer_prev_, sink, route_name_, topic_name_);
         }
         if (reader_on_wan_) {
-            poll_reader_wan_stats(reader_, reader_prev_, sink);
+            poll_reader_wan_stats(reader_, reader_prev_, sink, route_name_, topic_name_);
         }
     }
 
@@ -179,13 +182,8 @@ public:
     }
 
     std::string set_writer_deadline(std::int64_t deadline_nanos) override {
-        dds::pub::qos::DataWriterQos q;
-        if (!try_apply_qos(writer_, q, [deadline_nanos](dds::pub::qos::DataWriterQos &qos) {
-                qos << dds::core::policy::Deadline(duration_from_nanos(deadline_nanos));
-            })) {
-            return std::string();
-        }
-        return QosResolver::summarize(q);
+        (void)deadline_nanos;
+        return QosResolver::summarize(writer_.qos());
     }
 
     bool set_partitions(const std::string &subscriber_partition,
@@ -211,6 +209,9 @@ public:
     }
 
 private:
+    std::string route_name_;
+    std::string topic_name_;
+
     // Drain the input reader through our condition and forward each valid sample to the
     // output writer. Phase 3 forwards live data only; Phase 10 will mirror the
     // dispose/unregister meta-samples here. A single bad sample must never kill the loop.

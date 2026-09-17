@@ -117,8 +117,8 @@ struct ParticipantState {
     // the protected-identity partition default (RouteConfigParser) and the non-removable
     // protection (is_protected_partition_name). platform_wan-only in current configs
     // post-D103 (was team_wan-only before D103 retired it). Explicit, not name-sniffed.
-    // Does NOT drive link-stats WAN-leg detection (that is on_wan) and does NOT select
-    // SPDP2 (that is use_spdp2) — all three are decoupled.
+    // Does NOT drive link-stats WAN-leg detection (that is on_wan). SPDP2 is selected by
+    // the external WAN participant XML profile, not by runtime code.
     bool team_scoped = false;
     // YAML participants.<name>.on_wan (link-stats decomposition, 2026-07-22): true for a
     // participant whose route legs live on the WAN — drives WAN-leg flagging so the
@@ -129,11 +129,6 @@ struct ParticipantState {
     // cleared their `wan: true` for a partition-matching reason, silently un-covering
     // their data legs.
     bool on_wan = false;
-    // YAML participants.<name>.spdp2 (D78, reinstated; D87 retraction reversed by the D92
-    // CORRECTION 2026-07-22): select SPDP2|SEDP discovery for this participant. Set on every
-    // WAN-facing participant (control_wan/platform_wan post-D103). Decoupled from is_wan so
-    // all WAN participants use SPDP2 while only team-scoped ones take the D83 partition.
-    bool use_spdp2 = false;
     // YAML participants.<name>.protected_partition_entries (D103): literal partition
     // values that are auto-seeded into participant_partition at parse time (same
     // auto-seed convention as team_scoped's ${node.name}) and non-removable via
