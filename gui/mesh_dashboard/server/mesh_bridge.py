@@ -306,9 +306,31 @@ class DdsBridge:
                 nodes.append(f"{match.group(1).title()}_{match.group(2)}")
         return sorted(set(nodes))
 
+    def _team_names_for_node(self, node_name):
+        names = set()
+        for sample in self.cache.values():
+            for peer in sample.get("peers", []):
+                health = peer.get("health", {})
+                if str(health.get("router", "")).split("/", 1)[0] != node_name:
+                    continue
+                names.update(
+                    partition for partition in health.get("team_partition", [])
+                    if partition != node_name
+                )
+        return names
+
     def _expected_recipients(self, event):
         if event["topic"] == "ControlCommand":
             return [event["destination"]] if event.get("destination") else []
+        if event["topic"] == "PlatformData" and event["source_node"].startswith("Platform_"):
+            run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
+            source_teams = self._team_names_for_node(event["source_node"])
+            if not source_teams:
+                return []
+            return [node for node in run_nodes
+                    if node.startswith("Platform_")
+                    and node != event["source_node"]
+                    and source_teams.intersection(self._team_names_for_node(node))]
         if event["topic"] == "RouterHealth":
             run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
             if event["source_node"] == "Control_20":
@@ -433,8 +455,8 @@ class DdsBridge:
                 settled_window_ms = max(1, window_ms - settle_ms)
                 required_samples = self._required_samples_for_full_set(rate_hz, settled_window_ms)
                 percentage_ready = len(settled_events) >= required_samples
-                delivery_percentage = 100.0
-                loss_percentage = 0.0
+                delivery_percentage = None
+                loss_percentage = None
                 if percentage_ready:
                     delivery_percentage = 100 * settled_received / len(settled_events)
                     loss_percentage = 100 * lost / len(settled_events)

@@ -169,6 +169,37 @@ across forced termination; use the owned harness lifecycle for cleanup.
   `router/src/core/PresenceMonitor.hpp`, then rebuild/restart the routers; a browser reload alone
   only picks up static dashboard changes.
 
+### Live CommEffect verification lessons
+
+- Treat every scenario as contaminated until `POST /api/emane_controller` with
+  `{"reset_all":true}` succeeds and a follow-up `GET` reports an empty `impairments` list.
+  Restarting the mesh does not by itself prove the operator experiment state is clean. Record the
+  precondition and reset again after every scenario.
+- The Experiment UI's `pathloss_db=0` is not a generic reset signal: CommEffect applies always use
+  zero pathloss. Reset logic must use the explicit reset flag, otherwise a valid CommEffect apply
+  can be rendered or submitted as a reset. Apply requests are asynchronous; sequence responses so
+  an older response cannot overwrite a newer multi-profile state. Verify multiple profiles through
+  both the UI and `/api/emane_controller`.
+- For complete Delivery coverage, assign platforms to a common team (for example `TEAM_A`) so the
+  platform-to-platform `PlatformData` route is active, and set each platform to `debug` to expose
+  Detail, Mission, Waypoint, Debug, Thruster, and Power status topics. `PlatformData` is not a
+  control-to-platform flow; its expected recipients are other platforms sharing a non-identity
+  team partition. A Delivery resolver that expects every platform will falsely report loss for
+  unassigned peers.
+- In `/api/mesh_status`, each peer has `presence`, `last_seen_delta_ms`, and `health` as sibling
+  fields. `health.overall_state` is the last published RouterHealth summary and can remain
+  `ROUTER_OK` after communication is lost; use the sibling `presence` (`PRESENCE_STALE` or
+  `PRESENCE_DEAD`) for current reachability. Do not diagnose a presence defect by searching inside
+  `health`.
+- For raw EMANE evidence, resolve exact Compose names such as
+  `act-emane-container-baseline-control-20-1` and `...-platform-30-1`; short service names are
+  not valid `docker exec` targets. Check NEM 1 for Control_20 and NEM 2 for Platform_30 with
+  `emanesh localhost get table <nem> all`, especially `shim0 EventReceptionTable` event `103`.
+- The control container maps the dashboard to host port `8080`. Verify `/api/*` from the host only
+  after confirming that mapping. A local WebSocket `101 Switching Protocols` proves the bridge;
+  Dev Tunnel `502/504` failures are forwarding-layer evidence. Use the dashboard transport badge
+  and REST fallback state when deciding whether browser evidence is live.
+
 ## Debugging Workflow
 
 Use the repository debug tree as the first place to look for runtime evidence:

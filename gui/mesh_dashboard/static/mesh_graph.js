@@ -35,6 +35,8 @@
   const ASSIGN_URL = `${HTTP_ORIGIN}/api/team_assignment`;
   const STATUS_MODE_URL = `${HTTP_ORIGIN}/api/status_resolution`;
   const PLATFORM_STATUS_URL = `${HTTP_ORIGIN}/api/platform_status`;
+  const REST_REFRESH_MS = 500;
+  let websocketConnected = false;
 
   // Topology source is line style / metadata; edge color carries observed link state from
   // ActRouterLinkStats so operators can tell who is receiving traffic and whether counters
@@ -450,10 +452,16 @@
     return teamNames.length ? colorForTeam(teamNames[0]) : KNOWN_NODE_COLOR;
   }
 
-  const statusEl = document.getElementById("statusbar");
+  const statusEl = document.getElementById("status-text");
+  const transportBadge = document.getElementById("transport-badge");
   let topologyStatus = "connecting…";
   function setStatus(text) {
     statusEl.textContent = text;
+  }
+
+  function setTransportState(state, label) {
+    transportBadge.dataset.state = state;
+    transportBadge.textContent = label;
   }
 
   const nodes = new vis.DataSet();
@@ -1533,23 +1541,37 @@
 
   async function seedFromRest() {
     try {
-      const resp = await fetch(REST_URL);
-      if (!resp.ok) {
-        setStatus(`REST seed failed: HTTP ${resp.status}`);
-        return;
-      }
-      const n = ingestSampleArray(await resp.json());
+      const n = await refreshFromRest();
       setStatus(`Seeded ${n} sample(s) from REST — connecting WebSocket…`);
     } catch (err) {
+      setTransportState("error", "REST unavailable");
       setStatus(`REST seed error: ${err} — connecting WebSocket…`);
     }
+  }
+
+  async function refreshFromRest() {
+    const [meshResponse, linkResponse] = await Promise.all([
+      fetch(REST_URL),
+      fetch(LINK_STATS_URL),
+    ]);
+    if (!meshResponse.ok) throw new Error(`mesh REST HTTP ${meshResponse.status}`);
+    const n = ingestSampleArray(await meshResponse.json());
+    if (linkResponse.ok) ingestLinkStats(await linkResponse.json());
+    if (!websocketConnected) setTransportState("rest", "REST polling");
+    return n;
   }
 
   // Single always-on push socket -- no connection-creation POST, no HELLO handshake, no
   // bind_datareader frame (that was all WIS's own application-level protocol; the bridge
   // just pushes {"data": {...}} directly, same envelope as the REST seed).
   function connectWebSocket() {
+    websocketConnected = false;
     const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      websocketConnected = true;
+      setTransportState("websocket", "WebSocket live");
+    };
 
     ws.onmessage = (evt) => {
       let msg;
@@ -1592,10 +1614,13 @@
     };
 
     ws.onclose = () => {
+      websocketConnected = false;
+      setTransportState("rest", "REST polling");
       setStatus("WebSocket closed — reconnecting…");
       setTimeout(connectWebSocket, RECONNECT_DELAY_MS);
     };
     ws.onerror = () => {
+      setTransportState("rest", "REST polling");
       setStatus("WebSocket error — reconnecting…");
     };
   }
@@ -1757,5 +1782,10 @@
 
   fetch(LINK_STATS_URL).then((resp) => resp.ok ? resp.json() : null)
     .then(ingestLinkStats).catch(() => {});
+  setInterval(() => {
+    if (!websocketConnected) {
+      refreshFromRest().catch(() => setTransportState("error", "REST unavailable"));
+    }
+  }, REST_REFRESH_MS);
   seedFromRest().then(connectWebSocket);
 })();

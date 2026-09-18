@@ -5,6 +5,8 @@
   const deliveryTable = document.getElementById("delivery-table");
   const deliveryBody = deliveryTable.querySelector("tbody");
   const deliveryEmpty = document.getElementById("delivery-empty");
+  const deliveryReliableSummary = document.getElementById("delivery-reliable-summary");
+  const deliveryPeriodicSummary = document.getElementById("delivery-periodic-summary");
   const deliveryWindow = document.getElementById("delivery-window");
   const deliveryNodeFilter = document.getElementById("delivery-filter-node");
   const deliveryResolutionFilter = document.getElementById("delivery-filter-resolution");
@@ -12,6 +14,7 @@
   let latestSnapshot = { rows: [], node_modes: {}, window_ms: 30_000 };
   const deliveryUrl = `${location.protocol}//${location.host}/api/delivery_stats`;
   const websocketUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+  const DELIVERY_REFRESH_MS = 1000;
   const experimentState = document.getElementById("experiment-state");
   const experimentSource = document.getElementById("experiment-source");
   const experimentDestination = document.getElementById("experiment-destination");
@@ -32,9 +35,11 @@
   const experimentCurrentNetwork = document.getElementById("experiment-current-network");
   const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
   const EXPERIMENT_REFRESH_MS = 2000;
+  let experimentRequestVersion = 0;
 
   const MISSION_TOPICS = new Set(["PlatformDetailStatus", "PlatformMissionStatus", "PlatformWaypointStatus"]);
   const DEBUG_TOPICS = new Set(["PlatformDebugStatus", "PlatformThrusterStatus", "PlatformPowerStatus"]);
+  const RELIABLE_TOPICS = new Set(["ControlCommand", "PlatformCommandAck", "RouterHealth"]);
 
   function rowMatchesNodeFilter(row, node) {
     if (!node || node === "all") return true;
@@ -91,6 +96,23 @@
     return "";
   }
 
+  function renderDeliveryComparison(rows) {
+    const groups = [
+      [RELIABLE_TOPICS, deliveryReliableSummary, "15 s grace"],
+      [null, deliveryPeriodicSummary, "2 s grace"],
+    ];
+    for (const [topicSet, element, grace] of groups) {
+      const selected = rows.filter((row) => !topicSet || topicSet.has(row.topic));
+      const settled = selected.reduce((sum, row) => sum + (row.settled || 0), 0);
+      const received = selected.reduce((sum, row) => sum + (row.settled_received || 0), 0);
+      const lost = selected.reduce((sum, row) => sum + (row.lost || 0), 0);
+      const ready = selected.filter((row) => row.percentage_ready).length;
+      const label = topicSet ? "reliable" : "periodic/report";
+      element.innerHTML = `<strong>${received}/${settled}</strong> settled received · ` +
+        `<strong>${lost}</strong> lost · ${ready}/${selected.length} flows ready · ${grace} · ${label}`;
+    }
+  }
+
   function renderDelivery(snapshot) {
     latestSnapshot = snapshot || latestSnapshot;
     const rows = latestSnapshot?.rows || [];
@@ -100,6 +122,7 @@
     const selectedResolution = deliveryResolutionFilter.value || "all";
     const filteredRows = rows.filter((row) =>
       rowMatchesNodeFilter(row, selectedNode) && rowMatchesResolutionFilter(row, selectedResolution));
+    renderDeliveryComparison(filteredRows);
     const windowSeconds = Math.round((latestSnapshot?.window_ms || 30_000) / 1000);
     deliveryWindow.textContent = `Rolling ${windowSeconds} s`;
     deliveryBody.replaceChildren();
@@ -175,12 +198,16 @@
       tab.setAttribute("aria-selected", String(tab.dataset.tab === name));
     }
     if (name === "delivery") {
-      fetch(deliveryUrl)
-        .then((response) => response.ok ? response.json() : Promise.reject(response.status))
-        .then(renderDelivery)
-        .catch(() => {});
+      refreshDelivery();
     }
     if (name === "experiment") refreshExperimentController();
+  }
+
+  function refreshDelivery() {
+    return fetch(deliveryUrl)
+      .then((response) => response.ok ? response.json() : Promise.reject(response.status))
+      .then(renderDelivery)
+      .catch(() => {});
   }
 
   function setExperimentEnabled(enabled, unavailableReason) {
@@ -266,6 +293,7 @@
   }
 
   async function sendExperiment(pathlossDb, resetScenario = false) {
+    const requestVersion = ++experimentRequestVersion;
     const kind = experimentKind.value;
     const source = experimentSource.value;
     const destination = experimentDestination.value;
@@ -283,7 +311,7 @@
       loss_percent: Number(experimentLoss.value),
       duplicate_percent: Number(experimentDuplicate.value),
     };
-    if (pathlossDb === 0) {
+    if (resetScenario) {
       body.latency_ms = 0;
       body.jitter_ms = 0;
       body.unicast_bps = 0;
@@ -299,11 +327,12 @@
     if (!response.ok) {
       throw new Error(result.error || "EMANE controller request failed");
     }
+    if (requestVersion !== experimentRequestVersion) return;
     renderExperimentState(result);
-    experimentState.textContent = pathlossDb === 0
+    experimentState.textContent = resetScenario
       ? "Scenario reset"
       : (kind === "commeffect" ? "Applied CommEffect" : `Applied ${pathlossDb} dB pathloss`);
-    if (pathlossDb === 0) {
+    if (resetScenario) {
       experimentPathloss.value = "0";
       experimentLatency.value = "0";
       experimentJitter.value = "0";
@@ -359,6 +388,9 @@
   }
 
   connectDeliverySocket();
+  setInterval(() => {
+    if (document.body.dataset.activeTab === "delivery") refreshDelivery();
+  }, DELIVERY_REFRESH_MS);
   setInterval(() => {
     if (document.body.dataset.activeTab === "experiment") {
       refreshExperimentController();
