@@ -248,3 +248,45 @@ The live dashboard transport blocker was mitigated before continuing. The mesh i
 4. Run the full all-topic matrix across multiple loss/bandwidth levels only after the clean precondition check and exact container/run-id verification.
 
 Do not claim a clean restart unless the owned down/up lifecycle recreates the containers and the new run reports an empty controller impairment list.
+
+### Execution Record: S4 direction and reset correctness - 2026-09-18
+
+- **Forward-only:** Applied `Control_20 -> Platform_30` with 50 ms latency, 10 ms jitter, and 5% loss. The controller recorded exactly one forward profile.
+- **Reverse-only:** Applied `Platform_31 -> Control_20` through the reverse direction selector. The controller recorded exactly one reverse-path profile.
+- **Bidirectional:** Applied `Control_20 <-> Platform_32` with the same values. The controller recorded both directional profiles.
+- Each case was followed by `reset_all`; every reset returned HTTP 200 and an empty impairment list.
+- Final verification found six peers `PRESENCE_ALIVE`, six platform-status keys (`Platform_30` through `Platform_35`), and zero active impairments.
+
+The first automated S4 attempt was invalid because it nested impairment fields under a `values` object. The dashboard endpoint expects `latency_ms`, `jitter_ms`, `loss_percent`, and related fields at the top level of the JSON request. The corrected rerun above is the authoritative result.
+
+### Execution Record: S5 profile seeding and untouched-peer protection - 2026-09-18
+
+- Confirmed a clean precondition, then applied one-way 100% loss from `Control_20` to `Platform_33`; the controller recorded exactly one directional impairment.
+- Aggregate EMANE/controller telemetry was readable, and all reported mesh presence entries remained `PRESENCE_ALIVE` during this short check.
+- `reset_all` returned HTTP 200 and cleared the impairment list; the mesh remained nominal afterward.
+- **Evidence boundary:** `/api/emane_stats` exposes aggregate contributors and counters, but not per-receiver CommEffect profiles, drop tables, or `No Profile` attribution. Therefore profile seeding and untouched-peer protection remain unproven by this API-only run and require exact-container `emanesh` table inspection for acceptance.
+
+Raw-table follow-up confirmed event reception on Control NEM 1: `shim0 EventReceptionTable` contained event `103` with total reception `112` during the controlled apply. The exact Platform_33 container did not expose an `emanesh` target, and the shared management endpoint accepted only NEM 2, so the affected Platform_33 receiver profile/drop table could not be read. S5 therefore has partial raw corroboration, but profile seeding and `No Profile` protection remain open infrastructure evidence gaps.
+
+### Execution Record: S6 combined impairment and recovery - 2026-09-18
+
+- Applied 50% bidirectional loss on `Control_20 <-> Platform_30`, then 100% forward loss on `Control_20 -> Platform_32`; the controller held all three directional records simultaneously.
+- Cleared only the Platform_32 forward profile with a zero-effect command. The two Platform_30 directional records remained active, proving independent profile tracking.
+- `reset_all` then cleared every profile. Final verification found six peers `PRESENCE_ALIVE`, six platform-status publishers, and no active impairments.
+
+### Execution Record: S7 dashboard/API consistency and resilience - 2026-09-18
+
+- `/api/emane_controller`, `/api/emane_stats`, `/api/mesh_status`, `/api/link_stats`, `/api/delivery_stats?window_ms=30000`, `/api/traffic_stats`, and `/api/platform_status` all returned HTTP 200.
+- Correct parsing of the nested mesh payload found six peers, all `PRESENCE_ALIVE`; platform status contained `Platform_30` through `Platform_35`; the controller began and ended with zero impairments.
+- A one-way 25% test impairment on `Control_20 -> Platform_34` applied as one directional record and reset cleanly through the dashboard API.
+- Served HTML loaded cache-busted `mesh_graph.js`, `traffic_chart.js`, and `operator_tabs.js` revisions. The transport labels are client-rendered and therefore were not present as literal text in the initial HTML response; browser runtime verification remains the authoritative check for their visible state.
+- The first helper run misparsed the nested mesh list and used an invalid impairment request shape; the corrected direct run above is authoritative.
+
+### Router route-control verification: 2026-09-18
+
+The isolated real-router DDS tests were run in the disposable `connext:7.7.0` container so they did not alter the live dashboard mesh.
+
+- `test_router_admin_commands.py`: startup-disabled route, off-target command filtering, enable/wait-for-discovery/enabled transitions, acknowledgements, state-revision changes, duplicate-command stability, and disable-to-idle behavior.
+- `test_platform_status_route.py`: real status forwarding through the platform-to-control route.
+- `test_detail_status_toggle.py`: status-mode route enable/disable behavior.
+- Result: **4 passed, 0 failed** in 21.85 seconds. No failure logs were generated.

@@ -1,8 +1,8 @@
 // traffic_chart.js — WAN DDS traffic time-series sparklines (domain 200).
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
-// sparkline plots on the right panel, one card per domain ID, with discovery and user-data
-// kilobits/s overlaid in a single shared-scale graph.
+// sparkline plots on the bottom panel, with discovery and user-data kilobits/s overlaid
+// on one shared scale for direct comparison.
 
 (function () {
   "use strict";
@@ -18,13 +18,15 @@
   const panel = document.getElementById("traffic-panel");
   const graphEl = document.getElementById("graph");
   const statusbarEl = document.getElementById("statusbar");
+  const rfSummaryEl = document.getElementById("rf-summary");
   if (!panel) return;
 
   function syncGraphBottomToPanel() {
     if (!graphEl) return;
     const statusHeight = statusbarEl ? statusbarEl.getBoundingClientRect().height : 0;
+    panel.style.bottom = `${Math.ceil(statusHeight)}px`;
     const panelHeight = panel.children.length ? panel.getBoundingClientRect().height : 0;
-    const bottom = Math.max(0, Math.ceil(panelHeight - statusHeight));
+    const bottom = Math.max(0, Math.ceil(panelHeight + statusHeight));
     graphEl.style.bottom = `${bottom}px`;
   }
 
@@ -37,11 +39,6 @@
 
     const el = document.createElement("div");
     el.className = "tp-domain";
-
-    const titleDiv = document.createElement("div");
-    titleDiv.className = "tp-domain-title";
-    titleDiv.innerHTML = `<span>WAN Domain ${domainId}</span>`;
-    el.appendChild(titleDiv);
 
     const combinedSubplot = document.createElement("div");
     combinedSubplot.className = "tp-subplot";
@@ -114,7 +111,7 @@
     return durationMs ? bytes * 1000 / durationMs : 0;
   }
 
-  function drawCombinedSparkline(canvas, series, eventIndices, sharedScaleMax) {
+  function drawCombinedSparkline(canvas, series, eventIndices) {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     const w = rect.width * dpr;
@@ -128,18 +125,11 @@
 
     if (!series.length || series.every((s) => s.points.length < 2)) return;
 
-    // Discovery and user-data share a zero-based scale for direct comparison.
-    let maxVal = 0;
-    for (const s of series) {
-      for (const p of s.points) {
-        if (p > maxVal) maxVal = p;
-      }
-    }
+    const scaleMax = niceNum(Math.max(...series.flatMap((s) => s.points))) || 1;
     const scaleMin = 0;
-    const scaleMax = sharedScaleMax || niceNum(maxVal) || 1;
-    const scaleRange = scaleMax - scaleMin || 1;
 
-    const stepX = w / (MAX_POINTS - 1);
+    const visiblePointCount = Math.max(2, ...series.map((s) => s.points.length));
+    const stepX = w / (visiblePointCount - 1);
     const topPad = 12 * dpr;
 
     // Draw event markers first (behind the line)
@@ -147,7 +137,7 @@
       ctx.save();
       for (const ev of eventIndices) {
         const idx = ev.index;
-        if (idx < 0 || idx >= MAX_POINTS) continue;
+        if (idx < 0 || idx >= visiblePointCount) continue;
         const x = idx * stepX;
         // Vertical dashed line
         ctx.strokeStyle = "#e0b84d";
@@ -181,7 +171,7 @@
 
       for (const s of series) {
         if (!(s.peakRate > 0 && s.peakRate >= scaleMin && s.peakRate <= scaleMax)) continue;
-        const peakY = h - ((s.peakRate - scaleMin) / scaleRange) * (h - topPad);
+        const peakY = h - ((s.peakRate - scaleMin) / scaleMax) * (h - topPad);
         ctx.save();
         ctx.strokeStyle = s.color;
         ctx.globalAlpha = 0.65;
@@ -199,22 +189,18 @@
         ctx.restore();
       }
 
-    // Draw y-axis labels (min and max)
+    // Discovery and user data share one zero-based scale for direct comparison.
     ctx.fillStyle = TEXT_COLOR;
     ctx.font = `${8 * dpr}px sans-serif`;
     ctx.textAlign = "left";
     ctx.fillText(formatRate(scaleMin), 2 * dpr, h - 2 * dpr);
     ctx.textAlign = "right";
-    ctx.fillText(formatRate(scaleMax), w - 2 * dpr, topPad + 2 * dpr);
-
-    // Map value to y coordinate
-    function yOf(val) {
-      return h - ((val - scaleMin) / scaleRange) * (h - topPad);
-    }
+    ctx.fillText(`shared scale ${formatRate(scaleMax)}`, w - 2 * dpr, topPad + 2 * dpr);
 
     for (const s of series) {
       if (s.points.length < 2) continue;
-      const seriesStartIdx = MAX_POINTS - s.points.length;
+      const seriesStartIdx = visiblePointCount - s.points.length;
+      const yOf = (value) => h - (value / scaleMax) * (h - topPad);
 
       // Fill area under each curve with light transparency.
       ctx.beginPath();
@@ -265,22 +251,13 @@
   const REST_URL = `${location.protocol}//${location.host}/api/traffic_stats`;
   const EMANE_REST_URL = `${location.protocol}//${location.host}/api/emane_stats`;
   const RF_PIPE_RATE_BPS = 1000000;
-  let emaneSummaryEl = null;
 
   function formatBitRate(bitsPerSec) {
     return `${(bitsPerSec / 1000).toFixed(1)} kb/s`;
   }
 
-  function ensureEmaneSummary() {
-    if (emaneSummaryEl) return emaneSummaryEl;
-    emaneSummaryEl = document.createElement("div");
-    emaneSummaryEl.className = "tp-emane-summary";
-    panel.prepend(emaneSummaryEl);
-    return emaneSummaryEl;
-  }
-
   function handleEmaneSample(sample) {
-    if (!sample || sample.scope !== "network") return;
+    if (!rfSummaryEl || !sample || sample.scope !== "network") return;
     const intervalSec = (sample.interval_ms || 1000) / 1000;
     const txBytes = sample.mac_tx_bytes || 0;
     const txPackets = sample.mac_tx_packets || 0;
@@ -289,9 +266,8 @@
     const contributors = (sample.contributors || []).length;
     const averageNodeBitsPerSec = contributors ? txBitsPerSec / contributors : 0;
     const averageNodeUtilization = averageNodeBitsPerSec * 100 / RF_PIPE_RATE_BPS;
-    ensureEmaneSummary().innerHTML =
-      `<strong>Mesh RF MAC TX aggregate</strong>` +
-      `<span>${formatBitRate(txBitsPerSec)}</span>` +
+    rfSummaryEl.innerHTML =
+      `<span><strong>Mesh RF aggregate</strong> ${formatBitRate(txBitsPerSec)}</span>` +
       `<span>avg ${formatBitRate(averageNodeBitsPerSec)}/node ` +
       `(${averageNodeUtilization.toFixed(1)}% of 1 Mb/s)</span>` +
       `<span>${(txPackets / intervalSec).toFixed(0)} pkt/s</span>` +
@@ -311,13 +287,12 @@
     eventMarkers.push({ atCount: globalPointCount, label: label });
   }
 
-  function getVisibleEvents() {
-    // Convert absolute atCount to index within the current MAX_POINTS window
-    const windowStart = globalPointCount - MAX_POINTS;
+  function getVisibleEvents(visiblePointCount) {
+    const windowStart = globalPointCount - visiblePointCount;
     const visible = [];
     for (const ev of eventMarkers) {
       const idx = ev.atCount - windowStart;
-      if (idx >= 0 && idx < MAX_POINTS) {
+      if (idx >= 0 && idx < visiblePointCount) {
         visible.push({ index: idx, label: ev.label });
       }
     }
@@ -368,12 +343,12 @@
       `unknown ${formatRate(unknownRate)}`;
 
     // Redraw sparklines with event markers
-        const events = getVisibleEvents();
-        const sharedScaleMax = niceNum(Math.max(...entry.discovery, ...entry.data)) || 1;
+        const visiblePointCount = Math.max(entry.discovery.length, entry.data.length);
+        const events = getVisibleEvents(visiblePointCount);
         drawCombinedSparkline(entry.chartCanvas, [
-          { label: "disc", points: entry.discovery, color: DISCOVERY_COLOR, peakRate: entry.maxDiscovery },
-          { label: "data", points: entry.data, color: DATA_COLOR, peakRate: entry.maxData },
-        ], events, sharedScaleMax);
+          { label: "discovery", points: entry.discovery, color: DISCOVERY_COLOR, peakRate: entry.maxDiscovery },
+          { label: "user data", points: entry.data, color: DATA_COLOR, peakRate: entry.maxData },
+        ], events);
   }
 
   function connectTrafficWs() {

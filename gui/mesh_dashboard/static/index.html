@@ -20,6 +20,9 @@
                background: #1c222c; border-top: 1px solid #2c3542; font-size: 12px;
                display: flex; align-items: center; gap: 9px; white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; color: #8a94a6; }
+  #rf-summary { margin-left: auto; display: flex; gap: 14px; align-items: center; color: #d5d9df; }
+  #rf-summary strong { color: #e0b84d; }
+  #rf-summary .muted { color: #8a94a6; }
   #transport-badge { position: fixed; top: 8px; left: 490px; z-index: 13;
                      border: 1px solid #92772b; border-radius: 999px; padding: 2px 7px;
                      color: #f2cf67; font-size: 11px; font-weight: 600; line-height: 1.2; }
@@ -130,29 +133,23 @@
   #detail .detail-section-content { display: none; padding-top: 6px; }
   #detail .detail-section.expanded .detail-section-content { display: block; }
   /* Traffic panel — full-width bottom timeline */
-  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 27px; height: 183px; z-index: 10;
             overflow-x: auto; overflow-y: hidden; background: #1c222c;
             border-top: 1px solid #2c3542; display: flex; flex-direction: column; gap: 0;
-            font-size: 12px; }
+            box-sizing: border-box; font-size: 12px; }
   #traffic-panel:empty { display: none; }
   #traffic-panel .tp-header { padding: 8px 12px; font-weight: 600; font-size: 13px;
             border-bottom: 1px solid #2c3542; color: #e6e8eb; display: flex;
             justify-content: space-between; align-items: center; }
   #traffic-panel .tp-header .tp-toggle { cursor: pointer; color: #8a94a6; font-size: 14px; }
   #traffic-panel .tp-header .tp-toggle:hover { color: #fff; }
-  #traffic-panel .tp-emane-summary { display: flex; gap: 18px; flex-wrap: wrap; padding: 7px 12px;
-            border-bottom: 1px solid #2c3542; color: #d5d9df; }
-  #traffic-panel .tp-emane-summary strong { color: #e0b84d; }
-  #traffic-panel .tp-emane-summary .muted { color: #8a94a6; }
-  #traffic-panel .tp-domain { border-bottom: 1px solid #232a34; padding: 6px 12px; }
-  #traffic-panel .tp-domain-title { font-weight: 600; color: #d5d9df; margin-bottom: 4px;
-            display: flex; justify-content: space-between; align-items: baseline; }
-  #traffic-panel .tp-subplot { margin-bottom: 4px; }
+  #traffic-panel .tp-domain { flex: 1; min-height: 0; padding: 6px 12px; display: flex; flex-direction: column; }
+  #traffic-panel .tp-subplot { flex: 1; min-height: 0; margin-bottom: 4px; display: flex; flex-direction: column; }
   #traffic-panel .tp-subplot-label { color: #8a94a6; font-size: 11px; margin-bottom: 2px;
             display: flex; justify-content: space-between; }
   #traffic-panel .tp-subplot-average { font-size: 16px; font-weight: 700; }
   #traffic-panel .tp-frame-accounting { color: #8a94a6; font-size: 11px; margin: 2px 0 5px; }
-  #traffic-panel canvas { width: 100%; height: 108px; display: block; border-radius: 3px;
+  #traffic-panel canvas { width: 100%; height: auto; min-height: 0; flex: 1; display: block; border-radius: 3px;
             background: #181c24; }
   .workspace-panel { display: none; position: absolute; inset: 37px 0 28px; overflow: auto;
                      background: #14181f; padding: 24px; box-sizing: border-box; }
@@ -231,7 +228,7 @@
   @media (max-width: 700px) { .experiment-grid { grid-template-columns: 1fr; } }
   @media (max-width: 700px) {
     #graph { min-height: 300px; }
-    #traffic-panel canvas { height: 96px; }
+    #rf-summary span:not(:first-child) { display: none; }
   }
 </style>
 </head>
@@ -243,7 +240,7 @@
   <button type="button" data-tab="delivery" aria-selected="false">Delivery</button>
   <button type="button" data-tab="experiment" aria-selected="false">Experiment</button>
 </nav>
-<div id="statusbar" role="status" aria-live="polite"><span id="status-text">connecting…</span></div>
+<div id="statusbar" role="status" aria-live="polite"><span id="status-text">connecting…</span><span id="rf-summary"></span></div>
 <div id="topology-controls">
   <label><input id="toggle-direct-links" type="checkbox" checked> direct links</label>
   <label><input id="toggle-relayed-links" type="checkbox" checked> relayed links</label>
@@ -251,8 +248,6 @@
 <div id="right-panel">
 <div id="legend">
   <span><i style="background:#e0b84d"></i> observer</span>
-  <span><i style="background:#3aa655"></i> direct peer</span>
-  <span><i style="background:#3a7bd9"></i> relayed peer</span>
   <span><i style="background:#75c991"></i> receiving</span>
   <span><i style="background:#e0b84d"></i> degraded</span>
   <span><i style="background:#e6553a"></i> no receives/errors</span>
@@ -375,7 +370,7 @@
 </main>
 <script src="vendor/vis-network.min.js"></script>
   <script src="mesh_graph.js?v=20260918-transport-badge-v4"></script>
-<script src="traffic_chart.js?v=20260914-merged-wan-graph-v4"></script>
+<script src="traffic_chart.js?v=20260918-shared-wan-scale-v3"></script>
   <script src="operator_tabs.js?v=20260918-reliability-summary-v1"></script>
 </body>
 </html>
