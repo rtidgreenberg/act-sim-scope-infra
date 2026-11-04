@@ -30,7 +30,7 @@ struct control_command {
     int64 sent_at_ns;
     string<64> command_id;
     string<64> command_type;
-    sequence<octet, 100> payload;
+    sequence<octet, 8192> payload;
     int64 timestamp;
 };
 
@@ -67,6 +67,9 @@ struct platform_init_status {
     float altitude_m;
     float heading_deg;
     float speed_knots;
+    float time_scale;
+    float minimum_separation_m;
+    string<32> navigation_state;
     uint32 heartbeat_seq;
     int64 timestamp;
 };

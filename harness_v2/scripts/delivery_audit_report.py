@@ -77,7 +77,7 @@ def load_expectations(path, manifest, run_id):
         if not isinstance(expectation.get("enabled"), bool) \
                 or not isinstance(expectation.get("source_nodes"), list) \
                 or not isinstance(rule, dict) \
-                or rule.get("kind") not in {"fixed_nodes", "sample_destination"} \
+                or rule.get("kind") not in {"fixed_nodes", "fixed_nodes_except_source", "sample_destination"} \
                 or not isinstance(rule.get("nodes"), list):
             return {}, [f"invalid expectation for topic {topic}"]
     return topics, []
@@ -89,6 +89,8 @@ def expected_receivers(event, expectation):
     rule = expectation["recipient_rule"]
     if rule["kind"] == "fixed_nodes":
         return rule["nodes"]
+    if rule["kind"] == "fixed_nodes_except_source":
+        return [node for node in rule["nodes"] if node != event["source_node"]]
     destination = event.get("destination")
     return [destination] if destination in rule["nodes"] else []
 

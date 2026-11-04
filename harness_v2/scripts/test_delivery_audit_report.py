@@ -11,6 +11,10 @@ SPEC = importlib.util.spec_from_file_location("delivery_audit_report",
                                               SCRIPT_DIR / "delivery_audit_report.py")
 REPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(REPORT)
+COMPILER_SPEC = importlib.util.spec_from_file_location(
+    "compile_delivery_expectations", SCRIPT_DIR / "compile_delivery_expectations.py")
+COMPILER = importlib.util.module_from_spec(COMPILER_SPEC)
+COMPILER_SPEC.loader.exec_module(COMPILER)
 
 
 MANIFEST = {
@@ -38,6 +42,17 @@ def event(kind, topic, source, sequence, node, **extra):
 
 
 class DeliveryAuditExpectationTests(unittest.TestCase):
+    def test_shared_location_snapshot_includes_peers_not_source(self):
+        manifest = {**MANIFEST, "run_id": "r1", "shared_platform_locations": True,
+                    "nodes": ["control_20", "platform_30", "platform_31"]}
+        expectation = COMPILER.compile_expectations(manifest)["topics"]["PlatformInitStatus"]
+        self.assertEqual(["Control_20", "Platform_31"],
+                         REPORT.expected_receivers({"source_node": "Platform_30"}, expectation))
+        legacy = COMPILER.compile_expectations({**manifest, "shared_platform_locations": False})
+        self.assertEqual(["Control_20"],
+                         REPORT.expected_receivers({"source_node": "Platform_30"},
+                                                   legacy["topics"]["PlatformInitStatus"]))
+
     def analyze(self, events, expectations=EXPECTATIONS):
         return REPORT.analyze(events, [Path("events.jsonl")], [], MANIFEST, expectations, "r1")
 

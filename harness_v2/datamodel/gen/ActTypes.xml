@@ -10,7 +10,7 @@
   <member name="sent_at_ns" type="int64"/>
   <member name="command_id" stringMaxLength="64" type="string"/>
   <member name="command_type" stringMaxLength="64" type="string"/>
-  <member name="payload" sequenceMaxLength="100" type="byte"/>
+  <member name="payload" sequenceMaxLength="8192" type="byte"/>
   <member name="timestamp" type="int64"/>
 </struct>
 <struct name= "control_command_ack">
@@ -41,6 +41,9 @@
   <member name="altitude_m" type="float32"/>
   <member name="heading_deg" type="float32"/>
   <member name="speed_knots" type="float32"/>
+  <member name="time_scale" type="float32"/>
+  <member name="minimum_separation_m" type="float32"/>
+  <member name="navigation_state" stringMaxLength="32" type="string"/>
   <member name="heartbeat_seq" type="uint32"/>
   <member name="timestamp" type="int64"/>
 </struct>

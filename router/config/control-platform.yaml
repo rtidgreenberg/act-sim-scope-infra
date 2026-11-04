@@ -80,6 +80,13 @@ participants:
     # platform_wan endpoint including former team-only ones — bounded by C2 node count
     # (1-2 expected), not team/platform count.
     protected_partition_entries: ["*"]
+  location_wan:
+    role: platform
+    domain: 200
+    qos: wan_participant
+    on_wan: true
+    # Safety locations cross teams without opening team-scoped application data.
+    protected_partition_entries: ["NAVIGATION"]
   platform_lan:
     role: platform
     domain: 30
@@ -209,6 +216,38 @@ routes:
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
+
+  - name: platform_locations_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    topics:
+      - name: PlatformInitStatus
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: lan_status_1hz
+      output:
+        participant: location_wan
+        writer_qos: wan_status
+        publisher_partition: NAVIGATION
+
+  - name: wan_locations_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    topics:
+      - name: PlatformInitStatus
+    source_side:
+      input:
+        participant: location_wan
+        reader_qos: wan_status
+        subscriber_partition: NAVIGATION
+      output:
+        participant: platform_lan
+        writer_qos: lan_status_1hz
 
   - name: platform_detail_status
     enabled: false

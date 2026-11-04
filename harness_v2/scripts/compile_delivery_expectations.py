@@ -38,6 +38,9 @@ def compile_expectations(manifest):
     expected_topics = {"ControlCommand", "PlatformInitStatus"}
     if set(required_topics) != expected_topics:
         raise ValueError("baseline expectations support ControlCommand and PlatformInitStatus only")
+    shared_locations = manifest.get("shared_platform_locations", False)
+    if not isinstance(shared_locations, bool):
+        raise ValueError("shared_platform_locations must be a boolean")
     return {
         "schema_version": 1,
         "run_id": manifest["run_id"],
@@ -53,7 +56,10 @@ def compile_expectations(manifest):
                 "route": "platform_init_status",
                 "enabled": True,
                 "source_nodes": platform_nodes,
-                "recipient_rule": {"kind": "fixed_nodes", "nodes": control_nodes},
+                "recipient_rule": {
+                    "kind": "fixed_nodes_except_source" if shared_locations else "fixed_nodes",
+                    "nodes": control_nodes + platform_nodes if shared_locations else control_nodes,
+                },
             },
         },
     }
