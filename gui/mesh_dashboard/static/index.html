@@ -23,7 +23,7 @@
   #rf-summary { margin-left: auto; display: flex; gap: 14px; align-items: center; color: #d5d9df; }
   #rf-summary strong { color: #e0b84d; }
   #rf-summary .muted { color: #8a94a6; }
-  #transport-badge { position: fixed; top: 8px; left: 490px; z-index: 13;
+  #transport-badge { position: fixed; top: 8px; left: 565px; z-index: 13;
                      border: 1px solid #92772b; border-radius: 999px; padding: 2px 7px;
                      color: #f2cf67; font-size: 11px; font-weight: 600; line-height: 1.2; }
   #transport-badge[data-state="websocket"] { border-color: #2d8c5a; color: #75c991; }
@@ -160,7 +160,95 @@
   body[data-active-tab="experiment"] #detail, body[data-active-tab="experiment"] #topology-controls,
   body[data-active-tab="experiment"] #right-panel, body[data-active-tab="experiment"] #edge-detail-panel { display: none; }
   body[data-active-tab="delivery"] #delivery-panel,
-  body[data-active-tab="experiment"] #experiment-panel { display: block; }
+  body[data-active-tab="experiment"] #experiment-panel,
+  body[data-active-tab="mission"] #mission-panel { display: block; }
+  body[data-active-tab="mission"] #graph, body[data-active-tab="mission"] #traffic-panel,
+  body[data-active-tab="mission"] #detail, body[data-active-tab="mission"] #topology-controls,
+  body[data-active-tab="mission"] #right-panel, body[data-active-tab="mission"] #edge-detail-panel { display: none; }
+  .mission-layout { display: grid; grid-template-columns: minmax(220px, 275px) minmax(0, 1fr); gap: 12px; height: 100%; }
+  .mission-card { background: #1c222c; border: 1px solid #2c3542; border-radius: 6px; padding: 14px; }
+  .mission-card h1, .mission-card h2 { margin: 0 0 10px; font-size: 15px; }
+  .mission-card { display: flex; flex-direction: column; overflow: hidden; }
+  #mission-inventory { flex: 1; min-height: 75px; overflow-y: auto; }
+  #mission-teams { display: grid; gap: 4px; margin: 8px 0 12px; flex-shrink: 0; }
+  .mission-card h1, .mission-card h2, .mission-actions, #mission-plan-state { flex-shrink: 0; }
+  .mission-team { display: flex; justify-content: space-between; background: #172631; color: #d7efff;
+    border: 1px solid #3676a0; border-left: 4px solid var(--team-color); border-radius: 4px;
+    padding: 9px; cursor: pointer; font: inherit; font-size: 12px; }
+  .mission-team[aria-pressed="true"] { background: #234459; outline: 1px solid #67b9ef; }
+  #mission-context { position: fixed; z-index: 40; min-width: 180px; padding: 5px;
+    background: #1c2935; border: 1px solid #4b7893; border-radius: 5px; box-shadow: 0 8px 24px #0008; }
+  #mission-context[hidden] { display: none; }
+  #mission-context button { display: block; width: 100%; text-align: left; background: transparent;
+    color: #d7efff; border: 0; padding: 8px; cursor: pointer; }
+  #mission-context button:hover { background: #29475c; }
+  #mission-context button:disabled { color: #758691; cursor: default; }
+  .mission-actions button:disabled { opacity: .45; cursor: default; }
+  #mission-go { background: #12536a; font-weight: 700; }
+  #mission-plan-state { padding: 8px 0; color: #8bd6eb; font-size: 12px; }
+  .mission-instructions { font-size: 11px; line-height: 1.5; color: #90a7b4; margin: 6px 0; }
+  .mission-demo-clock { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+  .mission-demo-clock select, .mission-demo-clock button { background: #173c59; color: #d7efff;
+    border: 1px solid #3676a0; border-radius: 4px; padding: 4px; font: inherit; }
+  #mission-clock-state { color: #90a7b4; }
+  #mission-hint { --mission-hint-accent: #8bd6eb; color: var(--mission-hint-accent);
+    font-size: 15px; font-weight: 600; line-height: 1.45; padding: 12px; margin: 8px 0 12px;
+    background: #142d3f; border: 1px solid #284b61; border-left: 4px solid var(--mission-hint-accent);
+    border-radius: 5px; flex-shrink: 0; }
+  #mission-hint[data-stage="go"] { --mission-hint-accent: #73e1ad; }
+  #mission-hint[data-stage="waiting"], #mission-hint[data-stage="draft"] { --mission-hint-accent: #f0c978; }
+  #mission-setup { font-size: 12px; color: #d7efff; padding-top: 10px; flex-shrink: 0; }
+  #mission-setup strong { display: block; margin-bottom: 8px; }
+  #mission-loiter-radius { background: #173c59; color: #d7efff; border: 1px solid #3676a0;
+    border-radius: 4px; padding: 5px; }
+  .mission-scenario-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    min-height: 52px; box-sizing: border-box; padding: 8px 12px; margin-bottom: 10px;
+    background: #1c222c; border: 1px solid #2c3542; border-radius: 5px; font-size: 12px; }
+  .mission-scenario-bar button, .mission-scenario-bar select { background: #173c59; color: #d7efff;
+    border: 1px solid #3676a0; border-radius: 4px; padding: 6px; font: inherit; }
+  .mission-scenario-bar button:disabled { opacity: .4; }
+  #mission-scenario-status { color: #e3b2ad; }
+  #mission-map-scale { position: absolute; bottom: 18px; left: 20px; width: 100px;
+    border-top: 2px solid #b1c5c8; padding-top: 4px; color: #b1c5c8; text-align: center; pointer-events: none; }
+  .mission-cluster { cursor: zoom-in; }
+  body[data-active-tab="mission"] #mission-panel { display: flex; flex-direction: column; }
+  #mission-panel .mission-layout { height: auto; flex: 1; min-height: 0; }
+  #mission-panel .mission-scenario-bar { flex-shrink: 0; }
+  .mission-target { cursor: default; }
+  @media (max-width: 800px) {
+    body[data-active-tab="mission"] #mission-panel { display: block; }
+    #mission-panel .mission-layout { height: auto; }
+  }
+  .mission-actions button[hidden] { display: none; }
+  .mission-row-info { min-width: 0; }
+  .mission-row-info strong, .mission-row-info small { display: block; }
+  .mission-row-info small { margin-top: 3px; color: #94a8b6; line-height: 1.4; }
+  .mission-row { cursor: pointer; padding: 8px 7px; border-left: 3px solid transparent; }
+  .mission-row:hover { background: #223240; }
+  .mission-row.selected { background: #173c59; border-left-color: #67b9ef; }
+  .mission-row:focus-visible { outline: 1px solid #67b9ef; }
+  .mission-boat.unavailable polygon { fill: #59656f; stroke: #d3b064; filter: none; }
+  .mission-waypoint { cursor: grab; }
+  #mission-map { touch-action: none; user-select: none; }
+  #mission-map-controls { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; gap: 5px; }
+  #mission-map-controls button { color: #d7efff; background: #152633e8; border: 1px solid #3676a0;
+    border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+  #mission-map { position: relative; overflow: hidden; min-height: 0; background: #171919; border: 1px solid #303537; border-radius: 3px; }
+  #mission-map svg { width: 100%; height: 100%; display: block; }
+  .mission-boat { cursor: context-menu; pointer-events: bounding-box; }
+  .mission-boat polygon { fill: #1fb7c8; stroke: #d7fff8; stroke-width: 2; filter: drop-shadow(0 0 3px #1fb7c8); }
+  .mission-boat.selected polygon { fill: #4fd7e8; stroke: #fff; stroke-width: 2.5; }
+  .mission-route { fill: none; stroke: #34c5d5; stroke-width: 3; stroke-dasharray: 1 7; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  #mission-map svg > g:first-child path { vector-effect: non-scaling-stroke; }
+  .mission-waypoint { fill: #67b9ef; stroke: #d7efff; stroke-width: 1; }
+  .mission-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #2c3542; font-size: 12px; }
+  .mission-row button, .mission-actions button { background: #173c59; color: #d7efff; border: 1px solid #3676a0; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+  .mission-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  #mission-status { color: #8a94a6; font-size: 12px; margin-top: 8px; }
+  @media (max-width: 800px) {
+    .mission-layout { grid-template-columns: 1fr; height: auto; }
+    #mission-map { height: 600px; }
+  }
   .experiment-heading { display: flex; justify-content: space-between; align-items: baseline;
                         max-width: 1100px; margin: 0 auto 18px; }
   .experiment-heading h1 { margin: 0; font-size: 18px; letter-spacing: 0; }
@@ -237,6 +325,7 @@
 <span id="transport-badge" data-state="connecting">Connecting…</span>
 <nav id="app-tabs" aria-label="Operator workspace">
   <button type="button" data-tab="mesh" aria-selected="true">Mesh</button>
+  <button type="button" data-tab="mission" aria-selected="false">Mission</button>
   <button type="button" data-tab="delivery" aria-selected="false">Delivery</button>
   <button type="button" data-tab="experiment" aria-selected="false">Experiment</button>
 </nav>
@@ -368,9 +457,56 @@
     </section>
   </div>
 </main>
+<main id="mission-panel" class="workspace-panel">
+  <section class="mission-scenario-bar" aria-label="Scenario controller">
+    <strong>Scenario</strong>
+    <button id="mission-target-1" type="button">Activate Target 1</button>
+    <button id="mission-target-2" type="button" disabled>Activate Target 2</button>
+    <div class="mission-demo-clock">
+      <label for="mission-time-scale">Demo time</label>
+      <select id="mission-time-scale"><option value="1">1× real time</option><option value="20" selected>20× demo time</option></select>
+      <button id="mission-apply-time-scale" type="button">Set 20×</button>
+      <span id="mission-clock-state">Applies to all boats; reported speed remains 10 knots.</span>
+    </div>
+    <span id="mission-scenario-status">Activate Target 1 to display it on the map.</span>
+  </section>
+  <div class="mission-layout">
+    <aside class="mission-card">
+      <h1>Mission Fleet</h1>
+      <p id="mission-hint" class="mission-instructions" aria-live="polite">Step 1 · Left-drag pans. Click a boat to select; Shift-click adds or removes boats.</p>
+      <p id="mission-status" role="status" aria-live="polite">Loading live fleet…</p>
+      <h2>Teams</h2><div id="mission-teams"></div>
+      <h2>Boats</h2><div id="mission-inventory" role="listbox" aria-label="Boat selection" aria-multiselectable="true"></div>
+      <div id="mission-setup" hidden>
+        <strong id="mission-destination-state"></strong>
+        <label id="mission-loiter-control" hidden>Loiter distance <select id="mission-loiter-radius">
+          <option value="500">500 m</option><option value="1000" selected>1 km</option>
+          <option value="2000">2 km</option><option value="3000">3 km</option>
+        </select></label>
+      </div>
+      <p id="mission-plan-state" aria-live="polite">No mission draft</p>
+      <div class="mission-actions">
+        <button id="mission-create" type="button">Set mission</button>
+        <button id="mission-remove-waypoint" type="button">Remove last waypoint</button>
+        <button id="mission-clear-route" type="button">Clear route</button>
+        <button id="mission-validate" type="button">Validate mission</button>
+        <button id="mission-go" type="button" disabled>Go</button>
+        <button id="mission-cancel" type="button">Cancel</button>
+        <button id="mission-rtb" type="button">Return to base</button>
+      </div>
+    </aside>
+    <section id="mission-map" aria-label="San Diego Harbor mission map">
+      <div id="mission-map-controls"><button id="mission-zoom-in" type="button" aria-label="Zoom in">+</button><button id="mission-zoom-out" type="button" aria-label="Zoom out">−</button><button id="mission-zoom-selection" type="button" hidden>Zoom to boats</button><button id="mission-map-reset" type="button">Fit coast</button></div>
+      <output id="mission-map-scale" aria-label="Map distance scale"></output>
+    </section>
+  </div>
+  <div id="mission-context" role="menu" hidden></div>
+</main>
 <script src="vendor/vis-network.min.js"></script>
-  <script src="mesh_graph.js?v=20260918-transport-badge-v4"></script>
+  <script src="mesh_graph.js?v=20261103-team-icons-v1"></script>
 <script src="traffic_chart.js?v=20260918-shared-wan-scale-v3"></script>
-  <script src="operator_tabs.js?v=20260918-reliability-summary-v1"></script>
+  <script src="operator_tabs.js?v=20261103-mission-sync-v2"></script>
+<script src="mission_map.js?v=20261103-coast-v1"></script>
+<script src="mission.js?v=20261104-mission-review-fixes-v3"></script>
 </body>
 </html>

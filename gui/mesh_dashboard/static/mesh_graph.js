@@ -184,7 +184,8 @@
     "#e6553a", "#3aa1e6", "#e6c53a", "#8a4ae6",
     "#3ae6a1", "#e63a8a", "#a1e63a", "#3ae6e6",
   ];
-  const FIXED_TEAM_COLORS = { A: "#3aa1e6", B: "#e6c53a", C: "#8a4ae6" };
+  const FIXED_TEAM_COLORS = { A: "#3aa1e6", B: "#e6c53a", C: "#8a4ae6",
+    TEAM_A: "#3aa1e6", TEAM_B: "#d2bd65", TEAM_C: "#a481d5" };
   const teamColors = new Map(); // team name -> assigned palette color
   const teamLegendEl = document.getElementById("team-legend");
   const teamChips = new Map(
@@ -424,8 +425,12 @@
 
   function observerCircleLabel(id) {
     const match = /^Control_(\d+)$/.exec(String(id));
-    return match ? `C${match[1]}` : "";
+    return match ? `P${match[1]}` : "";
   }
+
+  window.ActMissionStyle = {
+    teamColor: colorForTeam, unassignedColor: KNOWN_NODE_COLOR, controlColor: OBSERVER_NODE_COLOR,
+  };
 
   // Every node id in the graph is now just the node name (nodeNameOf, above) -- which is
   // exactly what team_partition's protected/direct-tap entries contain too (D83:
@@ -518,7 +523,35 @@
     return { x: position.x - width / 2, y: position.y + 34 };
   }
 
+  let missionFleet = new Map();
+  let missionSelected = new Set();
+  window.addEventListener("act-mission-state", (event) => {
+    missionFleet = new Map(event.detail.platforms.map((boat) => [boat.platform, boat]));
+    missionSelected = new Set(event.detail.selected);
+    network.redraw();
+  });
+
   network.on("afterDrawing", (ctx) => {
+    nodes.get({ filter: (node) => node.kind === "peer" }).forEach((node) => {
+      const boat = missionFleet.get(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!boat || !position) return;
+      const teams = { TEAM_A: ["Alpha", "#3aa1e6"], TEAM_B: ["Bravo", "#d2bd65"], TEAM_C: ["Reserve", "#a481d5"] };
+      const team = teams[boat.squad] || ["Unassigned", KNOWN_NODE_COLOR];
+      ctx.save();
+      ctx.strokeStyle = boat.squad ? colorForTeam(boat.squad) : KNOWN_NODE_COLOR;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(position.x, position.y, 21, 0, Math.PI * 2); ctx.stroke();
+      if (missionSelected.has(node.id)) {
+        ctx.strokeStyle = "#d7efff"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(position.x, position.y, 25, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.font = "10px sans-serif"; ctx.fillStyle = "#d7efff"; ctx.textAlign = "center";
+      const mission = boat.mission || {};
+      ctx.fillText(`${team[0]} · ${mission.phase || "IDLE"} · ${mission.waypoint_index || 0}/${mission.waypoints_total || 0}`,
+        position.x, position.y + 68);
+      ctx.restore();
+    });
     nodes.get({ filter: (node) => node.kind === "peer" && node.resolutionMode }).forEach((node) => {
       const badge = RESOLUTION_BADGES[node.resolutionMode];
       const position = network.getPositions([node.id])[node.id];
@@ -1580,6 +1613,7 @@
       } catch (_err) {
         return;
       }
+      window.dispatchEvent(new CustomEvent("act-dashboard-message", { detail: msg }));
 
       if (msg.type === "platform_status") {
         if (msg.platform && msg.data) {
@@ -1708,8 +1742,9 @@
     `<div id="team-input-label" style="margin-bottom:8px;"></div>` +
     `<select id="team-input-field" style="width:100%;box-sizing:border-box;` +
     `padding:6px 10px;background:#14181f;border:1px solid #3a3f4a;border-radius:4px;` +
-    `color:#e6e8eb;font:13px sans-serif;outline:none;"><option value="A">A</option>` +
-    `<option value="B">B</option><option value="C">C</option></select>` +
+    `color:#e6e8eb;font:13px sans-serif;outline:none;"><option value="TEAM_A">Alpha</option>` +
+    `<option value="TEAM_B">Bravo</option><option value="TEAM_C">Reserve</option>` +
+    `<option value="">Unassigned</option></select>` +
     `<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">` +
     `<button id="team-input-cancel" style="padding:4px 14px;background:#2a2d38;border:1px solid #3a3f4a;` +
     `border-radius:4px;color:#e6e8eb;cursor:pointer;font:13px sans-serif;">Cancel</button>` +
@@ -1726,7 +1761,8 @@
 
   function showTeamInput(nodeId) {
     teamInputLabel.textContent = `Team name for ${nodeId}:`;
-    teamInputField.value = (nodes.get(nodeId).teamNames || [])[0] || "A";
+    const currentTeam = (nodes.get(nodeId).teamNames || [])[0] || "";
+    teamInputField.value = ["TEAM_A", "TEAM_B", "TEAM_C"].includes(currentTeam) ? currentTeam : "";
     teamInputModal.style.display = "flex";
     teamInputField.focus();
     return new Promise((resolve) => { teamInputResolve = resolve; });

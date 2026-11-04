@@ -36,6 +36,36 @@
   const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
   const EXPERIMENT_REFRESH_MS = 2000;
   let experimentRequestVersion = 0;
+  let missionContext = { selected: [], platforms: [], team: null };
+  let missionSelectionKey = "";
+  const teamNames = { TEAM_A: "Alpha", TEAM_B: "Bravo", TEAM_C: "Reserve", "": "Unassigned" };
+  const deliveryMissionLabel = document.createElement("span");
+  const experimentMissionLabel = document.createElement("span");
+  deliveryMissionLabel.className = experimentMissionLabel.className = "mission-instructions";
+  deliveryNodeFilter.parentElement.parentElement.appendChild(deliveryMissionLabel);
+  experimentSource.parentElement.parentElement.appendChild(experimentMissionLabel);
+  window.addEventListener("act-mission-state", (event) => {
+    missionContext = event.detail;
+    const label = missionContext.selected.length
+      ? `Mission selection: ${teamNames[missionContext.team] || "Boats"} · ${missionContext.selected.join(", ")}`
+      : "";
+    deliveryMissionLabel.textContent = experimentMissionLabel.textContent = label;
+    const key = `${missionContext.team}|${[...missionContext.selected].sort().join(",")}`;
+    if (key !== missionSelectionKey) {
+      missionSelectionKey = key;
+      if (missionContext.selected.length) {
+        renderDelivery(latestSnapshot);
+        deliveryNodeFilter.value = "mission";
+        renderDelivery(latestSnapshot);
+        if ([...experimentSource.options].some((option) => option.value === missionContext.selected[0])) {
+          experimentSource.value = missionContext.selected[0];
+          experimentDestination.value = "Control_20";
+        }
+      } else if (deliveryNodeFilter.value === "mission") {
+        deliveryNodeFilter.value = "all"; renderDelivery(latestSnapshot);
+      }
+    }
+  });
 
   const MISSION_TOPICS = new Set(["PlatformDetailStatus", "PlatformMissionStatus", "PlatformWaypointStatus"]);
   const DEBUG_TOPICS = new Set(["PlatformDebugStatus", "PlatformThrusterStatus", "PlatformPowerStatus"]);
@@ -43,6 +73,7 @@
 
   function rowMatchesNodeFilter(row, node) {
     if (!node || node === "all") return true;
+    if (node === "mission") return missionContext.selected.some((id) => row.source === id || row.recipient === id);
     const recipient = row.recipient || "Control_20";
     return row.source === node || recipient === node;
   }
@@ -81,13 +112,20 @@
     allOption.value = "all";
     allOption.textContent = "All nodes";
     deliveryNodeFilter.appendChild(allOption);
+    if (missionContext.selected.length) {
+      const option = document.createElement("option");
+      option.value = "mission";
+      option.textContent = `Mission: ${teamNames[missionContext.team] || "selected boats"}`;
+      deliveryNodeFilter.appendChild(option);
+    }
     for (const node of sorted) {
       const option = document.createElement("option");
       option.value = node;
       option.textContent = node;
       deliveryNodeFilter.appendChild(option);
     }
-    deliveryNodeFilter.value = sorted.includes(previous) || previous === "all" ? previous : "all";
+    deliveryNodeFilter.value = sorted.includes(previous) || previous === "all" ||
+      (previous === "mission" && missionContext.selected.length) ? previous : "all";
   }
 
   function percentClass(value) {
@@ -201,6 +239,7 @@
       refreshDelivery();
     }
     if (name === "experiment") refreshExperimentController();
+    window.dispatchEvent(new CustomEvent("act-workspace-change", { detail: { name } }));
   }
 
   function refreshDelivery() {
@@ -258,7 +297,8 @@
       for (const node of sorted) {
         const option = document.createElement("option");
         option.value = node;
-        option.textContent = node;
+        const boat = missionContext.platforms.find((entry) => entry.platform === node);
+        option.textContent = boat ? `${node} (${teamNames[boat.squad] || boat.squad || "Unassigned"})` : node;
         select.appendChild(option);
       }
     }
