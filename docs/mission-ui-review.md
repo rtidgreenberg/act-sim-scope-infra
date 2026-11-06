@@ -3,6 +3,184 @@
 Reviewed 2026-11-03 against the [architecture](mission-ui.md) and
 [implementation plan](mission-ui-implementation-plan.md).
 
+## Commit-readiness fixes (2026-11-06)
+
+- Accept discovery `PID_SENTINEL` regardless of its length, as required by
+  DDSI-RTPS 2.3 section 9.4.2.11. Both byte orders and ignored trailing bytes
+  have regressions; missing terminators and truncated policies still fail.
+- Preserve cumulative parser-error diagnostics, but use the error-counter delta
+  to assess the current capture interval. A counter reset restarts coverage.
+  Regressions keep the lifetime total nonzero and verify that loss and recovery
+  become available only after a complete clean rolling window. Traffic capture
+  health also recovers without clearing historical diagnostics.
+- Fresh isolated SDK build: **4/4 native suites passed**, and committed type XML
+  exactly matched regeneration from IDL.
+- Binding-enabled wire/accounting gate: **57 tests passed**. In-process
+  mission/reporting gate: **108 passed, 1 real-router test deselected**.
+- Host parser/accounting/browser gate: **61 tests, OK with 15 skips reported**.
+  Diff whitespace and modified launcher shell syntax checks passed.
+- These checks did not restart or change the running six-platform mesh. The full
+  real-router e2e suite was not rerun against that live mesh; the capture fixes
+  require a subsequent owned restart to take effect in the running backend.
+
+## Best Effort RouterHealth (2026-11-05)
+
+- Changed both `router_health` endpoints to Best Effort in external XML.
+  Kept 1 Hz publication, KEEP_LAST(1), durability, and presence timing unchanged.
+  Commands, acknowledgements, and contact reports remain Reliable.
+- Health probe tests now load the production XML profiles instead of hard-coding
+  Reliable endpoints. Added a profile regression covering health and event QoS.
+- Installed Connext validation, **4/4 native tests**, and **3 real-router presence
+  tests** passed, including stale detection, process death, rejoin, and config drift.
+- Coordinated six-platform restart and live Chromium verification confirmed all
+  **12 RouterHealth WAN flows** under Best Effort with the **2 s** Delivery grace.
+  Restored the operator's 10% loss in both Control_20/Platform_30 directions;
+  all six peers were ALIVE/ROUTER_OK after verification.
+
+Retained results: [presence tests](../debug/test_reports/router-health-best-effort-20261105.xml)
+and [live QoS/GUI verification](../debug/test_reports/router-health-best-effort-live-20261105.json).
+
+## Reliable WAN recovery timing (2026-11-05)
+
+- Added **Avg recovery** to topic rows: original WAN send to complete WAN receipt
+  for samples received after a confirmed retry. Confirmation requires a captured
+  ACKNACK/NACK_FRAG request and matching repeat transmission to the same destination
+  socket/reader. First-attempt deliveries and still-missing samples are excluded.
+- Recovered samples contribute once within their original rolling send window.
+  Parentheses show sample size; no observations shows a dash instead of zero.
+  Incomplete capture coverage shows Unknown, not a misleading average.
+- Added regressions for bitmap endianness, reader identity, initial fanout versus
+  repair, multiple retries, fragmented receipt completion, averaging/exclusions,
+  and desktop/mobile rendering. Existing traffic/accounting browser tests pass.
+- Live six-platform verification at the restored **10% bidirectional loss**
+  independently reconciled **68 flow counts and 8 Reliable averages** at each of
+  twelve snapshots over 60 seconds. **296 rendered-table/card checks** passed
+  without browser errors or invalid observations. For example, one ContactReport
+  window showed **4.22 s across 2 recovered samples**, matching the WAN JSONL.
+  All six peers remained ALIVE/ROUTER_OK after verification.
+
+Retained [live recovery evidence](../debug/test_reports/wan-recovery-20261105.json)
+contains per-sample send, request, retry, and receipt timestamps.
+
+## Delivery filters and configured QoS sidebar (2026-11-05)
+
+- Added independent Source and Destination filters plus a multi-topic checkbox
+  menu. Table rows and comparison cards use the same filter intersection.
+  Existing Node/Mode controls and mission selection remain available.
+- Added a configuration-only sidebar resolved at dashboard startup from the
+  active router YAML and its XML libraries. It shows WAN writer/reader profile,
+  reliability, history/depth, durability, deadline, and liveliness lease.
+  Identical settings are combined; different reader/writer settings remain
+  separate. Configuration never changes observed QoS grouping or delivery counts.
+- Canonical host/container launchers supply the active YAML. Configuration is
+  refreshed in the browser on tab entry and WebSocket reconnect, without treating
+  undeployed source-file edits as runtime QoS changes.
+- Targeted host gate: **49 tests, 44 passed and 5 binding-dependent skips**.
+  SDK gate: **29 passed**, including all binding-dependent contracts.
+- Live browser verified 68 unfiltered rows, 5 selected-direction rows, and 2
+  selected-topic rows; RouterLinkProbe still appears as observed Unknown while its
+  sidebar correctly shows configured Reliable. Verified writer depth 1 versus
+  reader depth 50, current script revision, and widths 1440/800/375 without
+  horizontal overflow or browser errors. Both 10% loss directions were restored
+  and all six peers were ALIVE/ROUTER_OK.
+
+Retained [live filter evidence](../debug/test_reports/delivery-filters-20261105.json).
+
+## WAN wire delivery and terminal-state recovery (2026-11-05)
+
+- Replaced the Delivery tab's LAN/application audit correlation with passive
+  source-WAN-TX to destination-WAN-RX RTPS observations. Fragment reconstruction,
+  writer/sequence deduplication, and actual unicast destination nodes define the
+  counts; DDS reader acceptance and application consumption are outside scope.
+- Grouped flows and comparison cards by discovered writer reliability: Reliable,
+  Best Effort, and explicit Unknown QoS. Removed automatic current-mode filtering
+  so Init/Mission transitions cannot reinterpret old samples or hide wire history.
+- Added capture coverage/status warnings. Missing enabled source/destination
+  capture evidence produces Unknown loss rather than a fabricated loss percentage.
+  Kernel capture drops remain unreported; even complete observed coverage does
+  not prove missing samples were lost in the RF channel.
+- Added compact mission ID/phase to always-on Init status. C2 reconciles newer
+  Init summaries without carrying detailed progress across mission IDs.
+- Rebuilt generated types and routers: **4/4 native unit tests passed**.
+  Binding-enabled in-process gates: **135 passed**, **16 subtests**, one
+  real-router subprocess test deliberately excluded while the mesh was live.
+  Host parser/accounting/Chromium gates: **47 passed**, **16 subtests**;
+  three binding-dependent cases skipped on the host passed in the SDK gate.
+- All four existing real six-platform mission browser workflows passed in
+  **382.56 seconds**. A new fifth live test passed in **27.85 seconds**:
+  applied 100% one-way CommEffect loss through the Experiment GUI, observed
+  missing Reliable and Best Effort WAN samples while an unrelated platform
+  remained unaffected, and cancelled a mission during the blackout. After reset,
+  detailed mission status was still TRANSIT, but fresh Init status recovered
+  CANCELLED at C2, proving recovery did not depend on a detailed terminal report.
+- Final coordinated restart left six ALIVE/ROUTER_OK platforms in Init/IDLE,
+  Unassigned, clocks 1x, targets Off, and no active impairments. Chromium loaded
+  `operator_tabs.js?v=20261105-wan-wire-delivery-v3`, rendered all QoS groups,
+  and reported no page errors. All seven WAN captures were fresh, with zero
+  invalid observations, unsupported destinations, or incomplete RTPS samples.
+  Both known-QoS summaries showed 100% settled receipt; 12 RouterLinkProbe flows
+  remained explicitly Unknown QoS rather than receiving guessed reliability.
+
+Retained results: [mission workflows](../debug/test_reports/wan-wire-mission-20261105.xml)
+and [wire blackout/recovery](../debug/test_reports/wan-wire-blackout-20261105.xml).
+
+## State-driven reporting and target toggles (2026-11-05)
+
+- Removed C2's pre-command switch to Mission reporting. The platform-local helper
+  now follows actual mission status, drains terminal reports for three seconds,
+  and returns to Init. Explicit Debug remains enabled until Auto is selected.
+  Fast missions first observed as complete also receive a terminal-report window.
+- Replaced manual Init/Mission menu entries with Auto, and derive Delivery's mode
+  from actual reported route state. Kept final mission status cached at C2.
+- Both scenario targets start hidden and have independent On/Off buttons.
+  Off publishes a lost ContactReport; sequence ordering rejects an older reveal
+  arriving after a hide. Existing missions survive hiding their target.
+- In-process gates: **132 passed**, plus **16 subtests**; the real-router helper
+  subprocess test was excluded because the live mesh was running. Offline
+  Chromium contracts: **13 passed**.
+- Full six-platform Chromium/DDS workflows: **4 passed, 0 skipped**, in
+  **337.29 seconds**, including a new state-transition/target-toggle scenario
+  and all three existing mission acceptance scenarios.
+- After cleanup, verified six ALIVE/ROUTER_OK peers, Init reporting on every boat,
+  both targets Off, teams Unassigned, clocks 1x, cancelled test missions, and no
+  active impairments. Mission/debug forwarded counters remained unchanged over
+  four seconds on all six boats, confirming idle telemetry is gated before WAN.
+  Current static asset revisions loaded without browser errors.
+
+Retained result: [live JUnit report](../debug/test_reports/mission-state-full-20261105.xml).
+
+## Six-platform mission acceptance (2026-11-05)
+
+- Ran the canonical containerized EMANE mesh with one C2 and six platforms.
+  Expanded mission commands from five to six recipients after the live gate
+  exposed the old limit rejecting fleet-wide Demo time requests. Added boundary
+  contracts for six accepted recipients and seven rejected recipients.
+- Updated the opt-in browser workflows to use `MISSION_PLATFORM_COUNT=6`, include
+  every platform in the two-team scenario, load current declared assets, and wait
+  for confirmed startup state. Icon selection uses the boat group, not a polygon
+  obscured by its label.
+- Added a third live scenario for late-join inheritance, active-team reassignment,
+  unchanged other-member command IDs, and stopping the old goal on Unassigned.
+- Final combined Chromium/DDS run: **3 passed, 0 skipped**, in **343.20 seconds**.
+  Covered editing/dragging, Validate/Go, DDS command acknowledgements, audited
+  Delivery rows, cross-tab state, GUI CommEffect apply/reset, route replacement,
+  cancel/RTB, both targets, 1 km/2 km loiter, all six boats reaching ORBIT, long
+  circuit persistence, water-only sampled positions, and team-goal inheritance.
+- Movement checks use cumulative geographic travel (at least 100 m per boat in
+  60 seconds), fresh positions, confirmed 20x telemetry, and bounded reported
+  speed. They allow legitimate onboard separation holds instead of requiring
+  exact simultaneous 10-knot motion or a fixed endpoint displacement. Continuous
+  separation remains covered by the deterministic navigator contracts.
+- Supporting gates: **94 mission/navigation contracts passed** and **11 offline
+  Chromium geometry/UI tests passed**. This is mission-focused acceptance, not a
+  claim that the entire router e2e suite was run.
+- Final cleanup verified all six peers ALIVE/ROUTER_OK, teams restored to
+  Unassigned, clocks restored to 1x, test missions cancelled, and no active EMANE
+  impairments. The mesh remains running. Target reveals remain visible until the
+  next owned lifecycle restart.
+
+Retained result: [live JUnit report](../debug/test_reports/mission-six-live-20261105.xml).
+
 ## Autonomous team-goal follow-up (2026-11-04)
 
 - C2 publishes authored team goals; sims compute their own water navigation and

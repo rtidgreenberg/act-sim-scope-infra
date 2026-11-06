@@ -27,6 +27,35 @@ observable in the other views through the normal DDS status and delivery streams
 
 ## Mission workspace
 
+### State-driven WAN reporting and target visibility
+
+Platforms start in Init reporting. The local mesh-control helper observes the
+platform's own `PlatformMissionStatus` on its LAN: accepted TRANSIT, ORBIT, RTB,
+or HOLDING phases enable Mission reporting at the platform's outbound router.
+C2 does not enable telemetry merely because it sends a command. Completion or
+cancellation keeps Mission reporting enabled for three seconds after the first
+local terminal report, allowing final updates to cross the WAN, then returns to
+Init. This drain window is not a delivery guarantee under radio loss.
+Always-on `PlatformInitStatus` also carries the current/last `mission_id` and
+`mission_phase`. C2 reconciles a newer compact summary with detailed reports, so
+completion/cancellation can recover after a dropout that covered the drain window.
+A new mission ID never inherits the previous mission's detailed progress.
+
+Debug is an explicit operator override that survives mission transitions.
+The Mesh menu's Auto option releases it and follows the current mission state;
+legacy Init/Mission status-mode requests both resume automatic reporting.
+Position sharing, command acknowledgements, contacts, and router health remain
+available in Init. Delivery measures unique RTPS samples crossing WAN interfaces,
+not local LAN sends or end-to-end application receipt. Its Reliable/Best Effort/
+Unknown QoS groups come from writer discovery. Mode filtering is manual; returning
+to Init does not hide historical Mission traffic. See the dashboard's
+[measurement definitions](../gui/mesh_dashboard/README.md#wan-wire-delivery).
+
+Both scenario targets start hidden after a mesh restart. Their buttons independently
+toggle On/Off, publishing a local C2 `ContactReport` (`lost=true` for Off).
+The map changes after DDS reception; older reports cannot undo a newer toggle.
+Hiding a target prevents new plans to it but does not cancel an existing mission.
+
 ### Map and visual language
 
 - Use an offline-styled Southern California coast map centered on San Diego Harbor.
@@ -133,12 +162,12 @@ position. When a boat reaches the final waypoint, it holds position and reports
 
 ### Two-target story
 
-The top Scenario controller's **Activate Target 1** / **Activate Target 2** controls
-display real DDS `ContactReport`s; activation does not change a mission draft.
+The top Scenario controller's **Target 1: On/Off** / **Target 2: On/Off** controls
+display real DDS `ContactReport`s; toggling does not change a mission draft.
 Demo time is also in the Scenario bar. Destination and loiter distance belong to
 mission setup below the platform list, not to global scenario controls.
 Select Alpha, create a mission, choose a loiter distance, Validate, then Go.
-Target 2 unlocks after an accepted Target 1 command; reveal it and dispatch Bravo.
+Either target can be enabled independently; for example, enable Target 2 and dispatch Bravo.
 The fixed target locations are offshore and use the same real-coastline planner.
 
 Loiter distance defaults to **1 km**, with **500 m, 1 km, 2 km, and 3 km** choices.
@@ -184,8 +213,8 @@ failed states, with explicit late-acknowledgement and per-target partial-failure
 information. Acknowledgement timeout is 15 seconds. Command, acknowledgement and
 plan histories are bounded to 200 records each.
 Current mission metadata and dotted route previews are retained separately per
-boat, and target-unlock progression is retained separately for the scenario, so
-history eviction does not erase an active mission or relock Target 2. Route drawing
+boat, and target dispatch history is retained separately for the scenario, so
+history eviction does not erase an active mission. Route drawing
 uses the boat's reported mission ID, not its most recent attempted command; a
 failed replacement leaves the actual running route visible.
 

@@ -244,11 +244,19 @@ changes teams and EMANE profiles. Launch a fresh owned five-platform demo first;
 the two-target story requires unrevealed targets:
 
 ```bash
-MISSION_DASHBOARD_URL=http://localhost:8080 \
+MISSION_DASHBOARD_URL=http://localhost:8080 MISSION_PLATFORM_COUNT=6 \
   python3 -m pytest -q -p no:cacheprovider router/test_e2e/test_mission_workflow.py
 ```
 
-It restores the affected boats' original teams, cancels its missions, and resets
+The live gate supports five or six platforms; set `MISSION_PLATFORM_COUNT` to match
+the launched mesh (default five). Mission commands accept up to six recipients.
+The multi-team scenario includes every platform in the fleet.
+The live gates also cover late joins inheriting an active team goal,
+active-to-active reassignment without restarting other members, and leaving a
+team stopping the joining boat's old mission. The loiter gate samples water-only
+positions through a full 2 km-radius circuit; continuous separation is checked
+separately by the navigator contracts.
+It restores the affected boats' original teams and demo clocks, cancels its missions, and resets
 EMANE in teardown. It does not clear the target reveals; restart the owned mesh
 before repeating the complete story gate. Do not point it at a shared operational deployment. A default
 router pytest run skips this gate; run it separately on the live demo. Run the
