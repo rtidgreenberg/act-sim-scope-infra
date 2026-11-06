@@ -63,7 +63,7 @@ enum class ControllerEventKind {
                             // state_revision and is never journaled (same skip-path as
                             // RefreshCounters, D71)
     LinkStatsTick,          // periodic link-metrics tick (Phase 9, D14/D81): tell the
-                            // collector to poll WAN protocol statuses + probe app-acks and
+                            // collector to poll WAN protocol statuses + passive health RTT and
                             // publish per-peer ActRouterLinkStats on the LAN; telemetry
                             // only, same never-bump/never-journal skip-path as the others
     MeshTick                // periodic LAN mesh-dashboard publish (D98): tell

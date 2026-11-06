@@ -4,14 +4,37 @@
 #include "Log.hpp"
 
 #include <dds/sub/ddssub.hpp>
+#include <rti/sub/discoveryImpl.hpp>
 #include <cstdlib>
 #include <fstream>
 #include <iterator> // std::next (prune_dead_locked's handle sweep)
+#include <random>
+#include <set>
 #include <sstream>
 
 namespace router {
 
 namespace {
+
+std::int64_t monotonic_us(std::chrono::steady_clock::time_point time) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+            time.time_since_epoch()).count();
+}
+
+std::uint64_t new_health_session() {
+    std::random_device entropy;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        const auto token = (static_cast<std::uint64_t>(entropy()) << 32) | entropy();
+        if (token) return token;
+    }
+    throw std::runtime_error("Unable to generate a nonzero RouterHealth session token");
+}
+
+std::string handle_string(const dds::core::InstanceHandle &handle) {
+    std::ostringstream os;
+    os << handle;
+    return os.str();
+}
 
 const char *presence_name(RouterPresenceState s) {
     switch (s) {
@@ -89,6 +112,8 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           node_name_(node_name),
           router_name_(router_name),
           identity_(node_name + "/" + router_name),
+          health_session_(new_health_session()),
+          rtt_(health_session_),
           team_scoped_participant_(team_scoped_participant),
           wan_publisher_(wan_participant),
           wan_subscriber_(wan_participant),
@@ -168,10 +193,32 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             out.team_partition.push_back(n);
         }
     }
+    std::int64_t send_boundary_us;
     {
-        const auto now = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lk(roster_mutex_);
+        std::vector<std::string> eligible;
         for (const auto &entry : roster_) {
+            if (entry.second.presence != RouterPresenceState::PRESENCE_DEAD)
+                eligible.push_back(entry.first);
+        }
+        for (const auto &entry : roster_) {
+            if (entry.second.presence == RouterPresenceState::PRESENCE_DEAD)
+                eligible.push_back(entry.first);
+        }
+        // Rotate only live coverage; retained DEAD topology must not starve live RTT.
+        const auto live_end = std::find_if(eligible.begin(), eligible.end(),
+                [&](const std::string &name) {
+                    return roster_.at(name).presence == RouterPresenceState::PRESENCE_DEAD;
+                });
+        const auto live_count = static_cast<std::size_t>(live_end - eligible.begin());
+        HeartbeatRtt::rotate_live_coverage(eligible, live_count,
+                                          out.peers_seen.max_size(), heartbeat_peer_cursor_);
+        const auto now = std::chrono::steady_clock::now();
+        send_boundary_us = monotonic_us(now);
+        out.session_id = health_session_;
+        out.peers_seen.clear();
+        for (const auto &name : eligible) {
+            const auto &entry = *roster_.find(name);
             // peers_seen is a codegen bounded_sequence (unbounded IDL -> cap 100);
             // growing past the cap throws PreconditionNotMetError, which would escape
             // the controller strand's DrainThread and terminate the process. Truncate
@@ -199,9 +246,21 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         if (out.peers_seen.size() < out.peers_seen.max_size()) {
             heartbeat_peers_truncated_ = false; // roster shrank back under the cap
         }
+        // One boundary after roster construction: remote age and local send history
+        // exclude the same local scheduling wait. DDS calls remain outside the lock.
+        send_boundary_us = monotonic_us(std::chrono::steady_clock::now());
+        for (auto &ref : out.peers_seen) {
+            const auto ack = rtt_.acknowledgment(ref.router, send_boundary_us);
+            ref.ack_session_id = ack.session;
+            ref.ack_heartbeat_seq = ack.sequence;
+            ref.ack_age_at_send_us = ack.age_us;
+        }
+        rtt_.reserve(out.heartbeat_seq, send_boundary_us);
     }
+    bool success = false;
     try {
         health_writer_.write(out);
+        success = true;
         log_router_health_audit("sent", out);
     } catch (const dds::core::NotEnabledError &) {
         // Defensive symmetry with DdsStatusPublisher (D52): ticks only start after
@@ -209,6 +268,10 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         Log::debug("heartbeat_skipped_not_enabled", {});
     } catch (const std::exception &e) {
         Log::warn("heartbeat_publish_failed", {{"error", e.what()}});
+    }
+    {
+        std::lock_guard<std::mutex> lk(roster_mutex_);
+        rtt_.finalize(out.heartbeat_seq, success);
     }
 }
 
@@ -241,6 +304,12 @@ void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
                           "presence", "RouterHealth");
     poll_reader_wan_stats(health_reader_, health_reader_prev_, sink,
                           "presence", "RouterHealth");
+    std::lock_guard<std::mutex> lk(roster_mutex_);
+    rtt_.collect(sink, monotonic_us(std::chrono::steady_clock::now()));
+    const auto rejected = rtt_.take_rejections();
+    if (rejected) {
+        Log::warn("heartbeat_rtt_rejected", {{"count", std::to_string(rejected)}});
+    }
 }
 
 void PresenceMonitor::on_health_data() {
@@ -253,13 +322,28 @@ void PresenceMonitor::on_health_data() {
         bool valid = false;
         bool duplicate_identity = false; // valid sample wearing OUR name, foreign writer
         std::string handle_key;
+        std::string writer_key;
+        std::chrono::steady_clock::time_point received;
         RouterHealth hb; // valid only
     };
     std::vector<HealthEvent> events;
+    std::set<std::string> alive_writers;
+    for (const auto &handle : dds::sub::matched_publications(health_reader_)) {
+        try {
+            if (rti::sub::is_matched_publication_alive(health_reader_, handle)) {
+                alive_writers.insert(handle_string(handle));
+            }
+        } catch (const dds::core::InvalidArgumentError &ex) {
+            Log::warn("presence_publication_unmatched",
+                      {{"writer", handle_string(handle)}, {"error", ex.what()}});
+        }
+    }
     {
         auto samples = health_reader_.take();
         for (auto it = samples.begin(); it != samples.end(); ++it) {
             HealthEvent ev;
+            ev.received = std::chrono::steady_clock::now();
+            ev.writer_key = handle_string(it->info().publication_handle());
             ev.handle_key = [&] {
                 std::ostringstream os;
                 os << it->info().instance_handle();
@@ -307,6 +391,41 @@ void PresenceMonitor::on_health_data() {
                 continue;
             }
             if (ev.valid) {
+                if (ev.hb.router.empty()) {
+                    Log::warn("presence_invalid_identity", {});
+                    continue;
+                }
+                if (roster_.find(ev.hb.router) == roster_.end()
+                    && roster_.size() >= HeartbeatRtt::peer_cap) {
+                    Log::warn("presence_roster_full", {{"router", ev.hb.router}});
+                    continue;
+                }
+                const auto previous = rtt_.writer_for(ev.hb.router);
+                const bool direct = alive_writers.count(ev.writer_key)
+                    && rtt_.observe(ev.hb.router, ev.writer_key, ev.hb.session_id,
+                                    ev.hb.heartbeat_seq, monotonic_us(ev.received),
+                                    alive_writers.count(previous) != 0);
+                if (direct) {
+                    const auto count = std::count_if(ev.hb.peers_seen.begin(),
+                            ev.hb.peers_seen.end(), [&](const RouterPeerRef &ref) {
+                                return ref.router == identity_;
+                            });
+                    if (count == 1) {
+                        for (const auto &ref : ev.hb.peers_seen) {
+                            if (ref.router != identity_) continue;
+                            if (!ref.ack_session_id && !ref.ack_heartbeat_seq
+                                && !ref.ack_age_at_send_us) continue;
+                            HeartbeatRtt::Ack ack;
+                            ack.session = ref.ack_session_id;
+                            ack.sequence = ref.ack_heartbeat_seq;
+                            ack.age_us = ref.ack_age_at_send_us;
+                            rtt_.measure(ev.hb.router, ev.hb.session_id, ack,
+                                         monotonic_us(ev.received));
+                        }
+                    } else if (count > 1) {
+                        rtt_.note_rejection();
+                    }
+                }
                 handle_to_name_[ev.handle_key] = ev.hb.router;
                 PeerEntry &e = roster_[ev.hb.router];
                 const bool was_alive =
@@ -341,6 +460,7 @@ void PresenceMonitor::on_health_data() {
                     continue; // never seen a valid heartbeat for this instance
                 }
                 PeerEntry &e = roster_[found->second];
+                rtt_.disconnect(found->second);
                 if (e.presence != RouterPresenceState::PRESENCE_DEAD) {
                     e.presence = RouterPresenceState::PRESENCE_DEAD;
                     changed = true;
@@ -466,6 +586,7 @@ bool PresenceMonitor::prune_dead_locked() {
                    {"dead_for_ms", std::to_string(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                                 now - it->second.last_seen).count())}});
+        rtt_.forget(it->first);
         it = roster_.erase(it);
         pruned = true;
     }

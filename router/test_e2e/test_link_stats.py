@@ -4,8 +4,8 @@ Two router_main processes (control + platform roles, config/e2e_link_stats.yaml)
 runs a LinkStatsCollector on its WAN participant: it polls every registered WAN endpoint's
 per-matched-endpoint reliable-protocol statuses (the ENABLED PlatformInitStatus route's
 WAN leg + PresenceMonitor's RouterHealth bellwether pair), rolls them up per peer NAME
-resolved from the middleware discovery DB (D81 — no roster join), probes RTT via app-ack on
-the dedicated RouterLinkProbe topic, and publishes per-peer ActRouterLinkStats on its admin
+resolved from the middleware discovery DB (D81 — no roster join), measures passive RTT via
+scheduled RouterHealth acknowledgment metadata, and publishes ActRouterLinkStats on its admin
 (LAN) participant.
 
 Asserts the D81 item-7 evidence map:
@@ -17,17 +17,19 @@ Asserts the D81 item-7 evidence map:
   E2  a (re)match interval is stamped rediscovery_in_interval (the first poll after a WAN
       endpoint matches a peer — TRANSIENT_LOCAL-durable so a reader joining shortly after
       startup still catches it).
-  E3  rtt_count / rtt_*_us populate from the app-ack probe at ~1 Hz.
+  E3  rtt_count / rtt_*_us populate from health samples in both directions.
   E4  link stats never bump the router's RouterStatus.state_revision (telemetry, D5): with
       no commands in flight, state_revision holds steady across several link-stats intervals.
 
-The "probe pair is the only new WAN traffic" bullet is checked separately with the
+The "no probe endpoints or extra periodic responses" contract is checked with the
 spikes/partition_retarget/ dumpcap/GuidPrefix pattern (see test_link_stats_wire_frugal).
 
 Run from the repo root (see router/test_e2e/README.md).
 """
 
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -86,6 +88,10 @@ def _fields(data):
         "samples_received": int(data["samples_received"]),
         "rtt_count": int(data["rtt_count"]),
         "rtt_mean_us": int(data["rtt_mean_us"]),
+        "rtt_valid": bool(data["rtt_valid"]),
+        "rtt_age_ms": int(data["rtt_last_sample_age_ms"]),
+        "ack_age_us": int(data["rtt_last_ack_age_us"]),
+        "interval_ms": int(data["interval_ms"]),
         "rediscovery": bool(data["rediscovery_in_interval"]),
         "capture_seq": int(data["capture_seq"]),
     }
@@ -152,7 +158,8 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
             have_push = any(f["pushed_samples"] > 0 for f in plat_cp)
             have_heartbeats = any(f["heartbeats_sent"] > 0 for f in plat_cp)
             have_recv = any(f["samples_received"] > 0 for f in ctrl_pp)
-            have_rtt = any(f["rtt_count"] > 0 for f in plat_cp + ctrl_pp)
+            have_rtt = (any(f["rtt_count"] > 0 and f["rtt_valid"] for f in plat_cp)
+                        and any(f["rtt_count"] > 0 and f["rtt_valid"] for f in ctrl_pp))
             have_rediscovery = any(f["rediscovery"] for f in plat_cp + ctrl_pp)
             # Don't exit until the platform_wan data legs have actually attributed to the peer
             # (E1b) — otherwise the loop can break on the first few bellwether-only intervals,
@@ -262,21 +269,123 @@ def _wan_port_range(wan_domain):
     return lo, lo + RTPS_DOMAIN_GAIN - 1
 
 
-def test_link_stats_wire_frugal(router_binary, e2e_tmp_dir, unique_domains):
-    """D81 item 7 wire-frugality bullet: 'the probe pair is the only new WAN traffic the
-    phase adds'. Captured passively on loopback with dumpcap FROM ROUTER STARTUP (so every
-    initial SEDP announcement is recorded), then isolated to the WAN domain by RTPS port
-    range and attributed by GuidPrefix (the spikes/partition_retarget/ pattern):
+@pytest.mark.parametrize("recovery_mode", ["graceful", "crash", "outage"])
+def test_health_rtt_idle_restart(router_binary, admin_types_xml, e2e_tmp_dir,
+                                 unique_domains, recovery_mode):
+    """No app endpoints: metadata, bidirectional RTT, 250ms stats cadence, and
+    graceful/crash restart or unchanged-writer recovery after roster pruning."""
+    config = render_config("e2e_link_stats.yaml", unique_domains, e2e_tmp_dir)
+    config.write_text(config.read_text().replace("link_stats_period_ms: 1000",
+                                                "link_stats_period_ms: 250"))
+    platform = start_router(router_binary, config, "platform", e2e_tmp_dir,
+                            admin_participant="platform_lan")
+    control = start_router(router_binary, config, "control", e2e_tmp_dir,
+                           node_name="Control_20", name="e2e-control-role",
+                           admin_participant="control_lan")
+    provider = dds.QosProvider(str(admin_types_xml))
+    plat_probe = Probe(unique_domains["platform_lan"])
+    ctrl_probe = Probe(unique_domains["control_lan"])
+    wan_probe = Probe(unique_domains["wan"], participant_profile="wan_router_participant")
+    try:
+        plat_reader = link_stats_reader(plat_probe, provider)
+        ctrl_reader = link_stats_reader(ctrl_probe, provider)
+        health_reader = wan_probe.reader("RouterHealth", "RouterHealth",
+                                        qos=reader_qos("router_health"),
+                                        dtype=provider.type("RouterHealth"))
 
-      - RouterLinkProbe (the Phase 9 probe pair) IS announced in the WAN port range;
-      - ActRouterLinkStats / ActRouterStatus are NOT in the WAN range — the telemetry/admin
-        plane stays LAN-only. This is not a missed burst: RouterLinkProbe's SEDP IS captured
-        in the same window and range, so a WAN ActRouterLinkStats endpoint (which the same
-        WAN participant would announce to the same peer) would appear right beside it;
-      - steady-state WAN bytes/s stays tiny (probe + health + SPDP, no firehose).
+        def wait_rtt(previous_session=None):
+            health, plat, ctrl = {}, [], []
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                assert control.is_alive() and platform.is_alive()
+                drain_into(plat_reader, plat)
+                drain_into(ctrl_reader, ctrl)
+                for sample in health_reader.take():
+                    if sample.info.valid:
+                        data = sample.data
+                        health[str(data["router"])] = {
+                            "session": int(data["session_id"]),
+                            "acks": {str(ref["router"]): (
+                                int(ref["ack_session_id"]), int(ref["ack_heartbeat_seq"]),
+                                int(ref["ack_age_at_send_us"])) for ref in data["peers_seen"]},
+                        }
+                ready = (all(name in health for name in (CONTROL, PLATFORM))
+                         and any(f["rtt_count"] and f["rtt_valid"] for f in plat)
+                         and any(f["rtt_count"] and f["rtt_valid"] for f in ctrl)
+                         and any(not f["rtt_count"] and f["rtt_valid"] for f in plat + ctrl))
+                if ready:
+                    session = health[CONTROL]["session"]
+                    if previous_session is not None and session == previous_session:
+                        time.sleep(0.1)
+                        continue
+                    if (health[PLATFORM]["acks"].get(CONTROL, (0,))[0] == session
+                        and health[CONTROL]["acks"].get(PLATFORM, (0,))[0]
+                            == health[PLATFORM]["session"]):
+                        assert session and health[PLATFORM]["session"]
+                        for observer, peer in ((CONTROL, PLATFORM), (PLATFORM, CONTROL)):
+                            _, sequence, age = health[observer]["acks"][peer]
+                            assert sequence > 0 and 0 <= age <= 32_000_000
+                        return health, plat, ctrl
+                time.sleep(0.1)
+            pytest.fail(f"No mutual passive RTT/metadata after restart: {health}, {plat}, {ctrl}")
 
-    Manages its own capture + launch (not router_pair) so dumpcap is attached before the
-    routers announce. Skips where dumpcap/tshark are unavailable."""
+        health, plat, ctrl = wait_rtt()
+        old_session = health[CONTROL]["session"]
+        assert not any(p["topic"] == "RouterLinkProbe"
+                       for p in wan_probe.discovered_publications())
+        assert any(f["rtt_count"] == 0 and f["rtt_mean_us"] == 0
+                   and f["rtt_valid"] for f in plat + ctrl)
+        assert all(150 <= f["interval_ms"] <= 400 for f in plat + ctrl), (plat, ctrl)
+        old_handles = set(health_reader.matched_publications)
+        if recovery_mode == "outage":
+            os.kill(control._popen.pid, signal.SIGSTOP)
+            try:
+                deadline = time.monotonic() + 75
+                while time.monotonic() < deadline:
+                    if "presence_peer_forgotten" in platform.log_path.read_text():
+                        break
+                    time.sleep(0.25)
+                else:
+                    pytest.fail("Suspended writer was not pruned after >60s outage")
+            finally:
+                os.kill(control._popen.pid, signal.SIGCONT)
+        elif recovery_mode == "crash":
+            control.kill()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                matched = set(health_reader.matched_publications)
+                dead_handles = [handle for handle in old_handles & matched
+                                if not health_reader.is_matched_publication_alive(handle)]
+                if dead_handles:
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail("Crashed health writer never became dead while still matched")
+        else:
+            control.stop()
+        plat_reader.take()
+        ctrl_reader.take()
+        health_reader.take()
+        if recovery_mode != "outage":
+            control = start_router(router_binary, config, "control", e2e_tmp_dir,
+                                   node_name="Control_20", name="e2e-control-role",
+                                   admin_participant="control_lan")
+        recovered, _, _ = wait_rtt(None if recovery_mode == "outage" else old_session)
+        if recovery_mode == "outage":
+            assert recovered[CONTROL]["session"] == old_session
+        elif recovery_mode == "crash":
+            assert all(handle in health_reader.matched_publications for handle in dead_handles)
+    finally:
+        wan_probe.close()
+        plat_probe.close()
+        ctrl_probe.close()
+        platform.stop()
+        control.stop()
+
+
+def test_link_stats_wire_frugal(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains):
+    """Capture startup SEDP and a separate steady window: health RTT remains
+    available without application traffic, with no probe or WAN admin endpoints."""
     if not (shutil.which("dumpcap") and shutil.which("tshark")):
         pytest.skip("dumpcap/tshark not available for the wire-frugality capture")
 
@@ -284,7 +393,9 @@ def test_link_stats_wire_frugal(router_binary, e2e_tmp_dir, unique_domains):
     wan_lo, wan_hi = _wan_port_range(unique_domains["wan"])
     cap_path = e2e_tmp_dir / "wan_frugal.pcap"
 
-    cap = subprocess.Popen(["dumpcap", "-i", "lo", "-w", str(cap_path), "-q"],
+    cap = subprocess.Popen(["dumpcap", "-i", "lo", "-a", "duration:40",
+                            "-f", f"udp portrange {wan_lo}-{wan_hi}",
+                            "-w", str(cap_path), "-q"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.6)  # let dumpcap attach before the routers announce
     platform = start_router(router_binary, config_path, "platform", e2e_tmp_dir,
@@ -292,12 +403,29 @@ def test_link_stats_wire_frugal(router_binary, e2e_tmp_dir, unique_domains):
     control = start_router(router_binary, config_path, "control", e2e_tmp_dir,
                            node_name="Control_20", name="e2e-control-role",
                            admin_participant="control_lan")
+    provider = dds.QosProvider(str(admin_types_xml))
+    plat_probe = Probe(unique_domains["platform_lan"])
+    ctrl_probe = Probe(unique_domains["control_lan"])
+    plat_acc, ctrl_acc = [], []
     try:
+        plat_stats = link_stats_reader(plat_probe, provider)
+        ctrl_stats = link_stats_reader(ctrl_probe, provider)
         c_ok, p_ok = wait_for_mutual_discovery(control, platform)
         assert c_ok and p_ok, (f"routers did not discover each other; "
                                f"control={control.log_path} platform={platform.log_path}")
-        time.sleep(4.0)  # a few probe/heartbeat intervals of steady WAN traffic
+        steady_start = time.time()
+        for _ in range(40):
+            drain_into(plat_stats, plat_acc)
+            drain_into(ctrl_stats, ctrl_acc)
+            time.sleep(0.1)
+        steady_end = time.time()
+        for records, observer, peer in ((plat_acc, PLATFORM, CONTROL),
+                                        (ctrl_acc, CONTROL, PLATFORM)):
+            assert any(f["observer"] == observer and f["peer"] == peer
+                       and f["rtt_count"] > 0 and f["rtt_valid"] for f in records), records
     finally:
+        plat_probe.close()
+        ctrl_probe.close()
         platform.stop()
         control.stop()
         cap.terminate()
@@ -314,8 +442,9 @@ def test_link_stats_wire_frugal(router_binary, e2e_tmp_dir, unique_domains):
     out = subprocess.run(
         ["tshark", "-r", str(cap_path), "-Y", "rtps", "-T", "fields",
          "-e", "udp.srcport", "-e", "udp.dstport", "-e", "frame.len",
-         "-e", "rtps.param.topicName", "-E", "separator=|"],
-        capture_output=True, text=True, check=False).stdout
+         "-e", "rtps.param.topicName", "-e", "frame.time_epoch",
+         "-e", "rtps.guidPrefix.src", "-E", "separator=|"],
+        capture_output=True, text=True, check=True).stdout
 
     wan_topics, all_topics = set(), set()
     wan_bytes = 0
@@ -333,32 +462,26 @@ def test_link_stats_wire_frugal(router_binary, e2e_tmp_dir, unique_domains):
             all_topics.add(t)
             if in_wan:
                 wan_topics.add(t)
-        if in_wan and length.isdigit():
+        if (in_wan and length.isdigit() and len(parts) >= 6
+                and steady_start <= float(parts[4]) <= steady_end and parts[5]):
             wan_bytes += int(length)
-    bytes_per_s = wan_bytes / 4.0
+    bytes_per_s = wan_bytes / (steady_end - steady_start)
     print(f"[wire-frugal] WAN domain {unique_domains['wan']} ports [{wan_lo},{wan_hi}]: "
           f"topics={sorted(wan_topics)}; steady-state ~{bytes_per_s:.0f} bytes/s; "
           f"all topics on lo={sorted(all_topics)}")
 
-    # The Phase 9 probe pair IS on the WAN (+ the pre-existing RouterHealth bellwether).
-    assert "RouterLinkProbe" in wan_topics, \
-        (f"RouterLinkProbe SEDP not seen in the WAN port range — the probe pair is missing; "
-         f"wan_topics={sorted(wan_topics)}; logs control={control.log_path} "
-         f"platform={platform.log_path}")
+    assert "RouterLinkProbe" not in all_topics, \
+        f"Retired probe endpoint observed: {sorted(all_topics)}"
     assert "RouterHealth" in wan_topics, \
         f"RouterHealth (bellwether) SEDP not in the WAN port range; wan={sorted(wan_topics)}"
-    # The telemetry/admin plane stays LAN-only: never in the WAN port range. Meaningful (not
-    # a missed burst) because RouterLinkProbe's SEDP WAS captured in this same window/range —
-    # a WAN ActRouterLinkStats endpoint would have been announced right beside it.
+    # Positive health discovery and LAN RTT above make endpoint absence meaningful.
     assert "ActRouterLinkStats" not in wan_topics, \
         (f"ActRouterLinkStats crossed the WAN — it must stay LAN-only (WAN-frugal, D14); "
          f"wan_topics={sorted(wan_topics)}")
     assert "ActRouterStatus" not in wan_topics, \
         f"ActRouterStatus crossed the WAN (should be LAN-only); wan={sorted(wan_topics)}"
 
-    # Frugal: only RouterHealth (1 Hz) + RouterLinkProbe (1 Hz + app-ack) + SPDP on the WAN,
-    # no app traffic — the rate is tiny. A generous ceiling catches a regression that put a
-    # firehose (or the LAN telemetry stream) on the WAN.
+    # Health + discovery only, no application traffic or triggered RTT response.
     assert 0 < bytes_per_s < 50_000, \
         (f"WAN steady-state bytes/s out of the frugal range ({bytes_per_s:.0f}); a Phase 9 "
          f"regression may have added WAN traffic beyond the probe pair (or the capture was "

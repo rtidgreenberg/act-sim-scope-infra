@@ -102,7 +102,7 @@ struct IControllerJournal {
 
 // Link-metrics tick seam (Phase 9, D14/D81). The controller's LinkStatsTick handler calls
 // this on the controller strand; the real implementation (LinkStatsCollector) polls every
-// registered WAN endpoint's protocol statuses, drains its probe app-acks, and publishes
+// registered WAN endpoint's protocol statuses and passive health RTT, and publishes
 // per-peer ActRouterLinkStats on the LAN. OPTIONAL like journal/presence: nullptr (the
 // default) disables link-metrics capture entirely — the collector is active only when
 // presence is active (D81 item 6). Telemetry only: on_link_stats_tick() never touches

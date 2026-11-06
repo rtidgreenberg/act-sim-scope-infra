@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace router {
@@ -53,6 +54,16 @@ struct ReaderLinkDeltas {
 // interval `rediscovery_in_interval` so analysis can down-weight the TRANSIENT_LOCAL replay
 // burst (D81 item 5). A peer contributed to by several sources (multiple topics, or the
 // health pair + a route) is summed by name.
+struct RttLinkStats {
+    std::uint32_t count = 0;
+    std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t max_us = 0;
+    std::uint64_t sum_us = 0;
+    bool valid = false;
+    std::uint32_t last_sample_age_ms = 0;
+    std::uint64_t last_ack_age_us = 0;
+};
+
 class LinkStatsSink {
 public:
     virtual ~LinkStatsSink() {}
@@ -60,6 +71,7 @@ public:
                             bool rematch) = 0;
     virtual void add_reader(const std::string &peer, const ReaderLinkDeltas &d,
                             bool rematch) = 0;
+    virtual void add_rtt(const std::string &, const RttLinkStats &) {}
     virtual void add_writer_topic(const std::string &, const std::string &, const std::string &,
                                   const WriterLinkDeltas &, bool) {}
     virtual void add_reader_topic(const std::string &, const std::string &, const std::string &,

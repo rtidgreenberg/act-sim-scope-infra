@@ -313,6 +313,9 @@
   <member name="router" stringMaxLength="255" type="string"/>
   <member name="presence" type="nonBasic"  nonBasicTypeName= "RouterPresenceState"/>
   <member name="last_seen_delta_ms" type="int64"/>
+  <member name="ack_session_id" type="uint64"/>
+  <member name="ack_heartbeat_seq" type="uint64"/>
+  <member name="ack_age_at_send_us" type="uint64"/>
 </struct>
 <struct name= "RouterCompactRouteHealth">
   <member name="route_name" stringMaxLength="255" type="string"/>
@@ -333,6 +336,7 @@
   <member name="role" stringMaxLength="255" type="string"/>
   <member name="config_hash" stringMaxLength="255" type="string"/>
   <member name="heartbeat_seq" type="uint64"/>
+  <member name="session_id" type="uint64"/>
   <member name="send_timestamp" type="int64"/>
   <member name="state_revision" type="uint64"/>
   <member name="n_routes" type="uint32"/>
@@ -388,11 +392,6 @@
   <member name="action" stringMaxLength="255" type="string"/>
   <member name="payload_json" stringMaxLength="255" type="string"/>
 </struct>
-<struct name= "RouterLinkProbe">
-  <member name="router" stringMaxLength="255" type="string" key="true"/>
-  <member name="probe_seq" type="uint64"/>
-  <member name="send_timestamp" type="int64"/>
-</struct>
 <struct name= "RouterLinkTopicStats">
   <member name="route_name" stringMaxLength="255" type="string"/>
   <member name="topic_name" stringMaxLength="255" type="string"/>
@@ -441,6 +440,9 @@
   <member name="rtt_min_us" type="uint32"/>
   <member name="rtt_mean_us" type="uint32"/>
   <member name="rtt_max_us" type="uint32"/>
+  <member name="rtt_valid" type="boolean"/>
+  <member name="rtt_last_sample_age_ms" type="uint32"/>
+  <member name="rtt_last_ack_age_us" type="uint64"/>
   <member name="topic_stats" sequenceMaxLength="128" type="nonBasic"  nonBasicTypeName= "RouterLinkTopicStats"/>
 </struct>
 <struct name= "DomainTrafficStats">

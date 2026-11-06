@@ -63,7 +63,6 @@ const char *kAdminCommandAckProfile = "ACT_QOS_LIB::router_admin_command_ack";
 const char *kControllerJournalProfile = "ACT_QOS_LIB::router_controller_journal";
 const char *kRouterHealthProfile = "ACT_QOS_LIB::router_health";
 const char *kRouterMeshStatusProfile = "ACT_QOS_LIB::router_mesh_status";
-const char *kRouterLinkProbeProfile = "ACT_QOS_LIB::router_link_probe";
 const char *kRouterLinkStatsProfile = "ACT_QOS_LIB::router_link_stats";
 
 void print_usage() {
@@ -398,8 +397,6 @@ int main(int argc, char **argv) {
         dds::sub::qos::DataReaderQos health_reader_qos;
         dds::pub::qos::DataWriterQos health_writer_qos;
         dds::pub::qos::DataWriterQos mesh_writer_qos;
-        dds::pub::qos::DataWriterQos link_probe_writer_qos;
-        dds::sub::qos::DataReaderQos link_probe_reader_qos;
         dds::pub::qos::DataWriterQos link_stats_writer_qos;
         try {
             if (!qos_provider) {
@@ -412,8 +409,6 @@ int main(int argc, char **argv) {
             health_reader_qos = qos_provider->datareader_qos(kRouterHealthProfile);
             health_writer_qos = qos_provider->datawriter_qos(kRouterHealthProfile);
             mesh_writer_qos = qos_provider->datawriter_qos(kRouterMeshStatusProfile);
-            link_probe_writer_qos = qos_provider->datawriter_qos(kRouterLinkProbeProfile);
-            link_probe_reader_qos = qos_provider->datareader_qos(kRouterLinkProbeProfile);
             link_stats_writer_qos = qos_provider->datawriter_qos(kRouterLinkStatsProfile);
         } catch (const std::exception &e) {
             Log::error("router.config.internal_qos_profile_unresolvable",
@@ -465,21 +460,20 @@ int main(int argc, char **argv) {
                     mesh_writer_qos, status_writer_qos, team_scoped_participant));
         }
 
-        // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the
-        // presence (WAN) participant, ActRouterLinkStats on the admin (LAN) participant.
+        // Link-metrics collector: passive health RTT and WAN protocol counters,
+        // ActRouterLinkStats on the admin (LAN) participant.
         // Active ONLY when presence is active (no WAN participant => no bellwether, no
         // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
         // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
         // dispatcher registers each route's WAN leg — the factory flags a leg as WAN via
         // registry.on_wan(participant_name) (any Config::on_wan participant, i.e.
         // control_wan and platform_wan post-D103, not only this presence participant).
-        // Conditions attach to the AWS here, before aws.start()/enable_all() (D52).
         std::unique_ptr<LinkStatsCollector> link_stats;
         if (presence) {
             link_stats.reset(new LinkStatsCollector(
-                    aws, registry.get(cfg.presence_participant), admin_dp,
+                    admin_dp,
                     router_identity, cfg.presence_participant,
-                    link_probe_writer_qos, link_probe_reader_qos, link_stats_writer_qos,
+                    link_stats_writer_qos,
                     cfg.link_stats_period_ms));
             route_disp.set_stats_registry(link_stats.get());
             link_stats->register_source(presence.get());
@@ -575,7 +569,7 @@ int main(int argc, char **argv) {
         discovery.shutdown();
         command_reader.shutdown();
         if (link_stats) {
-            link_stats->shutdown(); // reset the app-ack listener + detach the probe cond
+            link_stats->shutdown(); // release WAN source registrations
         }
         if (presence) {
             presence->shutdown();

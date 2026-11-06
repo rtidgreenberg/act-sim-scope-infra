@@ -2,8 +2,8 @@
 # (router/test_e2e/test_link_stats.py, D14/D18/D81).
 #
 # Same two-role shape as e2e_presence.yaml: each process runs its role's WAN participant
-# with a RouterHealth heartbeat pair (the mandatory idle-mesh bellwether) AND the Phase 9
-# RouterLinkProbe RTT pair + LinkStatsCollector. One ENABLED WAN route (PlatformInitStatus,
+# with a RouterHealth heartbeat pair (the mandatory idle-mesh bellwether), passive health
+# RTT, and LinkStatsCollector. One ENABLED WAN route (PlatformInitStatus,
 # platform -> control) carries steady traffic so the per-matched-endpoint protocol counters
 # advance; the collector rolls them up per peer NAME (D79) resolved from the discovery DB
 # and publishes ActRouterLinkStats on each router's admin (LAN) participant.

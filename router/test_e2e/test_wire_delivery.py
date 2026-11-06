@@ -536,7 +536,7 @@ class ConfiguredWanQosTests(unittest.TestCase):
                     config["router"]["presence_participant"] = presence
                     path.write_text(json.dumps(config))
                     result = load_delivery_config(path, lambda _: provider, float("inf"))
-                    self.assertEqual(set(result["topics"]), {"RouterHealth", "RouterLinkProbe"})
+                    self.assertEqual(set(result["topics"]), {"RouterHealth"})
                     for entries in result["topics"].values():
                         self.assertEqual(len(entries), 2)
                         self.assertTrue(all(entry["enabled"] for entry in entries))
@@ -554,7 +554,8 @@ class ConfiguredWanQosTests(unittest.TestCase):
             self.skipTest("Installed Connext binding required; no DDS entities created")
         result = load_delivery_config(
             ROOT / "router/config/control-platform.yaml", dds.QosProvider, dds.Duration.infinite)
-        expected = {"RouterHealth": "BEST_EFFORT", "RouterLinkProbe": "RELIABLE",
+        self.assertNotIn("RouterLinkProbe", result["topics"])
+        expected = {"RouterHealth": "BEST_EFFORT",
                     "ControlCommand": "RELIABLE", "PlatformInitStatus": "BEST_EFFORT"}
         for topic, reliability in expected.items():
             with self.subTest(topic=topic):

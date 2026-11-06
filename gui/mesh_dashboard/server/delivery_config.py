@@ -8,7 +8,6 @@ import yaml
 
 INTERNAL_WAN_PROFILES = {
     "RouterHealth": "ACT_QOS_LIB::router_health",
-    "RouterLinkProbe": "ACT_QOS_LIB::router_link_probe",
 }
 
 

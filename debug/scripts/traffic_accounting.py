@@ -15,6 +15,7 @@ WRITER_KINDS = {0x02, 0x03}
 DATA_SUBMESSAGES = {0x02, 0x03, 0x10, 0x11, 0x14, 0x15, 0x16, 0x18, 0x81}
 CONTROL_SUBMESSAGES = {0x06, 0x07, 0x08, 0x12, 0x13, 0x17, 0x19,
                        0x1a, 0x1b, 0x1c, 0x1d, 0x1e}
+# Keep retired probe captures classified as infrastructure for historical reports.
 INFRASTRUCTURE_TOPICS = {"RouterHealth", "RouterLinkProbe"}
 FRAME_CLASSES = ("discovery", "data", "reliability", "mixed", "unknown")
 TX_CLASSES = ("application", "infrastructure", "discovery", "reliability", "mixed", "unknown")

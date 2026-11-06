@@ -396,6 +396,9 @@ struct RouterPeerRef {
     string router;
     RouterPresenceState presence;
     int64 last_seen_delta_ms;
+    uint64 ack_session_id;
+    uint64 ack_heartbeat_seq;
+    uint64 ack_age_at_send_us;
 };
 
 struct RouterCompactRouteHealth {
@@ -421,6 +424,7 @@ struct RouterHealth {
     string role;
     string config_hash;
     uint64 heartbeat_seq;
+    uint64 session_id;
     int64 send_timestamp;
     uint64 state_revision;
     uint32 n_routes;
@@ -501,13 +505,6 @@ struct ControllerJournalRecord {
 // Link-Metrics Capture (Phase 9, D14/D18/D81)
 // ============================================================================
 
-struct RouterLinkProbe {
-    @key
-    string router;
-    uint64 probe_seq;
-    int64  send_timestamp;
-};
-
 struct RouterLinkTopicStats {
     string route_name;
     string topic_name;
@@ -554,6 +551,9 @@ struct RouterLinkStats {
 
     uint32 rtt_count;
     uint32 rtt_min_us;  uint32 rtt_mean_us;  uint32 rtt_max_us;
+    boolean rtt_valid;
+    uint32 rtt_last_sample_age_ms;
+    uint64 rtt_last_ack_age_us;
 
     sequence<RouterLinkTopicStats, 128> topic_stats;
 };

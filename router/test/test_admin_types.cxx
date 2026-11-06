@@ -95,6 +95,7 @@ int main() {
     RouterHealth health;
     health.router = "Platform_30/router";
     health.heartbeat_seq = (std::uint64_t(1) << 40) + 1;
+    health.session_id = (std::uint64_t(1) << 60) + 3;
     RouterCompactRouteHealth compact;
     compact.route_name = "platform_debug_status";
     compact.state = RouterRouteOperationalState::ROUTE_ERROR;
@@ -106,12 +107,19 @@ int main() {
         peer.router = "Platform_" + std::to_string(i + 30) + "/platform-router";
         peer.presence = RouterPresenceState::PRESENCE_STALE;
         peer.last_seen_delta_ms = 12345;
+        peer.ack_session_id = health.session_id;
+        peer.ack_heartbeat_seq = health.heartbeat_seq;
+        peer.ack_age_at_send_us = 680000;
         health.peers_seen.push_back(peer);
     }
     std::vector<char> buffer;
     rti::topic::to_cdr_buffer(buffer, health);
     const auto restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
     CHECK(restored.heartbeat_seq == health.heartbeat_seq);
+    CHECK(restored.session_id == health.session_id);
+    CHECK(restored.peers_seen.at(0).ack_session_id == health.session_id);
+    CHECK(restored.peers_seen.at(0).ack_heartbeat_seq == health.heartbeat_seq);
+    CHECK(restored.peers_seen.at(0).ack_age_at_send_us == 680000);
     CHECK(restored.routes.at(0).samples_forwarded == compact.samples_forwarded);
     CHECK(restored.routes.at(0).state == compact.state);
     CHECK(restored.peers_seen.size() == 70);
@@ -119,6 +127,10 @@ int main() {
     CHECK(restored.peers_seen.at(69).presence == RouterPresenceState::PRESENCE_STALE);
     CHECK(restored.peers_seen.at(69).last_seen_delta_ms == 12345);
     std::printf("RouterHealth 70-peer CDR size: %zu bytes\n", buffer.size());
+    health.peers_seen.resize(5);
+    rti::topic::to_cdr_buffer(buffer, health);
+    std::printf("RouterHealth 5-peer CDR size: %zu bytes\n", buffer.size());
+    CHECK(buffer.size() < 1400);
 
     if (g_failures == 0) {
         std::printf("test_admin_types: OK\n");

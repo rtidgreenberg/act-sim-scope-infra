@@ -84,6 +84,10 @@ target_link_libraries(router_main RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
 # --- Tests ---
 enable_testing()
 
+add_executable(test_heartbeat_rtt test/test_heartbeat_rtt.cxx)
+target_include_directories(test_heartbeat_rtt PRIVATE src)
+add_test(NAME heartbeat_rtt COMMAND test_heartbeat_rtt)
+
 set(ROUTER_TEST_TMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tmp/router_tests")
 file(MAKE_DIRECTORY "${ROUTER_TEST_TMP_DIR}")
 

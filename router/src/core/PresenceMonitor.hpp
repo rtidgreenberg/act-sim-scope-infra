@@ -89,6 +89,8 @@
 
 #pragma once
 
+#include "HeartbeatRtt.hpp"
+
 #include "Interfaces.hpp"
 #include "WanStatsPoll.hpp" // Phase 9: the RouterHealth pair is a WAN-stats source (D81)
 
@@ -211,6 +213,9 @@ private:
     std::string node_name_;
     std::string router_name_;
     std::string identity_; // "<node>/<router>" — the D74/D79 name, our RouterHealth key
+    const std::uint64_t health_session_;
+    HeartbeatRtt rtt_;
+    std::size_t heartbeat_peer_cursor_ = 0;
     // D93: polled live (qos().policy<Partition>().name()) at each heartbeat, never
     // cached — see the constructor comment and publish_heartbeat. dds::core::null if this
     // process has no team_scoped participant.

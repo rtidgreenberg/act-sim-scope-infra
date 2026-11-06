@@ -18,60 +18,34 @@ std::int64_t now_unix_ns() {
                     .count());
 }
 
-// The codebase's first (and only) DataWriterListener — the app-ack RTT sink, on the probe
-// writer alone (D81 item 3). The callback (middleware thread) does the minimum: stamp a
-// clock, push (subscription_handle, RTPS seq, recv_time). It shares ownership of the
-// accumulator via shared_ptr, so a callback that races teardown is still safe.
-class ProbeAckListener : public dds::pub::NoOpDataWriterListener<RouterLinkProbe> {
-public:
-    explicit ProbeAckListener(std::shared_ptr<ProbeAckAccumulator> acc)
-            : acc_(std::move(acc)) {}
-
-    void on_application_acknowledgment(
-            dds::pub::DataWriter<RouterLinkProbe> &,
-            const rti::pub::AcknowledgmentInfo &info) override {
-        ProbeAckAccumulator::Ack a;
-        a.subscription_handle = info.subscription_handle();
-        a.rtps_seq = static_cast<std::uint64_t>(
-                info.sample_identity().sequence_number().value());
-        a.recv_unix_ns = now_unix_ns();
-        std::lock_guard<std::mutex> lk(acc_->mutex);
-        acc_->acks.push_back(a);
-    }
-
-private:
-    std::shared_ptr<ProbeAckAccumulator> acc_;
-};
-
-// Per-peer RTT running stats for this interval.
-struct RttAccum {
-    std::uint32_t count = 0;
-    std::uint32_t min_us = std::numeric_limits<std::uint32_t>::max();
-    std::uint32_t max_us = 0;
-    std::uint64_t sum_us = 0;
-    void add(std::uint32_t us) {
-        ++count;
-        min_us = std::min(min_us, us);
-        max_us = std::max(max_us, us);
-        sum_us += us;
-    }
-};
-
 // Collector-owned sink: folds per-source contributions into a per-peer RouterLinkStats
 // (counter fields only; the collector stamps the invariants at emit time). rematch OR'd.
 class Accumulator : public LinkStatsSink {
 public:
     std::map<std::string, RouterLinkStats> records;
-    std::map<std::string, RttAccum> rtt;
 
     RouterLinkStats &record_for(const std::string &peer) {
         std::map<std::string, RouterLinkStats>::iterator it = records.find(peer);
         if (it != records.end()) {
             return it->second;
         }
+
         RouterLinkStats r; // value-initialized: all counters zero, flag false
         r.peer_router = peer;
         return records.emplace(peer, r).first->second;
+    }
+
+    void add_rtt(const std::string &peer, const RttLinkStats &d) override {
+        RouterLinkStats &r = record_for(peer);
+        r.rtt_count = d.count;
+        if (d.count) {
+            r.rtt_min_us = d.min_us;
+            r.rtt_max_us = d.max_us;
+            r.rtt_mean_us = static_cast<std::uint32_t>(d.sum_us / d.count);
+        }
+        r.rtt_valid = d.valid;
+        r.rtt_last_sample_age_ms = d.last_sample_age_ms;
+        r.rtt_last_ack_age_us = d.last_ack_age_us;
     }
 
     void add_writer(const std::string &peer, const WriterLinkDeltas &d,
@@ -145,50 +119,21 @@ public:
 
 } // namespace
 
-LinkStatsCollector::LinkStatsCollector(rti::core::cond::AsyncWaitSet &aws,
-                                       dds::domain::DomainParticipant wan_participant,
-                                       dds::domain::DomainParticipant lan_participant,
+LinkStatsCollector::LinkStatsCollector(dds::domain::DomainParticipant lan_participant,
                                        const std::string &observer_router,
                                        const std::string &network,
-                                       const dds::pub::qos::DataWriterQos &probe_writer_qos,
-                                       const dds::sub::qos::DataReaderQos &probe_reader_qos,
                                        const dds::pub::qos::DataWriterQos &stats_writer_qos,
                                        int period_ms,
-                                       const std::string &probe_topic,
                                        const std::string &stats_topic)
-        : aws_(aws),
-          observer_router_(observer_router),
+        : observer_router_(observer_router),
           network_(network),
           period_ms_(period_ms > 0 ? period_ms : kLinkStatsPeriodMs),
-          wan_publisher_(wan_participant),
-          wan_subscriber_(wan_participant),
-          probe_topic_(wan_participant, probe_topic),
-          probe_writer_(wan_publisher_, probe_topic_, probe_writer_qos),
-          probe_reader_(wan_subscriber_, probe_topic_, probe_reader_qos),
           lan_publisher_(lan_participant),
           stats_topic_(lan_participant, stats_topic),
           stats_writer_(lan_publisher_, stats_topic_, stats_writer_qos),
-          acks_(std::make_shared<ProbeAckAccumulator>()),
           shut_down_(false) {
-    // Install the app-ack listener on the probe writer alone, with exactly the app-ack
-    // mask (D81 item 3 containment). It shares the accumulator with the collector.
-    std::shared_ptr<ProbeAckListener> listener =
-            std::make_shared<ProbeAckListener>(acks_);
-    probe_writer_.set_listener(
-            listener,
-            dds::core::status::StatusMask::datawriter_application_acknowledgment());
-
-    // Take-and-discard peers' probes to emit APPLICATION_AUTO acks back to them (their
-    // RTT measurement). ReadCondition on the shared AWS, like PresenceMonitor (D52).
-    dds::sub::cond::ReadCondition probe_cond(
-            probe_reader_, dds::sub::status::DataState::any(),
-            [this]() { on_probe_data(); });
-    aws_.attach_condition(probe_cond);
-    conditions_.push_back(probe_cond);
-
     Log::info("link_stats_collector_ready",
-              {{"probe_topic", probe_topic},
-               {"stats_topic", stats_topic},
+              {{"stats_topic", stats_topic},
                {"observer", observer_router_},
                {"network", network_}});
 }
@@ -201,22 +146,6 @@ void LinkStatsCollector::shutdown() {
     if (shut_down_.exchange(true)) {
         return;
     }
-    // Reset the listener BEFORE closing the writer (D31/D32 discipline extended to the
-    // listener): no callback fires after this. The accumulator outlives any in-flight
-    // callback via its shared_ptr.
-    try {
-        probe_writer_.set_listener(nullptr);
-    } catch (const std::exception &e) {
-        Log::warn("link_stats_listener_reset_failed", {{"error", e.what()}});
-    }
-    for (const auto &cond : conditions_) {
-        try {
-            aws_.detach_condition(cond); // D32 blocking barrier per condition
-        } catch (const std::exception &e) {
-            Log::warn("link_stats_detach_condition_failed", {{"error", e.what()}});
-        }
-    }
-    conditions_.clear();
     // Drop every registered source (route legs the dispatcher didn't unregister, and the
     // PresenceMonitor pair which is registered for the collector's whole life) so no raw
     // source pointer outlives its registration — symmetric with unregister_source, and
@@ -237,52 +166,6 @@ void LinkStatsCollector::register_source(IWanStatsSource *source) {
 void LinkStatsCollector::unregister_source(IWanStatsSource *source) {
     sources_.erase(std::remove(sources_.begin(), sources_.end(), source),
                    sources_.end());
-}
-
-std::string LinkStatsCollector::probe_peer_name(const dds::core::InstanceHandle &handle) {
-    try {
-        dds::topic::ParticipantBuiltinTopicData pd =
-                rti::pub::matched_subscription_participant_data(probe_writer_, handle);
-        rti::core::optional_value<std::string> name = pd->participant_name().name();
-        return name.is_set() ? name.get() : std::string();
-    } catch (const std::exception &) {
-        return std::string();
-    }
-}
-
-void LinkStatsCollector::on_probe_data() {
-    try {
-        probe_reader_.take(); // loan returned at end of statement -> APPLICATION_AUTO ack
-    } catch (const std::exception &e) {
-        Log::warn("link_probe_take_failed", {{"error", e.what()}});
-    }
-}
-
-void LinkStatsCollector::write_probe() {
-    RouterLinkProbe p;
-    p.router = observer_router_;
-    p.probe_seq = probe_seq_;
-    p.send_timestamp = now_unix_ns();
-    try {
-        probe_writer_.write(p);
-    } catch (const dds::core::NotEnabledError &) {
-        Log::debug("link_probe_skipped_not_enabled", {}); // ticks start after enable_all()
-        return; // no RTPS seq consumed — do NOT advance the counter (would desync acks)
-    } catch (const std::exception &e) {
-        Log::warn("link_probe_write_failed", {{"error", e.what()}});
-        return; // ditto: a failed write assigns no sequence number
-    }
-    // Only now that write() succeeded and the writer consumed exactly one RTPS sequence
-    // number: record its send-time keyed by that seq and advance. Recording/incrementing
-    // on a throwing write would leave next_rtps_seq_ ahead of the writer's real sequence,
-    // so every later ack would join the wrong send-time (corrupted RTT).
-    send_times_[next_rtps_seq_] = p.send_timestamp;
-    ++probe_seq_;
-    ++next_rtps_seq_;
-    // Bound the send-time table: acks arrive within an interval, so a small ring is ample.
-    while (send_times_.size() > 32) {
-        send_times_.erase(send_times_.begin());
-    }
 }
 
 void LinkStatsCollector::on_link_stats_tick() {
@@ -307,37 +190,10 @@ void LinkStatsCollector::on_link_stats_tick() {
         source->collect_wan_stats(acc);
     }
 
-    // 2. Drain the app-ack accumulator and fold RTTs in (attributing via the discovery DB).
-    std::vector<ProbeAckAccumulator::Ack> acks;
-    {
-        std::lock_guard<std::mutex> lk(acks_->mutex);
-        acks.swap(acks_->acks);
-    }
-    for (const ProbeAckAccumulator::Ack &a : acks) {
-        std::map<std::uint64_t, std::int64_t>::iterator sit =
-                send_times_.find(a.rtps_seq);
-        if (sit == send_times_.end()) {
-            continue; // send-time evicted or seq unknown
-        }
-        std::int64_t rtt_ns = a.recv_unix_ns - sit->second;
-        if (rtt_ns < 0) {
-            rtt_ns = 0;
-        }
-        const std::string peer = probe_peer_name(a.subscription_handle);
-        if (peer.empty()) {
-            continue;
-        }
-        acc.rtt[peer].add(static_cast<std::uint32_t>(rtt_ns / 1000));
-    }
-
-    // 3. Emit one ActRouterLinkStats per peer (+ structured log line). A peer known only
+    // Emit one ActRouterLinkStats per peer (+ structured log line). A peer known only
     //    from RTT still gets a record (its route/health counters are simply zero).
     const std::int64_t capture_ts = now_unix_ns();
     ++capture_seq_;
-    for (std::map<std::string, RttAccum>::iterator it = acc.rtt.begin();
-         it != acc.rtt.end(); ++it) {
-        acc.record_for(it->first); // ensure a record exists for RTT-only peers
-    }
     for (std::map<std::string, RouterLinkStats>::iterator it = acc.records.begin();
          it != acc.records.end(); ++it) {
         RouterLinkStats &s = it->second;
@@ -346,14 +202,6 @@ void LinkStatsCollector::on_link_stats_tick() {
         s.capture_seq = capture_seq_;
         s.capture_timestamp = capture_ts;
         s.interval_ms = interval_ms;
-        std::map<std::string, RttAccum>::iterator r = acc.rtt.find(it->first);
-        if (r != acc.rtt.end() && r->second.count > 0) {
-            const RttAccum &ra = r->second;
-            s.rtt_count = ra.count;
-            s.rtt_min_us = ra.min_us;
-            s.rtt_max_us = ra.max_us;
-            s.rtt_mean_us = static_cast<std::uint32_t>(ra.sum_us / ra.count);
-        }
         try {
             stats_writer_.write(s);
         } catch (const dds::core::NotEnabledError &) {
@@ -373,11 +221,12 @@ void LinkStatsCollector::on_link_stats_tick() {
                    {"samples_received", std::to_string(s.samples_received)},
                    {"nacks_received", std::to_string(s.nacks_received)},
                    {"rtt_count", std::to_string(s.rtt_count)},
-                   {"rtt_mean_us", std::to_string(s.rtt_mean_us)}});
+                   {"rtt_mean_us", std::to_string(s.rtt_mean_us)},
+                   {"rtt_valid", s.rtt_valid ? "1" : "0"},
+                   {"rtt_last_sample_age_ms", std::to_string(s.rtt_last_sample_age_ms)},
+                   {"rtt_last_ack_age_us", std::to_string(s.rtt_last_ack_age_us)}});
     }
 
-    // 4. One probe on the WAN (the only new WAN traffic this phase adds).
-    write_probe();
 }
 
 } // namespace router
