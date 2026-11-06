@@ -160,6 +160,8 @@ The DDS values are domain-200 RTPS traffic captured at `emane0`, not native EMAN
 MAC counters and not payload-only throughput. Node rates include all captured DDS
 traffic in each direction. Network chart rates sum sender TX rates, never RX copies,
 using the latest capture window common to all expected contributors.
+Each chart series title appears above its three-second average; the stat blocks
+wrap on narrow screens and the graph spacing follows the rendered panel height.
 
 Monitor schema 3 assigns each physical frame to its original capture-time window,
 not the time tshark finishes decoding it. Reporting waits two seconds for decoding

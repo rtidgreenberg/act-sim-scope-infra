@@ -102,6 +102,21 @@ class TrafficDashboardTests(unittest.TestCase):
                 page.evaluate("(data) => window.trafficSocket.onmessage({data: JSON.stringify(data)})",
                               {"type": kind, "data": payload})
 
+            def assert_stacked_stats(count):
+                metrics = page.locator(".tp-subplot-label > [data-series]:visible").evaluate_all("""els =>
+                    els.map(el => {
+                        const title = document.createRange();
+                        title.selectNodeContents(el.firstChild);
+                        const titleRect = title.getBoundingClientRect();
+                        const valueRect = el.querySelector('.tp-subplot-average').getBoundingClientRect();
+                        return {titleBottom: titleRect.bottom, valueTop: valueRect.top,
+                                titleLeft: titleRect.left, valueLeft: valueRect.left};
+                    })""")
+                self.assertEqual(len(metrics), count)
+                for metric in metrics:
+                    self.assertGreaterEqual(metric["valueTop"], metric["titleBottom"])
+                    self.assertLessEqual(abs(metric["valueLeft"] - metric["titleLeft"]), 1)
+
             send(sample)
             sample["capture_timestamp"] += 1000
             send(sample)
@@ -109,12 +124,22 @@ class TrafficDashboardTests(unittest.TestCase):
             send(sample)
             self.assertTrue(page.locator('[data-series="application_tx"]').is_visible())
             self.assertFalse(page.locator('[data-series="infrastructure_tx"]').is_visible())
+            assert_stacked_stats(1)
             self.assertEqual(page.locator("#rf-summary").count(), 0)
             self.assertEqual(page.locator('[data-series="mac"]').count(), 0)
             self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
             page.evaluate("window.drawn = []")
             toggle.check()
             self.assertTrue(page.locator('[data-series="infrastructure_tx"]').is_visible())
+            assert_stacked_stats(6)
+            page.set_viewport_size({"width": 640, "height": 900})
+            page.wait_for_timeout(100)
+            assert_stacked_stats(6)
+            self.assertLessEqual(abs(page.locator("#graph").bounding_box()["height"] +
+                                     page.locator("#graph").bounding_box()["y"] -
+                                     page.locator("#traffic-panel").bounding_box()["y"]), 1)
+            page.set_viewport_size({"width": 1280, "height": 900})
+            page.wait_for_timeout(100)
             self.assertIn("shared scale 800.0 kb/s", page.evaluate("window.drawn"))
             self.assertTrue(any("heartbeat/probe TX peak" in text for text in page.evaluate("window.drawn")))
             page.evaluate("window.drawn = []")
