@@ -88,11 +88,11 @@ def test_full_control_platform_config(
     try:
         control_status = control_app.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
         platform_status = platform_app.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # App-side endpoints for every route topic, all created up front: each LAN

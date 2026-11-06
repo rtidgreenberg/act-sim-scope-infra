@@ -72,8 +72,7 @@ def link_stats_reader(probe, provider):
     # matched to the collector's RELIABLE + TRANSIENT_LOCAL writer.
     return probe.reader(
         LINK_STATS_TOPIC, "RouterLinkStats",
-        qos=reader_qos(reliability="reliable", durability="transient_local",
-                       keep_all=True),
+        qos=reader_qos("router_link_stats"),
         dtype=provider.type("RouterLinkStats"))
 
 
@@ -151,6 +150,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
             ctrl_pp = [f for f in ctrl_acc if f["observer"] == CONTROL
                        and f["peer"] == PLATFORM]
             have_push = any(f["pushed_samples"] > 0 for f in plat_cp)
+            have_heartbeats = any(f["heartbeats_sent"] > 0 for f in plat_cp)
             have_recv = any(f["samples_received"] > 0 for f in ctrl_pp)
             have_rtt = any(f["rtt_count"] > 0 for f in plat_cp + ctrl_pp)
             have_rediscovery = any(f["rediscovery"] for f in plat_cp + ctrl_pp)
@@ -159,7 +159,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
             # before the route legs' per-endpoint stats resolve (attribution lags discovery,
             # D95). The 20 s deadline still bounds a genuine regression.
             have_coverage = max((f["pushed_samples"] for f in plat_cp), default=0) >= 5
-            if (forwarded and have_push and have_recv and have_rtt
+            if (forwarded and have_push and have_heartbeats and have_recv and have_rtt
                     and have_rediscovery and have_coverage and len(plat_cp) >= 3):
                 break
             time.sleep(0.1)
@@ -231,7 +231,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
         # commands in flight, revision holds steady across several link-stats intervals.
         status_reader = plat_stats_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=provider.type("RouterStatus"))
         rev0 = None
         t0 = time.monotonic()

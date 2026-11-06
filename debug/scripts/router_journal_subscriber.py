@@ -18,22 +18,22 @@ import rti.connextdds as dds  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TYPES_XML = REPO_ROOT / "harness_v2" / "datamodel" / "gen" / "ActTypes.xml"
+QOS_XML = REPO_ROOT / "harness_v2" / "qos" / "act_qos_profiles.xml"
 DEFAULT_OUTPUT = REPO_ROOT / "debug" / "logs" / "journal" / "router_journal.jsonl"
 TOPICS = (
-    ("ActRouterControllerJournal", "ControllerJournalRecord", True),
-    ("ActRouterStatus", "RouterStatus", False),
-    ("ActRouterLinkStats", "RouterLinkStats", True),
+    ("ActRouterControllerJournal", "ControllerJournalRecord", "router_controller_journal"),
+    ("ActRouterStatus", "RouterStatus", "router_admin_status"),
+    ("ActRouterLinkStats", "RouterLinkStats", "router_link_stats"),
 )
 
 
-def reader_qos(keep_all):
-    qos = dds.DataReaderQos()
-    qos.reliability = dds.Reliability(kind=dds.ReliabilityKind.RELIABLE)
-    if keep_all:
-        qos.history = dds.History.keep_all
-    else:
-        qos.durability = dds.Durability(kind=dds.DurabilityKind.TRANSIENT_LOCAL)
-    return qos
+def journal_participant_qos():
+    return dds.QosProvider(str(QOS_XML)).participant_qos_from_profile(
+        "ACT_QOS_LIB::router_journal_participant")
+
+
+def reader_qos(profile):
+    return dds.QosProvider(str(QOS_XML)).datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
 
 
 def main():
@@ -58,8 +58,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     provider = dds.QosProvider(str(TYPES_XML))
-    participant_qos = dds.DomainParticipant.default_participant_qos
-    participant_qos.transport_builtin = dds.TransportBuiltin.udpv4
+    participant_qos = journal_participant_qos()
     if args.participant_name or args.participant_role:
         entity_name = participant_qos.participant_name
         if args.participant_name:
@@ -70,11 +69,11 @@ def main():
     participant = dds.DomainParticipant(args.domain, participant_qos)
     subscriber = dds.Subscriber(participant)
     readers = []
-    for topic_name, type_name, keep_all in TOPICS:
+    for topic_name, type_name, profile in TOPICS:
         dtype = provider.type(type_name)
         topic = dds.DynamicData.Topic(participant, topic_name, dtype)
         readers.append((topic_name, dds.DynamicData.DataReader(
-            subscriber, topic, reader_qos(keep_all))))
+            subscriber, topic, reader_qos(profile))))
 
     stop = False
 

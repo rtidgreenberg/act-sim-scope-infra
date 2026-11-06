@@ -45,12 +45,10 @@ struct FakeEntityFactory : IEntityFactory {
     struct Op {
         std::string route, topic;
         std::uint64_t gen;
-        DerivedWriterQos derived; // creates only (D39/D45)
-        std::int64_t deadline_nanos = 0; // deadline updates only
+        std::string reader_qos, writer_qos;
         std::string sub_partition, pub_partition; // partition updates + creates (7b/D69)
     };
-    std::vector<Op> creates, teardowns, aborts, deadline_updates, partition_updates;
-    bool fail_deadline_update = false;
+    std::vector<Op> creates, teardowns, aborts, partition_updates;
     // Counter the D63 RefreshCounters pull samples, keyed "route|topic" (7d).
     std::map<std::string, std::uint64_t> forwarded_counts;
 
@@ -61,13 +59,13 @@ struct FakeEntityFactory : IEntityFactory {
     bool fail_participant_partition_apply = false;
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
-                               std::uint64_t gen,
-                               const DerivedWriterQos &derived) override {
+                               std::uint64_t gen) override {
         Op op;
         op.route = view.spec.route_name;
         op.topic = topic;
         op.gen = gen;
-        op.derived = derived;
+        op.reader_qos = view.spec.input.reader_qos;
+        op.writer_qos = view.spec.output.writer_qos;
         op.sub_partition = view.spec.input.subscriber_partition;
         op.pub_partition = view.spec.output.publisher_partition;
         creates.push_back(op);
@@ -87,17 +85,6 @@ struct FakeEntityFactory : IEntityFactory {
         op.topic = topic;
         op.gen = gen;
         aborts.push_back(op);
-    }
-    std::string update_writer_deadline(const std::string &route,
-                                       const std::string &topic,
-                                       std::int64_t deadline_nanos) override {
-        Op op;
-        op.route = route;
-        op.topic = topic;
-        op.gen = 0;
-        op.deadline_nanos = deadline_nanos;
-        deadline_updates.push_back(op);
-        return fail_deadline_update ? std::string() : "RELIABLE,TRANSIENT_LOCAL,updated";
     }
     bool update_route_partitions(const std::string &route, const std::string &topic,
                                  const std::string &subscriber_partition,
@@ -780,8 +767,7 @@ static void test_endpoint_records_never_drive_teardown() {
     CHECK(f.status.snapshots.size() == snapshots); // internal map change: no publish
 }
 
-// An auto-QoS route with NO readers known builds immediately with the neutral
-// derivation — the strong baseline (D66: derivation is best-effort input, not a gate).
+// Empty aliases select the production default profiles without waiting for readers.
 static void test_auto_route_creates_with_baseline() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", true, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
@@ -791,16 +777,11 @@ static void test_auto_route_creates_with_baseline() {
     f.post(ControllerEvent::type_resolved("T"));
     f.activate();
     CHECK(f.factory.creates.size() == 1);
-    const DerivedWriterQos &d = f.factory.creates.back().derived;
-    CHECK(d.derive);
-    CHECK(d.deadline_nanos == kInfiniteNanos);
-    CHECK(d.liveliness_kind == LivelinessKindPod::Automatic);
-    CHECK(d.lease_nanos == kInfiniteNanos);
+    CHECK(f.factory.creates.back().reader_qos.empty());
+    CHECK(f.factory.creates.back().writer_qos.empty());
 }
 
-// Writer derivation (D39/D42): deadline = min period, kind = max, lease = min across
-// the readers known via builtin discovery at issue time.
-static void test_writer_qos_derivation() {
+static void test_discovered_reader_qos_does_not_override_profiles() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
                           /*auto_qos=*/true));
@@ -815,16 +796,12 @@ static void test_writer_qos_derivation() {
             command(RouterCommandKind::ENABLE_ROUTE, "e1", "r")));
 
     CHECK(f.factory.creates.size() == 1);
-    const DerivedWriterQos &d = f.factory.creates.back().derived;
-    CHECK(d.derive);
-    CHECK(d.deadline_nanos == 500000000LL);
-    CHECK(d.liveliness_kind == LivelinessKindPod::ManualByTopic);
-    CHECK(d.lease_nanos == 5000000000LL);
+    CHECK(f.factory.creates.back().reader_qos.empty());
+    CHECK(f.factory.creates.back().writer_qos.empty());
 }
 
-// A later reader with a tighter deadline tightens in place (D39); looser is a no-op;
-// summaries and warnings ride the snapshot.
-static void test_deadline_tightening_and_warning() {
+// Discovery cannot mutate XML-owned QoS or erase a genuine incompatibility warning.
+static void test_fixed_deadline_and_warning() {
     std::vector<RouterRouteSpec> specs(
             1, route_spec("r", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T")),
                           /*auto_qos=*/true));
@@ -843,21 +820,22 @@ static void test_deadline_tightening_and_warning() {
     CHECK(f.route("r").topic_status.at(0).writer_qos_summary
           == "RELIABLE,TRANSIENT_LOCAL,orig");
 
-    // Looser deadline: no update issued.
+    std::uint64_t unchanged_revision = f.revision();
     f.post(ControllerEvent::subscription_discovered(
             reader_record("rd2", "T", 3000000000LL)));
-    CHECK(f.factory.deadline_updates.empty());
-
-    // Tighter deadline: in-place update, no teardown/recreate, summary refreshed.
     f.post(ControllerEvent::subscription_discovered(
             reader_record("rd3", "T", 500000000LL)));
-    CHECK(f.factory.deadline_updates.size() == 1);
-    CHECK(f.factory.deadline_updates.back().deadline_nanos == 500000000LL);
+    CHECK(f.revision() == unchanged_revision);
     CHECK(f.factory.teardowns.empty());
     CHECK(f.factory.creates.size() == 1);
     CHECK(f.route("r").state == RouterRouteOperationalState::ROUTE_ENABLED);
     CHECK(f.route("r").topic_status.at(0).writer_qos_summary
-          == "RELIABLE,TRANSIENT_LOCAL,updated");
+          == "RELIABLE,TRANSIENT_LOCAL,orig");
+    f.post(ControllerEvent::topic_qos_warning("r", "T", gen, "writer:DEADLINE"));
+    CHECK(f.route("r").topic_status.at(0).qos_warning == "writer:DEADLINE");
+    f.post(ControllerEvent::subscription_discovered(
+            reader_record("rd4", "T", 250000000LL)));
+    CHECK(f.route("r").topic_status.at(0).qos_warning == "writer:DEADLINE");
 
     // Incompatible-QoS warning with the live stamp lands in status; a stale one is
     // discarded (D23 discipline).
@@ -1203,8 +1181,8 @@ int main() {
     RUN(test_per_topic_activation_two_topics);
     RUN(test_endpoint_records_never_drive_teardown);
     RUN(test_auto_route_creates_with_baseline);
-    RUN(test_writer_qos_derivation);
-    RUN(test_deadline_tightening_and_warning);
+    RUN(test_discovered_reader_qos_does_not_override_profiles);
+    RUN(test_fixed_deadline_and_warning);
     RUN(test_disable_tears_down);
     RUN(test_set_route_partition);
     RUN(test_participant_partition_accept_path);

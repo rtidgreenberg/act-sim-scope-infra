@@ -6,11 +6,25 @@ scripts — deterministic, single-shot, easy to assert against.
 """
 
 import time
+from pathlib import Path
 
 import rti.connextdds as dds
 
 ACT_TYPES_XML = "harness_v2/datamodel/gen/ActTypes.xml"
 _provider = None
+_qos_provider = None
+QOS_XML = Path(__file__).resolve().parents[3] / "harness_v2/qos/act_qos_profiles.xml"
+
+
+def _qos():
+    global _qos_provider
+    if _qos_provider is None:
+        _qos_provider = dds.QosProvider(str(QOS_XML))
+    return _qos_provider
+
+
+def _profile(name):
+    return name if "::" in name else "ACT_QOS_LIB::" + name
 
 
 def _types():
@@ -21,12 +35,11 @@ def _types():
 
 
 class Probe:
-    """One UDPv4-only DomainParticipant on `domain`, for app-side pub/sub in a test."""
+    """One participant using the selected production profile and isolated domain."""
 
-    def __init__(self, domain, participant_name=None, role_name=None, spdp2=False,
-                 participant_partition=None):
-        qos = dds.DomainParticipant.default_participant_qos
-        qos.transport_builtin = dds.TransportBuiltin.udpv4
+    def __init__(self, domain, participant_name=None, role_name=None,
+                 participant_partition=None, participant_profile="lan_router_participant"):
+        qos = _qos().participant_qos_from_profile(_profile(participant_profile))
         # participant_partition (D83/D103): PARTICIPANT-level partition, the RTI
         # extension that gates discovery itself (SPDP), not just endpoint (SEDP)
         # matching -- same mechanism the router applies via ParticipantRegistry. A probe
@@ -36,15 +49,6 @@ class Probe:
         # setting a wildcard here mirrors what control_wan needs in production.
         if participant_partition is not None:
             qos.partition = dds.Partition(list(participant_partition))
-        # A probe that shares a domain with a router WAN participant must run the SAME
-        # discovery protocol: SPDP2 and plain SPDP do not interoperate (D78/D94). Router
-        # WAN participants use SPDP2|SEDP (D94), so a WAN-domain probe sets spdp2=True.
-        if spdp2:
-            dc = qos.discovery_config
-            dc.builtin_discovery_plugins = (
-                dds.DiscoveryConfigBuiltinPluginKindMask.SPDP2
-                | dds.DiscoveryConfigBuiltinPluginKindMask.SEDP)
-            qos.discovery_config = dc
         # participant_name/role_name (EntityName, D74) let a probe pose as a router
         # (name="<node>/<router>", role_name="act.router") so the D15 same-node-ignore
         # path can be exercised off the new identity field. The old user_data tag is
@@ -88,7 +92,7 @@ class Probe:
         pub = (self._publisher if partition is None
                else self._partitioned_publisher(partition))
         if qos is None:
-            return dds.DynamicData.DataWriter(pub, topic)
+            qos = writer_qos("router_default_writer")
         return dds.DynamicData.DataWriter(pub, topic, qos)
 
     def reader(self, topic_name, type_name, qos=None, dtype=None, partition=None):
@@ -99,7 +103,7 @@ class Probe:
         sub = (self._subscriber if partition is None
                else self._partitioned_subscriber(partition))
         if qos is None:
-            return dds.DynamicData.DataReader(sub, topic)
+            qos = reader_qos("router_default_reader")
         return dds.DynamicData.DataReader(sub, topic, qos)
 
     def sample(self, type_name, **fields):
@@ -158,27 +162,28 @@ _OWNERSHIP = {"shared": dds.OwnershipKind.SHARED,
 
 def _apply_common(qos, reliability, durability, ownership):
     if reliability is not None:
-        qos.reliability = dds.Reliability(kind=_RELIABILITY[reliability])
+        policy = qos.reliability
+        policy.kind = _RELIABILITY[reliability]
+        qos.reliability = policy
     if durability is not None:
         qos.durability = dds.Durability(kind=_DURABILITY[durability])
     if ownership is not None:
         qos.ownership = dds.Ownership(kind=_OWNERSHIP[ownership])
 
 
-def reader_qos(reliability=None, durability=None, deadline_ms=None,
-               liveliness_automatic_lease_ms=None, ownership=None, keep_all=False):
-    """Build a DataReaderQos from simple options (only the policies the auto-QoS test
-    varies). Kinds are lowercase strings: 'reliable'/'best_effort',
-    'volatile'/'transient_local'/'transient', 'shared'/'exclusive'. keep_all=True sets
-    KEEP_ALL history — required for event-stream topics (e.g. the controller journal):
-    the default KEEP_LAST(1) cache holds ONE sample per instance, and one router's
-    journal is one instance (keyed by target_node/target_router), so a back-to-back
-    burst (7m creates entities in the same event-drain as the command) overwrites
-    earlier samples before a polling take()."""
-    q = dds.DataReaderQos()
+def reader_qos(profile):
+    return _qos().datareader_qos_from_profile(_profile(profile))
+
+
+def writer_qos(profile):
+    return _qos().datawriter_qos_from_profile(_profile(profile))
+
+
+def incompatible_reader_qos(profile, reliability=None, durability=None, deadline_ms=None,
+                            liveliness_automatic_lease_ms=None, ownership=None):
+    """Override a production profile only to exercise an incompatible endpoint."""
+    q = reader_qos(profile)
     _apply_common(q, reliability, durability, ownership)
-    if keep_all:
-        q.history = dds.History.keep_all
     if deadline_ms is not None:
         q.deadline = dds.Deadline(period=dds.Duration.from_milliseconds(deadline_ms))
     if liveliness_automatic_lease_ms is not None:
@@ -188,8 +193,9 @@ def reader_qos(reliability=None, durability=None, deadline_ms=None,
     return q
 
 
-def writer_qos(reliability=None, durability=None, ownership=None):
-    q = dds.DataWriterQos()
+def incompatible_writer_qos(profile, reliability=None, durability=None, ownership=None):
+    """Override a production profile only to exercise an incompatible endpoint."""
+    q = writer_qos(profile)
     _apply_common(q, reliability, durability, ownership)
     return q
 
@@ -325,15 +331,15 @@ class AdminChannel:
     def __init__(self, probe, provider):
         self.status = probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=provider.type("RouterStatus"))
         self.cmd_writer = probe.writer(
             "ActRouterCommand", "RouterCommand",
-            qos=writer_qos(reliability="reliable", durability="volatile"),
+            qos=writer_qos("router_admin_command"),
             dtype=provider.type("RouterCommand"))
         self.acks = AckCollector(probe.reader(
             "ActRouterCommandAck", "RouterCommandAck",
-            qos=reader_qos(reliability="reliable", durability="volatile"),
+            qos=reader_qos("router_admin_command_ack"),
             dtype=provider.type("RouterCommandAck")))
 
 

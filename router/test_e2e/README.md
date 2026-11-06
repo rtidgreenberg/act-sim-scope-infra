@@ -29,6 +29,27 @@ From the **repo root** (paths in the configs are repo-root-relative):
 pytest router/test_e2e -v
 ```
 
+## QoS source of truth
+
+Normal test participants, readers and writers load
+[`ACT_QOS_LIB`](../../harness_v2/qos/act_qos_profiles.xml), the same XML library
+used by the deployed router, dashboard and journal subscriber. There is no test
+QoS library or parallel set of policy defaults. The probe defaults use
+`lan_router_participant`, `router_default_reader` and `router_default_writer`;
+WAN probes explicitly select `wan_router_participant`, including its SPDP2
+discovery settings. Domain IDs and runtime identity/partition membership remain
+test-specific. WAN timing and transport-variable defaults also come from the XML,
+not a separate test environment tuning table.
+
+Explicit policy overrides are allowed only through `incompatible_reader_qos`
+and `incompatible_writer_qos` in incompatibility tests. These start from a named
+production profile and change only the policies being tested. Normal calls to
+`reader_qos` and `writer_qos` accept a profile name, not independent policy values.
+
+Empty route aliases also load the fixed production default profiles. A peer
+requesting a tighter deadline produces an incompatibility warning; it does not
+retune the router's writer or clear that warning as if an update succeeded.
+
 For a disposable Docker run, mount the checkout read-only and bind only its `debug/`
 directory writable at `/workspace/debug`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`,
 `TMPDIR=/tmp`, and use `-p no:cacheprovider` so interpreter caches and pytest state do
@@ -110,13 +131,14 @@ by role exactly as deployed:
 Getting these two fixtures to actually forward data surfaced two genuine bugs, not
 test-fixture quirks — see `docs/cpp_router/design-decisions.md` D51 for the full analysis:
 
-1. **Auto-QoS output-readiness deadlock.** A Phase 5 auto-QoS ("") output writer won't
+1. **Auto-QoS output-readiness deadlock — subsequently retired.** A Phase 5 auto-QoS ("") output writer wouldn't
    build until it has already discovered a matched reader, which two *independent*
    `router_main` processes each waiting on the other's not-yet-built WAN entity can never
    satisfy. Both fixtures route around it with `writer_qos: default` on the WAN-crossing
    output leg instead of `""` — a real, general limitation (not just these fixtures), though
    `control-platform.yaml` doesn't hit it today since its WAN legs already use non-empty
-   named aliases.
+   named aliases. The current create-and-observe path no longer has this gate, and
+   empty aliases now select fixed XML defaults rather than deriving QoS.
 2. **A real discovery bug in the router's own code — FIXED in D52.** Two `router_main`
    processes started back-to-back sometimes had one never see the other's participant at
    all (~50%+ flake). This was initially suspected to be Connext's default 30s SPDP

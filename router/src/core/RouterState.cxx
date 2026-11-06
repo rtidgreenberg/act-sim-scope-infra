@@ -4,35 +4,6 @@
 
 namespace router {
 
-bool output_uses_auto_qos(const RouterRouteSpec &spec) {
-    return spec.output.writer_qos.empty();
-}
-
-DerivedWriterQos derive_writer_qos(const TopicRouteState &topic,
-                                   const RouterRouteSpec &route_spec) {
-    DerivedWriterQos d;
-    d.derive = output_uses_auto_qos(route_spec);
-    if (!d.derive) {
-        return d;
-    }
-    for (std::map<std::string, MatchedEndpoint>::const_iterator it =
-                 topic.matched_readers.begin();
-         it != topic.matched_readers.end(); ++it) {
-        const MatchedEndpoint &r = it->second;
-        if (r.deadline_nanos < d.deadline_nanos) {
-            d.deadline_nanos = r.deadline_nanos;
-        }
-        if (static_cast<int>(r.liveliness_kind)
-            > static_cast<int>(d.liveliness_kind)) {
-            d.liveliness_kind = r.liveliness_kind;
-        }
-        if (r.lease_nanos < d.lease_nanos) {
-            d.lease_nanos = r.lease_nanos;
-        }
-    }
-    return d;
-}
-
 const RouterRouteTopicSpec *find_topic_spec(const RouterRouteSpec &spec,
                                             const std::string &topic_name) {
     for (size_t i = 0; i < spec.topics.size(); ++i) {

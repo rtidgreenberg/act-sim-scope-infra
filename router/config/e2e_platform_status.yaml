@@ -1,10 +1,8 @@
 # e2e_platform_status.yaml — router_main-runnable fixture for the Python e2e suite
 # (router/test_e2e/). Same shape as control-platform.yaml's platform_init_status route
-# (after the D50 topic-name fix: PlatformInitStatus, not the stale PlatformStatus), with
-# the same Phase 7/D34-D35 workarounds as e2e_control_command.yaml (qos: "" on LAN-local
-# legs, writer_qos: default on the WAN-crossing output leg to avoid the real auto-QoS
-# output-readiness deadlock between two independent router_main processes — D51; the gate
-# itself is retired by D66/D67) — see docs/cpp_router/design-decisions.md.
+# (after the D50 topic-name fix: PlatformInitStatus, not the stale PlatformStatus).
+# Empty/default endpoint aliases select fixed production XML defaults, as in
+# e2e_control_command.yaml. The historical output-readiness gate is retired.
 #
 # Loaded twice by the test harness against the SAME file: once with --role platform, once
 # with --role control. Domain placeholders are substituted per test run for isolation —

@@ -58,7 +58,7 @@ def test_route_builds_unmatched_then_observes_matches(
     try:
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # (1) No local endpoint yet: no wire type, so the route WAITS (7c/D70 gate).

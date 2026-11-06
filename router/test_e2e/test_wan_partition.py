@@ -91,8 +91,8 @@ def test_partition_gates_matching_and_changes_at_runtime(
 
     # The route's "default"-alias legs are RELIABLE+TRANSIENT_LOCAL: app endpoints must
     # be RxO-compatible so the partition stays the ONLY matching variable (D67 lesson).
-    compatible_w = writer_qos(reliability="reliable", durability="transient_local")
-    compatible_r = reader_qos(reliability="reliable", durability="transient_local")
+    compatible_w = writer_qos("router_default_writer")
+    compatible_r = reader_qos("router_admin_status")
 
     in_probe = Probe(in_domain)
     out_probe = Probe(out_domain)
@@ -100,15 +100,15 @@ def test_partition_gates_matching_and_changes_at_runtime(
     try:
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
         cmd_writer = in_probe.writer(
             "ActRouterCommand", "RouterCommand",
-            qos=writer_qos(reliability="reliable", durability="volatile"),
+            qos=writer_qos("lan_event"),
             dtype=command_type)
         ack_reader = in_probe.reader(
             "ActRouterCommandAck", "RouterCommandAck",
-            qos=reader_qos(reliability="reliable", durability="volatile"),
+            qos=reader_qos("lan_event"),
             dtype=ack_type)
         acks = AckCollector(ack_reader)
 

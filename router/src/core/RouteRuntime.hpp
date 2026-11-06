@@ -26,8 +26,6 @@
 // AsyncWaitSet serializes dispatch of a single condition, so pump never runs
 // concurrently with itself. Teardown detaches ALL conditions on the control strand —
 // blocking barriers that guarantee no handler is in flight — before close() is called.
-// set_writer_deadline runs on the control strand and only touches the (thread-safe)
-// writer QoS setter, never dispatcher state.
 
 #pragma once
 
@@ -72,10 +70,6 @@ struct RouteTopicRuntimeBase : public IWanStatsSource {
     virtual void close() = 0;
 
     virtual std::uint64_t forwarded() const = 0;
-
-    // In-place mutable deadline update on the output writer (D39). Returns the writer's
-    // new QoS summary, or "" on failure.
-    virtual std::string set_writer_deadline(std::int64_t deadline_nanos) = 0;
 
     // In-place partition change on this build's Subscriber (input leg) and Publisher
     // (output leg) — 7b/D69. Pub/sub PARTITION is runtime-mutable via set_qos with
@@ -179,11 +173,6 @@ public:
 
     std::uint64_t forwarded() const override {
         return count_.load(std::memory_order_relaxed);
-    }
-
-    std::string set_writer_deadline(std::int64_t deadline_nanos) override {
-        (void)deadline_nanos;
-        return QosResolver::summarize(writer_.qos());
     }
 
     bool set_partitions(const std::string &subscriber_partition,

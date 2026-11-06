@@ -112,20 +112,20 @@ Participant discovery is UDPv4-based. WAN participants can select SPDP2 plus SED
 
 ## QoS
 
-QoS resolution is handled by [QosResolver.hpp](../../router/src/core/QosResolver.hpp). The router supports configured XML QoS-library aliases, a built-in `default` alias, and an empty alias that requests asymmetric auto-QoS.
+QoS resolution is handled by [QosResolver.hpp](../../router/src/core/QosResolver.hpp). All fixed policies come from [the production XML library](../../harness_v2/qos/act_qos_profiles.xml). Named aliases select configured profiles; both `default` and an empty alias select `router_default_reader` or `router_default_writer`.
 
-The current auto-QoS policy is:
+The current XML default profiles are:
 
 | Endpoint | Reliability | Durability | History |
 |---|---|---|---|
 | Input reader | BEST_EFFORT | VOLATILE | KEEP_LAST(16) |
 | Output writer | RELIABLE | TRANSIENT_LOCAL | KEEP_LAST(16) |
 
-Writer deadline, liveliness, and lease settings are derived from matched local readers when auto-QoS is used. The `default` alias supplies RELIABLE, TRANSIENT_LOCAL, and KEEP_LAST(16).
+Writer deadline, liveliness and lease settings remain those of the selected XML profile. Discovering a reader does not derive or mutate them. Tests load these same production profiles; explicitly incompatible test endpoints alone may override individual policies.
 
 QoS aliases are preflight-validated at startup and resolved QoS summaries are exposed through status. Residual incompatible QoS is reported rather than dynamically adapting arbitrary incompatibilities.
 
-**Known limitation:** an auto-QoS WAN writer can wait for a reader while the remote reader waits for that writer, producing a readiness deadlock. WAN-crossing production routes therefore use explicit QoS aliases.
+Entities are created once their wire type is learned, without waiting for an output reader. WAN-crossing production routes use explicit QoS aliases.
 
 ## Runtime Administration and Status
 
@@ -213,7 +213,7 @@ The end-to-end suite covers:
 - Wire-learned multi-type routes.
 - Startup discovery timing.
 - Same-node endpoint ignore.
-- Named QoS aliases and auto-QoS.
+- Named QoS aliases and fixed XML default profiles.
 - Participant and route partitions.
 - Runtime route and participant partition changes.
 - Admin commands, acknowledgements, and idempotency.

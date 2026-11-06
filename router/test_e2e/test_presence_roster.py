@@ -75,7 +75,7 @@ def mesh_reader(probe, provider):
     instead. Both reliability and durability are RxO, so this reader must match both."""
     return probe.reader(
         MESH_TOPIC, "RouterMeshStatus",
-        qos=reader_qos(reliability="best_effort", durability="volatile"),
+        qos=reader_qos("router_mesh_status"),
         dtype=provider.type("RouterMeshStatus"))
 
 
@@ -242,7 +242,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
         # --- E-R2 extension (D77): the heartbeats themselves carry the who-sees-who
         # edges (by name), so a single WAN observer (C2) can draw the node map — both
         # directions of the control<->platform edge visible from one topic.
-        wan_probe = Probe(wan, spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
+        wan_probe = Probe(wan, participant_profile="wan_router_participant")  # WAN domain: router WAN participants are SPDP2 (D94)
         health_view = health_reader(wan_probe, provider)
         edges = wait_edges(
             health_view,
@@ -274,7 +274,7 @@ def test_presence_roster_mesh_dead_and_rejoin(
 
         # --- E-P3 first (needs the platform router still alive as a bystander): a
         # heartbeat-withholding probe goes STALE, never DEAD, nothing torn down ---
-        stale_probe = Probe(wan, spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
+        stale_probe = Probe(wan, participant_profile="wan_router_participant")  # WAN domain: router WAN participants are SPDP2 (D94)
         health_qos = dds.QosProvider(
             str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml")
         ).datawriter_qos_from_profile("ACT_QOS_LIB::router_health")
@@ -383,7 +383,7 @@ def test_config_hash_drift(
     drift_hash = sha256_of(drift_path)
     assert drift_hash != expected
 
-    wan_probe = Probe(unique_domains["wan"], spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
+    wan_probe = Probe(unique_domains["wan"], participant_profile="wan_router_participant")  # WAN domain: router WAN participants are SPDP2 (D94)
     drifter = None
     try:
         health_view = health_reader(wan_probe, provider)

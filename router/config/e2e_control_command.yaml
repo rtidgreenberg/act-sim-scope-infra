@@ -1,18 +1,9 @@
 # e2e_control_command.yaml — router_main-runnable fixture for the Python e2e suite
 # (router/test_e2e/). Same node/topology shape as control-platform.yaml's control_command
-# route, but sidesteps the two things router_main can't do yet (docs/cpp_router/
-# design-decisions.md D50):
-#   - qos: "" (auto) on LAN-local legs and reader sides, instead of named aliases
-#     (wan_event/wan_status/...), which are unresolvable until Phase 7 (D45).
-#   - the WAN-crossing output leg (source_side.output here) uses writer_qos: default
-#     rather than "" — an auto-QoS output writer won't build until it has already
-#     discovered a matched reader (Phase 5 derivation, D39), which two independent
-#     router_main processes each waiting on the other's not-yet-built WAN entity can
-#     never satisfy (a real mutual-deadlock bug, not test-fixture-specific — see
-#     docs/cpp_router/design-decisions.md D51). "default" is a real, already-shipped
-#     alias, not a fixture-only workaround.
-#   - topic types are wire-learned (7c, D70) — only the control_command route is
-#     included, not the full control-platform.yaml route set.
+# route. Empty/default endpoint aliases select fixed production XML defaults.
+# Topic types are wire-learned; only the control_command route is included, not the
+# full control-platform.yaml route set. The historical D51 output-readiness gate is
+# retired: entities are created once the type is learned, without waiting for readers.
 #
 # Loaded twice by the test harness against the SAME file: once with --role control, once
 # with --role platform (mirrors how control-platform.yaml is meant to be loaded on both

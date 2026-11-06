@@ -38,20 +38,7 @@ struct EndpointRecord {
     bool has_type = false;       // TypeLookup resolved (D13: optional until resolved)
     std::string origin_router;   // empty for application endpoints (D15)
 
-    // Requested QoS captured from subscription builtin data (D19/D27 pinned subset) —
-    // the writer-side derivation inputs (D39/D42). Defaults are the DDS defaults, so a
-    // record without captured QoS is derivation-neutral.
-    std::int64_t deadline_nanos = kInfiniteNanos;
-    LivelinessKindPod liveliness_kind = LivelinessKindPod::Automatic;
-    std::int64_t lease_nanos = kInfiniteNanos;
-};
-
-// Writer-side QoS derived from the matched local readers at entity creation (D39/D42):
-// deadline = min requested period, liveliness kind = max requested kind, lease = min
-// requested lease. `derive` is false when the output endpoint names an explicit alias —
-// the factory then applies the alias untouched.
-struct DerivedWriterQos {
-    bool derive = false;
+    // Requested QoS captured from subscription builtin data for diagnostics.
     std::int64_t deadline_nanos = kInfiniteNanos;
     LivelinessKindPod liveliness_kind = LivelinessKindPod::Automatic;
     std::int64_t lease_nanos = kInfiniteNanos;

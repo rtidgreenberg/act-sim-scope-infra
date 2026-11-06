@@ -1,5 +1,6 @@
 """Wire-only delivery regressions; no DDS entities or live network required."""
 
+import ast
 import json
 import re
 import struct
@@ -561,6 +562,130 @@ class ConfiguredWanQosTests(unittest.TestCase):
         for topic in ("PlatformMissionStatus", "ActRouterDiagnostics"):
             self.assertEqual({entry["endpoint"]: entry["enabled"] for entry in result["topics"][topic]},
                              {"writer": False, "reader": True})
+
+    def test_mesh_participant_profiles_disable_default_domain_announcements(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required; no DDS entities created")
+        provider = dds.QosProvider(str(ROOT / "harness_v2/qos/act_qos_profiles.xml"))
+        profiles = (
+            "participant_discovery_base", "lan_participant_base", "router_journal_participant",
+            "lan_transport_loopback", "lan_router_participant",
+            "lan_control_router_participant", "lan_platform_participant",
+            "lan_control_participant", "wan_router_participant_base",
+            "wan_router_participant", "wan_router_participant_emane",
+        )
+        for profile in profiles:
+            with self.subTest(profile=profile):
+                qos = provider.participant_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertEqual(qos.discovery_config.default_domain_announcement_period,
+                                 dds.Duration.infinite)
+        deny_key = "dds.transport.UDPv4.builtin.parent.deny_interfaces_list"
+        allow_key = "dds.transport.UDPv4.builtin.parent.allow_interfaces_list"
+        for profile in profiles:
+            with self.subTest(interface_scope=profile):
+                qos = provider.participant_qos_from_profile("ACT_QOS_LIB::" + profile)
+                if profile.startswith("lan_") or profile == "router_journal_participant":
+                    self.assertEqual(qos.property.get(deny_key), "emane0")
+                else:
+                    self.assertFalse(qos.property.exists(deny_key))
+        loopback = provider.participant_qos_from_profile("ACT_QOS_LIB::lan_transport_loopback")
+        self.assertEqual(loopback.property.get(allow_key), "127.0.0.1")
+        wan = provider.participant_qos_from_profile("ACT_QOS_LIB::wan_router_participant_emane")
+        self.assertEqual(wan.property.get(allow_key), "emane0")
+        from router_journal_subscriber import journal_participant_qos
+        qos = journal_participant_qos()
+        self.assertEqual(qos.discovery_config.default_domain_announcement_period, dds.Duration.infinite)
+        self.assertEqual(qos.transport_builtin, dds.TransportBuiltin.udpv4)
+        self.assertEqual(qos.property.get(deny_key), "emane0")
+
+
+class ProductionTestQosTests(unittest.TestCase):
+    def test_fixture_overrides_only_runtime_peer_locators(self):
+        from conftest import WAN_PEER_ENV_DEFAULTS
+        self.assertTrue(all("PEER" in name for name in WAN_PEER_ENV_DEFAULTS))
+
+    def test_normal_calls_select_profiles_without_policy_keywords(self):
+        for path in (ROOT / "router/test_e2e").glob("test_*.py"):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for call in ast.walk(tree):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                        and call.func.id in {"reader_qos", "writer_qos"}):
+                    with self.subTest(file=path.name, line=call.lineno):
+                        self.assertEqual(len(call.args), 1)
+                        self.assertEqual(call.keywords, [])
+
+    def test_helper_policy_mutation_is_confined_to_incompatibility_helpers(self):
+        path = ROOT / "router/test_e2e/util/dds_probe.py"
+        tree = ast.parse(path.read_text(), filename=str(path))
+        policies = {"reliability", "durability", "history", "deadline", "liveliness",
+                    "ownership", "transport_builtin", "discovery_config"}
+        exceptions = {"_apply_common", "incompatible_reader_qos", "incompatible_writer_qos"}
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(function):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Attribute) and target.attr in policies:
+                            self.assertIn(function.name, exceptions, (function.name, node.lineno))
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "_apply_common"):
+                    self.assertIn(function.name, exceptions - {"_apply_common"})
+
+    def test_helpers_preserve_complete_production_qos(self):
+        try:
+            import rti.connextdds as dds
+        except ImportError:
+            self.skipTest("Connext SDK not installed")
+        from util import dds_probe
+
+        provider = dds.QosProvider(str(ROOT / "harness_v2/qos/act_qos_profiles.xml"))
+        profiles = ("lan_event", "lan_status", "router_admin_status",
+                    "router_admin_command", "router_admin_command_ack",
+                    "router_controller_journal", "router_link_stats", "router_mesh_status",
+                    "router_default_reader", "router_default_writer", "wan_event", "wan_status")
+        for profile in profiles:
+            with self.subTest(profile=profile):
+                qualified = "ACT_QOS_LIB::" + profile
+                self.assertEqual(dds_probe.reader_qos(profile),
+                                 provider.datareader_qos_from_profile(qualified))
+                self.assertEqual(dds_probe.writer_qos(profile),
+                                 provider.datawriter_qos_from_profile(qualified))
+
+        for profile in ("lan_router_participant", "wan_router_participant"):
+            with self.subTest(participant_profile=profile), \
+                    patch.object(dds_probe.dds, "DomainParticipant") as create, \
+                    patch.object(dds_probe.dds, "Publisher"), \
+                    patch.object(dds_probe.dds, "Subscriber"):
+                probe = dds_probe.Probe(101, participant_profile=profile)
+                create.assert_called_once_with(
+                    101, provider.participant_qos_from_profile("ACT_QOS_LIB::" + profile))
+                probe.close()
+
+        with self.assertRaises(TypeError):
+            dds_probe.reader_qos("lan_event", deadline_ms=500)
+        with self.assertRaises(TypeError):
+            dds_probe.writer_qos("lan_event", reliability="best_effort")
+
+        base = dds_probe.reader_qos("lan_event")
+        incompatible = dds_probe.incompatible_reader_qos("lan_event", deadline_ms=500)
+        self.assertEqual(incompatible.deadline.period, dds.Duration.from_milliseconds(500))
+        incompatible.deadline = base.deadline
+        self.assertEqual(incompatible, base)
+
+        for normal, adverse in ((dds_probe.reader_qos, dds_probe.incompatible_reader_qos),
+                                (dds_probe.writer_qos, dds_probe.incompatible_writer_qos)):
+            base = normal("wan_event")
+            incompatible = adverse("wan_event", reliability="best_effort")
+            policy = incompatible.reliability
+            self.assertEqual(policy.kind, dds.ReliabilityKind.BEST_EFFORT)
+            policy.kind = base.reliability.kind
+            incompatible.reliability = policy
+            self.assertEqual(incompatible, base)
 
 
 class WireBridgeTests(unittest.TestCase):

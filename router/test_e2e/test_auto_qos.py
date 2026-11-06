@@ -1,33 +1,8 @@
-"""End-to-end Phase 5 asymmetric auto-QoS under create-and-observe (D39/D42/D45; D64/D66).
+"""Empty aliases use fixed production profiles, including under incompatible peers.
 
-Python port of the retired C++ test/test_auto_qos.cxx, now driven through the real
-router_main binary (config/e2e_auto_qos.yaml): ONE router, route auto_r1, auto ("") QoS
-on both legs. The observable route facts are read off the router's RouterStatus stream
-(RELIABLE+TRANSIENT_LOCAL, D26) as DynamicData, using a RouterStatus type generated from
-the admin IDL at test time (admin_types_xml fixture).
-
-Migrated by 7m (D66) and 7c (D70): the D51 output-readiness gate is retired and the
-route builds as soon as its type is wire-learned — here, when the first app writer
-appears (with the strong baseline: no readers known at build time). Asserts:
-
-  1. wait-for-type, then create-and-observe: before any endpoint exists the route WAITS
-     (no wire type, 7c); the BEST_EFFORT+VOLATILE app writer teaches the type AND
-     matches the weakest-request auto input reader (the F5 no-match case) — the route
-     is then ENABLED with output_matched == 0 / match_reason "output_unmatched".
-  2. a plain RELIABLE+VOLATILE reader matches the strong-offer baseline output writer
-     (output_matched rises; reason clears); a sample forwards end-to-end.
-  3. the resolved QoS summaries ride the status: weakest-request input; the output
-     writer offers the BASELINE (no derived deadline/liveliness — no readers were known
-     at build time, D66 best-effort derivation).
-  4. incompatible-QoS warnings: a TRANSIENT-requesting reader => writer:DURABILITY; an
-     EXCLUSIVE-ownership source writer => reader:OWNERSHIP (equality RxO); and the D66
-     liveliness residual — a finite-lease liveliness-requesting reader arriving AFTER
-     creation draws writer:LIVELINESS (immutable policy; remedy is a named alias or a
-     DISABLE/ENABLE re-arm).
-  5. a later, tighter-deadline reader tightens the writer offer in place (set_qos) — the
-     route stays ENABLED, no teardown cycle.
-
-Run from the repo root (see router/test_e2e/README.md).
+Normal participants and endpoints load the shared ACT QoS XML. Only deliberately
+incompatible endpoints override those profiles to exercise deadline, durability,
+ownership and liveliness warnings. Discovery never retunes the router's writer.
 """
 
 import sys
@@ -39,7 +14,8 @@ import rti.connextdds as dds
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import start_router, render_config, REPO_ROOT  # noqa: E402
 from util.dds_probe import (  # noqa: E402
-    Probe, reader_qos, writer_qos, read_route_facts, wait_for_route)
+    Probe, reader_qos, writer_qos, incompatible_reader_qos, incompatible_writer_qos,
+    read_route_facts, wait_for_route)
 
 TOPIC = "AutoQosCmd"
 TYPE = "ExampleCommand"
@@ -62,7 +38,7 @@ def _drain_seen(reader):
     return n
 
 
-def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
+def test_default_profiles_create_and_observe_and_incompatibility_warnings(
         router_binary, admin_types_xml, e2e_tmp_dir, unique_domains):
     config_path = render_config("e2e_auto_qos.yaml", unique_domains, e2e_tmp_dir)
     router = start_router(router_binary, config_path, "platform", e2e_tmp_dir,
@@ -82,7 +58,7 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         # KEEP_LAST state sample (D26).
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # (1) Wait-for-type (7c/D70): no endpoint exists, so no wire type and no build.
@@ -94,7 +70,7 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         # weakest-request input reader (the F5 case): the route builds, input_matched
         # rises, output leg is the observable unmatched zero.
         src_writer = in_probe.writer(
-            TOPIC, TYPE, qos=writer_qos(reliability="best_effort", durability="volatile"),
+            TOPIC, TYPE, qos=writer_qos("lan_status"),
             dtype=cmd_type)
         in_matched = wait_for_route(
             status_reader, ROUTE,
@@ -111,7 +87,7 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         # output writer (built with no readers known — no derived deadline/liveliness).
         sink = out_probe.reader(
             TOPIC, TYPE,
-            qos=reader_qos(reliability="reliable", durability="volatile"),
+            qos=reader_qos("lan_event"),
             dtype=cmd_type)
         ready = wait_for_route(
             status_reader, ROUTE,
@@ -125,7 +101,7 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
             f"reader summary {ready['reader_summary']!r}; log {router.log_path}"
         assert ready["writer_summary"] \
             == "RELIABLE,TRANSIENT_LOCAL,deadline=inf,liveliness=AUTOMATIC:inf", \
-            f"writer summary should be the underived baseline (D66); " \
+            f"writer summary should match the production default profile; " \
             f"got {ready['writer_summary']!r}; log {router.log_path}"
 
         # (2c) forwarding works through the auto route.
@@ -139,24 +115,25 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
             assert alive(), f"router exited early; log {router.log_path}"
         assert received > 0, f"no sample forwarded through auto route; log {router.log_path}"
 
-        # (5) A later, tighter-deadline reader tightens the writer offer in place.
+        # A deliberately incompatible reader cannot retune the production profile.
         tight = out_probe.reader(
             TOPIC, TYPE,
-            qos=reader_qos(reliability="reliable", durability="volatile", deadline_ms=500),
+            qos=incompatible_reader_qos("lan_event", deadline_ms=500),
             dtype=cmd_type)
-        tightened = wait_for_route(
+        deadline_warning = wait_for_route(
             status_reader, ROUTE,
-            lambda f: "deadline=500ms" in f["writer_summary"], check_alive=alive)
-        assert tightened is not None and "deadline=500ms" in tightened["writer_summary"], \
-            f"writer offer never tightened; got {tightened}; log {router.log_path}"
-        assert tightened["state"] == "ROUTE_ENABLED", \
-            f"route left ENABLED during in-place tighten; got {tightened}; log {router.log_path}"
+            lambda f: f["qos_warning"] == "writer:DEADLINE", check_alive=alive)
+        assert deadline_warning is not None, f"DEADLINE warning missing; log {router.log_path}"
+        assert deadline_warning["writer_summary"] == ready["writer_summary"], deadline_warning
+        assert deadline_warning["state"] == "ROUTE_ENABLED", deadline_warning
+        assert deadline_warning["output_matched"] == 1, deadline_warning
+        assert "deadline_tightened" not in router.log_path.read_text()
 
         # (4a) A TRANSIENT-requesting reader draws a loud writer:DURABILITY warning.
         # Keep the reference: a dropped DataReader is GC'd and closed immediately (router
         # would log subscription_discovered then endpoint_lost in the same instant).
         transient_reader = out_probe.reader(  # noqa: F841 (must stay alive)
-            TOPIC, TYPE, qos=reader_qos(reliability="reliable", durability="transient"),
+            TOPIC, TYPE, qos=incompatible_reader_qos("lan_event", durability="transient"),
             dtype=cmd_type)
         dur_warn = wait_for_route(
             status_reader, ROUTE,
@@ -168,7 +145,7 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
         # (4b) An EXCLUSIVE-ownership source writer draws a reader:OWNERSHIP warning
         # (ownership RxO is equality; the SHARED route reader never matches it).
         exclusive_writer = in_probe.writer(  # noqa: F841 (must stay alive)
-            TOPIC, TYPE, qos=writer_qos(ownership="exclusive"), dtype=cmd_type)
+            TOPIC, TYPE, qos=incompatible_writer_qos("lan_event", ownership="exclusive"), dtype=cmd_type)
         own_warn = wait_for_route(
             status_reader, ROUTE,
             lambda f: f["qos_warning"] == "reader:OWNERSHIP", check_alive=alive)
@@ -176,14 +153,11 @@ def test_auto_qos_create_and_observe_summaries_warnings_and_tightening(
             f"no reader:OWNERSHIP warning; got {own_warn}; log {router.log_path}"
         assert own_warn["state"] == "ROUTE_ENABLED", "OWNERSHIP should warn only, not disable"
 
-        # (4c) D66 liveliness residual: the writer was built before any reader existed,
-        # so it offers default (AUTOMATIC, infinite-lease) liveliness — immutable. A
-        # finite-lease liveliness-requesting reader arriving now is RxO-incompatible and
-        # draws writer:LIVELINESS (warn-only; the pinned remedy is a named alias or a
-        # DISABLE/ENABLE re-arm, which would re-derive from the now-known readers).
+        # A finite lease is incompatible with the XML default's infinite lease.
+        # Recreating entities never derives a different policy from discovered peers.
         liveliness_reader = out_probe.reader(  # noqa: F841 (must stay alive)
             TOPIC, TYPE,
-            qos=reader_qos(reliability="reliable", durability="volatile",
+            qos=incompatible_reader_qos("lan_event",
                            liveliness_automatic_lease_ms=2000),
             dtype=cmd_type)
         liv_warn = wait_for_route(

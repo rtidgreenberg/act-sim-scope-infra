@@ -231,25 +231,21 @@ class DdsBridge:
         control_command_type = qp.type(CONTROL_COMMAND_TYPE)
         control_command_ack_type = qp.type(CONTROL_COMMAND_ACK_TYPE)
 
-        pqos = (qp.participant_qos_from_profile(participant_qos_profile)
-            if participant_qos_profile else dds.DomainParticipant.default_participant_qos)
+        pqos = qp.participant_qos_from_profile(
+            participant_qos_profile or "ACT_QOS_LIB::lan_participant_base")
         self.participant = dds.DomainParticipant(domain_id, pqos)
 
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
         subscriber = dds.Subscriber(self.participant)
-        self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic)
+        self.reader = dds.DynamicData.DataReader(
+            subscriber, mesh_topic, qp.datareader_qos_from_profile("ACT_QOS_LIB::router_mesh_status"))
         diagnostics_topic = dds.DynamicData.Topic(self.participant, "ActRouterDiagnostics", diagnostics_type)
         self.diagnostics_reader = dds.DynamicData.DataReader(
             subscriber, diagnostics_topic, qp.datareader_qos_from_profile("ACT_QOS_LIB::lan_event"))
         self.router_diagnostics_cache = {}
         link_stats_topic = dds.DynamicData.Topic(self.participant, LINK_STATS_TOPIC,
                                                  link_stats_type)
-        link_stats_qos = dds.DataReaderQos()
-        link_stats_qos.reliability = dds.Reliability(
-            kind=dds.ReliabilityKind.RELIABLE)
-        link_stats_qos.durability = dds.Durability(
-            kind=dds.DurabilityKind.TRANSIENT_LOCAL)
-        link_stats_qos.history = dds.History.keep_all
+        link_stats_qos = qp.datareader_qos_from_profile("ACT_QOS_LIB::router_link_stats")
         self.link_stats_reader = dds.DynamicData.DataReader(
             subscriber, link_stats_topic, link_stats_qos)
         self.link_stats_cache = {}

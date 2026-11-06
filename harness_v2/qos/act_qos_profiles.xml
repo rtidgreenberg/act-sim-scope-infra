@@ -107,6 +107,40 @@
   </configuration_variables>
 
   <qos_library name="ACT_QOS_LIB">
+    <qos_profile name="participant_discovery_base">
+      <domain_participant_qos>
+        <discovery_config>
+          <!-- Disable RTPX tool announcements, not ordinary domain discovery. -->
+          <default_domain_announcement_period>
+            <sec>DURATION_INFINITE_SEC</sec>
+            <nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </default_domain_announcement_period>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_participant_base"
+                 base_name="ACT_QOS_LIB::participant_discovery_base">
+      <domain_participant_qos>
+        <transport_builtin>
+          <udpv4>
+            <deny_interfaces_list>
+              <element>emane0</element>
+            </deny_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="router_journal_participant"
+                 base_name="ACT_QOS_LIB::lan_participant_base">
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
     <!--
     ____________________________________________________________________________
 
@@ -114,7 +148,7 @@
     ____________________________________________________________________________
     -->
 
-    <qos_profile name="lan_transport_loopback">
+    <qos_profile name="lan_transport_loopback" base_name="ACT_QOS_LIB::lan_participant_base">
       <domain_participant_qos>
         <transport_builtin>
           <mask>UDPv4</mask>
@@ -135,7 +169,7 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="lan_control_router_participant">
+    <qos_profile name="lan_control_router_participant" base_name="ACT_QOS_LIB::lan_participant_base">
       <domain_participant_qos>
         <discovery_config>
           <request_types_filter>*</request_types_filter>
@@ -164,7 +198,7 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="lan_control_participant">
+    <qos_profile name="lan_control_participant" base_name="ACT_QOS_LIB::lan_participant_base">
       <domain_participant_qos>
         <participant_name>
           <name>$(ACT_PARTICIPANT_NAME)</name>
@@ -261,7 +295,7 @@
     ____________________________________________________________________________
     -->
 
-    <qos_profile name="wan_router_participant_base">
+    <qos_profile name="wan_router_participant_base" base_name="ACT_QOS_LIB::participant_discovery_base">
 
       <!-- 
         This profile is intended for use across a network comms link. 
@@ -724,7 +758,7 @@
       </datawriter_qos>
     </qos_profile>
 
-    <qos_profile name="router_admin_status" base_name="BuiltinQosLib::Generic.Common">
+    <qos_profile name="router_admin_status" base_name="ACT_QOS_LIB::lan_event">
       <datawriter_qos>
         <reliability>
           <kind>RELIABLE_RELIABILITY_QOS</kind>
@@ -737,6 +771,15 @@
           <depth>1</depth>
         </history>
       </datawriter_qos>
+      <datareader_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datareader_qos>
     </qos_profile>
 
     <qos_profile name="router_default_reader" base_name="BuiltinQosLib::Generic.Common">
@@ -769,7 +812,7 @@
       </datawriter_qos>
     </qos_profile>
 
-    <qos_profile name="router_admin_command" base_name="BuiltinQosLib::Generic.Common">
+    <qos_profile name="router_admin_command" base_name="ACT_QOS_LIB::lan_event">
       <datareader_qos>
         <reliability>
           <kind>RELIABLE_RELIABILITY_QOS</kind>
@@ -784,7 +827,7 @@
       </datareader_qos>
     </qos_profile>
 
-    <qos_profile name="router_admin_command_ack" base_name="BuiltinQosLib::Generic.Common">
+    <qos_profile name="router_admin_command_ack" base_name="ACT_QOS_LIB::lan_event">
       <datawriter_qos>
         <reliability>
           <kind>RELIABLE_RELIABILITY_QOS</kind>
@@ -799,7 +842,7 @@
       </datawriter_qos>
     </qos_profile>
 
-    <qos_profile name="router_controller_journal" base_name="BuiltinQosLib::Generic.Common">
+    <qos_profile name="router_controller_journal" base_name="ACT_QOS_LIB::lan_event">
       <datawriter_qos>
         <reliability>
           <kind>RELIABLE_RELIABILITY_QOS</kind>
@@ -866,7 +909,7 @@
       </datareader_qos>
     </qos_profile>
 
-    <qos_profile name="router_link_stats" base_name="BuiltinQosLib::Generic.Common">
+    <qos_profile name="router_link_stats" base_name="ACT_QOS_LIB::lan_event">
       <datawriter_qos>
         <reliability>
           <kind>RELIABLE_RELIABILITY_QOS</kind>
@@ -879,6 +922,11 @@
           <depth>8</depth>
         </history>
       </datawriter_qos>
+      <datareader_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+      </datareader_qos>
     </qos_profile>
 
 

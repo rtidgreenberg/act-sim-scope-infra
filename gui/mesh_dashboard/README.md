@@ -155,6 +155,26 @@ unreported, not zero; capture health means no detected parser/fragment/rotation 
 Container startup waits for the canonical launcher to establish the nominal RF matrix
 before enabling DDS; use the owned mesh lifecycle rather than starting individual nodes.
 
+Runtime participant profiles inherit `ACT_QOS_LIB::participant_discovery_base`,
+which disables RTPX default-domain announcements with an infinite announcement
+period. The journal subscriber uses the external UDPv4-only
+`router_journal_participant` profile, and standalone bridge launches also use the
+XML LAN base rather than factory defaults. Ordinary SPDP/SPDP2 and SEDP
+discovery are unchanged. RTI tools must explicitly join the desired domains;
+automatic domain discovery through RTPX is no longer available.
+
+LAN profiles inherit `ACT_QOS_LIB::lan_participant_base`, which denies `emane0`
+for UDPv4. This prevents LAN participants from advertising/receiving on the radio
+interface and sending their discovery multicast there, while preserving their
+other LAN interfaces and existing loopback allow-list. WAN profiles do not inherit
+this deny-list; the EMANE WAN profile still explicitly allows `emane0`.
+DDS domain IDs separate discovery/matching and UDP port ranges, not physical
+interfaces: unrestricted LAN discovery can otherwise be sent over the radio
+directly, without a forwarded application route. An interface deny-list is not a
+firewall for explicitly addressed unicast; outgoing unicast still follows OS routes.
+Restart all mesh participants through the owned lifecycle to apply the XML change;
+running participants do not hot-reload it.
+
 RouterHealth is a 1 Hz Best Effort, KEEP_LAST(1) latest-state heartbeat on the WAN;
 new heartbeats supersede missed ones without reliable repair traffic. Both endpoints
 use the external `router_health` profile. Commands and acknowledgements retain their

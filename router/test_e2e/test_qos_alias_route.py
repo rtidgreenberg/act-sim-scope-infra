@@ -23,7 +23,7 @@ from pathlib import Path
 # The QoS libraries this config loads are templated with 13 env vars (peer
 # locators + WAN tuning) — set before importing rti.connextdds / launching the router
 # subprocess (which inherits this process's env). Shared defaults live in conftest
-# (WAN_QOS_ENV_DEFAULTS); see docs/cpp_router/design-decisions.md D60/D65.
+# Peer locators are isolated; policy-variable defaults come from production XML.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import set_wan_qos_env, start_router, render_config, REPO_ROOT  # noqa: E402
 set_wan_qos_env()
@@ -67,13 +67,13 @@ def test_qos_alias_route_resolves_and_forwards(
     app_writer_qos = qos_prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_status")
     app_reader_qos = qos_prov.datareader_qos_from_profile("ACT_QOS_LIB::wan_event")
 
-    in_probe = Probe(in_domain)
-    out_probe = Probe(out_domain)
+    in_probe = Probe(in_domain, participant_profile="wan_router_participant")
+    out_probe = Probe(out_domain, participant_profile="wan_router_participant")
     alive = lambda: router.is_alive()  # noqa: E731
     try:
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # App writer: same wan_status profile the router's input reader (wan_status alias)

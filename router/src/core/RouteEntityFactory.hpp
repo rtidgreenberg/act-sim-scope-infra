@@ -66,8 +66,7 @@ public:
     void set_controller(RouterController *controller) { controller_ = controller; }
 
     void create_topic_entities(const RouteView &view, const std::string &topic_name,
-                               std::uint64_t generation,
-                               const DerivedWriterQos &derived) override {
+                               std::uint64_t generation) override {
         const std::string &route = view.spec.route_name;
         try {
             ensure_type_available(topic_name);
@@ -80,8 +79,7 @@ public:
             dds::domain::DomainParticipant out_dp =
                     registry_.get(view.spec.output.participant);
 
-            // (1) output writer first — strong baseline plus the controller-derived
-            //     deadline/liveliness when the output endpoint is auto (D39/D42).
+            // (1) output writer first, using the configured XML profile.
             //     The endpoint's publisher_partition applies to the per-build Publisher
             //     (7b/D61/D69); empty = default partition. A partition mismatch is a
             //     non-match — an observable zero matched count (D66), never an
@@ -94,7 +92,7 @@ public:
             }
             dds::pub::Publisher publisher(out_dp, pub_qos);
             dds::pub::qos::DataWriterQos wqos =
-                    qos_.writer_qos(view.spec.output.writer_qos, derived);
+                    qos_.writer_qos(view.spec.output.writer_qos);
             dds::pub::DataWriter<T> writer(publisher, out_topic, wqos);
 
             // (2) ignore our own output writer before forwarding / attaching input
@@ -154,8 +152,9 @@ public:
                             route, topic_name, generation, warning));
                 };
             }
-            bool manual_liveliness = derived.derive
-                    && derived.liveliness_kind != LivelinessKindPod::Automatic;
+            bool manual_liveliness =
+                    wqos.policy<dds::core::policy::Liveliness>().kind()
+                    != dds::core::policy::LivelinessKind::AUTOMATIC;
 
             // Matched-count changes from the entities' own statuses are the discovery
             // truth (D64/D66); stamp-carrying events, same MPSC path as the warnings.
@@ -228,12 +227,6 @@ public:
         // already zeroed the generation and moved the topic to IDLE, and will discard the
         // (now stale) TopicEntitiesReady — so abort posts no completion event (D8/D23).
         dispatcher_.detach_and_close(route, topic_name);
-    }
-
-    std::string update_writer_deadline(const std::string &route,
-                                       const std::string &topic_name,
-                                       std::int64_t deadline_nanos) override {
-        return dispatcher_.set_writer_deadline(route, topic_name, deadline_nanos);
     }
 
     bool update_route_partitions(const std::string &route,
