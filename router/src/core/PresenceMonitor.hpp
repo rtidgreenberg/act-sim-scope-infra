@@ -159,6 +159,7 @@ public:
                     const dds::sub::qos::DataReaderQos &health_reader_qos,
                     const dds::pub::qos::DataWriterQos &health_writer_qos,
                     const dds::pub::qos::DataWriterQos &mesh_writer_qos,
+                    const dds::pub::qos::DataWriterQos &diagnostics_writer_qos,
                     dds::domain::DomainParticipant team_scoped_participant = dds::core::null,
                     const std::string &health_topic = "RouterHealth",
                     const std::string &mesh_topic = "ActRouterMeshStatus");
@@ -167,6 +168,7 @@ public:
 
     // IPresencePublisher — called from the controller strand on each PresenceTick.
     void publish_heartbeat(const RouterHealth &hb) override;
+    void publish_diagnostics(const RouterDiagnostics &snapshot) override;
 
     // IPresencePublisher (D98) — called from the controller strand on each MeshTick, its
     // own independent cadence (kMeshPublishPeriodMs). Just republishes the mesh; on-change
@@ -222,6 +224,8 @@ private:
     dds::pub::Publisher lan_publisher_;
     dds::topic::Topic<RouterMeshStatus> mesh_topic_;
     dds::pub::DataWriter<RouterMeshStatus> mesh_writer_;
+    dds::topic::Topic<dds::core::xtypes::DynamicData> diagnostics_topic_;
+    dds::pub::DataWriter<dds::core::xtypes::DynamicData> diagnostics_writer_;
 
     std::mutex audit_mutex_;
     std::string audit_path_;

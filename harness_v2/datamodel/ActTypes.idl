@@ -70,6 +70,8 @@ struct platform_init_status {
     float time_scale;
     float minimum_separation_m;
     string<32> navigation_state;
+    string<64> mission_id;
+    string<32> mission_phase;
     uint32 heartbeat_seq;
     int64 timestamp;
 };
@@ -396,6 +398,23 @@ struct RouterPeerRef {
     int64 last_seen_delta_ms;
 };
 
+struct RouterCompactRouteHealth {
+    string route_name;
+    RouterRouteOperationalState state;
+    RouterRouteDiscoveryState discovery_state;
+    uint64 samples_forwarded;
+};
+
+struct RouterDiagnostics {
+    @key
+    string router;
+    string config_hash;
+    uint64 snapshot_seq;
+    int64 send_timestamp;
+    uint64 state_revision;
+    sequence<RouterRouteStatus> routes;
+};
+
 struct RouterHealth {
     @key
     string router;
@@ -410,7 +429,7 @@ struct RouterHealth {
     RouterOverallState overall_state;
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
-    sequence<RouterRouteStatus> routes;
+    sequence<RouterCompactRouteHealth> routes;
 };
 
 struct RouterMeshPeer {

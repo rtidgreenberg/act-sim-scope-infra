@@ -283,6 +283,7 @@ routes:
       - name: PlatformDebugStatus
       - name: PlatformThrusterStatus
       - name: PlatformPowerStatus
+      - name: ActRouterDiagnostics
     source_side:
       input:
         participant: platform_lan

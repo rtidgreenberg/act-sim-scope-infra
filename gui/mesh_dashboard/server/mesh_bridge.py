@@ -34,6 +34,20 @@ import uuid
 from pathlib import Path
 
 from aiohttp import web
+try:
+    from wire_delivery import WireDelivery
+    from delivery_config import load_delivery_config
+except ModuleNotFoundError as exc:
+    if exc.name != "wire_delivery":
+        raise
+    from gui.mesh_dashboard.server.wire_delivery import WireDelivery
+    from gui.mesh_dashboard.server.delivery_config import load_delivery_config
+try:
+    from traffic_metrics import aggregate as aggregate_metrics, validate_sample
+except ModuleNotFoundError as exc:
+    if exc.name != "traffic_metrics":
+        raise
+    from gui.mesh_dashboard.server.traffic_metrics import aggregate as aggregate_metrics, validate_sample
 import rti.connextdds as dds
 try:
     from mission_planning import WaterPlanner, SQUADS, launch_position_for, SCENARIO_TARGETS, orbit_points, LOITER_RADII_M, DEFAULT_LOITER_RADIUS_M
@@ -61,7 +75,7 @@ CONTROL_COMMAND_ACK_TOPIC = "PlatformCommandAck"
 CONTROL_COMMAND_ACK_TYPE = "control_command_ack"
 MISSION_PAYLOAD_VERSION = 1
 MISSION_OPERATIONS = {"route", "replace_route", "cancel", "return_to_base", "set_time_scale"}
-MAX_MISSION_TARGETS = 5
+MAX_MISSION_TARGETS = 6
 MAX_MISSION_WAYPOINTS = 64
 MAX_MISSION_PAYLOAD_BYTES = 8192
 MISSION_COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
@@ -198,7 +212,7 @@ class DdsBridge:
     """Owns the one DomainParticipant + reader + writer this service needs."""
 
     def __init__(self, domain_id, types_xml, poll_interval, participant_qos_profile=None,
-                 traffic_observers=None):
+                 traffic_observers=None, router_config=None):
         self.poll_interval = poll_interval
         self.cache = {}          # observer_node -> latest sample dict
         self.platform_cache = {} # platform_node -> latest per-resolution topic samples
@@ -208,8 +222,10 @@ class DdsBridge:
         self._stop = threading.Event()
 
         qp = _qos_provider_for(types_xml)
+        self.delivery_config = load_delivery_config(router_config, dds.QosProvider, dds.Duration.infinite)
         mesh_type = qp.type(MESH_STATUS_TYPE)
         link_stats_type = qp.type(LINK_STATS_TYPE)
+        diagnostics_type = qp.type("RouterDiagnostics")
         team_type = qp.type(TEAM_ASSIGNMENT_TYPE)
         status_mode_type = qp.type(STATUS_MODE_TYPE)
         control_command_type = qp.type(CONTROL_COMMAND_TYPE)
@@ -222,6 +238,10 @@ class DdsBridge:
         mesh_topic = dds.DynamicData.Topic(self.participant, MESH_STATUS_TOPIC, mesh_type)
         subscriber = dds.Subscriber(self.participant)
         self.reader = dds.DynamicData.DataReader(subscriber, mesh_topic)
+        diagnostics_topic = dds.DynamicData.Topic(self.participant, "ActRouterDiagnostics", diagnostics_type)
+        self.diagnostics_reader = dds.DynamicData.DataReader(
+            subscriber, diagnostics_topic, qp.datareader_qos_from_profile("ACT_QOS_LIB::lan_event"))
+        self.router_diagnostics_cache = {}
         link_stats_topic = dds.DynamicData.Topic(self.participant, LINK_STATS_TOPIC,
                                                  link_stats_type)
         link_stats_qos = dds.DataReaderQos()
@@ -272,6 +292,7 @@ class DdsBridge:
         self.audit_sent = {}  # (run_id, topic, source, sequence) -> sent event
         self.audit_received = {}  # (run_id, topic, source, sequence, receiver) -> receive event
         self.audit_versions = {}  # (topic, source, recipient) -> [sent, received]
+        self.wire_delivery = WireDelivery()
         self.platform_status_modes = {}  # platform_node -> init|mission|debug
         self.platform_status_mode_changed_ns = {}  # platform_node -> monotonic mode-change cutoff
         self.emane_impairments = {}
@@ -331,6 +352,9 @@ class DdsBridge:
                     continue
                 sample = json.loads(data.to_json())
                 self.record_mission_ack(sample)
+            for data, info in self.diagnostics_reader.take():
+                if info.valid:
+                    self.record_router_diagnostics(json.loads(data.to_json()))
             for data, info in self.scenario_reader.take():
                 if info.valid:
                     self.record_scenario_report(json.loads(data.to_json()))
@@ -388,7 +412,8 @@ class DdsBridge:
                         self.link_stats_cache[key] = sample
                     self._broadcast({"type": "link_stats", "data": self.link_stats_snapshot()})
 
-            if self.poll_audit_events():
+            self.poll_audit_events()
+            if self.poll_wire_events():
                 self._broadcast({"type": "delivery_stats", "data": self.delivery_snapshot()})
 
             self.expire_mission_commands()
@@ -417,11 +442,52 @@ class DdsBridge:
 
     def traffic_snapshot(self):
         with self.cache_lock:
-            return list(self.latest_traffic_aggregate)
+            return self._aggregate_traffic_locked()
+
+    def record_router_diagnostics(self, sample):
+        router = sample.get("router")
+        if not router:
+            raise ValueError("router diagnostics missing identity")
+        with self.cache_lock:
+            previous = self.router_diagnostics_cache.get(router, {}).get("data")
+            if previous and sample["send_timestamp"] <= previous["send_timestamp"]:
+                return
+            self.router_diagnostics_cache[router] = {
+                "data": sample, "received_at": int(time.time() * 1000)}
+        self._broadcast({"type": "router_diagnostics", "data": self.router_diagnostics_snapshot()})
+
+    def router_diagnostics_snapshot(self):
+        now = int(time.time() * 1000)
+        with self.cache_lock:
+            health = {peer["health"]["router"]: peer["health"] for status in self.cache.values()
+                      for peer in status.get("peers", [])}
+            rows = []
+            for router, entry in self.router_diagnostics_cache.items():
+                node = router.split("/", 1)[0]
+                summary = health.get(router)
+                enabled = not node.startswith("Platform_") or any(
+                    route["route_name"] == "platform_debug_status"
+                    and route["state"] != "ROUTE_DISABLED"
+                    for route in (summary or {}).get("routes", []))
+                state = "live"
+                if node.startswith("Platform_") and not summary:
+                    state = "awaiting health"
+                elif not enabled:
+                    state = "debug off / historical"
+                elif summary and entry["data"]["config_hash"] != summary["config_hash"]:
+                    state = "configuration mismatch"
+                elif summary and entry["data"]["state_revision"] != summary["state_revision"]:
+                    state = "awaiting matching health revision"
+                elif entry["data"]["send_timestamp"] < self.platform_status_mode_changed_ns.get(node, 0):
+                    state = "awaiting fresh debug snapshot"
+                elif now - entry["received_at"] > 5000 or now - entry["data"]["send_timestamp"] / 1e6 > 5000:
+                    state = "stale"
+                rows.append(dict(entry, router=router, state=state))
+            return {"rows": rows}
 
     def emane_snapshot(self):
         with self.cache_lock:
-            return dict(self.latest_emane_aggregate) if self.latest_emane_aggregate else None
+            return self._aggregate_emane_locked()
 
     def link_stats_snapshot(self):
         with self.cache_lock:
@@ -433,10 +499,26 @@ class DdsBridge:
         ))
         return {"rows": rows}
 
+    def _reported_status_mode(self, source_node):
+        for status in self.cache.values():
+            for peer in status.get("peers", []):
+                health = peer.get("health", {})
+                if health.get("router", "").split("/", 1)[0] != source_node:
+                    continue
+                routes = {route["route_name"]: route["state"]
+                          for route in health.get("routes", [])}
+                if "platform_debug_status" in routes:
+                    if routes["platform_debug_status"] != "ROUTE_DISABLED":
+                        return "debug"
+                    if routes.get("platform_detail_status", "ROUTE_DISABLED") != "ROUTE_DISABLED":
+                        return "mission"
+                    return "init"
+        return self.platform_status_modes.get(source_node, "init")
+
     def _platform_topic_expected(self, source_node, topic, sent_at_ns):
         if not source_node.startswith("Platform_"):
             return True
-        mode = self.platform_status_modes.get(source_node, "init")
+        mode = self._reported_status_mode(source_node)
         cutoff_ns = self.platform_status_mode_changed_ns.get(source_node, 0)
         if topic in MISSION_MODE_TOPICS | DEBUG_MODE_TOPICS and sent_at_ns < cutoff_ns:
             return False
@@ -460,7 +542,7 @@ class DdsBridge:
                 nodes.append(f"{match.group(1).title()}_{match.group(2)}")
         return sorted(set(nodes))
 
-    def _active_audit_event_paths(self):
+    def _active_audit_event_paths(self, filename="events.jsonl"):
         if self.audit_run_id is None:
             run_id_path = _THIS_FILE.parents[3] / "debug" / "control_20_debug" / "run_id"
             try:
@@ -478,7 +560,7 @@ class DdsBridge:
                     continue
             except OSError:
                 continue
-            event_path = run_id_path.with_name("events.jsonl")
+            event_path = run_id_path.with_name(filename)
             if event_path.is_file():
                 paths.append(event_path)
         return paths
@@ -599,7 +681,47 @@ class DdsBridge:
                     self._prune_audit_events(time.time_ns() - 60_000_000_000)
         return changed
 
+    def poll_wire_events(self):
+        paths = self._active_audit_event_paths("wan_events.jsonl")
+        with self.cache_lock:
+            return self.wire_delivery.poll(paths, self.audit_run_id)
+
+    @staticmethod
+    def _wire_capture_healthy(sample):
+        return (sample.get("wire_delivery_enabled", False)
+                and sample.get("capture_status") == "live"
+                and not sample.get("capture_invalid_rows_interval",
+                                   sample.get("capture_invalid_rows", 0))
+                and not sample.get("capture_gap", False))
+
     def delivery_snapshot(self, window_ms=30_000):
+        with self.cache_lock:
+            now_ns = time.time_ns()
+            snapshot = self.wire_delivery.snapshot(window_ms, now_ns=now_ns)
+            window_start_ms = now_ns / 1_000_000 - window_ms
+            snapshot["node_modes"] = {
+                peer["health"]["router"].split("/", 1)[0]: self._reported_status_mode(
+                    peer["health"]["router"].split("/", 1)[0])
+                for status in self.cache.values() for peer in status.get("peers", [])}
+            capture = self._aggregate_traffic_locked()
+            snapshot["capture"] = next((sample for sample in capture if sample["domain_id"] == 200), None)
+            fresh = set((snapshot["capture"] or {}).get("contributors", []))
+            for row in snapshot["rows"]:
+                row["coverage_complete"] = all(
+                    node in fresh
+                    and self._wire_capture_healthy(self.traffic_cache.get((node, 200), {}))
+                    and self.traffic_cache[(node, 200)].get("wire_coverage_since_ms") is not None
+                    and self.traffic_cache[(node, 200)]["wire_coverage_since_ms"] <= window_start_ms
+                    for node in (row["source"], row["recipient"]))
+                if not row["coverage_complete"]:
+                    row["observed_missing"] = row["lost"]
+                    row["lost"] = row["loss_percentage"] = row["delivery_percentage"] = None
+                    row["observed_recovered_samples"] = row["recovered_samples"]
+                    row["recovered_samples"] = row["avg_recovery_ms"] = None
+                    row["percentage_ready"] = False
+            return snapshot
+
+    def application_delivery_snapshot(self, window_ms=30_000):
         now_ns = time.time_ns()
         earliest_ns = now_ns - window_ms * 1_000_000
         with self.cache_lock:
@@ -613,7 +735,7 @@ class DdsBridge:
             rows = []
             for (topic, source, recipient), events in flows.items():
                 if source.startswith("Platform_"):
-                    node_modes[source] = self.platform_status_modes.get(source, "init")
+                    node_modes[source] = self._reported_status_mode(source)
                 settle_ms = self._delivery_settle_ms(topic)
                 settled_cutoff_ns = now_ns - settle_ms * 1_000_000
                 events.sort(key=lambda item: item[1]["sent_at_ns"])
@@ -671,67 +793,45 @@ class DdsBridge:
             }
 
     def _aggregate_traffic_locked(self):
-        totals = {}
-        fields = ("discovery_packets", "discovery_bytes", "data_packets", "data_bytes",
-                  "reliability_packets", "reliability_bytes", "mixed_packets", "mixed_bytes",
-                  "unknown_packets", "unknown_bytes", "discovery_tx_packets",
-                  "discovery_tx_bytes", "data_tx_packets", "data_tx_bytes",
-                  "total_packets", "total_bytes")
+        domains = {}
         for sample in self.traffic_cache.values():
-            domain_id = sample["domain_id"]
-            total = totals.setdefault(domain_id, {
-                "domain_id": domain_id,
-                "observer": "network",
-                "scope": "network",
-                "capture_timestamp": 0,
-                "interval_ms": sample.get("interval_ms", 0),
-                "contributors": [],
-                "discovery_packets": 0,
-                "discovery_bytes": 0,
-                "data_packets": 0,
-                "data_bytes": 0,
-                "reliability_packets": 0,
-                "reliability_bytes": 0,
-                "mixed_packets": 0,
-                "mixed_bytes": 0,
-                "unknown_packets": 0,
-                "unknown_bytes": 0,
-                "discovery_tx_packets": 0,
-                "discovery_tx_bytes": 0,
-                "data_tx_packets": 0,
-                "data_tx_bytes": 0,
-                "total_packets": 0,
-                "total_bytes": 0,
-            })
-            total["capture_timestamp"] = max(total["capture_timestamp"],
-                                             sample.get("capture_timestamp", 0))
-            total["contributors"].append(sample.get("observer", "unknown"))
-            for field in fields:
-                total[field] += sample.get(field, 0)
+            domains.setdefault(sample["domain_id"], {})[sample["observer"]] = sample
+        return [dict(aggregate_metrics(samples, self.traffic_observers), domain_id=domain)
+                for domain, samples in sorted(domains.items())]
 
-        for total in totals.values():
-            observer_count = len(total["contributors"])
-            total["observer_count"] = observer_count
-            # Every EMANE receiver can observe the same multicast RTPS frame. Preserve the
-            # raw sums for diagnostics, but give the UI a rate that is not multiplied by
-            # the number of monitors.
-            for field in fields:
-                total[f"mean_{field}"] = total[field] / observer_count if observer_count else 0
-        return list(totals.values())
+    def _aggregate_emane_locked(self):
+        return aggregate_metrics(self.emane_cache, self.traffic_observers, mac=True)
 
     def update_traffic(self, sample):
         """Store one node interval and return a complete aggregate when available."""
-        domain_id = sample.get("domain_id")
-        observer = sample.get("observer")
-        if domain_id is None or not observer:
-            return None
+        validate_sample(sample)
+        domain_id, observer = sample["domain_id"], sample["observer"]
         with self.cache_lock:
+            previous = self.traffic_cache.get((observer, domain_id), {})
+            if sample["capture_timestamp"] <= previous.get("capture_timestamp", 0):
+                return None
+            invalid_rows = sample.get("capture_invalid_rows", 0)
+            previous_invalid_rows = previous.get("capture_invalid_rows", 0)
+            sample = dict(sample, capture_invalid_rows_interval=(
+                invalid_rows - previous_invalid_rows
+                if invalid_rows >= previous_invalid_rows else invalid_rows))
+            coverage_since = None
+            if self._wire_capture_healthy(sample):
+                coverage_since = sample["capture_timestamp"]
+                interval_start = sample["capture_timestamp"] - sample["interval_ms"]
+                # One millisecond accommodates independently rounded interval/end times.
+                if (self._wire_capture_healthy(previous)
+                        and previous.get("wire_coverage_since_ms") is not None
+                        and interval_start <= previous["capture_timestamp"] + 1
+                        and invalid_rows >= previous_invalid_rows
+                        and sample.get("capture_restarts", 0) == previous.get("capture_restarts", 0)):
+                    coverage_since = previous["wire_coverage_since_ms"]
+            sample = dict(sample, wire_coverage_since_ms=coverage_since)
             self.traffic_cache[(observer, domain_id)] = sample
-            observers = self.traffic_observers or {
-                name for name, cached_domain in self.traffic_cache if cached_domain == domain_id
-            }
+            current = next(row for row in self._aggregate_traffic_locked() if row["domain_id"] == domain_id)
+            observers = current["contributors"]
             keys = {(name, domain_id) for name in observers}
-            if not keys.issubset(self.traffic_cache):
+            if not keys:
                 return None
             if any(self.traffic_cache[key].get("capture_timestamp", 0) <=
                    self.traffic_published_at.get(key, 0) for key in keys):
@@ -744,51 +844,20 @@ class DdsBridge:
 
     def update_emane(self, sample):
         """Store one MAC TX delta and return an all-node aggregate when complete."""
-        observer = sample.get("observer")
-        timestamp = sample.get("capture_timestamp", 0)
-        if not observer or not timestamp:
-            return None
-        fields = ("mac_tx_unicast_bytes", "mac_tx_broadcast_bytes",
-                  "mac_tx_unicast_packets", "mac_tx_broadcast_packets",
-                  "mac_tx_unicast_drops", "mac_tx_broadcast_drops",
-                  "mac_rx_unicast_bytes", "mac_rx_broadcast_bytes",
-                  "mac_rx_unicast_packets", "mac_rx_broadcast_packets",
-                  "mac_rx_unicast_drops", "mac_rx_broadcast_drops")
-        if any(field not in sample for field in fields):
-            return None
-
+        validate_sample(sample, mac=True)
+        observer = sample["observer"]
         with self.cache_lock:
+            if sample["capture_timestamp"] <= self.emane_cache.get(observer, {}).get("capture_timestamp", 0):
+                return None
             self.emane_cache[observer] = sample
-            observers = self.traffic_observers or set(self.emane_cache)
-            if not observers.issubset(self.emane_cache):
+            aggregate = self._aggregate_emane_locked()
+            observers = aggregate["contributors"]
+            if not observers:
                 return None
             if any(self.emane_cache[name].get("capture_timestamp", 0) <=
                    self.emane_published_at.get(name, 0) for name in observers):
                 return None
 
-            aggregate = {
-                "scope": "network",
-                "observer": "network",
-                "capture_timestamp": max(self.emane_cache[name]["capture_timestamp"]
-                                         for name in observers),
-                "interval_ms": max(self.emane_cache[name].get("interval_ms", 0)
-                                   for name in observers),
-                "contributors": sorted(observers),
-            }
-            for field in fields:
-                aggregate[field] = sum(self.emane_cache[name][field] for name in observers)
-            aggregate["mac_tx_bytes"] = (aggregate["mac_tx_unicast_bytes"] +
-                                         aggregate["mac_tx_broadcast_bytes"])
-            aggregate["mac_tx_packets"] = (aggregate["mac_tx_unicast_packets"] +
-                                           aggregate["mac_tx_broadcast_packets"])
-            aggregate["mac_tx_drops"] = (aggregate["mac_tx_unicast_drops"] +
-                                         aggregate["mac_tx_broadcast_drops"])
-            aggregate["mac_rx_bytes"] = (aggregate["mac_rx_unicast_bytes"] +
-                                         aggregate["mac_rx_broadcast_bytes"])
-            aggregate["mac_rx_packets"] = (aggregate["mac_rx_unicast_packets"] +
-                                           aggregate["mac_rx_broadcast_packets"])
-            aggregate["mac_rx_drops"] = (aggregate["mac_rx_unicast_drops"] +
-                                         aggregate["mac_rx_broadcast_drops"])
             self.latest_emane_aggregate = aggregate
             for name in observers:
                 self.emane_published_at[name] = self.emane_cache[name]["capture_timestamp"]
@@ -822,6 +891,15 @@ class DdsBridge:
                 entry = self.platform_cache.get(node, {})
                 init = entry.get("init", {}).get("PlatformInitStatus", {})
                 mission = entry.get("mission", {}).get("PlatformMissionStatus", {})
+                # The compact always-on summary can recover terminal state after WAN loss.
+                if init.get("mission_phase"):
+                    detailed_at = mission.get("sent_at_ns", mission.get("timestamp", 0) * 1000)
+                    init_at = init.get("sent_at_ns", init.get("timestamp", 0) * 1000)
+                    if not mission or init_at >= detailed_at:
+                        if init["mission_id"] != mission.get("mission_id"):
+                            mission = {}
+                        mission = dict(mission, mission_id=init["mission_id"],
+                                       mission_phase=init["mission_phase"])
                 mission_id = mission.get("mission_id", "")
                 mission_command = self.mission_commands.get(mission_id)
                 if mission_command is not None:
@@ -894,7 +972,8 @@ class DdsBridge:
                 })
             return {"platforms": inventory, "squads": SQUADS,
                     "team_missions": json.loads(json.dumps(self.team_missions)),
-                    "scenario_targets": [dict(target, revealed=target["id"] in self.scenario_reports,
+                    "scenario_targets": [dict(target, revealed=target["id"] in self.scenario_reports
+                        and not self.scenario_reports[target["id"]].get("lost", False),
                         dispatched=target["id"] in self.scenario_dispatched_targets)
                         for target in SCENARIO_TARGETS]}
 
@@ -922,6 +1001,10 @@ class DdsBridge:
             logger.warning("Ignoring invalid scenario ContactReport: %s", sample.get("contact_id"))
             return False
         with self.cache_lock:
+            previous = self.scenario_reports.get(target["id"])
+            if previous and sample["audit_sequence"] <= previous["audit_sequence"]:
+                logger.debug("Ignoring older scenario ContactReport: %s", target["id"])
+                return False
             self.scenario_reports[target["id"]] = sample
         try:
             self._log_scenario_event("received", sample)
@@ -931,19 +1014,19 @@ class DdsBridge:
         return True
 
     def reveal_scenario_target(self, body):
-        if not isinstance(body, dict) or set(body) != {"target_id"}:
-            raise ValueError("expected JSON {target_id}")
+        if (not isinstance(body, dict) or "target_id" not in body
+                or set(body) - {"target_id", "visible"}
+                or not isinstance(body.get("visible", True), bool)):
+            raise ValueError("expected JSON {target_id, visible?: boolean}")
         target = self._scenario_target(body["target_id"])
         with self.mission_lock:
-            if target["id"] == "target_2" and "target_1" not in self.scenario_dispatched_targets:
-                raise MissionConflict("Dispatch a team to Target 1 before revealing Target 2.")
             sample = dds.DynamicData(self.scenario_type)
             for key, value in {
                 "source": "Control_20/Scenario", "source_node": "Control_20",
                 "run_id": self._mission_run_id(), "contact_id": target["id"],
                 "classification": "DEMO_TARGET", "sensor_type": "SCENARIO",
                 "latitude": target["latitude"], "longitude": target["longitude"],
-                "confidence_pct": 100.0, "lost": False,
+                "confidence_pct": 100.0, "lost": not body.get("visible", True),
                 "audit_sequence": time.time_ns(), "sent_at_ns": time.time_ns(),
                 "timestamp": int(time.time() * 1_000_000),
             }.items():
@@ -1041,7 +1124,8 @@ class DdsBridge:
         radius = body.get("loiter_radius_m", DEFAULT_LOITER_RADIUS_M)
         if isinstance(radius, bool) or not isinstance(radius, (int, float)) or radius not in LOITER_RADII_M:
             raise ValueError("loiter_radius_m must be 500, 1000, 2000 or 3000")
-        if target and target["id"] not in self.scenario_reports:
+        if target and (target["id"] not in self.scenario_reports
+                       or self.scenario_reports[target["id"]].get("lost", False)):
             raise MissionConflict("Reveal this scenario target first.")
         request = validate_mission_request({
             "operation": "route", "targets": body["targets"],
@@ -1382,8 +1466,6 @@ class DdsBridge:
                     "timestamp": int(time.time() * 1_000_000),
                 }.items():
                     sample[field] = value
-                if request["operation"] not in {"cancel", "set_time_scale"} and self.platform_status_modes.get(target, "init") == "init":
-                    self.write_status_mode(target, "mission")
                 self.command_writer.write(sample)
                 with self.cache_lock:
                     command["published"] = True
@@ -1472,8 +1554,7 @@ class DdsBridge:
         missing_tools = [tool for tool in ("emaneevent-pathloss", "emaneevent-commeffect")
                          if shutil.which(tool) is None]
         with self.cache_lock:
-            observed = (dict(self.latest_emane_aggregate)
-                        if self.latest_emane_aggregate else None)
+            observed = self._aggregate_emane_locked()
         return {
             "available": EMANE_CONTROLLER_ENABLED and not missing_tools,
             "unavailable_reason": (None if not missing_tools
@@ -1760,6 +1841,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_emane_stats(_request):
         return web.json_response(bridge.emane_snapshot())
 
+    async def get_router_diagnostics(_request):
+        return web.json_response(bridge.router_diagnostics_snapshot())
+
     async def get_link_stats(_request):
         return web.json_response(bridge.link_stats_snapshot())
 
@@ -1790,6 +1874,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
             return web.Response(status=400, text="window_ms must be between 1000 and 60000")
         return web.json_response(bridge.delivery_snapshot(window_ms))
 
+    async def get_delivery_config(_request):
+        return web.json_response(bridge.delivery_config)
+
     async def post_traffic_stats(request):
         """Ingest per-node capture summaries and broadcast network-wide aggregates."""
         try:
@@ -1797,6 +1884,11 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
         except json.JSONDecodeError:
             return web.Response(status=400, text="expected JSON array")
         samples = body if isinstance(body, list) else [body]
+        try:
+            for sample in samples:
+                validate_sample(sample)
+        except ValueError as exc:
+            return web.Response(status=400, text=str(exc))
         for sample in samples:
             bridge._broadcast({"type": "traffic_node_stats", "data": sample})
             aggregate = bridge.update_traffic(sample)
@@ -1809,6 +1901,10 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
             sample = await request.json()
         except json.JSONDecodeError:
             return web.Response(status=400, text="expected JSON object")
+        try:
+            validate_sample(sample, mac=True)
+        except ValueError as exc:
+            return web.Response(status=400, text=str(exc))
         node_sample = dict(sample)
         node_sample["mac_tx_bytes"] = (
             node_sample.get("mac_tx_unicast_bytes", 0) +
@@ -1832,10 +1928,12 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_post("/api/mission_scenario", post_mission_scenario)
     app.router.add_get("/api/traffic_stats", get_traffic_stats)
     app.router.add_get("/api/emane_stats", get_emane_stats)
+    app.router.add_get("/api/router_diagnostics", get_router_diagnostics)
     app.router.add_get("/api/link_stats", get_link_stats)
     app.router.add_get("/api/emane_controller", get_emane_controller)
     app.router.add_post("/api/emane_controller", post_emane_controller)
     app.router.add_get("/api/delivery_stats", get_delivery_stats)
+    app.router.add_get("/api/delivery_config", get_delivery_config)
     app.router.add_post("/api/traffic_stats", post_traffic_stats)
     app.router.add_post("/api/emane_stats", post_emane_stats)
     app.router.add_post("/api/team_assignment", team_assignment)
@@ -1860,6 +1958,8 @@ def main():
                         help="optional DomainParticipant QoS profile")
     parser.add_argument("--traffic-observers", default="",
                         help="comma-separated monitors required for an aggregate sample")
+    parser.add_argument("--router-config", type=Path,
+                        help="active router YAML used for the configured WAN QoS sidebar")
     args = parser.parse_args()
 
     os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")
@@ -1868,7 +1968,7 @@ def main():
 
     bridge = DdsBridge(args.domain, Path(args.types_xml), args.poll_interval,
                        args.participant_qos_profile,
-                       filter(None, args.traffic_observers.split(",")))
+                       filter(None, args.traffic_observers.split(",")), args.router_config)
     try:
         app = build_app(bridge, Path(args.static_dir))
         web.run_app(app, host=args.host, port=args.port)

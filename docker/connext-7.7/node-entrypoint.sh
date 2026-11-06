@@ -119,6 +119,37 @@ stop_children() {
 }
 trap stop_children TERM INT EXIT
 
+if [[ "${EMANE_TRAFFIC_MONITOR:-0}" == "1" ]]; then
+    python3 "$WORKSPACE/debug/scripts/domain_traffic_monitor.py" --domains 200 \
+        --interface emane0 --observer "$NODE_NAME" \
+        --emane-nem-id "${EMANE_NEM_ID:?EMANE_NEM_ID is required for EMANE monitoring}" \
+        --dashboard-url "${MESH_DASHBOARD_URL:?MESH_DASHBOARD_URL is required}" \
+        --interval "${EMANE_TRAFFIC_MONITOR_INTERVAL:-1}" \
+        --ready-file /tmp/traffic-monitor.ready \
+        --output "$NODE_DEBUG_DIR/traffic_stats.jsonl" \
+        > "$LOG_DIR/traffic_monitor.log" 2>&1 &
+    PIDS+=("$!")
+    for _ in {1..50}; do
+        [[ -s /tmp/traffic-monitor.ready ]] && break
+        sleep 0.1
+    done
+    [[ -s /tmp/traffic-monitor.ready ]] || {
+        echo "Traffic capture did not become ready before DDS startup" >&2
+        exit 1
+    }
+fi
+
+if [[ "${EMANE_ENABLED:-0}" == "1" ]]; then
+    for _ in {1..1200}; do
+        [[ -s "$NODE_DEBUG_DIR/rf-ready" ]] && break
+        sleep 0.1
+    done
+    [[ -s "$NODE_DEBUG_DIR/rf-ready" ]] || {
+        echo "Nominal RF matrix was not released before DDS startup" >&2
+        exit 1
+    }
+fi
+
 bash -c 'exec -a "$0" "$@"' "${NODE_NAME}-router-main" \
     "$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
     --node-name "$NODE_NAME" \
@@ -176,18 +207,8 @@ if [[ "${MESH_DASHBOARD:-0}" == "1" ]]; then
         --port "${MESH_DASHBOARD_PORT:-8080}" \
         --participant-qos-profile ACT_QOS_LIB::lan_control_participant \
         --traffic-observers "${MESH_TRAFFIC_OBSERVERS:-}" \
+        --router-config "$CONFIG_PATH" \
         > "$LOG_DIR/mesh_dashboard.log" 2>&1 &
-    PIDS+=("$!")
-fi
-
-if [[ "${EMANE_TRAFFIC_MONITOR:-0}" == "1" ]]; then
-    python3 "$WORKSPACE/debug/scripts/domain_traffic_monitor.py" --domains 200 \
-        --interface emane0 --observer "$NODE_NAME" \
-        --emane-nem-id "${EMANE_NEM_ID:?EMANE_NEM_ID is required for EMANE monitoring}" \
-        --dashboard-url "${MESH_DASHBOARD_URL:?MESH_DASHBOARD_URL is required}" \
-        --interval "${EMANE_TRAFFIC_MONITOR_INTERVAL:-1}" \
-        --output "$NODE_DEBUG_DIR/traffic_stats.jsonl" \
-        > "$LOG_DIR/traffic_monitor.log" 2>&1 &
     PIDS+=("$!")
 fi
 

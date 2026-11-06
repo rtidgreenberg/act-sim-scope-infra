@@ -642,12 +642,15 @@
       <!--
         RouterHealth presence heartbeat on the WAN participant.
 
-        Inherits wan_event's reliable WAN protocol tuning, including the XML-controlled
-        RTPS reliable-writer heartbeat periods. Presence-specific cache/deadline/liveliness
-        settings live here so the router does not mutate endpoint QoS in code.
+        Periodic latest-state data uses best effort: the next heartbeat supersedes a
+        missed one. Override reliability at both endpoints while retaining the existing
+        base defaults and presence-specific cache/deadline/liveliness settings.
       -->
 
       <datawriter_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
         <durability>
           <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
         </durability>
@@ -674,6 +677,9 @@
       </datawriter_qos>
 
       <datareader_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
         <durability>
           <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
         </durability>

@@ -81,6 +81,7 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  const dds::sub::qos::DataReaderQos &health_reader_qos,
                                  const dds::pub::qos::DataWriterQos &health_writer_qos,
                                  const dds::pub::qos::DataWriterQos &mesh_writer_qos,
+                                 const dds::pub::qos::DataWriterQos &diagnostics_writer_qos,
                                  dds::domain::DomainParticipant team_scoped_participant,
                                  const std::string &health_topic,
                                  const std::string &mesh_topic)
@@ -97,6 +98,9 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           lan_publisher_(lan_participant),
           mesh_topic_(lan_participant, mesh_topic),
           mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos),
+          diagnostics_topic_(lan_participant, "ActRouterDiagnostics",
+                             rti::topic::dynamic_type<RouterDiagnostics>::get()),
+          diagnostics_writer_(lan_publisher_, diagnostics_topic_, diagnostics_writer_qos),
           shut_down_(false) {
     const char *debug_dir = std::getenv("NODE_DEBUG_DIR");
     if (debug_dir != nullptr && *debug_dir != '\0') {
@@ -215,6 +219,16 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
 // (kMeshPublishPeriodMs), on top of the existing on-change publishes in
 // on_health_data/on_health_reader_status (which still fire immediately on a transition
 // rather than waiting on either tick's period).
+void PresenceMonitor::publish_diagnostics(const RouterDiagnostics &snapshot) {
+    try {
+        diagnostics_writer_.write(rti::core::xtypes::convert(snapshot));
+    } catch (const dds::core::NotEnabledError &) {
+        Log::debug("diagnostics_skipped_not_enabled", {});
+    } catch (const std::exception &e) {
+        Log::warn("diagnostics_publish_failed", {{"error", e.what()}});
+    }
+}
+
 void PresenceMonitor::publish_mesh_tick() {
     publish_mesh();
 }

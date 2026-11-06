@@ -802,7 +802,26 @@ void RouterController::apply_presence_tick() {
                                       : RouterOverallState::ROUTER_OK;
     const std::vector<RouterRouteStatus> route_statuses = build_route_statuses();
     for (size_t i = 0; i < route_statuses.size(); ++i) {
-        hb.routes.push_back(route_statuses[i]);
+        RouterCompactRouteHealth route;
+        route.route_name = route_statuses[i].route_name;
+        route.state = route_statuses[i].state;
+        route.discovery_state = route_statuses[i].discovery_state;
+        route.samples_forwarded = route_statuses[i].samples_forwarded;
+        hb.routes.push_back(route);
+    }
+    const auto debug_route = state_.routes.find("platform_debug_status");
+    if (node_role_ == "control" ||
+            (debug_route != state_.routes.end() && debug_route->second.desired.desired_enabled)) {
+        RouterDiagnostics diagnostics;
+        diagnostics.router = hb.router;
+        diagnostics.config_hash = hb.config_hash;
+        diagnostics.snapshot_seq = hb.heartbeat_seq;
+        diagnostics.send_timestamp = hb.send_timestamp;
+        diagnostics.state_revision = hb.state_revision;
+        for (const auto &route : route_statuses) {
+            diagnostics.routes.push_back(route);
+        }
+        presence_->publish_diagnostics(diagnostics);
     }
     // team_partition is deliberately NOT filled in here. Unlike every other field above
     // (derived from state_, the controller's own config-mirrored copy), team_partition is

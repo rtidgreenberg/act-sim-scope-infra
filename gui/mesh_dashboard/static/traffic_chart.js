@@ -1,17 +1,23 @@
 // traffic_chart.js — WAN DDS traffic time-series sparklines (domain 200).
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
-// sparkline plots on the bottom panel, with discovery and user-data kilobits/s overlaid
-// on one shared scale for direct comparison.
+// application-carrying frame rates by default. Infrastructure series and the distinct
+// MAC accounting layer are optional; visible series alone determine scale and peaks.
 
 (function () {
   "use strict";
 
   const MAX_POINTS = 300;  // rolling visual history
-  const EMA_ALPHA = 0.1;   // exponential moving average smoothing (lower = smoother)
-  const DISCOVERY_COLOR = "#3aa655";
-  const DATA_COLOR = "#3a7bd9";
-  const DISPLAY_AVERAGE_MS = 10_000;
+  const SERIES = [
+    {key: "application_tx", label: "WAN application TX", color: "#3a7bd9"},
+    {key: "infrastructure_tx", label: "Router heartbeat/probe TX", color: "#b88ce0"},
+    {key: "discovery_tx", label: "Discovery TX", color: "#3aa655"},
+    {key: "reliability_tx", label: "Reliability/control TX", color: "#e0944c"},
+    {key: "mixed_tx", label: "Mixed TX", color: "#e0ce64"},
+    {key: "unknown_tx", label: "Unknown TX", color: "#e6553a"},
+    {key: "mac", label: "MAC TX (all traffic)", color: "#d0d5df"},
+  ];
+  const DISPLAY_AVERAGE_MS = 3_000;
   const GRID_COLOR = "#232a34";
   const TEXT_COLOR = "#8a94a6";
 
@@ -19,7 +25,11 @@
   const graphEl = document.getElementById("graph");
   const statusbarEl = document.getElementById("statusbar");
   const rfSummaryEl = document.getElementById("rf-summary");
+  const infraToggle = document.getElementById("toggle-infrastructure-stats");
+  let showInfrastructure = false;
+  let lastEmaneSample = null;
   if (!panel) return;
+  if (rfSummaryEl) rfSummaryEl.style.display = "none";
 
   function syncGraphBottomToPanel() {
     if (!graphEl) return;
@@ -28,6 +38,7 @@
     const panelHeight = panel.children.length ? panel.getBoundingClientRect().height : 0;
     const bottom = Math.max(0, Math.ceil(panelHeight + statusHeight));
     graphEl.style.bottom = `${bottom}px`;
+    document.documentElement.style.setProperty("--mesh-bottom-inset", `${bottom}px`);
   }
 
   // domain_id -> { discovery: [{t, bytes}], data: [{t, bytes}], total: [{t, bytes}],
@@ -44,11 +55,9 @@
     combinedSubplot.className = "tp-subplot";
     const legendDiv = document.createElement("div");
     legendDiv.className = "tp-subplot-label";
-    legendDiv.innerHTML =
-      `<span><span style="color:${DISCOVERY_COLOR}">WAN discovery TX</span> ` +
-      `<span class="tp-subplot-average" style="color:${DISCOVERY_COLOR}">10s avg 0.0 kb/s</span></span>` +
-      `<span><span style="color:${DATA_COLOR}">WAN user data TX</span> ` +
-      `<span class="tp-subplot-average" style="color:${DATA_COLOR}">10s avg 0.0 kb/s</span></span>`;
+    legendDiv.innerHTML = SERIES.map(s =>
+      `<span data-series="${s.key}" style="color:${s.color}">${s.label} ` +
+      `<span class="tp-subplot-average">waiting</span></span>`).join("");
     combinedSubplot.appendChild(legendDiv);
     const chartCanvas = document.createElement("canvas");
     chartCanvas.height = 132;
@@ -57,30 +66,24 @@
 
     const accountingDiv = document.createElement("div");
     accountingDiv.className = "tp-frame-accounting";
-    accountingDiv.textContent = "Receiver view: control 0 kb/s | bundled 0 kb/s | unknown 0 kb/s";
+    accountingDiv.textContent = "Waiting for traffic accounting";
     el.appendChild(accountingDiv);
 
     panel.appendChild(el);
 
     const entry = {
-      discovery: [],
-      data: [],
-      total: [],
-      discoverySamples: [],
-      dataSamples: [],
-      emaDisc: 0,
-      emaData: 0,
-      emaTotal: 0,
+      series: Object.fromEntries(SERIES.map(s => [s.key, {
+        points: [], samples: [], label: legendDiv.querySelector(`[data-series="${s.key}"]`),
+      }])),
       el,
       chartCanvas,
-      discLabel: legendDiv.querySelector("span:first-child .tp-subplot-average"),
-      dataLabel: legendDiv.querySelector("span:last-child .tp-subplot-average"),
       accountingEl: accountingDiv,
-        maxDiscovery: 0,
-        maxData: 0,
       lastSample: null,
+      lastPointTimestamp: null,
+      lastPointIntervalMs: null,
     };
     domains.set(domainId, entry);
+    redraw(entry);
     syncGraphBottomToPanel();
     return entry;
   }
@@ -89,13 +92,16 @@
     return `${(bytesPerSec * 8 / 1000).toFixed(1)} kb/s`;
   }
 
-  function pushPoint(arr, value) {
-    arr.push(value);
+  function pushPoint(arr, value, replace = false) {
+    if (replace && arr.length) arr[arr.length - 1] = value;
+    else arr.push(value);
     if (arr.length > MAX_POINTS) arr.shift();
   }
 
-  function pushRateSample(samples, bytes, intervalMs) {
-    samples.push({ bytes, intervalMs });
+  function pushRateSample(samples, bytes, intervalMs, replace = false) {
+    const sample = { bytes, intervalMs };
+    if (replace && samples.length) samples[samples.length - 1] = sample;
+    else samples.push(sample);
     if (samples.length > MAX_POINTS) samples.shift();
   }
 
@@ -250,29 +256,54 @@
   const WS_URL = `${WS_ORIGIN}/ws`;
   const REST_URL = `${location.protocol}//${location.host}/api/traffic_stats`;
   const EMANE_REST_URL = `${location.protocol}//${location.host}/api/emane_stats`;
-  const RF_PIPE_RATE_BPS = 1000000;
-
-  function formatBitRate(bitsPerSec) {
-    return `${(bitsPerSec / 1000).toFixed(1)} kb/s`;
-  }
-
   function handleEmaneSample(sample) {
     if (!rfSummaryEl || !sample || sample.scope !== "network") return;
-    const intervalSec = (sample.interval_ms || 1000) / 1000;
-    const txBytes = sample.mac_tx_bytes || 0;
-    const txPackets = sample.mac_tx_packets || 0;
-    const txDrops = sample.mac_tx_drops || 0;
-    const txBitsPerSec = txBytes * 8 / intervalSec;
-    const contributors = (sample.contributors || []).length;
-    const averageNodeBitsPerSec = contributors ? txBitsPerSec / contributors : 0;
-    const averageNodeUtilization = averageNodeBitsPerSec * 100 / RF_PIPE_RATE_BPS;
-    rfSummaryEl.innerHTML =
-      `<span><strong>Mesh RF aggregate</strong> ${formatBitRate(txBitsPerSec)}</span>` +
-      `<span>avg ${formatBitRate(averageNodeBitsPerSec)}/node ` +
-      `(${averageNodeUtilization.toFixed(1)}% of 1 Mb/s)</span>` +
-      `<span>${(txPackets / intervalSec).toFixed(0)} pkt/s</span>` +
-      `<span>${(txDrops / intervalSec).toFixed(0)} drop/s</span>` +
-      `<span class="muted">${contributors} nodes</span>`;
+    if (lastEmaneSample && (sample.aggregated_at_ms ?? sample.capture_timestamp) <
+        (lastEmaneSample.aggregated_at_ms ?? lastEmaneSample.capture_timestamp)) return;
+    lastEmaneSample = sample;
+    renderMacSummary();
+  }
+
+  function isFresh(sample) {
+    return sample && !sample.stale && Date.now() <= sample.fresh_until_ms;
+  }
+
+  function renderMacSummary() {
+    if (!rfSummaryEl) return;
+    rfSummaryEl.style.display = showInfrastructure ? "" : "none";
+    const s = lastEmaneSample;
+    rfSummaryEl.textContent = isFresh(s)
+      ? `MAC accounted TX ${formatRate(s.mac_tx_bytes_per_second)} | RX ${formatRate(s.mac_rx_bytes_per_second)} | ` +
+        `${s.mac_tx_packets_per_second.toFixed(1)} TX pkt/s | ` +
+        `${(s.mac_tx_drops_per_second + s.mac_rx_drops_per_second).toFixed(1)} drops/s | ` +
+        `${s.contributors.length} nodes${s.complete ? "" : " (partial)"}`
+      : "MAC counters unavailable / stale";
+  }
+
+  function redraw(entry) {
+    const visible = SERIES.filter(s => showInfrastructure || s.key === "application_tx");
+    for (const spec of SERIES) {
+      entry.series[spec.key].label.style.display =
+        showInfrastructure || spec.key === "application_tx" ? "" : "none";
+    }
+    drawCombinedSparkline(entry.chartCanvas, visible.map(spec => ({
+      label: spec.label, color: spec.color, points: entry.series[spec.key].points,
+      peakRate: Math.max(0, ...entry.series[spec.key].points),
+    })), getVisibleEvents(entry.series.application_tx.points.length));
+    const s = entry.lastSample;
+    if (!s) return;
+    const warnings = [];
+    if (!isFresh(s)) warnings.push("Traffic unavailable / stale");
+    if (s.schema_version < 2) warnings.push("Application attribution unavailable: old monitor schema");
+    if (!s.complete) warnings.push(`Partial coverage: ${s.contributors.length} nodes`);
+    if (!s.capture_complete) warnings.push("Capture incomplete");
+    if (!s.classification_complete) warnings.push("Application rate is known traffic only; mixed/unknown excluded");
+    entry.accountingEl.textContent = warnings.join(" | ") +
+      (showInfrastructure ? `${warnings.length ? " | " : ""}Ethernet frame bytes; MAC accounted bytes are a different layer, not airtime` : "");
+    entry.accountingEl.style.display = entry.accountingEl.textContent ? "" : "none";
+    if (!isFresh(s) || s.schema_version < 2) {
+      entry.series.application_tx.label.querySelector(".tp-subplot-average").textContent = "unavailable";
+    }
   }
 
   // Event markers: track resolution changes as indices into the point arrays.
@@ -308,47 +339,42 @@
     const domainId = sample.domain_id;
     if (domainId == null) return;
 
-    const intervalSec = (sample.interval_ms || 2000) / 1000;
-    const meanOrRaw = (field) => sample[`mean_${field}`] ?? sample[field] ?? 0;
-    const discoveryBytes = sample.discovery_tx_bytes ?? meanOrRaw("discovery_bytes");
-    const dataBytes = sample.data_tx_bytes ?? meanOrRaw("data_bytes");
-    const discRate = discoveryBytes / intervalSec;
-    const dataRate = dataBytes / intervalSec;
-    const reliabilityRate = meanOrRaw("reliability_bytes") / intervalSec;
-    const mixedRate = meanOrRaw("mixed_bytes") / intervalSec;
-    const unknownRate = meanOrRaw("unknown_bytes") / intervalSec;
-    const totalRate = meanOrRaw("total_bytes") / intervalSec;
-
     const entry = ensureDomain(domainId);
-    pushPoint(entry.discovery, discRate);
-    pushPoint(entry.data, dataRate);
-    pushPoint(entry.total, totalRate);
-    pushRateSample(entry.discoverySamples, discoveryBytes, sample.interval_ms || 2000);
-    pushRateSample(entry.dataSamples, dataBytes, sample.interval_ms || 2000);
-      entry.maxDiscovery = Math.max(entry.maxDiscovery, discRate);
-      entry.maxData = Math.max(entry.maxData, dataRate);
-    globalPointCount++;
-    // Update EMA
-    entry.emaDisc = entry.emaDisc === 0 ? discRate : EMA_ALPHA * discRate + (1 - EMA_ALPHA) * entry.emaDisc;
-    entry.emaData = entry.emaData === 0 ? dataRate : EMA_ALPHA * dataRate + (1 - EMA_ALPHA) * entry.emaData;
-    entry.emaTotal = entry.emaTotal === 0 ? totalRate : EMA_ALPHA * totalRate + (1 - EMA_ALPHA) * entry.emaTotal;
+    const previous = entry.lastSample;
+    if (previous && (sample.aggregated_at_ms ?? sample.capture_timestamp) <
+        (previous.aggregated_at_ms ?? previous.capture_timestamp)) return;
     entry.lastSample = sample;
-
-    // Update labels with smoothed EMA rates
-    // A 10-second average makes periodic DDS bursts comparable across resolution modes.
-    entry.discLabel.textContent = `10s avg ${formatRate(trailingRate(entry.discoverySamples))}`;
-    entry.dataLabel.textContent = `10s avg ${formatRate(trailingRate(entry.dataSamples))}`;
-    entry.accountingEl.textContent =
-      `Receiver view: control ${formatRate(reliabilityRate)} | bundled ${formatRate(mixedRate)} | ` +
-      `unknown ${formatRate(unknownRate)}`;
-
-    // Redraw sparklines with event markers
-        const visiblePointCount = Math.max(entry.discovery.length, entry.data.length);
-        const events = getVisibleEvents(visiblePointCount);
-        drawCombinedSparkline(entry.chartCanvas, [
-          { label: "discovery", points: entry.discovery, color: DISCOVERY_COLOR, peakRate: entry.maxDiscovery },
-          { label: "user data", points: entry.data, color: DATA_COLOR, peakRate: entry.maxData },
-        ], events);
+    if (!isFresh(sample) || sample.schema_version < 2) {
+      redraw(entry);
+      return;
+    }
+    // A delayed contributor can correct an aggregate without advancing its newest source.
+    const replace = entry.lastPointTimestamp != null &&
+      sample.capture_timestamp <= entry.lastPointTimestamp;
+    const pointTimestamp = replace ? entry.lastPointTimestamp : sample.capture_timestamp;
+    const intervalMs = replace ? entry.lastPointIntervalMs : entry.lastPointTimestamp != null
+      ? Math.min(5000, sample.capture_timestamp - entry.lastPointTimestamp) : sample.interval_ms;
+    for (const spec of SERIES) {
+      const series = entry.series[spec.key];
+      const rate = spec.key === "mac"
+        ? (isFresh(lastEmaneSample) ? lastEmaneSample.mac_tx_bytes_per_second : null)
+        : sample[`${spec.key}_bytes_per_second`];
+      if (!Number.isFinite(rate)) {
+        series.label.querySelector(".tp-subplot-average").textContent = "unavailable";
+        continue;
+      }
+      const replaceSeriesPoint = replace && series.lastPointTimestamp === pointTimestamp;
+      pushPoint(series.points, rate, replaceSeriesPoint);
+      pushRateSample(series.samples, rate * intervalMs / 1000, intervalMs, replaceSeriesPoint);
+      series.lastPointTimestamp = pointTimestamp;
+      series.label.querySelector(".tp-subplot-average").textContent =
+        `3s avg ${formatRate(trailingRate(series.samples))}`;
+    }
+    entry.lastPointTimestamp = pointTimestamp;
+    entry.lastPointIntervalMs = intervalMs;
+    if (!replace) globalPointCount++;
+    redraw(entry);
+    syncGraphBottomToPanel();
   }
 
   function connectTrafficWs() {
@@ -384,6 +410,25 @@
     .catch(() => {});
 
   window.addEventListener("resize", syncGraphBottomToPanel);
+  if (infraToggle) {
+    infraToggle.checked = false;
+    infraToggle.addEventListener("change", () => {
+      showInfrastructure = infraToggle.checked;
+      domains.forEach(redraw);
+      renderMacSummary();
+      syncGraphBottomToPanel();
+    });
+  }
+  setInterval(() => {
+    fetch(REST_URL).then(r => r.json()).then(arr => {
+      if (Array.isArray(arr)) arr.forEach(handleTrafficSample);
+    }).catch(error => console.warn("Traffic refresh failed", error));
+    fetch(EMANE_REST_URL).then(r => r.json()).then(handleEmaneSample)
+      .catch(error => console.warn("MAC refresh failed", error));
+    domains.forEach(redraw);
+    renderMacSummary();
+    syncGraphBottomToPanel();
+  }, 2000);
   syncGraphBottomToPanel();
 
   connectTrafficWs();

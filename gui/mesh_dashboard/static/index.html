@@ -110,7 +110,7 @@
   #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; min-height: 440px; }
   /* node detail panel (click a node) */
   #detail { position: fixed; top: 84px; left: 12px; z-index: 11; width: 300px;
-            max-height: calc(100% - 100px); overflow-y: auto; display: none;
+            max-height: calc(100vh - var(--mesh-bottom-inset, 27px) - 116px); overflow-y: auto; display: none;
             background: #1c222c; border: 1px solid #2c3542; border-radius: 6px;
             padding: 12px 14px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
   #detail .detail-title { font-weight: 600; font-size: 13px; margin-bottom: 8px;
@@ -133,7 +133,7 @@
   #detail .detail-section-content { display: none; padding-top: 6px; }
   #detail .detail-section.expanded .detail-section-content { display: block; }
   /* Traffic panel — full-width bottom timeline */
-  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 27px; height: 183px; z-index: 10;
+  #traffic-panel { position: fixed; left: 0; right: 0; bottom: 27px; height: auto; z-index: 10;
             overflow-x: auto; overflow-y: hidden; background: #1c222c;
             border-top: 1px solid #2c3542; display: flex; flex-direction: column; gap: 0;
             box-sizing: border-box; font-size: 12px; }
@@ -149,7 +149,7 @@
             display: flex; justify-content: space-between; }
   #traffic-panel .tp-subplot-average { font-size: 16px; font-weight: 700; }
   #traffic-panel .tp-frame-accounting { color: #8a94a6; font-size: 11px; margin: 2px 0 5px; }
-  #traffic-panel canvas { width: 100%; height: auto; min-height: 0; flex: 1; display: block; border-radius: 3px;
+  #traffic-panel canvas { width: 100%; height: 132px; min-height: 132px; flex: none; display: block; border-radius: 3px;
             background: #181c24; }
   .workspace-panel { display: none; position: absolute; inset: 37px 0 28px; overflow: auto;
                      background: #14181f; padding: 24px; box-sizing: border-box; }
@@ -259,10 +259,49 @@
   .experiment-filters select { margin-left: 6px; background: #1c222c; color: #e6e8eb;
                                border: 1px solid #2c3542; border-radius: 4px; padding: 5px 8px;
                                font-size: 12px; }
+  .delivery-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr);
+                     gap: 24px; max-width: 1384px; margin: 0 auto; align-items: start; }
+  .delivery-content { min-width: 0; }
+  .delivery-sidebar { position: sticky; top: 0; max-height: calc(100vh - 100px); overflow-y: auto; }
+  .delivery-guide, .delivery-config { padding: 16px; background: #1c222c;
+                    border: 1px solid #2c3542; border-radius: 6px;
+                    color: #a7b0c0; font-size: 12px; line-height: 1.5; }
+  .delivery-config { margin-bottom: 12px; overflow-wrap: anywhere; }
+  .delivery-config h2 { margin: 0 0 8px; color: #e6e8eb; font-size: 14px; }
+  .delivery-config p { margin: 0 0 10px; }
+  .delivery-config details { margin-top: 8px; border-top: 1px solid #2c3542; padding-top: 8px; }
+  .delivery-config summary { cursor: pointer; color: #d7efff; }
+  .delivery-config-endpoint { margin-top: 10px; }
+  .delivery-config-endpoint strong { color: #e6e8eb; }
+  .delivery-config dl { margin: 6px 0; display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 5px 6px; }
+  .delivery-config dt { color: #8a94a6; }
+  .delivery-config dd { margin: 0; color: #e6e8eb; }
+  .delivery-topic-filter { position: relative; font-size: 12px; }
+  .delivery-topic-filter > summary { cursor: pointer; padding: 5px 8px; background: #1c222c;
+                                    border: 1px solid #2c3542; border-radius: 4px; }
+  .delivery-topic-menu { position: absolute; z-index: 20; top: 100%; left: 0; width: 260px;
+                         max-width: calc(100vw - 64px); padding: 10px; box-sizing: border-box;
+                         background: #1c222c; border: 1px solid #3c4655; border-radius: 4px; }
+  #delivery-topic-options { max-height: 280px; overflow-y: auto; margin-top: 8px; }
+  #delivery-topic-options label { display: flex; align-items: center; gap: 6px; padding: 4px 0;
+                                  color: #e6e8eb; overflow-wrap: anywhere; }
+  .delivery-topic-menu button { cursor: pointer; padding: 4px 8px; background: #173c59;
+                                color: #d7efff; border: 1px solid #3676a0; border-radius: 4px; }
+  .delivery-guide h2 { margin: 0 0 12px; color: #e6e8eb; font-size: 14px; }
+  .delivery-guide h3 { margin: 16px 0 6px; color: #e6e8eb; font-size: 12px; }
+  .delivery-guide p { margin: 0 0 10px; }
+  .delivery-guide p:last-child { margin-bottom: 0; }
+  .delivery-guide ul { margin: 0 0 10px; padding-left: 18px; }
+  .delivery-guide li { margin: 4px 0; padding: 4px 6px; border-left: 3px solid transparent; }
+  .delivery-guide strong { color: #e6e8eb; }
+  @media (max-width: 900px) {
+    .delivery-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .delivery-sidebar { position: static; max-height: none; overflow-y: visible; }
+  }
   .delivery-table { width: min(1100px, 100%); margin: 0 auto; border-collapse: collapse;
                     background: #1c222c; font-size: 13px; }
   .delivery-table th, .delivery-table td { padding: 11px 12px; border-bottom: 1px solid #2c3542; text-align: right; }
-  .delivery-table th:first-child, .delivery-table td:first-child { text-align: left; }
+  .delivery-table th:first-child, .delivery-table td:first-child { text-align: left; overflow-wrap: anywhere; }
   .delivery-table th { color: #8a94a6; font-size: 11px; font-weight: 600; }
   .delivery-route-group td { padding: 9px 12px; background: #252c37; color: #e6e8eb; text-align: left;
                              font-weight: 600; cursor: pointer; }
@@ -273,6 +312,16 @@
                           border-radius: 6px; color: #a7b0c0; font-size: 12px; line-height: 1.5; }
   .delivery-definitions div + div { margin-top: 4px; }
   .delivery-definitions strong { color: #e6e8eb; }
+  .delivery-reliability-group th { text-align: left; background: #172433; font-size: 13px; color: #d7efff; }
+  .delivery-reliability-group[data-reliability="reliable"] th { background: #203b54; }
+  .delivery-reliability-group[data-reliability="best_effort"] th { background: #20463d; }
+  .delivery-topic-row[data-reliability="reliable"], .delivery-guide li[data-reliability="reliable"] { background: #192c40; }
+  .delivery-topic-row[data-reliability="best_effort"], .delivery-guide li[data-reliability="best_effort"] { background: #18332e; }
+  .delivery-topic-row td:first-child { border-left: 3px solid transparent; }
+  .delivery-topic-row[data-reliability="reliable"] td:first-child,
+  .delivery-guide li[data-reliability="reliable"] { border-left-color: #3aa1e6; }
+  .delivery-topic-row[data-reliability="best_effort"] td:first-child,
+  .delivery-guide li[data-reliability="best_effort"] { border-left-color: #59b8a5; }
   .delivery-topic-row[data-route-group] td:first-child { padding-left: 28px; }
   .delivery-rate { color: #75c991; font-weight: 700; }
   .delivery-rate.warn { color: #e0b84d; }
@@ -287,7 +336,11 @@
   .delivery-comparison-card h2 { margin: 0 0 7px; font-size: 12px; color: #e6e8eb; }
   .delivery-comparison-card p { margin: 0; color: #aeb7c5; font-size: 12px; }
   .delivery-comparison-card strong { color: #e6e8eb; }
-  @media (max-width: 700px) { #delivery-comparison { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) {
+    #delivery-comparison { grid-template-columns: 1fr; }
+    .delivery-topic-filter { width: 100%; }
+    .delivery-topic-menu { width: 100%; max-width: 100%; }
+  }
   .experiment-card { width: min(1100px, 100%); margin: 0 auto; background: #1c222c;
                      border: 1px solid #2c3542; border-radius: 6px; padding: 16px; box-sizing: border-box; }
   .experiment-state { display: inline-flex; align-items: center; gap: 8px; color: #e0b84d;
@@ -333,6 +386,7 @@
 <div id="topology-controls">
   <label><input id="toggle-direct-links" type="checkbox" checked> direct links</label>
   <label><input id="toggle-relayed-links" type="checkbox" checked> relayed links</label>
+  <label><input id="toggle-infrastructure-stats" type="checkbox"> infrastructure stats</label>
 </div>
 <div id="right-panel">
 <div id="legend">
@@ -362,8 +416,50 @@
 <div id="traffic-panel"></div>
 <div id="graph"></div>
 <main id="delivery-panel" class="workspace-panel">
-  <div class="experiment-heading"><h1>Delivery Performance</h1><span id="delivery-window">Rolling 30 s</span></div>
+  <div class="delivery-layout">
+  <aside class="delivery-sidebar">
+  <section class="delivery-config" aria-labelledby="delivery-config-title">
+    <h2 id="delivery-config-title">Configured WAN QoS</h2>
+    <p>Settings loaded from the router configuration at dashboard startup. These do not change captured flow grouping or delivery counts.</p>
+    <p id="delivery-config-status" role="status">Waiting for configuration.</p>
+    <div id="delivery-config-topics"></div>
+  </section>
+  <section class="delivery-guide" aria-labelledby="delivery-guide-title">
+    <h2 id="delivery-guide-title">How to read these counts</h2>
+    <p>These are <strong>rolling 30-second counts</strong>, not cumulative totals.</p>
+    <p>New messages enter as messages older than 30 seconds leave. At a steady message rate, the numbers stay roughly constant. The window slides continuously; it does not reset every 30 seconds.</p>
+    <h3>What does settled mean?</h3>
+    <p>The summary cards show <strong>settled received / settled sent</strong>. A send is settled once its grace period has elapsed:</p>
+    <ul>
+      <li data-reliability="reliable"><strong>Reliable:</strong> 15-second grace.</li>
+      <li data-reliability="best_effort"><strong>Best Effort:</strong> 2-second grace.</li>
+    </ul>
+    <p>For one flow sending once per second, expect roughly <strong>15 settled Reliable</strong> samples or <strong>28 settled Best Effort</strong> samples in the window.</p>
+    <h3>Why can the table differ?</h3>
+    <p>The table's <strong>Received</strong> count also includes newer arrivals still inside the grace period. <strong>Lost</strong> counts only settled samples still missing. A late arrival can reduce that loss count.</p>
+    <h3>What is Avg recovery?</h3>
+    <p>For Reliable topics, this is the average time from <strong>original WAN send to complete WAN receipt</strong> for samples received after a confirmed retry. The number in parentheses is the recovered sample count.</p>
+    <p>First-attempt deliveries and samples still missing are excluded. No confirmed recoveries shows <strong>—</strong>, not zero. Like the counts, it uses the rolling send window.</p>
+  </section>
+  </aside>
+  <div class="delivery-content">
+  <div class="experiment-heading"><h1>WAN Wire Delivery</h1><span id="delivery-window">Rolling 30 s</span></div>
+  <p id="delivery-capture-status" class="delivery-empty">Waiting for WAN interface captures.</p>
   <div class="experiment-filters">
+    <label>Source
+      <select id="delivery-filter-source"><option value="all">All sources</option></select>
+    </label>
+    <label>Destination
+      <select id="delivery-filter-destination"><option value="all">All destinations</option></select>
+    </label>
+    <details class="delivery-topic-filter" id="delivery-topic-filter">
+      <summary id="delivery-topic-filter-label">Topics: All</summary>
+      <div class="delivery-topic-menu">
+        <button type="button" id="delivery-topics-all">Select all</button>
+        <button type="button" id="delivery-topics-clear">Clear</button>
+        <div id="delivery-topic-options"></div>
+      </div>
+    </details>
     <label>Node
       <select id="delivery-filter-node">
         <option value="all">All nodes</option>
@@ -381,23 +477,28 @@
   <div id="delivery-empty" class="delivery-empty">Waiting for status samples.</div>
   <div id="delivery-comparison" aria-live="polite">
     <section class="delivery-comparison-card">
-      <h2>Reliable command / health</h2>
+      <h2>Reliable channels</h2>
       <p id="delivery-reliable-summary">Waiting for settled samples…</p>
     </section>
     <section class="delivery-comparison-card">
-      <h2>Periodic status / report</h2>
+      <h2>Best Effort channels</h2>
       <p id="delivery-periodic-summary">Waiting for settled samples…</p>
     </section>
   </div>
   <table id="delivery-table" class="delivery-table" hidden>
-    <thead><tr><th>Route / topic</th><th>Sent</th><th>Received</th><th>Lost</th></tr></thead>
+    <thead><tr><th>Route / topic</th><th>Sent</th><th>Received</th><th>Lost</th><th>Avg recovery</th></tr></thead>
     <tbody></tbody>
   </table>
   <div class="delivery-definitions">
-    <div><strong>Sent</strong>: messages observed in the rolling window.</div>
-    <div><strong>Received</strong>: messages observed at the expected destination in the rolling window.</div>
-    <div><strong>Lost</strong>: messages older than the grace period that have not been received.</div>
-    <div><strong>Grace period</strong>: 15 s for reliable command/health topics, 2 s for periodic status/report topics.</div>
+    <div><strong>Scope</strong>: passive RTPS observations from the source WAN interface to each destination WAN interface. This is not DDS reader acceptance, LAN forwarding, or application consumption.</div>
+    <div><strong>Sent</strong>: unique complete RTPS data samples first observed leaving the source WAN interface within the rolling window, counted separately per unicast destination node.</div>
+    <div><strong>Received</strong>: those same samples fully observed at that destination WAN interface. Fragments are reassembled; retransmissions and duplicate copies do not increase message counts.</div>
+    <div><strong>Lost</strong>: sent samples not observed complete at the destination after the grace period. A late observation corrects the count while the send remains in the window. Source and destination captures must cover the entire selected window; startup, rotation, restart, or reporting gaps show Unknown until a full clean window is available and are excluded from summary percentages. Undetected capture drops can still mimic network loss.</div>
+    <div><strong>Channel grouping</strong>: writer reliability decoded from DDS discovery, not topic-name guesses. A complete writer discovery record with an omitted reliability parameter uses the standard Reliable default; an explicit Best Effort value overrides it. Missing discovery stays Unknown QoS. Multicast or unmapped destinations are not assigned invented recipients.</div>
+    <div><strong>Grace period</strong>: 15 s for Reliable channels; 2 s for Best Effort and Unknown QoS. These are observation windows, not guarantees of eventual reliable delivery.</div>
+    <div><strong>Avg recovery</strong>: mean original-send-to-complete-receipt time for Reliable samples received after an observed repair request and matching resend at the writer WAN interface. Each sample contributes once, in its original send window, without waiting for the loss grace period. First-attempt deliveries, missing samples, and retries lacking captured request evidence are excluded. Parentheses show the sample count; — means no confirmed recoveries. This includes loss-detection time, not just retransmit latency. Fragmented samples use completion of the full destination sample. Missing capture coverage shows Unknown; separate hosts require synchronized clocks.</div>
+  </div>
+  </div>
   </div>
 </main>
 <main id="experiment-panel" class="workspace-panel">
@@ -460,8 +561,8 @@
 <main id="mission-panel" class="workspace-panel">
   <section class="mission-scenario-bar" aria-label="Scenario controller">
     <strong>Scenario</strong>
-    <button id="mission-target-1" type="button">Activate Target 1</button>
-    <button id="mission-target-2" type="button" disabled>Activate Target 2</button>
+    <button id="mission-target-1" type="button" aria-pressed="false">Target 1: Off</button>
+    <button id="mission-target-2" type="button" aria-pressed="false">Target 2: Off</button>
     <div class="mission-demo-clock">
       <label for="mission-time-scale">Demo time</label>
       <select id="mission-time-scale"><option value="1">1× real time</option><option value="20" selected>20× demo time</option></select>
@@ -503,10 +604,10 @@
   <div id="mission-context" role="menu" hidden></div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
-  <script src="mesh_graph.js?v=20261103-team-icons-v1"></script>
-<script src="traffic_chart.js?v=20260918-shared-wan-scale-v3"></script>
-  <script src="operator_tabs.js?v=20261103-mission-sync-v2"></script>
+  <script src="mesh_graph.js?v=20261105-mission-reporting-v5"></script>
+<script src="traffic_chart.js?v=20261105-aggregate-corrections-v4"></script>
+  <script src="operator_tabs.js?v=20261106-delivery-review-fixes-v1"></script>
 <script src="mission_map.js?v=20261103-coast-v1"></script>
-<script src="mission.js?v=20261104-mission-review-fixes-v3"></script>
+<script src="mission.js?v=20261105-state-and-target-toggles-v4"></script>
 </body>
 </html>

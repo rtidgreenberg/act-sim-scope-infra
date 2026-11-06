@@ -169,9 +169,9 @@
   function render() {
     for (const target of scenarioTargets) {
       const button = document.getElementById(target.id === "target_1" ? "mission-target-1" : "mission-target-2");
-      button.textContent = `Activate ${target.label}`;
-      button.disabled = busy || target.revealed ||
-        (target.id === "target_2" && !scenarioTargets.find((entry) => entry.id === "target_1")?.dispatched);
+      button.textContent = `${target.label}: ${target.revealed ? "On" : "Off"}`;
+      button.setAttribute("aria-pressed", String(Boolean(target.revealed)));
+      button.disabled = busy;
     }
     document.getElementById("mission-setup").hidden = !drafting;
     document.getElementById("mission-loiter-control").hidden = !drafting || !draftTarget;
@@ -181,12 +181,7 @@
     const zoomSelection = document.getElementById("mission-zoom-selection");
     zoomSelection.hidden = !selected.size;
     zoomSelection.disabled = busy;
-    const firstTarget = scenarioTargets.find((target) => target.id === "target_1");
-    const secondTarget = scenarioTargets.find((target) => target.id === "target_2");
-    scenarioStatusEl.textContent = !firstTarget?.revealed ? "Activate Target 1 to display it on the map." :
-      !firstTarget.dispatched ? "Target 1 active. Dispatch a team to unlock Target 2." :
-      !secondTarget?.revealed ? "First team dispatched. Activate Target 2 for another team." :
-      "Both targets active. Choose destinations during mission setup.";
+    scenarioStatusEl.textContent = "Toggle targets on or off to show or hide them. Existing missions are unchanged.";
     if (loaded) {
       targetLayer.replaceChildren();
       for (const target of scenarioTargets.filter((target) => target.revealed)) {
@@ -296,7 +291,7 @@
     timeScaleEl.disabled = busy;
     svg.style.cursor = gesture ? "grabbing" : "grab";
     hintEl.dataset.stage = busy || pending ? "waiting" : validated ? "go" : drafting ? "draft" :
-      replaces ? "running" : selected.size ? "setup" : firstTarget?.revealed ? "select" : "activate";
+      replaces ? "running" : selected.size ? "setup" : scenarioTargets.some((target) => target.revealed) ? "select" : "activate";
     const assignedTeam = actions.fleet.length > 0 && actions.fleet[0].squad &&
       actions.fleet.every((boat) => boat.squad === actions.fleet[0].squad);
     hintEl.textContent = busy ? "Working · Waiting for the current action to finish." :
@@ -305,13 +300,12 @@
       drafting && draftTarget ? "Step 5 · Choose the loiter distance, then Validate. Go starts the team circling the unknown target." :
       drafting && route.length ? "Step 5 · Validate mission to avoid land. Drag a waypoint to edit; right-click to remove." :
       drafting ? "Step 4 · Click the map to place the first waypoint. Choose water, not land." :
-      firstTarget?.dispatched && !secondTarget?.revealed ? "Next · Activate Target 2, then select another team." :
       replaces ? (actions.fleet.every((boat) => boat.mission?.phase === "ORBIT") ? "Loitering" :
         actions.fleet.every((boat) => boat.mission?.phase === "RTB") ? "Returning to base" : "Mission running") +
         " · Right-click to set a replacement mission, cancel, or return to base." :
       (selectedTeam !== null || assignedTeam) && selected.size ? "Step 3 · Right-click → Set mission → Draw waypoints or Select target." :
       selected.size ? "Step 2 · Right-click the selected boats and assign Alpha, Bravo, or Reserve." :
-      !firstTarget?.revealed ? "Start · Activate Target 1 in the Scenario bar to display it." :
+      !scenarioTargets.some((target) => target.revealed) ? "Start · Toggle a target On, or select boats to draw a mission." :
       "Step 1 · Click a boat to select; Shift-click adds or removes boats. Or choose a team. Left-drag pans.";
     planEl.textContent = validated ? `Validated ${draftTarget ? "continuous orbit" : "water route"} · ${validated.plans.reduce((n, plan) => n + plan.waypoints.length, 0)} waypoints · Ready to Go` :
       (drafting ? `Draft · ${draftTarget ? "Target orbit" : `${route.length}/64 destinations`} · ${selected.size} boats · Not validated` :
@@ -569,11 +563,11 @@
   }
 
   async function revealTarget(id) {
-    if (scenarioTargets.find((target) => target.id === id)?.revealed) return;
+    const visible = !scenarioTargets.find((target) => target.id === id)?.revealed;
     busy = true; render();
     try {
-      await request("/api/mission_scenario", { target_id: id });
-      notify("Target ContactReport published. Waiting for DDS reception.");
+      await request("/api/mission_scenario", { target_id: id, visible });
+      notify(`Target ${visible ? "on" : "off"} requested. Waiting for DDS confirmation.`);
       await refresh();
     } catch (error) { notify(`Scenario: ${error.message}`); }
     finally { busy = false; render(); }

@@ -42,7 +42,7 @@ from pathlib import Path
 import rti.connextdds as dds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from conftest import start_router  # noqa: E402
+from conftest import REPO_ROOT, set_wan_qos_env, start_router  # noqa: E402
 from util.dds_probe import Probe, reader_qos  # noqa: E402
 
 MESH_TOPIC = "ActRouterMeshStatus"
@@ -80,10 +80,24 @@ def mesh_reader(probe, provider):
 
 
 def health_reader(probe, provider):
+    qos = dds.QosProvider(str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"))
     return probe.reader(
         HEALTH_TOPIC, "RouterHealth",
-        qos=reader_qos(reliability="reliable", durability="transient_local"),
+        qos=qos.datareader_qos_from_profile("ACT_QOS_LIB::router_health"),
         dtype=provider.type("RouterHealth"))
+
+
+def test_router_health_qos_is_best_effort_without_changing_event_reliability():
+    set_wan_qos_env()
+    provider = dds.QosProvider(str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"))
+    for resolve in (provider.datawriter_qos_from_profile, provider.datareader_qos_from_profile):
+        health = resolve("ACT_QOS_LIB::router_health")
+        assert health.reliability.kind == dds.ReliabilityKind.BEST_EFFORT
+        assert health.history.kind == dds.HistoryKind.KEEP_LAST
+        assert health.history.depth == 1
+        assert health.durability.kind == dds.DurabilityKind.TRANSIENT_LOCAL
+        events = resolve("ACT_QOS_LIB::wan_event")
+        assert events.reliability.kind == dds.ReliabilityKind.RELIABLE
 
 
 def latest_health(reader):
@@ -261,15 +275,9 @@ def test_presence_roster_mesh_dead_and_rejoin(
         # --- E-P3 first (needs the platform router still alive as a bystander): a
         # heartbeat-withholding probe goes STALE, never DEAD, nothing torn down ---
         stale_probe = Probe(wan, spdp2=True)  # WAN domain: router WAN participants are SPDP2 (D94)
-        health_qos = dds.DataWriterQos()
-        health_qos.reliability = dds.Reliability(kind=dds.ReliabilityKind.RELIABLE)
-        health_qos.durability = dds.Durability(
-            kind=dds.DurabilityKind.TRANSIENT_LOCAL)
-        health_qos.deadline = dds.Deadline(
-            period=dds.Duration.from_milliseconds(int(HEALTH_DEADLINE_S * 1000)))
-        health_qos.liveliness = dds.Liveliness(
-            dds.LivelinessKind.AUTOMATIC,
-            dds.Duration.from_milliseconds(int(HEALTH_LEASE_S * 1000)))
+        health_qos = dds.QosProvider(
+            str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml")
+        ).datawriter_qos_from_profile("ACT_QOS_LIB::router_health")
         health_type = provider.type("RouterHealth")
         probe_writer = stale_probe.writer(HEALTH_TOPIC, "RouterHealth",
                                           qos=health_qos, dtype=health_type)

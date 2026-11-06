@@ -230,6 +230,7 @@ do_up() {
         echo "[run_mesh up] launching dashboard (mesh_bridge.py) on port $DASHBOARD_PORT..."
         nohup python3 "$REPO_ROOT/gui/mesh_dashboard/server/mesh_bridge.py" \
             --domain 20 --port "$DASHBOARD_PORT" \
+            --router-config "$REPO_ROOT/router/config/control-platform.yaml" \
             > "$LOG_ROOT/mesh_bridge.log" 2>&1 &
         echo "mesh_bridge $!" >> "$WORKDIR/pids.txt"
         echo "[run_mesh up] dashboard: http://localhost:${DASHBOARD_PORT}/"

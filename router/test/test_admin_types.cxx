@@ -7,6 +7,7 @@
 // vector-like bounded_sequence fields, so access is by field, not fluent accessors.
 
 #include "ActTypes.hpp"
+#include <rti/topic/cdr.hpp>
 
 #include <cstdio>
 #include <string>
@@ -90,6 +91,34 @@ int main() {
     spec.input.filter_parameters.push_back("Platform_30");
     CHECK(spec.topics.size() == 1);
     CHECK(spec.input.filter_parameters.size() == 1);
+
+    RouterHealth health;
+    health.router = "Platform_30/router";
+    health.heartbeat_seq = (std::uint64_t(1) << 40) + 1;
+    RouterCompactRouteHealth compact;
+    compact.route_name = "platform_debug_status";
+    compact.state = RouterRouteOperationalState::ROUTE_ERROR;
+    compact.discovery_state = RouterRouteDiscoveryState::DISCOVERY_READY;
+    compact.samples_forwarded = (std::uint64_t(1) << 40) + 7;
+    health.routes.push_back(compact);
+    for (unsigned int i = 0; i < 70; ++i) {
+        RouterPeerRef peer;
+        peer.router = "Platform_" + std::to_string(i + 30) + "/platform-router";
+        peer.presence = RouterPresenceState::PRESENCE_STALE;
+        peer.last_seen_delta_ms = 12345;
+        health.peers_seen.push_back(peer);
+    }
+    std::vector<char> buffer;
+    rti::topic::to_cdr_buffer(buffer, health);
+    const auto restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
+    CHECK(restored.heartbeat_seq == health.heartbeat_seq);
+    CHECK(restored.routes.at(0).samples_forwarded == compact.samples_forwarded);
+    CHECK(restored.routes.at(0).state == compact.state);
+    CHECK(restored.peers_seen.size() == 70);
+    CHECK(restored.peers_seen.at(69).router == health.peers_seen.at(69).router);
+    CHECK(restored.peers_seen.at(69).presence == RouterPresenceState::PRESENCE_STALE);
+    CHECK(restored.peers_seen.at(69).last_seen_delta_ms == 12345);
+    std::printf("RouterHealth 70-peer CDR size: %zu bytes\n", buffer.size());
 
     if (g_failures == 0) {
         std::printf("test_admin_types: OK\n");

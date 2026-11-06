@@ -32,7 +32,7 @@ from pathlib import Path
 import rti.connextdds as dds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from conftest import CONFIG_DIR, start_router  # noqa: E402
+from conftest import CONFIG_DIR, REPO_ROOT, start_router  # noqa: E402
 from util.dds_probe import (  # noqa: E402
     AdminChannel, COMMAND_KIND, Probe, reader_qos)
 
@@ -67,9 +67,10 @@ def _partition_cmd(command_type, node_name, command_id, kind, partition_name):
 
 
 def health_reader(probe, provider):
+    qos = dds.QosProvider(str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"))
     return probe.reader(
         HEALTH_TOPIC, "RouterHealth",
-        qos=reader_qos(reliability="reliable", durability="transient_local"),
+        qos=qos.datareader_qos_from_profile("ACT_QOS_LIB::router_health"),
         dtype=provider.type("RouterHealth"))
 
 

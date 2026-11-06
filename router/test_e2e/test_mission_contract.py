@@ -316,6 +316,20 @@ def test_invalid_target_shape_is_rejected(mission_modules):
     with pytest.raises(ValueError, match="targets"):
         bridge.validate_mission_request({"operation": "cancel", "targets": [{}]})
 
+@pytest.mark.parametrize("operation", ["cancel", "return_to_base", "set_time_scale", "route"])
+def test_six_platform_command_limit(mission_modules, operation):
+    bridge, simulator = mission_modules
+    body = {"operation": operation, "targets": [f"Platform_{i}" for i in range(30, 36)]}
+    if operation == "set_time_scale":
+        body["time_scale"] = 20
+    elif operation == "route":
+        body["waypoints"] = [[32.74, -117.38]]
+    request = bridge.validate_mission_request(body)
+    assert request["targets"] == body["targets"]
+    assert simulator.parse_mission_payload(request["payload"])["operation"] == operation
+    with pytest.raises(ValueError, match="1 to 6"):
+        bridge.validate_mission_request(dict(body, targets=body["targets"] + ["Platform_36"]))
+
 
 def test_payload_byte_limit(mission_modules):
     _, simulator = mission_modules
@@ -368,6 +382,9 @@ def backend(mission_modules, monkeypatch, tmp_path):
     bridge.audit_sent = {}
     bridge.audit_received = {}
     bridge.audit_versions = {}
+    bridge.wire_delivery = module.WireDelivery()
+    bridge.traffic_cache = {}
+    bridge.traffic_observers = set()
     bridge.control_command_type = None
     bridge.events = []
     bridge.samples = []
@@ -381,7 +398,8 @@ def backend(mission_modules, monkeypatch, tmp_path):
     (directory / "run_id").write_text(bridge.audit_run_id, encoding="utf-8")
     monkeypatch.setattr(bridge, "_mission_audit_path", lambda: directory / "events.jsonl")
     monkeypatch.setattr(bridge, "_active_audit_event_paths",
-                        lambda: [directory / "events.jsonl"] if (directory / "events.jsonl").exists() else [])
+                        lambda filename="events.jsonl": [directory / filename]
+                        if (directory / filename).exists() else [])
     yield bridge
 
 
@@ -529,7 +547,7 @@ def test_real_coastline_detour_and_rtb_use_water_route(backend, mission_modules)
         previous = point
 
 
-def test_register_before_write_ack_correlates_and_audit_matches_delivery(backend):
+def test_register_before_write_ack_correlates_but_lan_audit_is_not_wan_delivery(backend):
     def write(sample):
         command = backend.mission_commands[sample["command_id"]]
         assert command["state"] == "pending"
@@ -552,7 +570,9 @@ def test_register_before_write_ack_correlates_and_audit_matches_delivery(backend
     with backend._mission_audit_path().open("a") as events:
         events.write(json.dumps(received) + "\n")
     backend.poll_audit_events()
-    row = backend.delivery_snapshot()["rows"][0]
+    assert backend.delivery_snapshot()["scope"] == "wan_wire"
+    assert not backend.delivery_snapshot()["rows"]
+    row = backend.application_delivery_snapshot()["rows"][0]
     assert (row["topic"], row["sent"], row["received"], row["lost"]) == ("ControlCommand", 1, 1, 0)
     ack_sent = dict(sent, topic="PlatformCommandAck", source_node="Platform_30",
                     source="Platform_30", destination="Control_20", node="Platform_30")
@@ -560,7 +580,7 @@ def test_register_before_write_ack_correlates_and_audit_matches_delivery(backend
         events.write(json.dumps(ack_sent) + "\n")
         events.write(json.dumps(dict(ack_sent, event="received", node="Control_20")) + "\n")
     backend.poll_audit_events()
-    rows = backend.delivery_snapshot()["rows"]
+    rows = backend.application_delivery_snapshot()["rows"]
     assert [(row["topic"], row["sent"], row["received"]) for row in rows] == [
         ("ControlCommand", 1, 1), ("PlatformCommandAck", 1, 1)]
     assert len(backend.mission_ack_snapshot()["acks"]) == 1
@@ -729,13 +749,13 @@ def test_demo_clock_scales_motion_without_replacing_mission(simulator_state, mis
     assert sim.mission_elapsed_s == pytest.approx(42)
 
 
-def test_scenario_targets_require_dds_reception_and_order(backend, mission_modules):
-    bridge, _ = mission_modules
-    with pytest.raises(bridge.MissionConflict, match="Dispatch"):
-        backend.reveal_scenario_target({"target_id": "target_2"})
+def test_scenario_targets_require_dds_reception_but_are_independent(backend, mission_modules):
+    assert not any(target["revealed"] for target in backend.mission_inventory_snapshot()["scenario_targets"])
+    backend.reveal_scenario_target({"target_id": "target_2"})
+    assert backend.record_scenario_report(backend.scenario_samples[-1])
     backend.reveal_scenario_target({"target_id": "target_1"})
     assert not backend.mission_inventory_snapshot()["scenario_targets"][0]["revealed"]
-    assert backend.record_scenario_report(backend.scenario_samples[0])
+    assert backend.record_scenario_report(backend.scenario_samples[-1])
     assert backend.mission_inventory_snapshot()["scenario_targets"][0]["revealed"]
     plan = backend.validate_mission_plan({"targets": ["Platform_30", "Platform_31"], "target_id": "target_1"})
     assert backend.samples == []
@@ -747,6 +767,112 @@ def test_scenario_targets_require_dds_reception_and_order(backend, mission_modul
     backend.reveal_scenario_target({"target_id": "target_2"})
     assert backend.record_scenario_report(backend.scenario_samples[-1])
     assert all(target["revealed"] for target in backend.mission_inventory_snapshot()["scenario_targets"])
+
+
+def test_target_off_preserves_mission_and_rejects_late_reveal(backend, mission_modules):
+    bridge, _ = mission_modules
+    backend.reveal_scenario_target({"target_id": "target_1", "visible": True})
+    reveal = backend.scenario_samples[-1]
+    backend.record_scenario_report(reveal)
+    plan = backend.validate_mission_plan({"targets": ["Platform_30"], "target_id": "target_1"})
+    backend.write_mission_command({"operation": "route", "plan_id": plan["plan_id"]})
+    commands = dict(backend.mission_commands)
+    backend.reveal_scenario_target({"target_id": "target_1", "visible": False})
+    assert backend.record_scenario_report(backend.scenario_samples[-1])
+    assert not backend.mission_inventory_snapshot()["scenario_targets"][0]["revealed"]
+    assert backend.mission_commands == commands
+    assert not backend.record_scenario_report(reveal)
+    with pytest.raises(bridge.MissionConflict, match="Reveal"):
+        backend.validate_mission_plan({"targets": ["Platform_30"], "target_id": "target_1"})
+    backend.reveal_scenario_target({"target_id": "target_1", "visible": True})
+    assert backend.record_scenario_report(backend.scenario_samples[-1])
+    assert backend.mission_inventory_snapshot()["scenario_targets"][0]["revealed"]
+
+
+@pytest.mark.parametrize("visible", [None, "false", 0])
+def test_target_visibility_requires_boolean(backend, visible):
+    with pytest.raises(ValueError, match="boolean"):
+        backend.reveal_scenario_target({"target_id": "target_1", "visible": visible})
+
+
+def test_command_publication_does_not_preempt_platform_reporting(backend):
+    backend.write_mission_command(route_request())
+    assert backend.samples
+    assert not backend.status_requests
+
+
+@pytest.mark.parametrize("detail,debug,expected", [
+    ("ROUTE_DISABLED", "ROUTE_DISABLED", "init"),
+    ("ROUTE_ENABLED", "ROUTE_DISABLED", "mission"),
+    ("ROUTE_ENABLED", "ROUTE_ENABLED", "debug"),
+])
+def test_reported_route_state_overrides_requested_mode(backend, detail, debug, expected):
+    backend.platform_status_modes["Platform_30"] = "debug"
+    backend.cache["Control_20"]["peers"][0]["health"]["routes"] = [
+        {"route_name": "platform_detail_status", "state": detail},
+        {"route_name": "platform_debug_status", "state": debug},
+    ]
+    assert backend._reported_status_mode("Platform_30") == expected
+
+
+def test_missing_wan_capture_does_not_claim_network_loss(backend):
+    from test_wire_delivery import observation
+    backend.wire_delivery.ingest(observation(timestamp=time.time_ns() - 20_000_000_000))
+    backend._aggregate_traffic_locked = lambda: [{"domain_id": 200, "contributors": ["Control_20"]}]
+    row = backend.delivery_snapshot()["rows"][0]
+    assert row["observed_missing"] == 1
+    assert row["lost"] is None
+    assert not row["percentage_ready"]
+    assert row["loss_percentage"] is None
+    for node in ("Control_20", "Platform_30"):
+        backend.traffic_cache[node, 200] = {
+            "wire_delivery_enabled": True, "capture_status": "live",
+        }
+    backend._aggregate_traffic_locked = lambda: [{
+        "domain_id": 200, "contributors": ["Control_20", "Platform_30"],
+    }]
+    row = backend.delivery_snapshot()["rows"][0]
+    assert not row["coverage_complete"]
+    assert row["lost"] is None
+    for node in ("Control_20", "Platform_30"):
+        backend.traffic_cache[node, 200]["wire_coverage_since_ms"] = time.time() * 1000 - 60_000
+    row = backend.delivery_snapshot()["rows"][0]
+    assert row["coverage_complete"]
+    assert row["lost"] == 1
+
+
+def test_fresh_init_recovers_terminal_mission_and_clears_completed_team_goal(backend):
+    now = time.time_ns()
+    backend.team_missions = {"TEAM_A": {"version": "v1", "goal": {"kind": "waypoints"}}}
+    for node, entry in backend.platform_cache.items():
+        mission_id = "mission-" + node
+        entry["mission"]["PlatformMissionStatus"] = {
+            "mission_id": mission_id, "mission_phase": "TRANSIT", "sent_at_ns": now - 20_000_000_000,
+        }
+        entry["init"]["PlatformInitStatus"].update(
+            mission_id=mission_id, mission_phase="COMPLETE", sent_at_ns=now)
+        backend.team_followers[node] = {"team": "TEAM_A", "version": "v1", "command_id": mission_id}
+        backend.team_memberships[node] = "TEAM_A"
+    assert all(boat["mission"]["phase"] == "COMPLETE"
+               for boat in backend.mission_inventory_snapshot()["platforms"])
+    backend.reconcile_team_missions()
+    assert not backend.team_missions
+    assert not backend.samples
+
+
+def test_new_init_mission_does_not_inherit_previous_mission_progress(backend):
+    entry = backend.platform_cache["Platform_30"]
+    entry["mission"]["PlatformMissionStatus"] = {
+        "mission_id": "previous", "mission_phase": "COMPLETE", "waypoints_total": 12,
+        "waypoint_index": 12, "sent_at_ns": 10,
+    }
+    entry["init"]["PlatformInitStatus"].update(
+        mission_id="current", mission_phase="TRANSIT", sent_at_ns=20)
+    boat = next(boat for boat in backend.mission_inventory_snapshot()["platforms"]
+                if boat["platform"] == "Platform_30")
+    assert boat["mission"]["mission_id"] == "current"
+    assert boat["mission"]["phase"] == "TRANSIT"
+    assert boat["mission"]["waypoints_total"] == 0
 
 
 def test_active_mission_and_scenario_progress_survive_command_history_eviction(backend):

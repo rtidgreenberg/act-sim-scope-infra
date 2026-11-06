@@ -142,11 +142,15 @@ struct FakeStatusPublisher : IStatusPublisher {
 
 struct FakePresencePublisher : IPresencePublisher {
     std::vector<RouterHealth> heartbeats;
+    std::vector<RouterDiagnostics> diagnostics;
 
     void publish_heartbeat(const RouterHealth &heartbeat) override {
         heartbeats.push_back(heartbeat);
     }
     void publish_mesh_tick() override {}
+    void publish_diagnostics(const RouterDiagnostics &snapshot) override {
+        diagnostics.push_back(snapshot);
+    }
 };
 
 // --- Fixture helpers ---
@@ -634,7 +638,9 @@ static void test_error_sticky_until_rearm() {
         FakeEntityFactory factory;
         FakeStatusPublisher status;
         FakePresencePublisher presence;
-        RouterController controller(Fixture::identity(), specs, Fixture::participants(),
+        RouterIdentityInfo identity = Fixture::identity();
+        identity.node_role = "control";
+        RouterController controller(identity, specs, Fixture::participants(),
                     &factory, &status, nullptr, &presence);
         controller.post(ControllerEvent::type_resolved("T"));
         controller.drain();
@@ -652,15 +658,62 @@ static void test_error_sticky_until_rearm() {
         CHECK(heartbeat.overall_state == RouterOverallState::ROUTER_ERROR);
         CHECK(heartbeat.routes.size() == 1);
         CHECK(heartbeat.routes.at(0).route_name == "r");
-        CHECK(heartbeat.routes.at(0).topic_status.size() == 1);
-        CHECK(heartbeat.routes.at(0).topic_status.at(0).topic_state ==
+        CHECK(heartbeat.routes.at(0).state == status.last().routes.at(0).state);
+        CHECK(heartbeat.routes.at(0).discovery_state == status.last().routes.at(0).discovery_state);
+        CHECK(heartbeat.routes.at(0).samples_forwarded == status.last().routes.at(0).samples_forwarded);
+        CHECK(status.last().routes.at(0).topic_status.size() == 1);
+        CHECK(status.last().routes.at(0).topic_status.at(0).topic_state ==
           RouterRouteTopicState::TOPIC_ERROR);
-        CHECK(heartbeat.routes.at(0).topic_status.at(0).last_error ==
+        CHECK(status.last().routes.at(0).topic_status.at(0).last_error ==
+          "Failed to create ContentFilteredTopic");
+        CHECK(presence.diagnostics.size() == 1);
+        CHECK(presence.diagnostics.back().routes.at(0).topic_status.at(0).last_error ==
           "Failed to create ContentFilteredTopic");
     }
 
 // Two-topic route (D11): activate builds both; the route is active as soon as one topic
 // is ready; one topic's failure is contained; route ERROR only when all topics errored.
+static void test_debug_diagnostics_lifecycle() {
+    std::vector<RouterRouteSpec> specs(1, route_spec(
+        "platform_debug_status", false, std::vector<RouterRouteTopicSpec>(1, topic_spec("T"))));
+    FakeEntityFactory factory;
+    FakeStatusPublisher status;
+    FakePresencePublisher presence;
+    RouterController controller(Fixture::identity(), specs, Fixture::participants(),
+                                &factory, &status, nullptr, &presence);
+    auto tick = [&]() {
+        controller.post(ControllerEvent::presence_tick());
+        controller.drain();
+    };
+    tick();
+    CHECK(presence.diagnostics.empty());
+    controller.post(ControllerEvent::command_received(
+        command(RouterCommandKind::ENABLE_ROUTE, "debug-on", "platform_debug_status")));
+    controller.drain();
+    tick();
+    CHECK(presence.diagnostics.size() == 1);
+    CHECK(presence.diagnostics.back().routes.size() == 1);
+    CHECK(presence.diagnostics.back().routes.at(0).desired.desired_enabled);
+    const auto revision = presence.diagnostics.back().state_revision;
+    const auto sequence = presence.diagnostics.back().snapshot_seq;
+    tick();
+    CHECK(presence.diagnostics.back().state_revision == revision);
+    CHECK(presence.diagnostics.back().snapshot_seq > sequence);
+    controller.post(ControllerEvent::command_received(
+        command(RouterCommandKind::DISABLE_ROUTE, "debug-off", "platform_debug_status")));
+    controller.drain();
+    tick();
+    CHECK(presence.diagnostics.size() == 2);
+    CHECK(presence.heartbeats.back().routes.at(0).state ==
+          RouterRouteOperationalState::ROUTE_DISABLED);
+    controller.post(ControllerEvent::command_received(
+        command(RouterCommandKind::ENABLE_ROUTE, "debug-again", "platform_debug_status")));
+    controller.drain();
+    tick();
+    CHECK(presence.diagnostics.size() == 3);
+    CHECK(presence.diagnostics.back().snapshot_seq > sequence + 1);
+}
+
 static void test_per_topic_activation_two_topics() {
     std::vector<RouterRouteTopicSpec> topics;
     topics.push_back(topic_spec("PlatformCommandAck"));
@@ -1146,6 +1199,7 @@ int main() {
     RUN(test_redundant_enable_idempotent_accept);
     RUN(test_error_sticky_until_rearm);
     RUN(test_presence_heartbeat_carries_route_diagnostics);
+    RUN(test_debug_diagnostics_lifecycle);
     RUN(test_per_topic_activation_two_topics);
     RUN(test_endpoint_records_never_drive_teardown);
     RUN(test_auto_route_creates_with_baseline);

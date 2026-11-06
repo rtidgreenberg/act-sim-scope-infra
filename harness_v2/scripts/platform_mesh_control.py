@@ -22,6 +22,7 @@ import argparse
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import rti.connextdds as dds
@@ -40,6 +41,45 @@ REMOVE_PARTICIPANT_PARTITION = 4
 STATUS_INIT = 0
 STATUS_MISSION = 1
 STATUS_DEBUG = 2
+
+
+class MissionReporting:
+    ACTIVE_PHASES = {"TRANSIT", "ORBIT", "RTB", "HOLDING"}
+    TERMINAL_PHASES = {"IDLE", "COMPLETE", "CANCELLED"}
+    FINAL_STATUS_SECONDS = 3.0
+
+    def __init__(self):
+        self.phase = "IDLE"
+        self.debug = False
+        self.final_status_until = 0.0
+        self.mission_id = ""
+
+    def observe(self, phase, now, mission_id=""):
+        if phase not in self.ACTIVE_PHASES | self.TERMINAL_PHASES:
+            raise ValueError(f"unknown mission phase: {phase}")
+        if phase != self.phase or mission_id != self.mission_id:
+            if (phase in self.TERMINAL_PHASES
+                    and (self.phase in self.ACTIVE_PHASES
+                         or (mission_id and mission_id != self.mission_id))):
+                self.final_status_until = now + self.FINAL_STATUS_SECONDS
+            elif phase in self.ACTIVE_PHASES:
+                self.final_status_until = 0.0
+            self.phase = phase
+            self.mission_id = mission_id
+
+    def request(self, mode):
+        if mode not in (STATUS_INIT, STATUS_MISSION, STATUS_DEBUG):
+            raise ValueError(f"unknown status mode: {mode}")
+        # Both legacy non-debug requests release the override and resume automatic mode.
+        self.debug = mode == STATUS_DEBUG
+
+    def mode(self, now):
+        if self.debug:
+            return STATUS_DEBUG
+        if self.phase in self.ACTIVE_PHASES or now < self.final_status_until:
+            return STATUS_MISSION
+        return STATUS_INIT
+
 
 def get_types_xml():
     """Return the committed generated XML type description."""
@@ -116,6 +156,12 @@ def main():
     status_reader = dds.DynamicData.DataReader(
         dds.Subscriber(participant), status_topic, reader_qos)
 
+    mission_topic = dds.DynamicData.Topic(
+        participant, "PlatformMissionStatus", provider.type("platform_mission_status"))
+    mission_reader = dds.DynamicData.DataReader(
+        dds.Subscriber(participant), mission_topic,
+        qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::lan_status"))
+
     # RouterCommand writer (ActRouterCommand — same topic name the router listens on)
     cmd_topic = dds.DynamicData.Topic(participant, "ActRouterCommand",
                                       router_command_type)
@@ -129,6 +175,7 @@ def main():
     # Reaction state
     tracked_team = ""
     tracked_mode = STATUS_INIT
+    reporting = MissionReporting()
     cmd_seq = 0
 
     def make_cmd(kind, partition):
@@ -207,6 +254,8 @@ def main():
     waitset = dds.WaitSet()
     waitset += team_read_condition
     waitset += status_read_condition
+    mission_read_condition = dds.ReadCondition(mission_reader, dds.DataState.any_data)
+    waitset += mission_read_condition
 
     print(f"[platform_mesh_control] {args.node} domain={args.domain} "
           f"router={router_name} — waiting for TeamAssignment samples", flush=True)
@@ -215,7 +264,7 @@ def main():
         try:
             waitset.dispatch(dds.Duration.from_milliseconds(500))
         except dds.TimeoutError:
-            continue
+            pass
 
         for sample in team_reader.take():
             if not sample.info.valid:
@@ -249,15 +298,29 @@ def main():
 
             tracked_team = team_name
 
+        for sample in mission_reader.take():
+            if sample.info.valid and sample.data["source"] == args.node:
+                try:
+                    reporting.observe(sample.data["mission_phase"], time.monotonic(),
+                                      sample.data["mission_id"])
+                except ValueError as exc:
+                    print(f"[platform_mesh_control] {exc}", flush=True)
+
         for sample in status_reader.take():
             if not sample.info.valid:
                 continue
 
             data = sample.data
-            mode = parse_mode(data["resolution_mode"])
-            if mode == tracked_mode:
+            if data["platform_node"] != args.node:
                 continue
+            mode = parse_mode(data["resolution_mode"])
+            try:
+                reporting.request(mode)
+            except ValueError as exc:
+                print(f"[platform_mesh_control] {exc}", flush=True)
 
+        mode = reporting.mode(time.monotonic())
+        if mode != tracked_mode:
             apply_mode(mode)
             tracked_mode = mode
 

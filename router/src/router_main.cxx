@@ -462,7 +462,7 @@ int main(int argc, char **argv) {
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
                     cfg.node_name, cfg.router_name, health_reader_qos, health_writer_qos,
-                    mesh_writer_qos, team_scoped_participant));
+                    mesh_writer_qos, status_writer_qos, team_scoped_participant));
         }
 
         // Phase 9 (D14/D81): link-metrics collector — RouterLinkProbe RTT pair on the
@@ -496,6 +496,13 @@ int main(int argc, char **argv) {
                               &status_pub, &journal_pub, presence.get(),
                               link_stats.get());
         factory.set_controller(&ctrl);
+        if (presence) {
+            // This router owns the producer; its own publication is not rediscovered
+            // through the remote-participant discovery path.
+            types.register_discovered_type("ActRouterDiagnostics",
+                                          rti::topic::dynamic_type<RouterDiagnostics>::get());
+            ctrl.post(ControllerEvent::type_resolved("ActRouterDiagnostics"));
+        }
 
         DiscoveryDispatcher discovery(aws, ctrl, registry, router_identity, types);
 

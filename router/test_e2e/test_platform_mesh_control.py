@@ -6,12 +6,14 @@ commands, which this test verifies through target-router acknowledgements and ro
 """
 
 import os
+import importlib.util
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import rti.connextdds as dds
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import REPO_ROOT, set_wan_qos_env  # noqa: E402
@@ -32,6 +34,67 @@ DEBUG_TOPICS = (
     ("PlatformThrusterStatus", "platform_thruster_status"),
     ("PlatformPowerStatus", "platform_power_status"),
 )
+
+
+@pytest.fixture
+def reporting():
+    spec = importlib.util.spec_from_file_location(
+        "platform_mesh_control_contract",
+        REPO_ROOT / "harness_v2/scripts/platform_mesh_control.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.MissionReporting()
+
+
+@pytest.mark.parametrize("phase", ["TRANSIT", "ORBIT", "RTB", "HOLDING"])
+def test_reporting_follows_active_platform_phase(reporting, phase):
+    assert reporting.mode(10) == 0
+    reporting.observe(phase, 10)
+    assert reporting.mode(10) == 1
+
+
+@pytest.mark.parametrize("terminal", ["COMPLETE", "CANCELLED", "IDLE"])
+def test_reporting_drains_final_status_without_extending_on_repeated_samples(reporting, terminal):
+    reporting.observe("TRANSIT", 10)
+    reporting.observe(terminal, 11)
+    reporting.observe(terminal, 13)
+    assert reporting.mode(13.9) == 1
+    assert reporting.mode(14) == 0
+
+
+def test_reporting_debug_survives_terminal_and_auto_resumes_current_state(reporting):
+    reporting.request(2)
+    reporting.observe("RTB", 10)
+    reporting.observe("COMPLETE", 11)
+    assert reporting.mode(20) == 2
+    reporting.request(0)
+    assert reporting.mode(20) == 0
+    reporting.observe("TRANSIT", 21)
+    reporting.request(2)
+    reporting.request(1)
+    assert reporting.mode(21) == 1
+
+
+def test_reporting_new_mission_cancels_pending_drain(reporting):
+    reporting.observe("TRANSIT", 10)
+    reporting.observe("CANCELLED", 11)
+    reporting.observe("RTB", 12)
+    assert reporting.mode(20) == 1
+
+
+def test_reporting_fast_completion_still_exposes_final_status(reporting):
+    reporting.observe("COMPLETE", 10, "short-mission")
+    reporting.observe("COMPLETE", 11, "short-mission")
+    assert reporting.mode(12.9) == 1
+    assert reporting.mode(13) == 0
+
+
+def test_reporting_rejects_unknown_inputs_without_changing_state(reporting):
+    with pytest.raises(ValueError):
+        reporting.observe("BROKEN", 10)
+    with pytest.raises(ValueError):
+        reporting.request(-1)
+    assert reporting.mode(20) == 0
 
 
 def _start_platform_mesh_control(domains, e2e_tmp_dir):
@@ -101,12 +164,13 @@ def test_dashboard_control_topics_reconfigure_target_platform(
         assert ack is not None and ack["accepted"], (
             f"TeamAssignment did not add the target WAN partition: {ack}; log={log_path}")
 
-        mission = dds.DynamicData(mode_type)
-        mission["platform_node"] = PLATFORM_NODE
-        mission["resolution_mode"] = 1  # STATUS_MISSION
-        mission["request_id"] = "e2e-mission"
+        mission_type = provider.type("platform_mission_status")
+        mission_writer = platform.writer("PlatformMissionStatus", "platform_mission_status", dtype=mission_type)
+        mission = dds.DynamicData(mission_type)
+        mission["source"] = PLATFORM_NODE
+        mission["mission_phase"] = "TRANSIT"
         facts = _write_until_route(
-            mode_writer, mission, platform_admin.status, DETAIL_ROUTE,
+            mission_writer, mission, platform_admin.status, DETAIL_ROUTE,
             lambda state: state["state"] == "ROUTE_ENABLED", alive)
         assert facts is not None and facts["state"] == "ROUTE_ENABLED", (
             f"MISSION did not enable {DETAIL_ROUTE}: {facts}; log={log_path}")
@@ -121,6 +185,8 @@ def test_dashboard_control_topics_reconfigure_target_platform(
         assert facts is not None and facts["state"] == "ROUTE_ENABLED", (
             f"DEBUG did not enable {DEBUG_ROUTE}: {facts}; log={log_path}")
 
+        mission["mission_phase"] = "COMPLETE"
+        mission_writer.write(mission)
         init = dds.DynamicData(mode_type)
         init["platform_node"] = PLATFORM_NODE
         init["resolution_mode"] = 0  # STATUS_INIT

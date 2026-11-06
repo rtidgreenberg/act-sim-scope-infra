@@ -191,7 +191,12 @@ dashboard_environment_yaml() {
 
 traffic_monitor_environment_yaml() {
     [[ "$EMANE_ENABLED" == 1 ]] || return 0
+    local nodes="Control_20=${EMANE_IP[control_20]}" id
+    for id in $(platform_ids); do
+        nodes+=",Platform_${id}=${EMANE_IP[platform_${id}]}"
+    done
     printf '%s\n' '      EMANE_TRAFFIC_MONITOR: "1"' \
+        "      WAN_DELIVERY_NODES: \"$nodes\"" \
         "      MESH_DASHBOARD_URL: http://${EMANE_CONTROL_IP[control_20]}:8080"
 }
 
@@ -400,6 +405,10 @@ up() {
     trap 'compose down --remove-orphans >/dev/null 2>&1 || true' ERR
     wait_for_emane_interfaces
     establish_nominal_rf_links
+    printf 'ready\n' > "$REPO_ROOT/debug/control_20_debug/rf-ready"
+    for id in $(platform_ids); do
+        printf 'ready\n' > "$REPO_ROOT/debug/platform_${id}_debug/rf-ready"
+    done
     release_audit_start
     trap - ERR
     compose ps

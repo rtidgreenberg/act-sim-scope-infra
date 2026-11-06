@@ -44,6 +44,8 @@
   <member name="time_scale" type="float32"/>
   <member name="minimum_separation_m" type="float32"/>
   <member name="navigation_state" stringMaxLength="32" type="string"/>
+  <member name="mission_id" stringMaxLength="64" type="string"/>
+  <member name="mission_phase" stringMaxLength="32" type="string"/>
   <member name="heartbeat_seq" type="uint32"/>
   <member name="timestamp" type="int64"/>
 </struct>
@@ -312,6 +314,20 @@
   <member name="presence" type="nonBasic"  nonBasicTypeName= "RouterPresenceState"/>
   <member name="last_seen_delta_ms" type="int64"/>
 </struct>
+<struct name= "RouterCompactRouteHealth">
+  <member name="route_name" stringMaxLength="255" type="string"/>
+  <member name="state" type="nonBasic"  nonBasicTypeName= "RouterRouteOperationalState"/>
+  <member name="discovery_state" type="nonBasic"  nonBasicTypeName= "RouterRouteDiscoveryState"/>
+  <member name="samples_forwarded" type="uint64"/>
+</struct>
+<struct name= "RouterDiagnostics">
+  <member name="router" stringMaxLength="255" type="string" key="true"/>
+  <member name="config_hash" stringMaxLength="255" type="string"/>
+  <member name="snapshot_seq" type="uint64"/>
+  <member name="send_timestamp" type="int64"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteStatus"/>
+</struct>
 <struct name= "RouterHealth">
   <member name="router" stringMaxLength="255" type="string" key="true"/>
   <member name="role" stringMaxLength="255" type="string"/>
@@ -325,7 +341,7 @@
   <member name="overall_state" type="nonBasic"  nonBasicTypeName= "RouterOverallState"/>
   <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
-  <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterRouteStatus"/>
+  <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterCompactRouteHealth"/>
 </struct>
 <struct name= "RouterMeshPeer">
   <member name="health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>

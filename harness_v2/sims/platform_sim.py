@@ -511,6 +511,8 @@ class PlatformSim:
         sample["time_scale"] = self.time_scale
         sample["minimum_separation_m"] = MIN_BOAT_SEPARATION_M
         sample["navigation_state"] = self.navigation_state
+        sample["mission_id"] = self.mission_id
+        sample["mission_phase"] = self.mission_phase
         sample["heartbeat_seq"] = seq
         sample["run_id"] = RUN_ID
         sample["source_node"] = self.args.source

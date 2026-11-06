@@ -93,6 +93,7 @@ struct IStatusPublisher {
 struct IPresencePublisher {
     virtual ~IPresencePublisher() {}
     virtual void publish_heartbeat(const RouterHealth &hb) = 0;
+    virtual void publish_diagnostics(const RouterDiagnostics &snapshot) = 0;
     virtual void publish_mesh_tick() = 0;
 };
 

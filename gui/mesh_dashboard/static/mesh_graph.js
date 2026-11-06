@@ -193,6 +193,7 @@
   );
   const directLinksToggle = document.getElementById("toggle-direct-links");
   const relayedLinksToggle = document.getElementById("toggle-relayed-links");
+  const infrastructureStatsToggle = document.getElementById("toggle-infrastructure-stats");
 
   // Team filter (interactivity, 2026-07-21): click a team's legend chip to highlight only
   // that team's nodes (others dimmed). Multi-select — click several to widen the set;
@@ -484,6 +485,7 @@
   // Expose for headless Playwright e2e tests (test_team_assignment_e2e.py) — lets
   // page.evaluate() call network.getPositions() / canvasToDOM() to find node coords.
   window.__network = network;
+  infrastructureStatsToggle.addEventListener("change", () => network.redraw());
 
   function updateNodeRate(sample, field, valueField) {
     if (!sample || !sample.observer || !sample.interval_ms) return;
@@ -492,6 +494,8 @@
       : sample[valueField] || 0;
     const rate = bytes * 8 / (sample.interval_ms / 1000);
     const rates = nodeRates.get(sample.observer) || {};
+    if (sample.capture_timestamp <= (rates[`${field}UpdatedAt`] || 0)) return;
+    rates[`${field}UpdatedAt`] = sample.capture_timestamp;
     if (field === "ddsTx" || field === "ddsRx") {
       const sampleField = `${field}Samples`;
       rates[sampleField] = rates[sampleField] || [];
@@ -597,13 +601,16 @@
       ctx.restore();
     });
     nodes.get({ filter: (node) => node.kind === "observer" || node.kind === "peer" }).forEach((node) => {
+      if (!infrastructureStatsToggle.checked) return;
       const rates = nodeRates.get(node.id);
       const position = network.getPositions([node.id])[node.id];
       if (!rates || !position || rates.macTx == null || rates.macRx == null ||
           rates.ddsTx == null || rates.ddsRx == null) return;
+      if (["macTx", "macRx", "ddsTx", "ddsRx"].some(
+          field => Date.now() - rates[`${field}UpdatedAt`] > 5000)) return;
       const lines = [
         `MAC TX/RX ${formatNodeRatePair(rates.macTx, rates.macRx)}`,
-        `DDS TX/RX ${formatNodeRatePair(rates.ddsTx, rates.ddsRx)}`,
+        `RTPS TX/RX ${formatNodeRatePair(rates.ddsTx, rates.ddsRx)}`,
       ];
       ctx.save();
       ctx.font = "10px monospace";
@@ -754,6 +761,31 @@
       `text-transform:uppercase;" title="${safeTitle}">${label}</span>`;
   }
 
+  const routerDiagnosticsCache = new Map();
+  let routerDiagnosticsRequest = 0;
+  async function refreshRouterDiagnostics() {
+    const request = ++routerDiagnosticsRequest;
+    try {
+      const response = await fetch("/api/router_diagnostics");
+      if (!response.ok) throw new Error(`Diagnostics HTTP ${response.status}`);
+      const snapshot = await response.json();
+      if (request !== routerDiagnosticsRequest) return;
+      routerDiagnosticsCache.clear();
+      for (const row of snapshot.rows) routerDiagnosticsCache.set(row.router, row);
+    } catch (error) {
+      if (request !== routerDiagnosticsRequest) return;
+      routerDiagnosticsCache.clear();
+      console.warn("Router diagnostics refresh failed", error);
+    } finally {
+      if (request === routerDiagnosticsRequest && selectedId !== null) renderDetail(selectedId);
+    }
+  }
+  setInterval(() => {
+    if (selectedId !== null) renderDetail(selectedId);
+    refreshRouterDiagnostics();
+  }, 2000);
+  refreshRouterDiagnostics();
+
   function renderPlatformDataSection(nodeId) {
     // Derive badge state from route status in RouterHealth (authoritative, comes over WAN)
     const nodeObj = nodes.get(nodeId);
@@ -801,8 +833,24 @@
 
     // Route detail table (when routes array is available from health)
     if (health && Array.isArray(health.routes) && health.routes.length) {
-      let routeHtml = "";
-      health.routes.forEach((rs) => {
+      const diagnostics = routerDiagnosticsCache.get(health.router);
+      let diagnosticState = diagnostics && diagnostics.state;
+      if (diagnosticState === "live") {
+        if (diagnostics.data.config_hash !== health.config_hash) {
+          diagnosticState = "configuration mismatch";
+        } else if (diagnostics.data.state_revision !== health.state_revision) {
+          diagnosticState = "awaiting matching health revision";
+        } else if (Date.now() - diagnostics.received_at > 5000 ||
+                   Date.now() - diagnostics.data.send_timestamp / 1e6 > 5000) {
+          diagnosticState = "stale";
+        }
+      }
+      const diagnosticRoutes = diagnosticState === "live" ? diagnostics.data.routes : [];
+      let routeHtml = detailRow("full diagnostics",
+        diagnostics ? escHtml(diagnosticState) : "unavailable (enable debug for platform detail)");
+      health.routes.forEach((summary) => {
+        const detail = diagnosticRoutes.find(route => route.route_name === summary.route_name);
+        const rs = {...(detail || {}), ...summary};
         const stateShort = (rs.state || "").replace("ROUTE_", "");
         const fwd = rs.samples_forwarded != null ? rs.samples_forwarded : "?";
         const isUnhealthy = rs.state === "ROUTE_ERROR" || rs.state === "ROUTE_DEGRADED";
@@ -844,6 +892,11 @@
         }
       });
       html += detailSection(nodeId, "route-status", "Route Status", routeHtml);
+      if (diagnosticRoutes.length) {
+        html += detailSection(nodeId, "router-diagnostics", "Full router diagnostics",
+          `<pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;">` +
+          `${escHtml(JSON.stringify(diagnostics.data, null, 2))}</pre>`);
+      }
     }
 
     return html;
@@ -1624,7 +1677,8 @@
       }
 
       if (msg.type === "traffic_node_stats") {
-        updateNodeRate(msg.data, "ddsTx", ["discovery_tx_bytes", "data_tx_bytes"]);
+        if (msg.data.schema_version < 2) return;
+        updateNodeRate(msg.data, "ddsTx", "tx_bytes");
         updateNodeRate(msg.data, "ddsRx", "rx_bytes");
         return;
       }
@@ -1686,7 +1740,7 @@
       body: JSON.stringify(sample),
     }).then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setStatus(`Mode ${platformNode} → ${mode}`);
+      setStatus(`Mode ${platformNode} → ${mode === "debug" ? "Debug" : "Auto (mission state)"}`);
       refreshPlatformStatus(platformNode);
     }).catch((err) => {
       setStatus(`Status mode update failed: ${err}`);
@@ -1796,13 +1850,8 @@
     ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
       publishTeamAssignment(nodeId, "");
     }));
-    ctxMenu.appendChild(ctxItem("Mode: Init", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Auto (Init / Mission)", (nodeId) => {
       publishStatusResolution(nodeId, "init");
-      network.selectNodes([nodeId]);
-      renderDetail(nodeId);
-    }));
-    ctxMenu.appendChild(ctxItem("Mode: Mission", (nodeId) => {
-      publishStatusResolution(nodeId, "mission");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);
     }));
