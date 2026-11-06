@@ -1,20 +1,23 @@
 """Pure accounting regressions; no DDS entities or live network required."""
 
 import json
+import shutil
+import struct
 import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "debug/scripts"))
 sys.path.insert(0, str(ROOT / "gui/mesh_dashboard/server"))
 
 from traffic_accounting import FIELDS, TX_CLASSES, FrameAccounting, classify_packet
-from domain_traffic_monitor import TrafficAccumulator, EmaneSampler, build_port_filter
+from domain_traffic_monitor import (TrafficAccumulator, EmaneSampler, build_port_filter,
+                                   _start_tshark_live, CaptureBatches)
 from traffic_metrics import aggregate, coherent_samples, counter_fields, validate_sample
 
 
@@ -276,6 +279,235 @@ class AccountingTests(unittest.TestCase):
             self.assertAlmostEqual(sample["interval_ms"], 1000)
             self.assertIsNone(sampler.poll())
             self.assertEqual(sampler.poll()["count"], 2)
+
+
+class LiveCaptureTests(unittest.TestCase):
+    header = struct.pack("<IHHIIII", 0xa1b2c3d4, 2, 4, 0, 0, 262144, 1)
+
+    @staticmethod
+    def record(line):
+        payload = line.encode()
+        return struct.pack("<IIII", 100, 0, len(payload), len(payload)) + payload
+
+    @staticmethod
+    def decode(command, **kwargs):
+        data = kwargs["input"][24:]
+        rows = []
+        while data:
+            length = struct.unpack_from("<I", data, 8)[0]
+            rows.append(data[16:16 + length] + f'|"{len(rows) + 1}"\n'.encode())
+            data = data[16 + length:]
+        return Mock(returncode=0, stdout=b"".join(rows), stderr=b"")
+
+    def run_capture(self, chunks, stop_on_eof=True, decoder_error=None, exit_code=0):
+        self.stop = threading.Event()
+        self.accumulator = TrafficAccumulator(start_ms=100000)
+        self.capture = Mock(stdout=Mock(), poll=Mock(return_value=None),
+                            wait=Mock(return_value=0))
+        self.commands = []
+        self.error_files = []
+        chunks = iter(chunks)
+
+        def spawn(command, **kwargs):
+            self.commands.append(command)
+            self.error_files.append(kwargs["stderr"])
+            if len(self.commands) > 1:
+                raise AssertionError("Capture restarted")
+            kwargs["stderr"].write("Capturing on 'test'\n")
+            kwargs["stderr"].flush()
+            return self.capture
+
+        def decode(command, **kwargs):
+            if decoder_error:
+                raise decoder_error
+            result = self.decode(command, **kwargs)
+            result.returncode = exit_code
+            return result
+
+        def read(fd, size):
+            chunk = next(chunks)
+            if not chunk and stop_on_eof:
+                self.stop.set()
+            return chunk
+
+        with tempfile.TemporaryDirectory() as work, \
+             patch("domain_traffic_monitor.time.time", return_value=100.1), \
+             patch("domain_traffic_monitor.subprocess.Popen", side_effect=spawn), \
+             patch("domain_traffic_monitor.subprocess.run", side_effect=decode) as runner, \
+             patch("domain_traffic_monitor.CAPTURE_BATCH_PACKETS", 1), \
+             patch("domain_traffic_monitor.select.select",
+                   return_value=([self.capture.stdout], [], [])), \
+             patch("domain_traffic_monitor.os.read", side_effect=read):
+            _start_tshark_live("test", "udp portrange 57400-57649",
+                               self.accumulator, self.stop, {"10.0.0.1"}, [200],
+                               Path(work) / "topics.json", Path(work) / "ready")
+            self.decoder_calls = runner.call_args_list
+
+    def test_continuous_pipe_preserves_rows_past_multiple_former_rotation_periods(self):
+        rows = [self.record(frame(**{"frame.time_epoch": timestamp}))
+                for timestamp in ("100.1", "401.1", "702.1")]
+        self.run_capture([self.header[:10], self.header[10:] + rows[0][:20],
+                          rows[0][20:] + rows[1], rows[2], b""])
+        self.assertEqual([command[0] for command in self.commands], ["dumpcap"])
+        self.assertEqual(self.commands[0][-2:], ["-w", "-"])
+        self.assertNotIn("-a", self.commands[0])
+        self.assertNotIn("-b", self.commands[0])
+        self.assertIn("-P", self.commands[0])
+        self.assertEqual(len(self.decoder_calls), 3)
+        for call in self.decoder_calls:
+            self.assertEqual(call.args[0][:3], ["tshark", "-r", "-"])
+            self.assertEqual(call.kwargs["timeout"], 5)
+        self.assertEqual(self.accumulator.capture_restarts, 0)
+        self.assertEqual(self.accumulator.capture_status, "live")
+        self.assertEqual(self.accumulator.drain()[200]["tx_bytes"], 360)
+        self.capture.terminate.assert_called_once()
+        self.capture.wait.assert_called_once()
+        self.capture.stdout.close.assert_called_once()
+        self.assertTrue(all(file.closed for file in self.error_files))
+
+    def test_unexpected_clean_eof_is_an_explicit_failure_not_a_silent_restart(self):
+        with self.assertRaisesRegex(RuntimeError, "dumpcap exited unexpectedly"):
+            self.run_capture([b""], stop_on_eof=False)
+        self.capture.terminate.assert_called_once()
+        self.assertTrue(all(file.closed for file in self.error_files))
+
+    def test_decoder_failure_surfaces_status_and_cleans_up_capture(self):
+        with self.assertRaisesRegex(RuntimeError, "tshark batch failed.*2"):
+            self.run_capture([self.header + self.record(frame())], exit_code=2)
+        self.capture.terminate.assert_called_once()
+        self.assertTrue(all(file.closed for file in self.error_files))
+
+    def test_decoder_start_failure_still_reaps_capture(self):
+        with self.assertRaisesRegex(OSError, "missing decoder"):
+            self.run_capture([self.header + self.record(frame())],
+                             decoder_error=OSError("missing decoder"))
+        self.capture.terminate.assert_called_once()
+        self.capture.wait.assert_called_once()
+        self.capture.stdout.close.assert_called()
+        self.assertTrue(all(file.closed for file in self.error_files))
+
+    def test_invalid_capture_header_and_oversized_records_fail_explicitly(self):
+        for data in (b"x" * 24, self.header + struct.pack("<IIII", 100, 0, 262145, 262145)):
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError):
+                    self.run_capture([data])
+                self.capture.terminate.assert_called_once()
+
+
+class CaptureBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.accumulator = TrafficAccumulator()
+        self.accounting = FrameAccounting([200], {"10.0.0.1"}, self.accumulator)
+        self.batches = CaptureBatches(LiveCaptureTests.header, self.accounting)
+
+    def test_ip_fragments_replay_without_double_counting_across_decoder_batches(self):
+        first = frame(**{
+            "frame.time_epoch": "100.1", "frame.len": "1514", "ip.flags.mf": "1",
+            "rtps.guidPrefix.src": "", "udp.dstport": "",
+            "data.data": (b"\0\0" + (57400).to_bytes(2, "big") + b"\0" * 4 + b"RTPS").hex(),
+        })
+        last = frame(**{
+            "frame.time_epoch": "101.1", "frame.len": "398", "ip.frag_offset": "1480",
+        })
+        with patch("domain_traffic_monitor.time.time", return_value=101.2), \
+             patch("domain_traffic_monitor.subprocess.run",
+                   side_effect=LiveCaptureTests.decode) as runner:
+            self.batches.decode([(0, LiveCaptureTests.record(first))])
+            self.assertEqual(len(self.batches.replay()), 1)
+            self.batches.decode([(1, LiveCaptureTests.record(last))])
+        self.assertIn(LiveCaptureTests.record(first), runner.call_args.kwargs["input"])
+        self.assertFalse(self.batches.replay())
+        counts = self.accumulator.drain()[200]
+        self.assertEqual(counts["tx_packets"], 2)
+        self.assertEqual(counts["tx_bytes"], 1912)
+        self.assertEqual(counts["incomplete_fragment_packets"], 0)
+
+    def test_fragmented_discovery_replays_until_complete(self):
+        from test_wire_delivery import message, metadata
+        payload = metadata(topic="RouterHealth")
+        size = len(payload)
+        with patch("domain_traffic_monitor.time.time", return_value=100.2), \
+             patch("domain_traffic_monitor.subprocess.run", side_effect=LiveCaptureTests.decode):
+            for number in (1, 2):
+                fragment_size = (size + 1) // 2
+                part = payload[(number - 1) * fragment_size:number * fragment_size]
+                line = frame(**{
+                    "rtps.sm.wrEntityId": "000003c2", "rtps.sm.id": "0x16",
+                    "udp.payload": message(payload=part, writer=bytes.fromhex("000003c2"),
+                                           fragment=(number, 1, fragment_size, size)).hex(),
+                })
+                self.batches.decode([(number, LiveCaptureTests.record(line))])
+                self.assertEqual(bool(self.batches.replay()), number == 1)
+        self.assertEqual(self.accumulator.drain()[200]["tx_packets"], 2)
+
+    def test_replay_budget_and_expiry_are_explicit(self):
+        self.batches.discovery_fragments["sample"] = {
+            "at": 100, "records": {0: b"xx"}, "parts": {1}}
+        with patch("domain_traffic_monitor.CAPTURE_REPLAY_BYTES", 1):
+            with self.assertRaisesRegex(RuntimeError, "replay memory limit"):
+                self.batches.replay()
+        with patch("domain_traffic_monitor.time.time", return_value=161):
+            self.batches.prune()
+        self.assertFalse(self.batches.replay())
+
+    def test_missing_decoded_frames_fail_instead_of_reporting_success(self):
+        with patch("domain_traffic_monitor.subprocess.run",
+                   return_value=Mock(returncode=0, stdout=b"", stderr=b"")):
+            with self.assertRaisesRegex(RuntimeError, "every captured frame"):
+                self.batches.decode([(0, LiveCaptureTests.record(frame()))])
+
+
+@unittest.skipUnless(shutil.which("tshark"), "tshark is required for offline decoder verification")
+class NativeCaptureBatchTests(unittest.TestCase):
+    @staticmethod
+    def packet(payload, timestamp, *, offset=0, more=False, ident=1):
+        ip = struct.pack(
+            "!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), ident,
+            (0x2000 if more else 0) | (offset // 8), 64, 17, 0,
+            b"\x0a\0\0\1", b"\x0a\0\0\2")
+        packet = b"\0" * 12 + b"\x08\0" + ip + payload
+        return struct.pack("<IIII", timestamp, 0, len(packet), len(packet)) + packet
+
+    @staticmethod
+    def udp(payload):
+        return struct.pack("!HHHH", 57411, 57411, len(payload) + 8, 0) + payload
+
+    def test_reordered_duplicate_ip_fragments_span_real_decoder_sessions(self):
+        from test_wire_delivery import message
+        for order in ((0, 1), (1, 0), (0, 0, 1)):
+            with self.subTest(order=order):
+                accumulator = TrafficAccumulator()
+                accounting = FrameAccounting([200], {"10.0.0.1"}, accumulator)
+                batches = CaptureBatches(LiveCaptureTests.header, accounting)
+                raw = self.udp(message(payload=b"\0\1\0\0" + b"x" * 600))
+                now = int(time.time())
+                fragments = (
+                    self.packet(raw[:400], now, more=True),
+                    self.packet(raw[400:], now, offset=400))
+                for number, index in enumerate(order):
+                    batches.decode([(number, fragments[index])])
+                counts = accumulator.drain()[200]
+                self.assertEqual(counts["tx_packets"], len(order))
+                self.assertEqual(counts["tx_bytes"], sum(len(fragments[i]) - 16 for i in order))
+                self.assertEqual(counts["incomplete_fragment_packets"], 0)
+                self.assertFalse(batches.replay())
+
+    def test_fragmented_sedp_keeps_topic_learning_across_real_decoder_sessions(self):
+        from test_wire_delivery import message, metadata, GUID
+        accumulator = TrafficAccumulator()
+        accounting = FrameAccounting([200], {"10.0.0.1"}, accumulator)
+        batches = CaptureBatches(LiveCaptureTests.header, accounting)
+        payload = metadata(topic="RouterHealth")
+        fragment_size = (len(payload) + 1) // 2
+        for index in (0, 1):
+            sample = message(
+                writer=bytes.fromhex("000003c2"),
+                payload=payload[index * fragment_size:(index + 1) * fragment_size],
+                fragment=(index + 1, 1, fragment_size, len(payload)))
+            batches.decode([(index, self.packet(self.udp(sample), int(time.time()), ident=index))])
+        self.assertEqual(accounting.topics["200:" + GUID]["topic"], "RouterHealth")
+        self.assertEqual(accumulator.drain()[200]["tx_packets"], 2)
+        self.assertFalse(batches.replay())
 
 
 class AggregateTests(unittest.TestCase):

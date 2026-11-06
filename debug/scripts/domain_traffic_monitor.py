@@ -25,7 +25,7 @@ Entity-ID classification (last byte = entity kind):
   0x02 = user-defined writer with key -> data
   0x03 = user-defined writer without key -> data
 
-Requires: tshark (unprivileged on this VM via cap_net_raw on dumpcap).
+Requires: tshark and dumpcap (unprivileged on this VM via cap_net_raw on dumpcap).
 
 Usage:
     python3 debug/scripts/domain_traffic_monitor.py [--domains 200] [--interval 2]
@@ -41,6 +41,7 @@ import os
 import re
 import select
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -51,7 +52,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from traffic_accounting import (FrameAccounting, TX_CLASSES, classify_packet,
                                 empty_counters, tshark_fields)
-from rtps_delivery import WireCapture
+from rtps_delivery import WireCapture, submessages
 
 # ── RTPS port-mapping constants (OMG interoperable defaults) ──
 PB = 7400   # port base
@@ -69,6 +70,10 @@ DISCOVERY_WRITER_ENTITY_KINDS = {0xc2, 0xc3}
 RELIABILITY_SUBMESSAGE_IDS = {0x06, 0x07, 0x08, 0x12, 0x13}
 DEFAULT_OUTPUT = (Path(__file__).resolve().parents[2] / "debug" / "logs"
                   / "network_monitor" / "traffic_stats.jsonl")
+CAPTURE_BATCH_SECONDS = 1
+CAPTURE_BATCH_PACKETS = 2048
+CAPTURE_BATCH_BYTES = 2 * 1024 * 1024
+CAPTURE_REPLAY_BYTES = 16 * 1024 * 1024
 
 
 def port_to_domain(port: int) -> Optional[int]:
@@ -270,67 +275,166 @@ def build_port_filter(domain_ids: List[int], max_participants: int = 32) -> str:
     return f"ip proto 17 and ((udp and ({clauses})) or (ip[6:2] & 0x1fff != 0))"
 
 
+class CaptureBatches:
+    """Replay only unfinished reassembly state into finite decoder sessions."""
+
+    def __init__(self, header, accounting):
+        self.header = header
+        self.accounting = accounting
+        self.ip_fragments = {}
+        self.discovery_fragments = {}
+
+    def prune(self):
+        self.ip_fragments = {key: records for key, records in self.ip_fragments.items()
+                             if key in self.accounting.fragments}
+        now = time.time()
+        self.discovery_fragments = {
+            key: group for key, group in self.discovery_fragments.items()
+            if now - group["at"] <= 60}
+
+    def replay(self):
+        records = dict(record for group in self.ip_fragments.values() for record in group)
+        for group in self.discovery_fragments.values():
+            records.update(group["records"])
+        if sum(len(record) for record in records.values()) > CAPTURE_REPLAY_BYTES:
+            raise RuntimeError("Unfinished capture fragments exceed the replay memory limit")
+        return sorted(records.items())
+
+    def decode(self, records):
+        self.accounting.expire(time.time())
+        self.prune()
+        prefix = self.replay()
+        result = subprocess.run(
+            ["tshark", "-r", "-", "-o", "rtps.enable_rtps_reassembly:TRUE"] +
+            tshark_fields() + ["-e", "frame.number"],
+            input=self.header + b"".join(record for _, record in prefix + records),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"tshark batch failed (status {result.returncode}): "
+                f"{result.stderr[-4000:].decode('utf-8', errors='replace')}")
+        lines = result.stdout.splitlines()
+        if len(lines) != len(prefix) + len(records):
+            raise RuntimeError("tshark batch did not decode every captured frame")
+        for number, line in enumerate(lines, 1):
+            fields, ordinal = line.rsplit(b"|", 1)
+            if int(ordinal.strip(b'"')) != number:
+                raise RuntimeError("tshark batch returned unexpected frame ordering")
+            if number <= len(prefix):
+                continue
+            record = records[number - len(prefix) - 1]
+            try:
+                row = self.accounting.process(fields.decode("utf-8"))
+            except ValueError as exc:
+                try:
+                    timestamp_ms = int(float(fields.split(b"|", 1)[0].strip(b'"')) * 1000)
+                except (ValueError, OverflowError):
+                    timestamp_ms = None
+                self.accounting.accumulator.note_invalid_row(timestamp_ms)
+                print(f"[traffic-monitor] invalid capture row: {exc}", file=sys.stderr)
+                continue
+            if not row:
+                continue
+            datagram = [record]
+            if row["ip.flags.mf"] == "1" or int(row["ip.frag_offset"] or 0) > 0:
+                key = (row["ip.src"], row["ip.dst"], row["ip.id"])
+                datagram = self.ip_fragments.setdefault(key, [])
+                datagram.append(record)
+                if key not in self.accounting.fragments:
+                    del self.ip_fragments[key]
+            if not row["rtps.guidPrefix.src"] or not row["udp.payload"]:
+                continue
+            domain = (int(row["udp.dstport"]) - PB) // DG
+            for item in submessages(bytes.fromhex(row["udp.payload"].replace(":", ""))):
+                if "first" not in item or int(item["writer_guid"][-2:], 16) not in (0xc2, 0xc3):
+                    continue
+                key = (domain, row["ip.src"], row["ip.dst"], item["writer_guid"], item["sequence"])
+                group = self.discovery_fragments.setdefault(key, {
+                    "at": float(row["frame.time_epoch"]), "parts": set(), "records": {},
+                    "size": item["sample_size"], "fragment_size": item["fragment_size"]})
+                if (group["size"], group["fragment_size"]) != (item["sample_size"], item["fragment_size"]):
+                    raise ValueError("Inconsistent discovery DATA_FRAG dimensions")
+                group["records"].update(datagram)
+                group["parts"].update(range(item["first"], item["first"] + item["count"]))
+                total = (group["size"] + group["fragment_size"] - 1) // group["fragment_size"]
+                if len(group["parts"]) == total:
+                    del self.discovery_fragments[key]
+        self.prune()
+        self.replay()
+
+
 def _start_tshark_live(interface: str, bpf_filter: str, accumulator: TrafficAccumulator,
                        stop_event: threading.Event, local_ips: set[str],
                        domain_ids: List[int], topic_cache: Path, ready_file: Optional[Path],
-                       wire_capture=None, capture_duration_s=300):
-    """Run tshark in live capture mode, parsing RTPS fields and feeding the accumulator."""
-    if capture_duration_s <= 0:
-        raise ValueError("Capture duration must be positive")
-    cmd = [
-        "tshark", "-i", interface, "-l",   # -l = line-buffered
-        "-a", f"duration:{capture_duration_s}",
-        "-f", bpf_filter,                  # BPF capture filter
-    ] + tshark_fields()
+                       wire_capture=None):
+    """Keep capture continuous while bounding each decoder's packet history."""
+    capture_cmd = ["dumpcap", "-i", interface, "-P", "-q", "-f", bpf_filter, "-w", "-"]
     accounting = FrameAccounting(domain_ids, local_ips, accumulator, topic_cache, wire_capture)
-    while not stop_event.is_set():
-        with tempfile.TemporaryFile(mode="w+t") as errors:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors, bufsize=0)
-            pending = b""
-            try:
-                while not stop_event.is_set():
-                    diagnostic = os.pread(errors.fileno(), 16384, 0).decode("utf-8", errors="replace")
-                    if "Capturing on" in diagnostic:
-                        accumulator.set_capture_status("live", int(time.time() * 1000))
-                        if ready_file and not ready_file.exists():
-                            ready_file.write_text("ready\n")
-                    accounting.expire(time.time())
-                    readable, _, _ = select.select([proc.stdout], [], [], 0.2)
-                    if not readable:
-                        if proc.poll() is not None:
-                            break
-                        continue
-                    chunk = os.read(proc.stdout.fileno(), 65536)
+    with tempfile.TemporaryFile(mode="w+t", dir="/tmp") as errors:
+        capture = subprocess.Popen(capture_cmd, stdout=subprocess.PIPE,
+                                   stderr=errors, bufsize=0)
+        try:
+            pending = bytearray()
+            decoder = None
+            endian = None
+            packets, packet_bytes, sequence = [], 0, 0
+            batch_started = time.monotonic()
+            while not stop_event.is_set():
+                diagnostic = os.pread(errors.fileno(), 16384, 0).decode("utf-8", errors="replace")
+                if decoder and "Capturing on" in diagnostic:
+                    accumulator.set_capture_status("live", int(time.time() * 1000))
+                    if ready_file and not ready_file.exists():
+                        ready_file.write_text("ready\n")
+                accounting.expire(time.time())
+                readable, _, _ = select.select([capture.stdout], [], [], 0.1)
+                if readable:
+                    chunk = os.read(capture.stdout.fileno(), 65536)
                     if not chunk:
+                        if stop_event.is_set():
+                            break
+                        errors.seek(0)
+                        raise RuntimeError(
+                            f"dumpcap exited unexpectedly (status {capture.poll()}): "
+                            f"{errors.read()[-4000:]}")
+                    pending.extend(chunk)
+                elif capture.poll() is not None:
+                    raise RuntimeError(f"dumpcap exited unexpectedly (status {capture.returncode})")
+                if decoder is None and len(pending) >= 24:
+                    header = bytes(pending[:24])
+                    endian = {b"\xd4\xc3\xb2\xa1": "<", b"\x4d\x3c\xb2\xa1": "<",
+                              b"\xa1\xb2\xc3\xd4": ">", b"\xa1\xb2\x3c\x4d": ">"}.get(header[:4])
+                    if endian is None or struct.unpack_from(endian + "HH", header, 4) != (2, 4):
+                        raise ValueError("Unsupported dumpcap PCAP header")
+                    decoder = CaptureBatches(header, accounting)
+                    del pending[:24]
+                while decoder and len(pending) >= 16:
+                    size = struct.unpack_from(endian + "I", pending, 8)[0]
+                    if size > 262144:
+                        raise ValueError("Captured frame exceeds PCAP memory limit")
+                    if len(pending) < 16 + size:
                         break
-                    pending += chunk
-                    lines = pending.split(b"\n")
-                    pending = lines.pop()
-                    for line in lines:
-                        try:
-                            accounting.process(line.decode("utf-8"))
-                        except ValueError as exc:
-                            try:
-                                captured_at = float(line.split(b"|", 1)[0].strip(b'"'))
-                                timestamp_ms = int(captured_at * 1000)
-                            except (ValueError, OverflowError):
-                                timestamp_ms = None
-                            accumulator.note_invalid_row(timestamp_ms)
-                            print(f"[traffic-monitor] invalid capture row: {exc}", file=sys.stderr)
-                if not stop_event.is_set() and proc.wait(timeout=3) != 0:
-                    errors.seek(0)
-                    raise RuntimeError(f"tshark failed: {errors.read()[-4000:]}")
-            finally:
-                if proc.poll() is None:
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                accounting.save_topics()
-            accumulator.capture_restarts += 1
-            accumulator.set_capture_status("restarting", int(time.time() * 1000))
+                    packets.append((sequence, bytes(pending[:16 + size])))
+                    sequence += 1
+                    packet_bytes += 16 + size
+                    del pending[:16 + size]
+                    if len(packets) >= CAPTURE_BATCH_PACKETS or packet_bytes >= CAPTURE_BATCH_BYTES:
+                        decoder.decode(packets)
+                        packets, packet_bytes = [], 0
+                        batch_started = time.monotonic()
+                if packets and time.monotonic() - batch_started >= CAPTURE_BATCH_SECONDS:
+                    decoder.decode(packets)
+                    packets, packet_bytes = [], 0
+                    batch_started = time.monotonic()
+        finally:
+            if capture.poll() is None:
+                capture.terminate()
+            try:
+                capture.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                capture.kill()
+                capture.wait()
+            capture.stdout.close()
+            accounting.save_topics()
 
 
 def _post_stats(url: str, payload: List[dict]) -> bool:
@@ -559,7 +663,7 @@ def main():
         if "output" in locals():
             output.close()
         stop_event.set()
-        capture_thread.join(timeout=5)
+        capture_thread.join()
         if wire_capture and not capture_thread.is_alive():
             wire_capture.close()
         print("[traffic-monitor] Done.")

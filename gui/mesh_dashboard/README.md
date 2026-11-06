@@ -166,6 +166,32 @@ not the time tshark finishes decoding it. Reporting waits two seconds for decodi
 and holds windows containing unresolved IP fragments until reassembly/expiry.
 Late rows are explicitly counted and invalidate rates rather than being moved
 into the next interval. Every window intersecting a capture restart is flagged.
+Capture runs continuously through an owned `dumpcap` pipe, without five-minute
+capture restarts or raw capture files accumulating on disk. Finite `tshark`
+sessions decode batches after one second, 2,048 packets, or 2 MiB, whichever comes
+first, so decoder history cannot grow with run duration. Unfinished IPv4 fragments
+and fragmented SEDP samples are replayed into the next session; replay rows never
+enter accounting or delivery events twice. The replay budget is 16 MiB; exceeding
+it fails capture explicitly rather than silently discarding reassembly state.
+Decoder timeouts/failures and missing output rows are explicit capture failures.
+All children and pipes are reaped before monitor shutdown completes.
+Initial continuous-pipe verification on 2026-11-06 crossed the former five-minute restart boundary:
+all seven nodes retained their capture/decoder processes, with zero restarts and
+no gaps in 370–372 settled one-second windows per node. A 315-second browser/API
+check found no unavailable network rates, all six peers healthy, and no browser
+errors. See the [retained continuity report](../../debug/test_reports/capture-continuity-after-20261106.json).
+That initial check did not test long-run decoder memory. The bounded-session
+follow-up processed 480,000 offline frames with exact byte/packet conservation:
+parent RSS stabilized at approximately 26 MiB and peak decoder RSS stayed below
+145 MiB, instead of accumulating per-packet state throughout the run. Offline
+regressions also verify reordered/duplicate IPv4 fragments and fragmented SEDP
+across real decoder sessions.
+After deployment, all seven nodes retained their capture/monitor processes with
+195–196 consecutive settled windows and no gaps or late rows. Monitor RSS stayed
+approximately 23–25 MiB during the 135-second live browser/API check; all six peers
+remained healthy and every sampled network rate was valid. See the
+[memory stress report](../../debug/test_reports/bounded-decoder-memory-20261106.json)
+and [live verification](../../debug/test_reports/bounded-decoder-live-20261106.json).
 Node and chart averages require three contiguous seconds of valid capture coverage;
 gaps, restarts, invalid rows, stale sources, and incomplete network coverage clear
 the average and show unavailable/warming instead of a depressed rate. Graph lines

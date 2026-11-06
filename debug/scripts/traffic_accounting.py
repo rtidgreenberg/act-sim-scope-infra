@@ -170,6 +170,7 @@ class FrameAccounting:
             self.save_topics()
 
     def process(self, line):
+        """Account a frame and return its normalized UDP fields for replay tracking."""
         parts = next(csv.reader([line], delimiter="|"))
         if len(parts) != len(FIELDS):
             raise ValueError("unexpected tshark field count")
@@ -206,12 +207,12 @@ class FrameAccounting:
                 if len(payload) >= 12 and payload[8:12] == b"RTPS":
                     group["domain"] = (int.from_bytes(payload[2:4], "big") - 7400) // 250
             if not row["rtps.guidPrefix.src"]:
-                return
+                return row
         if domain not in self.domains or not row["rtps.guidPrefix.src"]:
             if group:
                 self.fragments.pop(key)
                 self.accumulator.release_fragment(key)
-            return
+            return row
         self._learn(domain, row["rtps.param.endpoint_guid"], row["rtps.param.topicName"], timestamp)
         frame_class = classify_packet(row["rtps.sm.wrEntityId"], row["rtps.sm.id"])
         tx_class = self._tx_class(domain, row["rtps.guidPrefix.src"],
@@ -223,3 +224,4 @@ class FrameAccounting:
             self.accumulator.release_fragment(key)
         if self.wire_capture:
             self.wire_capture.process(row, domain)
+        return row
