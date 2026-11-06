@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "gui/mesh_dashboard/server"))
 
 from traffic_accounting import FIELDS, TX_CLASSES, FrameAccounting, classify_packet
 from domain_traffic_monitor import TrafficAccumulator, EmaneSampler, build_port_filter
-from traffic_metrics import aggregate, counter_fields, validate_sample
+from traffic_metrics import aggregate, coherent_samples, counter_fields, validate_sample
 
 
 PREFIX = "0102030405060708090a0b0c"
@@ -160,6 +160,69 @@ class AccountingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Invalid topic cache"):
                     FrameAccounting([200], {"10.0.0.1"}, self.accumulator, path)
 
+    def test_capture_time_windows_do_not_move_a_delayed_burst(self):
+        accumulator = TrafficAccumulator(start_ms=100000)
+        parser = FrameAccounting([200], {"10.0.0.1"}, accumulator)
+        with patch("traffic_accounting.time.time", return_value=102.8):
+            for timestamp in ("100.010", "100.990", "101.010"):
+                parser.process(frame(**{"frame.time_epoch": timestamp}))
+        self.assertEqual(accumulator.drain_ready(102999), [])
+        first = accumulator.drain_ready(103000)
+        self.assertEqual(len(first), 1)
+        counters, metadata = first[0]
+        self.assertEqual(counters[200]["tx_bytes"], 240)
+        self.assertEqual(metadata["capture_timestamp"], 101000)
+        self.assertEqual(metadata["capture_window_start_ms"], 100000)
+        self.assertEqual(metadata["interval_ms"], 1000)
+        self.assertEqual(metadata["reported_at_ms"], 103000)
+        second = accumulator.drain_ready(104000)
+        self.assertEqual(second[0][0][200]["tx_bytes"], 120)
+
+    def test_fragment_frames_keep_their_own_windows_and_delay_finalization(self):
+        accumulator = TrafficAccumulator(start_ms=100000)
+        parser = FrameAccounting([200], {"10.0.0.1"}, accumulator)
+        payload = (b"\x00\x00" + (57400).to_bytes(2, "big") + b"\x00" * 4 + b"RTPS").hex()
+        parser.process(frame(**{
+            "frame.time_epoch": "100.9", "frame.len": "1514", "ip.flags.mf": "1",
+            "rtps.guidPrefix.src": "", "udp.dstport": "", "data.data": payload,
+        }))
+        self.assertEqual(accumulator.drain_ready(103000), [])
+        parser.process(frame(**{
+            "frame.time_epoch": "101.1", "frame.len": "398", "ip.frag_offset": "1480",
+        }))
+        first = accumulator.drain_ready(103000)
+        second = accumulator.drain_ready(104000)
+        self.assertEqual(first[0][0][200]["tx_bytes"], 1514)
+        self.assertEqual(second[0][0][200]["tx_bytes"], 398)
+        self.assertFalse(accumulator.pending_fragments)
+
+    def test_late_frames_invalidate_rates_instead_of_polluting_the_next_window(self):
+        accumulator = TrafficAccumulator(start_ms=100000)
+        parser = FrameAccounting([200], {"10.0.0.1"}, accumulator)
+        accumulator.drain_ready(103000)
+        parser.process(frame(**{"frame.time_epoch": "100.99"}))
+        counters, metadata = accumulator.drain_ready(104000)[0]
+        self.assertEqual(counters, {})
+        self.assertFalse(metadata["capture_timing_valid"])
+        self.assertEqual(metadata["late_capture_packets_interval"], 1)
+        self.assertTrue(accumulator.drain_ready(105000)[0][1]["capture_timing_valid"])
+
+    def test_restart_marks_every_intersected_window_and_then_recovers(self):
+        accumulator = TrafficAccumulator(start_ms=100000)
+        accumulator.set_capture_status("live", 100100)
+        accumulator.set_capture_status("restarting", 101500)
+        accumulator.set_capture_status("live", 102200)
+        windows = accumulator.drain_ready(106000)
+        self.assertEqual([metadata["capture_gap"] for _, metadata in windows],
+                         [True, True, True, False])
+
+    def test_invalid_decoded_row_marks_its_capture_window_not_an_earlier_report(self):
+        accumulator = TrafficAccumulator(start_ms=100000)
+        accumulator.note_invalid_row(101500)
+        self.assertEqual(accumulator.drain_ready(103000)[0][1]["capture_invalid_rows_interval"], 0)
+        self.assertEqual(accumulator.drain_ready(104000)[0][1]["capture_invalid_rows_interval"], 1)
+        self.assertEqual(accumulator.drain_ready(105000)[0][1]["capture_invalid_rows_interval"], 0)
+
     def test_mac_sampler_uses_own_interval_and_rebaselines_reset(self):
         with patch("domain_traffic_monitor.read_emane_mac_counters",
                    side_effect=[{"count": 5}, {"count": 8}, {"count": 2}, {"count": 4}]), \
@@ -175,6 +238,47 @@ class AccountingTests(unittest.TestCase):
 
 
 class AggregateTests(unittest.TestCase):
+    def capture_sample(self, observer, end=10000):
+        sample = self.sample(observer, 1000)
+        sample.update(schema_version=3, capture_timestamp=end,
+                      capture_window_start_ms=end - 1000, reported_at_ms=end + 2000,
+                      timestamp_basis="capture", capture_timing_valid=True,
+                      capture_invalid_rows_interval=0, late_capture_packets_interval=0,
+                      orphan_fragment_packets_interval=0)
+        return sample
+
+    def test_capture_time_metadata_is_validated_and_report_time_controls_freshness(self):
+        sample = self.capture_sample("a")
+        validate_sample(sample)
+        self.assertTrue(aggregate({"a": sample}, ["a"], now_ms=16000)["complete"])
+        for field, value in (("capture_window_start_ms", 8000), ("timestamp_basis", "processing"),
+                             ("reported_at_ms", 9999), ("capture_timing_valid", "true"),
+                             ("late_capture_packets_interval", -1)):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_sample(dict(sample, **{field: value}))
+
+    def test_network_rates_use_the_latest_shared_capture_window(self):
+        a = self.capture_sample("a")
+        b = self.capture_sample("b")
+        newer = self.capture_sample("a", end=11000)
+        newer["application_tx_bytes"] = 9000
+        samples = {"a": newer, "b": b}
+        unaligned = aggregate(samples, ["a", "b"], now_ms=13000)
+        self.assertFalse(unaligned["complete"])
+        aligned = coherent_samples(samples, ["a", "b"], {"a": [a, newer], "b": [b]}, now_ms=13000)
+        result = aggregate(aligned, ["a", "b"], now_ms=13000)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["capture_timestamp"], 10000)
+        self.assertEqual(result["application_tx_bytes_per_second"], 2000)
+
+    def test_late_capture_rows_are_not_healthy_and_orphan_errors_can_recover(self):
+        sample = self.capture_sample("a")
+        sample["capture_timing_valid"] = False
+        self.assertFalse(aggregate({"a": sample}, ["a"], now_ms=13000)["capture_complete"])
+        sample.update(capture_timing_valid=True, orphan_fragment_packets=5,
+                      orphan_fragment_packets_interval=0)
+        self.assertTrue(aggregate({"a": sample}, ["a"], now_ms=13000)["capture_complete"])
+
     def sample(self, observer, interval, count=1000, mac=False):
         sample = dict.fromkeys(counter_fields(mac), 0)
         sample.update(observer=observer, interval_ms=interval, capture_timestamp=10000,

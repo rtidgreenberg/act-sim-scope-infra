@@ -43,11 +43,11 @@ except ModuleNotFoundError as exc:
     from gui.mesh_dashboard.server.wire_delivery import WireDelivery
     from gui.mesh_dashboard.server.delivery_config import load_delivery_config
 try:
-    from traffic_metrics import aggregate as aggregate_metrics, validate_sample
+    from traffic_metrics import aggregate as aggregate_metrics, coherent_samples, validate_sample
 except ModuleNotFoundError as exc:
     if exc.name != "traffic_metrics":
         raise
-    from gui.mesh_dashboard.server.traffic_metrics import aggregate as aggregate_metrics, validate_sample
+    from gui.mesh_dashboard.server.traffic_metrics import aggregate as aggregate_metrics, coherent_samples, validate_sample
 import rti.connextdds as dds
 try:
     from mission_planning import WaterPlanner, SQUADS, launch_position_for, SCENARIO_TARGETS, orbit_points, LOITER_RADII_M, DEFAULT_LOITER_RADIUS_M
@@ -277,6 +277,7 @@ class DdsBridge:
             self.platform_readers.append((level, topic_name, reader))
 
         self.traffic_cache = {}  # (observer, domain_id) -> latest sample dict
+        self.traffic_history = {}  # (observer, domain_id) -> bounded capture-window history
         self.traffic_observers = set(traffic_observers or [])
         self.traffic_published_at = {}  # (observer, domain_id) -> timestamp in last aggregate
         self.latest_traffic_aggregate = []
@@ -688,7 +689,9 @@ class DdsBridge:
                 and sample.get("capture_status") == "live"
                 and not sample.get("capture_invalid_rows_interval",
                                    sample.get("capture_invalid_rows", 0))
-                and not sample.get("capture_gap", False))
+                and not sample.get("capture_gap", False)
+                and sample.get("capture_timing_valid", True)
+                and not sample.get("late_capture_packets_interval", 0))
 
     def delivery_snapshot(self, window_ms=30_000):
         with self.cache_lock:
@@ -792,8 +795,13 @@ class DdsBridge:
         domains = {}
         for sample in self.traffic_cache.values():
             domains.setdefault(sample["domain_id"], {})[sample["observer"]] = sample
-        return [dict(aggregate_metrics(samples, self.traffic_observers), domain_id=domain)
-                for domain, samples in sorted(domains.items())]
+        result = []
+        for domain, samples in sorted(domains.items()):
+            if all(sample.get("schema_version", 1) >= 3 for sample in samples.values()):
+                samples = coherent_samples(samples, self.traffic_observers, {
+                    name: self.traffic_history.get((name, domain), []) for name in samples})
+            result.append(dict(aggregate_metrics(samples, self.traffic_observers), domain_id=domain))
+        return result
 
     def _aggregate_emane_locked(self):
         return aggregate_metrics(self.emane_cache, self.traffic_observers, mac=True)
@@ -808,9 +816,9 @@ class DdsBridge:
                 return None
             invalid_rows = sample.get("capture_invalid_rows", 0)
             previous_invalid_rows = previous.get("capture_invalid_rows", 0)
-            sample = dict(sample, capture_invalid_rows_interval=(
+            sample = dict(sample, capture_invalid_rows_interval=sample.get("capture_invalid_rows_interval", (
                 invalid_rows - previous_invalid_rows
-                if invalid_rows >= previous_invalid_rows else invalid_rows))
+                if invalid_rows >= previous_invalid_rows else invalid_rows)))
             coverage_since = None
             if self._wire_capture_healthy(sample):
                 coverage_since = sample["capture_timestamp"]
@@ -824,6 +832,10 @@ class DdsBridge:
                     coverage_since = previous["wire_coverage_since_ms"]
             sample = dict(sample, wire_coverage_since_ms=coverage_since)
             self.traffic_cache[(observer, domain_id)] = sample
+            if sample.get("schema_version", 1) >= 3:
+                history = self.traffic_history.setdefault((observer, domain_id), [])
+                history.append(sample)
+                del history[:-8]
             current = next(row for row in self._aggregate_traffic_locked() if row["domain_id"] == domain_id)
             observers = current["contributors"]
             keys = {(name, domain_id) for name in observers}
@@ -834,8 +846,9 @@ class DdsBridge:
                 return None
             self.latest_traffic_aggregate = self._aggregate_traffic_locked()
             for key in keys:
-                self.traffic_published_at[key] = self.traffic_cache[key].get(
-                    "capture_timestamp", 0)
+                self.traffic_published_at[key] = (
+                    current["capture_timestamp"] if current["schema_version"] >= 3
+                    else self.traffic_cache[key].get("capture_timestamp", 0))
             return list(self.latest_traffic_aggregate)
 
     def update_emane(self, sample):

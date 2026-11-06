@@ -4,6 +4,7 @@ import ast
 import json
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -689,6 +690,58 @@ class ProductionTestQosTests(unittest.TestCase):
 
 
 class WireBridgeTests(unittest.TestCase):
+    def test_package_import_aggregates_capture_windows(self):
+        self.make_bridge()
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", """
+import sys
+import time
+sys.path.insert(0, sys.argv[1])
+from gui.mesh_dashboard.server.mesh_bridge import DdsBridge
+from gui.mesh_dashboard.server.traffic_metrics import counter_fields
+
+now = int(time.time() * 1000)
+sample = dict(dict.fromkeys(counter_fields(), 0), observer="Control_20", domain_id=200,
+              schema_version=3, capture_timestamp=now - 2000, interval_ms=1000,
+              capture_window_start_ms=now - 3000, reported_at_ms=now,
+              timestamp_basis="capture", capture_timing_valid=True,
+              capture_status="live", application_tx_bytes=100)
+bridge = DdsBridge.__new__(DdsBridge)
+bridge.traffic_cache = {("Control_20", 200): sample}
+bridge.traffic_history = {("Control_20", 200): [sample]}
+bridge.traffic_observers = {"Control_20"}
+aggregate = bridge._aggregate_traffic_locked()[0]
+assert aggregate["complete"] and aggregate["windows_aligned"], aggregate
+assert aggregate["application_tx_bytes_per_second"] == 100, aggregate
+""", str(ROOT)],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_asynchronous_capture_windows_are_aggregated_without_mixing_intervals(self):
+        bridge = self.make_bridge()
+        from traffic_metrics import counter_fields
+        now = int(time.time() * 1000)
+
+        def sample(node, end, count):
+            return dict(dict.fromkeys(counter_fields(), 0), observer=node, domain_id=200,
+                        schema_version=3, capture_timestamp=end, interval_ms=1000,
+                        capture_window_start_ms=end - 1000, reported_at_ms=now,
+                        timestamp_basis="capture", capture_timing_valid=True,
+                        capture_status="live", capture_invalid_rows_interval=0,
+                        late_capture_packets_interval=0, orphan_fragment_packets_interval=0,
+                        application_tx_bytes=count)
+
+        bridge.update_traffic(sample("Control_20", now - 3000, 100))
+        bridge.update_traffic(sample("Platform_30", now - 3000, 200))
+        bridge.update_traffic(sample("Control_20", now - 2000, 9000))
+        pending = bridge._aggregate_traffic_locked()[0]
+        self.assertTrue(pending["complete"])
+        self.assertEqual(pending["application_tx_bytes_per_second"], 300)
+        bridge.update_traffic(sample("Platform_30", now - 2000, 400))
+        complete = bridge._aggregate_traffic_locked()[0]
+        self.assertTrue(complete["windows_aligned"])
+        self.assertEqual(complete["application_tx_bytes_per_second"], 9400)
+
     def make_bridge(self):
         try:
             import rti.connextdds
@@ -701,6 +754,7 @@ class WireBridgeTests(unittest.TestCase):
         bridge.cache_lock = threading.RLock()
         bridge.cache = {}
         bridge.traffic_cache = {}
+        bridge.traffic_history = {}
         bridge.traffic_observers = {"Control_20", "Platform_30"}
         bridge.traffic_published_at = {}
         bridge.latest_traffic_aggregate = []

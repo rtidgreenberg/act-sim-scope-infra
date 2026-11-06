@@ -119,10 +119,24 @@ def interface_ipv4_addresses(interface: str) -> set[str]:
 class TrafficAccumulator:
     """Accumulates packet counts/bytes per domain, per traffic class."""
 
-    def __init__(self):
+    def __init__(self, interval_ms=1000, start_ms=None, settle_ms=2000):
+        if interval_ms < 1 or settle_ms < 0:
+            raise ValueError("Invalid capture window or settling period")
         self.lock = threading.Lock()
-        # domain_id -> byte/packet counters for mutually exclusive frame classes.
-        self.stats: Dict[int, Dict[str, int]] = {}
+        self.interval_ms = interval_ms
+        self.settle_ms = settle_ms
+        self.next_window = start_ms // interval_ms * interval_ms if start_ms is not None else None
+        self.closed_before = self.next_window
+        self.windows = {}
+        self.pending_fragments = {}
+        self.gap_windows = set()
+        self.gap_started = start_ms
+        self.late_packets = 0
+        self.previous_late_packets = 0
+        self.invalid_windows = {}
+        self.unassigned_invalid_rows = 0
+        self.previous_unassigned_invalid_rows = 0
+        self.previous_orphan_packets = 0
         self.capture_status = "starting"
         self.capture_error = None
         self.capture_restarts = 0
@@ -131,16 +145,53 @@ class TrafficAccumulator:
         self.orphan_fragment_packets = 0
         self.orphan_fragment_bytes = 0
 
-    def _ensure_domain(self, domain_id: int):
-        if domain_id not in self.stats:
-            self.stats[domain_id] = empty_counters()
+    def set_capture_status(self, status, now_ms):
+        with self.lock:
+            if status == self.capture_status:
+                return
+            if status == "live":
+                start = self.gap_started if self.gap_started is not None else now_ms
+                first = int(start) // self.interval_ms * self.interval_ms
+                self.gap_windows.update(range(first, int(now_ms) + 1, self.interval_ms))
+                self.gap_started = None
+            elif self.gap_started is None:
+                self.gap_started = now_ms
+            self.capture_status = status
+            self.capture_gap_at_ms = now_ms
+
+    def hold_fragment(self, key, timestamp_ms):
+        with self.lock:
+            self.pending_fragments.setdefault(key, timestamp_ms)
+
+    def release_fragment(self, key):
+        with self.lock:
+            self.pending_fragments.pop(key, None)
+
+    def note_invalid_row(self, timestamp_ms=None):
+        with self.lock:
+            self.capture_invalid_rows += 1
+            if timestamp_ms is None:
+                self.unassigned_invalid_rows += 1
+                return
+            window = int(timestamp_ms) // self.interval_ms * self.interval_ms
+            if self.closed_before is not None and window < self.closed_before:
+                self.late_packets += 1
+            else:
+                self.invalid_windows[window] = self.invalid_windows.get(window, 0) + 1
 
     def add_packet(self, domain_id: int, frame_len: int, traffic_class: str,
                    is_local_transmit: bool, tx_class: str, packet_count: int = 1,
-                   incomplete: bool = False):
+                   incomplete: bool = False, *, timestamp_ms):
         with self.lock:
-            self._ensure_domain(domain_id)
-            s = self.stats[domain_id]
+            window = int(timestamp_ms) // self.interval_ms * self.interval_ms
+            if self.next_window is None or (self.closed_before is None and window < self.next_window):
+                self.next_window = window
+            if self.closed_before is not None and window < self.closed_before:
+                self.late_packets += packet_count
+                print(f"[traffic-monitor] late frame for closed capture window {window}",
+                      file=sys.stderr)
+                return
+            s = self.windows.setdefault(window, {}).setdefault(domain_id, empty_counters())
             s["total_packets"] += packet_count
             s["total_bytes"] += frame_len
             s[f"{traffic_class}_packets"] += packet_count
@@ -161,11 +212,52 @@ class TrafficAccumulator:
                 s["incomplete_fragment_bytes"] += frame_len
 
     def drain(self) -> Dict[int, Dict[str, int]]:
-        """Return and reset all accumulated stats."""
+        """Return all pending counts, for offline accounting checks."""
         with self.lock:
-            snapshot = self.stats
-            self.stats = {}
+            snapshot = {}
+            for domains in self.windows.values():
+                for domain, counters in domains.items():
+                    target = snapshot.setdefault(domain, empty_counters())
+                    for field, value in counters.items():
+                        target[field] += value
+            self.windows.clear()
             return snapshot
+
+    def drain_ready(self, now_ms):
+        """Close capture-time windows only after decoding and reassembly settle."""
+        with self.lock:
+            cutoff = min([now_ms - self.settle_ms, *self.pending_fragments.values()])
+            late = self.late_packets - self.previous_late_packets
+            invalid = self.unassigned_invalid_rows - self.previous_unassigned_invalid_rows
+            orphans = self.orphan_fragment_packets - self.previous_orphan_packets
+            result = []
+            while self.next_window is not None and self.next_window + self.interval_ms <= cutoff:
+                start, end = self.next_window, self.next_window + self.interval_ms
+                gap = start in self.gap_windows or (
+                    self.gap_started is not None and end > self.gap_started)
+                result.append((self.windows.pop(start, {}), {
+                    "schema_version": 3, "capture_timestamp": end,
+                    "capture_window_start_ms": start, "interval_ms": self.interval_ms,
+                    "reported_at_ms": now_ms, "finalization_delay_ms": now_ms - end,
+                    "timestamp_basis": "capture", "capture_timing_valid": late == 0,
+                    "capture_status": self.capture_status, "capture_gap": gap,
+                    "capture_restarts": self.capture_restarts,
+                    "capture_invalid_rows": self.capture_invalid_rows,
+                    "capture_invalid_rows_interval": invalid + self.invalid_windows.pop(start, 0),
+                    "late_capture_packets": self.late_packets,
+                    "late_capture_packets_interval": late,
+                    "orphan_fragment_packets": self.orphan_fragment_packets,
+                    "orphan_fragment_packets_interval": orphans,
+                    "orphan_fragment_bytes": self.orphan_fragment_bytes,
+                }))
+                self.gap_windows.discard(start)
+                self.next_window = end
+                self.closed_before = end
+            if result:
+                self.previous_late_packets = self.late_packets
+                self.previous_unassigned_invalid_rows = self.unassigned_invalid_rows
+                self.previous_orphan_packets = self.orphan_fragment_packets
+            return result
 
 
 def build_port_filter(domain_ids: List[int], max_participants: int = 32) -> str:
@@ -181,11 +273,13 @@ def build_port_filter(domain_ids: List[int], max_participants: int = 32) -> str:
 def _start_tshark_live(interface: str, bpf_filter: str, accumulator: TrafficAccumulator,
                        stop_event: threading.Event, local_ips: set[str],
                        domain_ids: List[int], topic_cache: Path, ready_file: Optional[Path],
-                       wire_capture=None):
+                       wire_capture=None, capture_duration_s=300):
     """Run tshark in live capture mode, parsing RTPS fields and feeding the accumulator."""
+    if capture_duration_s <= 0:
+        raise ValueError("Capture duration must be positive")
     cmd = [
         "tshark", "-i", interface, "-l",   # -l = line-buffered
-        "-a", "duration:300",
+        "-a", f"duration:{capture_duration_s}",
         "-f", bpf_filter,                  # BPF capture filter
     ] + tshark_fields()
     accounting = FrameAccounting(domain_ids, local_ips, accumulator, topic_cache, wire_capture)
@@ -197,9 +291,7 @@ def _start_tshark_live(interface: str, bpf_filter: str, accumulator: TrafficAccu
                 while not stop_event.is_set():
                     diagnostic = os.pread(errors.fileno(), 16384, 0).decode("utf-8", errors="replace")
                     if "Capturing on" in diagnostic:
-                        if accumulator.capture_status == "restarting":
-                            accumulator.capture_gap_at_ms = int(time.time() * 1000)
-                        accumulator.capture_status = "live"
+                        accumulator.set_capture_status("live", int(time.time() * 1000))
                         if ready_file and not ready_file.exists():
                             ready_file.write_text("ready\n")
                     accounting.expire(time.time())
@@ -218,7 +310,12 @@ def _start_tshark_live(interface: str, bpf_filter: str, accumulator: TrafficAccu
                         try:
                             accounting.process(line.decode("utf-8"))
                         except ValueError as exc:
-                            accumulator.capture_invalid_rows += 1
+                            try:
+                                captured_at = float(line.split(b"|", 1)[0].strip(b'"'))
+                                timestamp_ms = int(captured_at * 1000)
+                            except (ValueError, OverflowError):
+                                timestamp_ms = None
+                            accumulator.note_invalid_row(timestamp_ms)
                             print(f"[traffic-monitor] invalid capture row: {exc}", file=sys.stderr)
                 if not stop_event.is_set() and proc.wait(timeout=3) != 0:
                     errors.seek(0)
@@ -233,8 +330,7 @@ def _start_tshark_live(interface: str, bpf_filter: str, accumulator: TrafficAccu
                     proc.wait()
                 accounting.save_topics()
             accumulator.capture_restarts += 1
-            accumulator.capture_gap_at_ms = int(time.time() * 1000)
-            accumulator.capture_status = "restarting"
+            accumulator.set_capture_status("restarting", int(time.time() * 1000))
 
 
 def _post_stats(url: str, payload: List[dict]) -> bool:
@@ -369,7 +465,8 @@ def main():
         print(f"  domain {d}: ports {base}..{min(65535, base + DG - 1)}")
 
     # ── Set up tshark capture thread ──
-    accumulator = TrafficAccumulator()
+    accumulator = TrafficAccumulator(
+        interval_ms=max(1, round(args.interval * 1000)), start_ms=int(time.time() * 1000))
     stop_event = threading.Event()
     bpf_filter = build_port_filter(domain_ids, args.max_participants)
     local_ips = interface_ipv4_addresses(args.interface)
@@ -397,7 +494,7 @@ def main():
                 args.ready_file, wire_capture)
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
             accumulator.capture_error = str(exc)
-            accumulator.capture_status = "failed"
+            accumulator.set_capture_status("failed", int(time.time() * 1000))
             print(f"[traffic-monitor] capture failed: {exc}", file=sys.stderr)
             stop_event.set()
 
@@ -417,40 +514,27 @@ def main():
     emane_sampler = EmaneSampler(args.emane_nem_id, observer)
     if args.emane_nem_id is not None:
         emane_sampler.poll()
-    previous_sample_at = time.monotonic()
     print("[traffic-monitor] Running (no DDS participant — pure tshark + HTTP). Ctrl+C to stop.")
     try:
         output = args.output.open("a", encoding="utf-8")
         while not stop_event.is_set():
             stop_event.wait(args.interval)
-            snapshot = accumulator.drain()
-            sample_at = time.monotonic()
-            interval_ms = max(1, round((sample_at - previous_sample_at) * 1000))
-            previous_sample_at = sample_at
             now_ms = int(time.time() * 1000)
 
             # Build a batch of samples (one per monitored domain)
             batch = []
-            for d in domain_ids:
-                s = snapshot.get(d, empty_counters())
-                batch.append({
-                    "schema_version": 2,
-                    "domain_id": d,
-                    "observer": observer,
-                    "capture_timestamp": now_ms,
-                    "interval_ms": interval_ms,
-                    "capture_status": accumulator.capture_status,
-                    "capture_restarts": accumulator.capture_restarts,
-                    "capture_invalid_rows": accumulator.capture_invalid_rows,
-                    "capture_gap": accumulator.capture_gap_at_ms >= now_ms - interval_ms,
-                    "kernel_drop_count": None,
-                    "orphan_fragment_packets": accumulator.orphan_fragment_packets,
-                    "orphan_fragment_bytes": accumulator.orphan_fragment_bytes,
-                    "wire_delivery_enabled": wire_capture is not None,
-                    "wire_incomplete_fragments": wire_capture.incomplete_fragments if wire_capture else 0,
-                    "wire_unknown_destinations": wire_capture.unknown_destinations if wire_capture else 0,
-                    **s,
-                })
+            for snapshot, metadata in accumulator.drain_ready(now_ms):
+                for d in domain_ids:
+                    batch.append({
+                        **metadata,
+                        "domain_id": d,
+                        "observer": observer,
+                        "kernel_drop_count": None,
+                        "wire_delivery_enabled": wire_capture is not None,
+                        "wire_incomplete_fragments": wire_capture.incomplete_fragments if wire_capture else 0,
+                        "wire_unknown_destinations": wire_capture.unknown_destinations if wire_capture else 0,
+                        **snapshot.get(d, empty_counters()),
+                    })
 
             posted = _post_stats(post_url, batch)
             emane_sample = None

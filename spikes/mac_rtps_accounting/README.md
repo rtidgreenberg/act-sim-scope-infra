@@ -171,3 +171,25 @@ Retained evidence:
 - [Browser reconciliation](../../debug/test_reports/mac-rtps-browser-20261106.json)
 - [Browser screenshot](../../debug/test_reports/mac-rtps-browser-20261106.png)
 - [Post-QoS fleet report](../../debug/test_reports/mac-rtps-post-qos-20261106.json)
+
+### Capture-time correction verification (2026-11-06)
+
+The processing-time and ten-report-average limitations above describe the earlier
+schema-2 monitor. Schema 3 bins frames by capture timestamp, waits two seconds
+before closing a window, and holds pending fragment windows until resolution.
+Frames decoded after a window has already closed invalidate rates explicitly.
+Capture gaps reset the shared three-second node/chart average; they are not zero
+traffic. The network aggregate uses a common capture window across contributors.
+
+Two passive 42-second checks exercised the new code on Control_20 and Platform_30
+without restarting or changing the running mesh. Each check used a separate
+dumpcap capture and this spike's independent Ethernet/pcap decoder. Eight-second
+capture lifetimes deliberately exercised repeated real tshark rotations.
+All **264 exact comparisons** passed: TX/RX frame bytes and packets in 33 valid
+one-second windows per node. Both independent captures reported zero kernel
+drops, no late frames occurred, and gap windows were excluded explicitly.
+This validates the new capture-time measurement, not RF airtime or guaranteed
+drop-free future captures; ongoing kernel drops remain unreported by the monitor.
+
+- [Platform_30 capture-window verification](../../debug/test_reports/dds-capture-windows-20261106.json)
+- [Control_20 capture-window verification](../../debug/test_reports/dds-capture-windows-control-20261106.json)

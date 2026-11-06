@@ -140,9 +140,9 @@ class FrameAccounting:
                           else "application")
         return next(iter(roles), "unknown") if len(roles) <= 1 else "mixed"
 
-    def _emit(self, domain, source, size, count, frame_class, tx_class, incomplete=False):
+    def _emit(self, domain, source, size, timestamp, frame_class, tx_class, incomplete=False):
         self.accumulator.add_packet(domain, size, frame_class, source in self.local_ips,
-                                    tx_class, count, incomplete)
+                                    tx_class, incomplete=incomplete, timestamp_ms=int(timestamp * 1000))
 
     def expire(self, now):
         for key, group in list(self.fragments.items()):
@@ -150,13 +150,15 @@ class FrameAccounting:
                 continue
             self.fragments.pop(key)
             if group["domain"] in self.domains:
-                self._emit(group["domain"], key[0], group["bytes"], group["packets"],
-                           "unknown", "unknown", incomplete=True)
+                for timestamp, size in group["frames"]:
+                    self._emit(group["domain"], key[0], size, timestamp,
+                               "unknown", "unknown", incomplete=True)
             else:
                 self.orphan_packets += group["packets"]
                 self.orphan_bytes += group["bytes"]
                 self.accumulator.orphan_fragment_packets = self.orphan_packets
                 self.accumulator.orphan_fragment_bytes = self.orphan_bytes
+            self.accumulator.release_fragment(key)
         if self.dirty and now - self.last_saved >= 5:
             self.save_topics()
 
@@ -176,6 +178,8 @@ class FrameAccounting:
         for field in ("ip.src", "ip.dst", "ip.id", "ip.frag_offset", "ip.flags.mf", "udp.dstport"):
             row[field] = row[field].split(",", 1)[0]
         timestamp = float(row["frame.time_epoch"])
+        if not math.isfinite(timestamp) or timestamp <= 0:
+            raise ValueError("Invalid capture timestamp")
         self.expire(timestamp)
         size = int(row["frame.len"])
         port = int(row["udp.dstport"]) if row["udp.dstport"] else None
@@ -185,23 +189,30 @@ class FrameAccounting:
         if fragmented:
             key = (row["ip.src"], row["ip.dst"], row["ip.id"])
             group = self.fragments.setdefault(key, {
-                "at": timestamp, "domain": None, "bytes": 0, "packets": 0})
+                "at": timestamp, "domain": None, "bytes": 0, "packets": 0, "frames": []})
+            self.accumulator.hold_fragment(key, int(timestamp * 1000))
             group["bytes"] += size
             group["packets"] += 1
+            group["frames"].append((timestamp, size))
             if row["ip.frag_offset"] == "0" and row["data.data"]:
                 payload = bytes.fromhex(row["data.data"].replace(":", ""))
                 if len(payload) >= 12 and payload[8:12] == b"RTPS":
                     group["domain"] = (int.from_bytes(payload[2:4], "big") - 7400) // 250
             if not row["rtps.guidPrefix.src"]:
                 return
-            self.fragments.pop(key)
         if domain not in self.domains or not row["rtps.guidPrefix.src"]:
+            if group:
+                self.fragments.pop(key)
+                self.accumulator.release_fragment(key)
             return
         self._learn(domain, row["rtps.param.endpoint_guid"], row["rtps.param.topicName"], timestamp)
-        self._emit(domain, row["ip.src"], group["bytes"] if group else size,
-                   group["packets"] if group else 1,
-                   classify_packet(row["rtps.sm.wrEntityId"], row["rtps.sm.id"]),
-                   self._tx_class(domain, row["rtps.guidPrefix.src"],
-                                  row["rtps.sm.wrEntityId"], row["rtps.sm.id"]))
+        frame_class = classify_packet(row["rtps.sm.wrEntityId"], row["rtps.sm.id"])
+        tx_class = self._tx_class(domain, row["rtps.guidPrefix.src"],
+                                 row["rtps.sm.wrEntityId"], row["rtps.sm.id"])
+        for captured_at, frame_size in group["frames"] if group else [(timestamp, size)]:
+            self._emit(domain, row["ip.src"], frame_size, captured_at, frame_class, tx_class)
+        if group:
+            self.fragments.pop(key)
+            self.accumulator.release_fragment(key)
         if self.wire_capture:
             self.wire_capture.process(row, domain)
