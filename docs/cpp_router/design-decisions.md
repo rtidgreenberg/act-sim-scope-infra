@@ -5184,3 +5184,26 @@ relay entities at startup.
   know the control router's identity.
 - Hardcoded C++ rule "destination_side always enabled": invisible, not configurable,
   surprising for future routes where destination gating IS desired.
+
+## D121 — Passive RouterHealth RTT replaces RouterLinkProbe (2026-11-06, accepted)
+
+**Decision.** Amend D14/D81's RTT mechanism only: remove the dedicated WAN probe
+topic, application-ACK QoS, listener, and collector WAN endpoints. Keep health QoS,
+compact routes/debug detail, independent Presence/Mesh/LinkStats ticks, protocol
+counter attribution, and LAN telemetry unchanged.
+
+`PresenceMonitor` generates a nonzero random health-writer incarnation and stores
+monotonic send history. Direct peer health receipts acknowledge exact session/sequence
+tuples in existing `peers_seen` refs on the next independently scheduled heartbeat.
+Local round-trip elapsed minus remote receipt-to-send age gives application-observed
+RTT, without synchronized clocks or triggered replies.
+
+Bounded history/correlation, accepted writer bindings, retired incarnations,
+duplicate suppression, write-success finalization, and rejection diagnostics prevent
+false correlations. Interval RTT is unavailable when count is zero; latest measurement
+validity expires after 32 seconds and includes age/remote-wait telemetry.
+
+**Rollout.** Coordinated owned-lifecycle restart: nested health types change; mixed-version
+assignability is not promised. Larger peer caps require explicit serialized-size and
+wire-fragmentation budgets. LP-7's SPDP2 consolidation remains unimplemented.
+See [implementation and acceptance plan](router-health-passive-rtt-plan.md).

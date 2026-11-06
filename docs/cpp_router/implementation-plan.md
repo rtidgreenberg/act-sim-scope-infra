@@ -1,5 +1,10 @@
 # Implementation Plan
 
+**2026-11-06 update:** Phase 9's historical dedicated-probe RTT design below is
+superseded by [passive RouterHealth RTT](router-health-passive-rtt-plan.md).
+The collector retains WAN protocol polling/LAN telemetry, but owns no probe endpoints
+or application-ACK listener. Independent tick cadences and health QoS are unchanged.
+
 > **Reframe banner (authoritative — see [Thesis & Tenets](thesis-and-tenets.md)).** This plan
 > predates several decisions; where it conflicts, the tenets win. Specifically:
 > - **ISC is out of scope.** The keyed-lifecycle phase (now **Phase 13**; "Phase 10" in

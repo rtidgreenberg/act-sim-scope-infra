@@ -52,7 +52,7 @@ RouterInstance
   CommandHandler
   StatusPublisher
   PresenceMonitor        # RouterHealth pub/sub + roster; presence-driven reset (Tenet 4/5)
-  LinkStatsCollector     # WAN link metric capture: protocol-status polling + RTT probe (D14/D81)
+  LinkStatsCollector     # WAN protocol-status polling + passive heartbeat RTT
   Log                    # one structured stream; Connext logger bridged in (below)
 ```
 
@@ -167,9 +167,9 @@ RouterInstance
   interval. Endpoints reach it by **registration**: a `collect_wan_stats` virtual on
   `RouteTopicRuntimeBase` (typed-only status getters) + `PresenceMonitor`'s `RouterHealth`
   pair (bellwether), register-at-build/unregister-at-close on the controller strand; active
-  only when presence is active. It also owns the `RouterLinkProbe` writer/reader (app-ack
-  RTT, probe-only QoS) — app-ack is listener-only, so the probe writer carries the
-  codebase's one listener, feeding a mutex-guarded accumulator drained on the tick (D81).
+  only when presence is active. `PresenceMonitor` owns monotonic health RTT correlation
+  and drains it through the same source/sink seam. The collector owns no WAN entities,
+  probe listener, or application-ACK channel.
   Capture only — no health classification (presence remains the health authority); metric
   deltas never bump `state_revision`. **SHIPPED D82 (2026-07-20):** the per-matched-endpoint
   poll (attribution + self-delta + rematch) lives once in `WanStatsPoll.hpp`, reused by

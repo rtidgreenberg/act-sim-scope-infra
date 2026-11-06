@@ -31,7 +31,7 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
   replaces the old `node_name` field), `role`,
   `config_hash` (digest of the loaded system-wide config, D80 — C2 sees config drift
   mesh-wide on the topic it already watches),
-  `heartbeat_seq`, `send_timestamp`, `state_revision` (matches the router's own `RouterStatus`
+  `heartbeat_seq`, nonzero writer-incarnation `session_id`, `send_timestamp`, `state_revision` (matches the router's own `RouterStatus`
   revision), and a rollup: `n_routes`, `n_degraded`, `n_error`, `overall_state`
   (`ROUTER_OK` / `ROUTER_DEGRADED` / `ROUTER_ERROR`). It carries **summary** status, **not** the
   full route table — full per-route detail stays on the LAN plane. This resolves the old "echo
@@ -49,8 +49,10 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
 - **QoS is deliberately untouched by link-metrics capture (D14).** `RouterHealth` doubles as
   the *passive* stats bellwether — the `LinkStatsCollector` polls this pair's protocol
   statistics like any WAN pair (known offered rate; signal even when data routes are idle) —
-  but the RTT probe's special QoS (app-ack, per-sample piggyback HB, zero ACK delay) lives on
-  the dedicated `RouterLinkProbe` topic, never here. See [Link Metrics](link-health.md).
+  and passive RTT acknowledgments now ride the scheduled health samples themselves.
+  Each peer ref includes `ack_session_id`, `ack_heartbeat_seq`, and `ack_age_at_send_us`.
+  No response write or application-ACK mode is added. The peer's monotonic wait is
+  subtracted from the local round-trip elapsed time. See [Link Metrics](link-health.md).
 - **Multi-network (D18):** WAN participants are never multi-homed — one WAN participant per
   unique network (`allow_interfaces_list`). Each network participant carries its own
   `RouterHealth` pair, so presence becomes per-path (`router name, network`) when a second
@@ -159,7 +161,6 @@ distinct from the per-router `ActRouterStatus` (this router's own detailed route
 | `RouterHealth` | WAN | one compact summary per router (this router publishes its own) | single cross-link presence + summary signal; small on the constrained WAN |
 | `ActRouterStatus` | LAN | this router's own full route/participant detail | LAN-local control plane, WAN-independent |
 | `ActRouterMeshStatus` | LAN | aggregated list of **all** connected routers' summaries + presence | local mesh observability; LAN is unconstrained so the full peer list is cheap here |
-| `RouterLinkProbe` | WAN | tiny per-router probe samples (app-ack RTT) | isolates the probe's special QoS (`VOLATILE`, no liveliness, zero ACK delay) from the presence authority — D14/D18, [link-health.md](link-health.md) |
 | `ActRouterLinkStats` | LAN | per-peer raw link metrics each poll interval | capture-only telemetry (D14); nothing new crosses the WAN |
 
 - The mesh-status sample carries, per connected router: identity, `presence` (`ALIVE`/`STALE`/

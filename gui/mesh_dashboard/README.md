@@ -102,7 +102,7 @@ writer and reader profiles, reliability, history/depth, durability, deadline, an
 liveliness lease. With all topics selected, expand individual topic headings.
 These settings are resolved from the active router YAML's QoS libraries once at
 dashboard startup, including inherited XML policies; the reader and writer can
-have different settings. Dedicated RouterHealth/RouterLinkProbe profiles are
+have different settings. The dedicated RouterHealth profile is
 included alongside forwarding routes. Auto-QoS legs are marked as runtime-learned
 instead of receiving invented static settings. This is a configuration reference,
 **not a writer association or a fallback for observed QoS classification**.
@@ -133,13 +133,40 @@ on different hosts require synchronized clocks. Existing application `events.jso
 audits remain separate diagnostics and never feed this tab.
 
 The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
-every fresh page. Enabling it adds DDS heartbeat/probe, discovery,
+every fresh page. Enabling it adds router heartbeat, discovery,
 reliability/control, and mixed/unknown chart series. Node DDS TX/RX rates remain
 visible independently of that checkbox. Mesh presentation is DDS-only: MAC
 values are retained in diagnostic collection/API responses, not drawn as a
 competing traffic rate or used to scale the chart.
 It changes presentation only. RouterLinkStats, link activity, health, connected
 peers, route badges, and mission/delivery operations remain available when unchecked.
+
+The link inspector reports **Heartbeat RTT**, measured from direct RouterHealth
+acknowledgments rather than an active probe. It subtracts the remote peer's wait
+before its next scheduled heartbeat from the local round-trip elapsed time; no
+cross-host timestamp subtraction or clock synchronization is needed. Receive
+dispatch and send queueing can remain, so this is application-observed RTT, not
+pure wire latency.
+
+Interval min/mean/max require `rtt_valid=true`, `rtt_count>0`, and fresh telemetry.
+A zero count means unavailable, not zero latency; an accepted zero RTT is displayed
+as `0 us`. The inspector shows the last sample age (router-reported age plus
+monotonic bridge-cache age and browser `performance.now()` elapsed time since
+receipt) and last heartbeat acknowledgment age (the immutable
+subtracted peer wait). Core measurement freshness lasts 32 s, including intervals
+with no new samples; interval RTT still requires a positive count. Measurements
+older than 32 s or stats telemetry older than 5 s are presented as stale/unavailable
+even while the inspector remains open. Missing validity/freshness fields are
+unavailable, not interpreted as legacy probe RTT. The bridge forwards the generated
+type's JSON fields unchanged, including health session IDs, nested peer
+acknowledgment metadata, and link-stat validity/ages. Python preserves uint64
+integers; JavaScript must not use those identity tokens for RTT correlation.
+Link-stat snapshots add `telemetry_sample_id` (opaque per-sample token) and
+`telemetry_age_ms` (monotonic age since the bridge received that sample).
+Repeated REST/WebSocket snapshots cannot reset sample freshness, and server/browser
+wall-clock offsets or jumps do not affect RTT availability or link-stats aging.
+Deploy the regenerated types and routers together in a coordinated restart;
+mixed-version DDS assignability is not promised by this dashboard.
 
 **Link activity** is a right-edge drawer that starts collapsed as a vertical tab.
 Click its title to expand it alongside the graph or collapse it again. Filters
@@ -148,7 +175,7 @@ chart. The graph reserves the drawer's width so activity does not cover nodes.
 
 Normal chart rates count known application-carrying **Ethernet frames**, including
 their transport overhead and any piggybacked protocol submessages, not just serialized
-application payload. RouterHealth and RouterLinkProbe are infrastructure; debug
+application payload. RouterHealth is infrastructure; debug
 diagnostic traffic is operator-selected application telemetry. LAN-only RouterLinkStats
 publication bytes do not enter the domain-200 WAN chart. Ambiguous topic roles stay
 mixed/unknown and produce a lower-bound warning rather than fabricated application bytes.

@@ -1,5 +1,44 @@
 # Link Metrics: Capture First, Infer Later
 
+## Current implementation: passive heartbeat RTT (2026-11-06)
+
+`RouterLinkProbe` and its QoS/endpoints/application-ACK listener have been removed.
+`PresenceMonitor` attaches acknowledgment metadata to existing scheduled
+`RouterHealth.peers_seen` entries without changing health QoS or tick cadence.
+RTT is local monotonic elapsed time minus the remote monotonic receipt-to-publication
+wait; it includes application dispatch/queueing, not just propagation delay.
+Only direct samples from the accepted writer/session contribute.
+
+Send history is capped at 64 entries/32 seconds, active correlation peers at 256,
+dormant bindings retained after roster pruning at 256, superseded writer/session
+bindings at 256, and pending write-race measurements at 128.
+New writers replace bindings only after the old publication loses liveliness
+(even if it remains discovery-matched); live duplicate-name writers and superseded
+sessions cannot contaminate measurements. Pruning a DEAD peer does not retire its
+unchanged writer/session: recovery preserves sequence high-water marks and starts
+without a valid old RTT. Failed writes cancel
+pending correlations. Rejections are counted and logged per link-stats interval.
+Live peers have priority over retained DEAD topology; coverage rotates if more than
+100 live peers exceed the existing wire sequence cap. Larger meshes need a measured
+size budget; the cap is not a promise of MTU-sized health samples.
+
+`collect_wan_stats()` drains RTT with protocol counters through `LinkStatsSink`.
+The LAN stats retain interval count/min/mean/max; count zero means **no measurement**,
+not zero latency. `rtt_valid` means the latest measurement is at most 32 seconds old,
+`rtt_last_sample_age_ms` reports its local age, and `rtt_last_ack_age_us` reports the
+subtracted peer wait. Cached mesh summaries never age the acknowledgment evidence.
+Neither RTT nor LinkStatsTick changes presence policy or controller revision.
+Dashboard freshness adds the bridge's monotonic cache age to the router's reported
+sample age, then advances it with browser `performance.now()`. Repeated cache
+snapshots cannot rejuvenate a sample. Wall-clock timestamps are audit/display only,
+never subtracted across machines for RTT or link-stats freshness.
+
+The following probe/API investigation is **historical**, superseded for RTT by
+[the passive RTT plan](router-health-passive-rtt-plan.md). Its protocol-counter
+discussion remains relevant. Schema rollout requires a coordinated router restart;
+mixed-version assignability is not promised. Discovery piggybacking (LP-7) remains
+a separate unimplemented product request.
+
 > Investigation and capture-architecture proposal for Tenet 5's "(Future) per-writer/reader
 > protocol statistics" ([thesis-and-tenets.md](thesis-and-tenets.md)). Status: **proposed,
 > under discussion** (D14 in [design-decisions.md](design-decisions.md)).

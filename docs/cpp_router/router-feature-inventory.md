@@ -171,7 +171,7 @@ Mesh identity is router-name based, using the discovered `<node>/<router>` parti
 
 Mesh status is published periodically with BEST_EFFORT/VOLATILE semantics. Mesh publication cadence is separate from the heartbeat cadence. This gives operators a topology/health view without making mesh status a durable data path.
 
-[LinkStatsCollector.hpp](../../router/src/core/LinkStatsCollector.hpp) reports WAN protocol counters and application probe acknowledgement RTT. Link statistics are telemetry; they do not independently infer peer health.
+[LinkStatsCollector.hpp](../../router/src/core/LinkStatsCollector.hpp) reports WAN protocol counters and passive heartbeat RTT (remote wait subtracted), with interval availability and measurement freshness. Link statistics are telemetry; they do not independently infer peer health.
 
 ## Observability and Audit
 
@@ -220,7 +220,7 @@ The end-to-end suite covers:
 - Controller journal output.
 - Presence, stale/dead health transitions, and mesh roster behavior.
 - Configuration-hash drift detection.
-- Link metrics and application acknowledgement RTT.
+- Link metrics and passive heartbeat RTT.
 - Team partition membership.
 - The full production-shaped `control-platform.yaml`.
 - Dashboard-equivalent route and platform control flows.

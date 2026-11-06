@@ -1,5 +1,11 @@
 # Link-probe spike — app-ack RTT mechanism for Phase 9 (D81 gate)
 
+**Historical evidence only (2026-11-06):** production now uses
+[passive RouterHealth RTT](../../docs/cpp_router/router-health-passive-rtt-plan.md);
+the probe type/profile/endpoints were removed. Results below are preserved, not a
+description of the current router. The old domain IDs shown here exceed the supported
+232 ceiling; do not reuse them for new DDS runs.
+
 **Status: PASSED 3/3 consecutive runs (2026-07-17, domains 3210/3212/3213), `/dev/shm`
 clean.** The gate on Phase 9's `LinkStatsCollector` RTT probe is cleared; the pinned
 ReadCondition echo fallback (D81 item 3) is **not needed**.
