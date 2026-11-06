@@ -1,8 +1,8 @@
 // traffic_chart.js — WAN DDS traffic time-series sparklines (domain 200).
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
-// application-carrying frame rates by default. Infrastructure series and the distinct
-// MAC accounting layer are optional; visible series alone determine scale and peaks.
+// application-carrying frame rates by default. Optional infrastructure series are
+// also DDS/RTPS Ethernet frames; visible series alone determine scale and peaks.
 
 (function () {
   "use strict";
@@ -15,21 +15,16 @@
     {key: "reliability_tx", label: "Reliability/control TX", color: "#e0944c"},
     {key: "mixed_tx", label: "Mixed TX", color: "#e0ce64"},
     {key: "unknown_tx", label: "Unknown TX", color: "#e6553a"},
-    {key: "mac", label: "MAC TX (all traffic)", color: "#d0d5df"},
   ];
-  const DISPLAY_AVERAGE_MS = 3_000;
   const GRID_COLOR = "#232a34";
   const TEXT_COLOR = "#8a94a6";
 
   const panel = document.getElementById("traffic-panel");
   const graphEl = document.getElementById("graph");
   const statusbarEl = document.getElementById("statusbar");
-  const rfSummaryEl = document.getElementById("rf-summary");
   const infraToggle = document.getElementById("toggle-infrastructure-stats");
   let showInfrastructure = false;
-  let lastEmaneSample = null;
   if (!panel) return;
-  if (rfSummaryEl) rfSummaryEl.style.display = "none";
 
   function syncGraphBottomToPanel() {
     if (!graphEl) return;
@@ -73,14 +68,14 @@
 
     const entry = {
       series: Object.fromEntries(SERIES.map(s => [s.key, {
-        points: [], samples: [], label: legendDiv.querySelector(`[data-series="${s.key}"]`),
+        points: [], label: legendDiv.querySelector(`[data-series="${s.key}"]`),
       }])),
       el,
       chartCanvas,
       accountingEl: accountingDiv,
       lastSample: null,
       lastPointTimestamp: null,
-      lastPointIntervalMs: null,
+      rates: new window.ACTTrafficRates.History(),
     };
     domains.set(domainId, entry);
     redraw(entry);
@@ -98,25 +93,6 @@
     if (arr.length > MAX_POINTS) arr.shift();
   }
 
-  function pushRateSample(samples, bytes, intervalMs, replace = false) {
-    const sample = { bytes, intervalMs };
-    if (replace && samples.length) samples[samples.length - 1] = sample;
-    else samples.push(sample);
-    if (samples.length > MAX_POINTS) samples.shift();
-  }
-
-  function trailingRate(samples) {
-    let bytes = 0;
-    let durationMs = 0;
-    for (let index = samples.length - 1; index >= 0 && durationMs < DISPLAY_AVERAGE_MS; index--) {
-      const sample = samples[index];
-      const includedMs = Math.min(sample.intervalMs, DISPLAY_AVERAGE_MS - durationMs);
-      bytes += sample.bytes * includedMs / sample.intervalMs;
-      durationMs += includedMs;
-    }
-    return durationMs ? bytes * 1000 / durationMs : 0;
-  }
-
   function drawCombinedSparkline(canvas, series, eventIndices) {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
@@ -131,7 +107,7 @@
 
     if (!series.length || series.every((s) => s.points.length < 2)) return;
 
-    const scaleMax = niceNum(Math.max(...series.flatMap((s) => s.points))) || 1;
+    const scaleMax = niceNum(Math.max(0, ...series.flatMap((s) => s.points.filter(Number.isFinite)))) || 1;
     const scaleMin = 0;
 
     const visiblePointCount = Math.max(2, ...series.map((s) => s.points.length));
@@ -208,29 +184,31 @@
       const seriesStartIdx = visiblePointCount - s.points.length;
       const yOf = (value) => h - (value / scaleMax) * (h - topPad);
 
-      // Fill area under each curve with light transparency.
-      ctx.beginPath();
-      const firstX = seriesStartIdx * stepX;
-      ctx.moveTo(firstX, h);
-      for (let i = 0; i < s.points.length; i++) {
-        ctx.lineTo((seriesStartIdx + i) * stepX, yOf(s.points[i]));
+      for (let start = 0; start < s.points.length;) {
+        if (!Number.isFinite(s.points[start])) { start++; continue; }
+        let end = start + 1;
+        while (end < s.points.length && Number.isFinite(s.points[end])) end++;
+        ctx.beginPath();
+        ctx.moveTo((seriesStartIdx + start) * stepX, h);
+        for (let i = start; i < end; i++) {
+          ctx.lineTo((seriesStartIdx + i) * stepX, yOf(s.points[i]));
+        }
+        ctx.lineTo((seriesStartIdx + end - 1) * stepX, h);
+        ctx.closePath();
+        ctx.fillStyle = s.color + "14";
+        ctx.fill();
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        for (let i = start; i < end; i++) {
+          const x = (seriesStartIdx + i) * stepX;
+          if (i === start) ctx.moveTo(x, yOf(s.points[i]));
+          else ctx.lineTo(x, yOf(s.points[i]));
+        }
+        ctx.stroke();
+        start = end;
       }
-      ctx.lineTo((seriesStartIdx + s.points.length - 1) * stepX, h);
-      ctx.closePath();
-      ctx.fillStyle = s.color + "14";
-      ctx.fill();
-
-      // Stroke the series line.
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth = 1.5 * dpr;
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      for (let i = 0; i < s.points.length; i++) {
-        const x = (seriesStartIdx + i) * stepX;
-        if (i === 0) ctx.moveTo(x, yOf(s.points[i]));
-        else ctx.lineTo(x, yOf(s.points[i]));
-      }
-      ctx.stroke();
     }
   }
 
@@ -255,31 +233,6 @@
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
   const WS_URL = `${WS_ORIGIN}/ws`;
   const REST_URL = `${location.protocol}//${location.host}/api/traffic_stats`;
-  const EMANE_REST_URL = `${location.protocol}//${location.host}/api/emane_stats`;
-  function handleEmaneSample(sample) {
-    if (!rfSummaryEl || !sample || sample.scope !== "network") return;
-    if (lastEmaneSample && (sample.aggregated_at_ms ?? sample.capture_timestamp) <
-        (lastEmaneSample.aggregated_at_ms ?? lastEmaneSample.capture_timestamp)) return;
-    lastEmaneSample = sample;
-    renderMacSummary();
-  }
-
-  function isFresh(sample) {
-    return sample && !sample.stale && Date.now() <= sample.fresh_until_ms;
-  }
-
-  function renderMacSummary() {
-    if (!rfSummaryEl) return;
-    rfSummaryEl.style.display = showInfrastructure ? "" : "none";
-    const s = lastEmaneSample;
-    rfSummaryEl.textContent = isFresh(s)
-      ? `MAC accounted TX ${formatRate(s.mac_tx_bytes_per_second)} | RX ${formatRate(s.mac_rx_bytes_per_second)} | ` +
-        `${s.mac_tx_packets_per_second.toFixed(1)} TX pkt/s | ` +
-        `${(s.mac_tx_drops_per_second + s.mac_rx_drops_per_second).toFixed(1)} drops/s | ` +
-        `${s.contributors.length} nodes${s.complete ? "" : " (partial)"}`
-      : "MAC counters unavailable / stale";
-  }
-
   function redraw(entry) {
     const visible = SERIES.filter(s => showInfrastructure || s.key === "application_tx");
     for (const spec of SERIES) {
@@ -288,21 +241,20 @@
     }
     drawCombinedSparkline(entry.chartCanvas, visible.map(spec => ({
       label: spec.label, color: spec.color, points: entry.series[spec.key].points,
-      peakRate: Math.max(0, ...entry.series[spec.key].points),
+      peakRate: Math.max(0, ...entry.series[spec.key].points.filter(Number.isFinite)),
     })), getVisibleEvents(entry.series.application_tx.points.length));
     const s = entry.lastSample;
     if (!s) return;
     const warnings = [];
-    if (!isFresh(s)) warnings.push("Traffic unavailable / stale");
-    if (s.schema_version < 2) warnings.push("Application attribution unavailable: old monitor schema");
-    if (!s.complete) warnings.push(`Partial coverage: ${s.contributors.length} nodes`);
-    if (!s.capture_complete) warnings.push("Capture incomplete");
+    const problem = window.ACTTrafficRates.issue(s, true) || entry.rates.problem;
+    if (problem) warnings.push(problem);
     if (!s.classification_complete) warnings.push("Application rate is known traffic only; mixed/unknown excluded");
     entry.accountingEl.textContent = warnings.join(" | ") +
-      (showInfrastructure ? `${warnings.length ? " | " : ""}Ethernet frame bytes; MAC accounted bytes are a different layer, not airtime` : "");
+      (showInfrastructure ? `${warnings.length ? " | " : ""}DDS/RTPS Ethernet frame bytes, not RF airtime` : "");
     entry.accountingEl.style.display = entry.accountingEl.textContent ? "" : "none";
-    if (!isFresh(s) || s.schema_version < 2) {
-      entry.series.application_tx.label.querySelector(".tp-subplot-average").textContent = "unavailable";
+    for (const spec of SERIES) {
+      entry.series[spec.key].label.querySelector(".tp-subplot-average").textContent = problem
+        ? "unavailable" : `3s avg ${formatRate(entry.rates.rate(spec.key))}`;
     }
   }
 
@@ -344,35 +296,24 @@
     if (previous && (sample.aggregated_at_ms ?? sample.capture_timestamp) <
         (previous.aggregated_at_ms ?? previous.capture_timestamp)) return;
     entry.lastSample = sample;
-    if (!isFresh(sample) || sample.schema_version < 2) {
-      redraw(entry);
-      return;
-    }
     // A delayed contributor can correct an aggregate without advancing its newest source.
     const replace = entry.lastPointTimestamp != null &&
       sample.capture_timestamp <= entry.lastPointTimestamp;
+    const discontinuity = !replace && entry.lastPointTimestamp != null &&
+      sample.capture_window_start_ms !== entry.lastPointTimestamp;
     const pointTimestamp = replace ? entry.lastPointTimestamp : sample.capture_timestamp;
-    const intervalMs = replace ? entry.lastPointIntervalMs : entry.lastPointTimestamp != null
-      ? Math.min(5000, sample.capture_timestamp - entry.lastPointTimestamp) : sample.interval_ms;
+    const values = Object.fromEntries(SERIES.map(spec =>
+      [spec.key, sample[`${spec.key}_bytes_per_second`]]));
+    const valid = entry.rates.add(sample, values, true);
     for (const spec of SERIES) {
       const series = entry.series[spec.key];
-      const rate = spec.key === "mac"
-        ? (isFresh(lastEmaneSample) ? lastEmaneSample.mac_tx_bytes_per_second : null)
-        : sample[`${spec.key}_bytes_per_second`];
-      if (!Number.isFinite(rate)) {
-        series.label.querySelector(".tp-subplot-average").textContent = "unavailable";
-        continue;
-      }
+      if (discontinuity) pushPoint(series.points, null);
       const replaceSeriesPoint = replace && series.lastPointTimestamp === pointTimestamp;
-      pushPoint(series.points, rate, replaceSeriesPoint);
-      pushRateSample(series.samples, rate * intervalMs / 1000, intervalMs, replaceSeriesPoint);
+      pushPoint(series.points, valid ? values[spec.key] : null, replaceSeriesPoint);
       series.lastPointTimestamp = pointTimestamp;
-      series.label.querySelector(".tp-subplot-average").textContent =
-        `3s avg ${formatRate(trailingRate(series.samples))}`;
     }
     entry.lastPointTimestamp = pointTimestamp;
-    entry.lastPointIntervalMs = intervalMs;
-    if (!replace) globalPointCount++;
+    if (!replace) globalPointCount += discontinuity ? 2 : 1;
     redraw(entry);
     syncGraphBottomToPanel();
   }
@@ -384,8 +325,6 @@
       try { msg = JSON.parse(evt.data); } catch (_) { return; }
       if (msg.type === "traffic_stats" && msg.data) {
         handleTrafficSample(msg.data);
-      } else if (msg.type === "emane_stats" && msg.data) {
-        handleEmaneSample(msg.data);
       } else if (msg.type === "resolution_change") {
         const mode = (msg.resolution_mode || "").toLowerCase();
         const label = MODE_LABELS[mode] || mode.charAt(0).toUpperCase();
@@ -404,18 +343,12 @@
     })
     .catch(() => {});
 
-  fetch(EMANE_REST_URL)
-    .then((r) => r.ok ? r.json() : null)
-    .then(handleEmaneSample)
-    .catch(() => {});
-
   window.addEventListener("resize", syncGraphBottomToPanel);
   if (infraToggle) {
     infraToggle.checked = false;
     infraToggle.addEventListener("change", () => {
       showInfrastructure = infraToggle.checked;
       domains.forEach(redraw);
-      renderMacSummary();
       syncGraphBottomToPanel();
     });
   }
@@ -423,10 +356,7 @@
     fetch(REST_URL).then(r => r.json()).then(arr => {
       if (Array.isArray(arr)) arr.forEach(handleTrafficSample);
     }).catch(error => console.warn("Traffic refresh failed", error));
-    fetch(EMANE_REST_URL).then(r => r.json()).then(handleEmaneSample)
-      .catch(error => console.warn("MAC refresh failed", error));
     domains.forEach(redraw);
-    renderMacSummary();
     syncGraphBottomToPanel();
   }, 2000);
   syncGraphBottomToPanel();

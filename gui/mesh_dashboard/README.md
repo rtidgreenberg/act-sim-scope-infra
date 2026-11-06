@@ -133,10 +133,18 @@ on different hosts require synchronized clocks. Existing application `events.jso
 audits remain separate diagnostics and never feed this tab.
 
 The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
-every fresh page. Enabling it adds node MAC/RTPS counters, heartbeat/probe,
-discovery, reliability/control, mixed/unknown, and all-traffic MAC chart series.
+every fresh page. Enabling it adds DDS heartbeat/probe, discovery,
+reliability/control, and mixed/unknown chart series. Node DDS TX/RX rates remain
+visible independently of that checkbox. Mesh presentation is DDS-only: MAC
+values are retained in diagnostic collection/API responses, not drawn as a
+competing traffic rate or used to scale the chart.
 It changes presentation only. RouterLinkStats, link activity, health, connected
 peers, route badges, and mission/delivery operations remain available when unchecked.
+
+**Link activity** is a right-edge drawer that starts collapsed as a vertical tab.
+Click its title to expand it alongside the graph or collapse it again. Filters
+stack above the scrollable activity list, and the drawer stops above the WAN
+chart. The graph reserves the drawer's width so activity does not cover nodes.
 
 Normal chart rates count known application-carrying **Ethernet frames**, including
 their transport overhead and any piggybacked protocol submessages, not just serialized
@@ -145,11 +153,24 @@ diagnostic traffic is operator-selected application telemetry. LAN-only RouterLi
 publication bytes do not enter the domain-200 WAN chart. Ambiguous topic roles stay
 mixed/unknown and produce a lower-bound warning rather than fabricated application bytes.
 
-Network rates sum each sender's TX delta divided by its own measured interval. They
-do not sum RX copies or divide all nodes by a shared interval. MAC counters are EMANE
-accounted bytes for all traffic, not RF airtime or application-delivery percentages.
+The DDS values are domain-200 RTPS traffic captured at `emane0`, not native EMANE
+MAC counters and not payload-only throughput. Node rates include all captured DDS
+traffic in each direction. Network chart rates sum sender TX rates, never RX copies,
+using the latest capture window common to all expected contributors.
+
+Monitor schema 3 assigns each physical frame to its original capture-time window,
+not the time tshark finishes decoding it. Reporting waits two seconds for decoding
+and holds windows containing unresolved IP fragments until reassembly/expiry.
+Late rows are explicitly counted and invalidate rates rather than being moved
+into the next interval. Every window intersecting a capture restart is flagged.
+Node and chart averages require three contiguous seconds of valid capture coverage;
+gaps, restarts, invalid rows, stale sources, and incomplete network coverage clear
+the average and show unavailable/warming instead of a depressed rate. Graph lines
+break at invalid windows and missing capture intervals. Older processing-time monitors are explicitly unavailable
+until upgraded. Freshness uses the report time, while bandwidth uses capture time.
+
 Stale/missing contributors are explicitly unavailable/partial. Packet reassembly counts
-all physical fragments once; monitor startup precedes DDS discovery and cached full
+all physical fragments in their original windows; monitor startup precedes DDS discovery and cached full
 writer identities support capture rotation/restart. Live kernel-drop counts are
 unreported, not zero; capture health means no detected parser/fragment/rotation error.
 Container startup waits for the canonical launcher to establish the nominal RF matrix

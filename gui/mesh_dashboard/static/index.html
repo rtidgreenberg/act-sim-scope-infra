@@ -20,40 +20,45 @@
                background: #1c222c; border-top: 1px solid #2c3542; font-size: 12px;
                display: flex; align-items: center; gap: 9px; white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; color: #8a94a6; }
-  #rf-summary { margin-left: auto; display: flex; gap: 14px; align-items: center; color: #d5d9df; }
-  #rf-summary strong { color: #e0b84d; }
-  #rf-summary .muted { color: #8a94a6; }
   #transport-badge { position: fixed; top: 8px; left: 565px; z-index: 13;
                      border: 1px solid #92772b; border-radius: 999px; padding: 2px 7px;
                      color: #f2cf67; font-size: 11px; font-weight: 600; line-height: 1.2; }
   #transport-badge[data-state="websocket"] { border-color: #2d8c5a; color: #75c991; }
   #transport-badge[data-state="error"] { border-color: #a54b4b; color: #f08b8b; }
   #status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  #right-panel { position: fixed; right: 0; top: 0; z-index: 10; display: flex;
+  #right-panel { position: fixed; right: 0; top: 0; bottom: calc(var(--mesh-bottom-inset, 27px) + 8px);
+            z-index: 10; display: flex;
             flex-direction: column; align-items: flex-end; pointer-events: none; }
   #legend { padding: 8px 14px;
             background: #1c222c; border-bottom: 1px solid #2c3542; border-left: 1px solid #2c3542;
-            font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; max-width: 40vw; pointer-events: auto; }
+            font-size: 12px; display: flex; flex: none; gap: 14px; flex-wrap: wrap; max-width: 40vw; pointer-events: auto; }
   #team-legend { padding: 0;
             background: #1c222c; border-left: 1px solid #2c3542;
-            font-size: 12px; display: flex; flex-direction: column; gap: 0; min-width: 120px; pointer-events: auto; }
+            font-size: 12px; display: flex; flex: none; flex-direction: column; gap: 0; min-width: 120px; pointer-events: auto; }
   #team-legend:empty { display: none; }
-  #activity-panel { width: 430px; max-width: 42vw; margin-top: 8px;
+  #activity-panel { width: 360px; max-width: 42vw; margin-top: 8px; flex: 1; min-height: 0;
+            display: flex; flex-direction: column;
             background: #1c222c; border: 1px solid #2c3542; border-right: 0;
             border-radius: 6px 0 0 6px; font-size: 12px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.24); pointer-events: auto; }
-  #activity-panel .activity-header { padding: 8px 12px; display: flex; justify-content: space-between;
+  #activity-panel .activity-header { padding: 8px 12px; display: flex; flex: none; justify-content: space-between;
             align-items: center; gap: 10px; color: #e6e8eb; font-weight: 600; border-bottom: 1px solid #2c3542; }
-  #activity-panel.collapsed #activity-log, #activity-panel.collapsed .activity-controls { display: none; }
-  #activity-panel .activity-title { display: inline-flex; align-items: center; gap: 8px; }
+  #activity-panel.collapsed { width: 36px; flex: none; }
+  #activity-panel.collapsed #activity-body, #activity-panel.collapsed .activity-count { display: none; }
+  #activity-panel.collapsed .activity-header { padding: 12px 8px; border-bottom: 0; justify-content: center; }
+  #activity-panel.collapsed #activity-toggle { writing-mode: vertical-rl; }
+  #activity-panel .activity-title { display: inline-flex; align-items: center; }
   #activity-toggle { border: 0; background: transparent; color: #8a94a6; cursor: pointer;
-            font: inherit; font-size: 14px; padding: 0; }
+            font: inherit; padding: 0; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  #activity-toggle .activity-toggle-icon { font-size: 14px; writing-mode: horizontal-tb; }
   #activity-toggle:hover { color: #fff; }
-  #activity-panel .activity-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  #activity-body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+  #activity-panel .activity-controls { display: grid; grid-template-columns: minmax(0, 1fr);
+            gap: 6px; padding: 8px 12px; flex: none; border-bottom: 1px solid #2c3542; }
   #activity-filter, #activity-topic-filter, #activity-platform-filter, #activity-link-select { background: #14181f; color: #d5d9df; border: 1px solid #2c3542;
-            border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11px; }
+            border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11px; min-width: 0; width: 100%; box-sizing: border-box; }
   #activity-panel .activity-count { color: #8a94a6; font-weight: 500; }
-  #activity-log { height: var(--activity-log-height, 260px); max-height: var(--activity-log-height, 260px); overflow-y: auto; }
+  #activity-log { flex: 1; min-height: 0; overflow-y: auto; }
   .activity-empty { padding: 10px 12px; color: #8a94a6; line-height: 1.4; }
   .activity-entry { padding: 7px 12px; border-bottom: 1px solid #232a34; }
   .activity-entry .activity-main { display: flex; justify-content: space-between; gap: 8px; color: #e6e8eb; }
@@ -107,7 +112,7 @@
   #team-legend span:hover { color: #fff; }
   #team-legend span.active { background: #2c3542; font-weight: 600; }
   /* Taller viewport for the shallow 2-row control/platform layout. */
-  #graph { position: absolute; top: 76px; left: 0; right: 0; bottom: 0; min-height: 440px; }
+  #graph { position: absolute; top: 76px; left: 0; right: var(--mesh-right-inset, 0px); bottom: 0; min-height: 440px; }
   /* node detail panel (click a node) */
   #detail { position: fixed; top: 84px; left: 12px; z-index: 11; width: 300px;
             max-height: calc(100vh - var(--mesh-bottom-inset, 27px) - 116px); overflow-y: auto; display: none;
@@ -369,7 +374,6 @@
   @media (max-width: 700px) { .experiment-grid { grid-template-columns: 1fr; } }
   @media (max-width: 700px) {
     #graph { min-height: 300px; }
-    #rf-summary span:not(:first-child) { display: none; }
   }
 </style>
 </head>
@@ -382,7 +386,7 @@
   <button type="button" data-tab="delivery" aria-selected="false">Delivery</button>
   <button type="button" data-tab="experiment" aria-selected="false">Experiment</button>
 </nav>
-<div id="statusbar" role="status" aria-live="polite"><span id="status-text">connecting…</span><span id="rf-summary"></span></div>
+<div id="statusbar" role="status" aria-live="polite"><span id="status-text">connecting…</span></div>
 <div id="topology-controls">
   <label><input id="toggle-direct-links" type="checkbox" checked> direct links</label>
   <label><input id="toggle-relayed-links" type="checkbox" checked> relayed links</label>
@@ -403,9 +407,12 @@
   <span data-team="B"><i style="background:#e6c53a"></i> Team B</span>
   <span data-team="C"><i style="background:#8a4ae6"></i> Team C</span>
 </div>
-<section id="activity-panel" aria-live="polite">
-  <div class="activity-header"><span class="activity-title"><button id="activity-toggle" type="button" title="collapse">▾</button>Link activity</span><span class="activity-controls"><select id="activity-link-select"><option value="">Inspect link</option></select><select id="activity-filter"><option value="all">All</option><option value="sample">Samples</option><option value="hb">Heartbeats</option><option value="nack">NACKs</option><option value="repair">Repair</option><option value="issue">Issues</option></select><select id="activity-topic-filter"><option value="all">All topics</option></select><select id="activity-platform-filter"><option value="all">All platforms</option></select><span id="activity-count" class="activity-count">0</span></span></div>
-  <div id="activity-log"><div class="activity-empty">Waiting for link activity.</div></div>
+<section id="activity-panel" class="collapsed" aria-label="Link activity drawer" aria-live="polite">
+  <div class="activity-header"><span class="activity-title"><button id="activity-toggle" type="button" title="Expand link activity drawer" aria-expanded="false" aria-controls="activity-body"><span class="activity-toggle-icon" aria-hidden="true">◂</span><span>Link activity</span></button></span><span id="activity-count" class="activity-count">0</span></div>
+  <div id="activity-body">
+    <div class="activity-controls"><select id="activity-link-select" aria-label="Inspect link"><option value="">Inspect link</option></select><select id="activity-filter" aria-label="Activity type"><option value="all">All</option><option value="sample">Samples</option><option value="hb">Heartbeats</option><option value="nack">NACKs</option><option value="repair">Repair</option><option value="issue">Issues</option></select><select id="activity-topic-filter" aria-label="Activity topic"><option value="all">All topics</option></select><select id="activity-platform-filter" aria-label="Activity platform"><option value="all">All platforms</option></select></div>
+    <div id="activity-log"><div class="activity-empty">Waiting for link activity.</div></div>
+  </div>
 </section>
 </div>
 <div id="detail"></div>
@@ -604,8 +611,9 @@
   <div id="mission-context" role="menu" hidden></div>
 </main>
 <script src="vendor/vis-network.min.js"></script>
-  <script src="mesh_graph.js?v=20261105-mission-reporting-v5"></script>
-<script src="traffic_chart.js?v=20261105-aggregate-corrections-v4"></script>
+<script src="traffic_rates.js?v=20261106-capture-time-v1"></script>
+<script src="mesh_graph.js?v=20261106-dds-only-v2"></script>
+<script src="traffic_chart.js?v=20261106-capture-time-v2"></script>
   <script src="operator_tabs.js?v=20261106-delivery-review-fixes-v1"></script>
 <script src="mission_map.js?v=20261103-coast-v1"></script>
 <script src="mission.js?v=20261105-state-and-target-toggles-v4"></script>

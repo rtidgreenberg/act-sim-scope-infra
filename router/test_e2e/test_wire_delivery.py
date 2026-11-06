@@ -892,6 +892,67 @@ assert aggregate["application_tx_bytes_per_second"] == 100, aggregate
 
 
 class WireDashboardTests(unittest.TestCase):
+    def test_link_activity_side_drawer_layout_and_toggle(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ModuleNotFoundError:
+            self.skipTest("Playwright is required")
+        static = ROOT / "gui/mesh_dashboard/static"
+        html = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", (static / "index.html").read_text())
+        with sync_playwright() as driver:
+            browser = driver.chromium.launch(args=["--no-sandbox"])
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("**/api/**", lambda route: route.fulfill(json={}))
+            page.route("http://activity.test/", lambda route: route.fulfill(body=html, content_type="text/html"))
+            page.goto("http://activity.test/")
+            page.evaluate("() => { window.WebSocket = class {}; }")
+            page.add_script_tag(path=str(static / "vendor/vis-network.min.js"))
+            page.add_script_tag(path=str(static / "traffic_rates.js"))
+            page.add_script_tag(path=str(static / "mesh_graph.js"))
+            page.add_script_tag(path=str(static / "operator_tabs.js"))
+            page.evaluate("""() => {
+                document.querySelector('#traffic-panel').innerHTML = '<div style="height:200px"></div>';
+                document.documentElement.style.setProperty('--mesh-bottom-inset', '227px');
+            }""")
+            drawer = page.locator("#activity-panel")
+            toggle = page.locator("#activity-toggle")
+            self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
+            self.assertFalse(page.locator("#activity-body").is_visible())
+            self.assertLess(drawer.bounding_box()["width"], 50)
+            toggle.click()
+            for width, height in ((1440, 1000), (1000, 800), (600, 900)):
+                page.set_viewport_size({"width": width, "height": height})
+                page.wait_for_function("""() => {
+                    const drawer = document.querySelector('#activity-panel').getBoundingClientRect();
+                    const graph = document.querySelector('#graph').getBoundingClientRect();
+                    return graph.right <= drawer.left;
+                }""")
+                expanded = drawer.bounding_box()
+                chart = page.locator("#traffic-panel").bounding_box()
+                self.assertLessEqual(expanded["y"] + expanded["height"], chart["y"])
+                filters = page.locator(".activity-controls select").all()
+                for before, after in zip(filters, filters[1:]):
+                    first, second = before.bounding_box(), after.bounding_box()
+                    self.assertLessEqual(first["y"] + first["height"], second["y"])
+                toggle.click()
+                self.assertEqual(toggle.get_attribute("aria-expanded"), "false")
+                self.assertFalse(page.locator("#activity-body").is_visible())
+                collapsed = drawer.bounding_box()
+                self.assertLess(collapsed["width"], 50)
+                self.assertGreater(collapsed["height"], collapsed["width"])
+                self.assertEqual(toggle.evaluate("el => getComputedStyle(el).writingMode"), "vertical-rl")
+                toggle.click()
+                self.assertEqual(toggle.get_attribute("aria-expanded"), "true")
+                self.assertTrue(page.locator("#activity-body").is_visible())
+            page.locator('[data-tab="delivery"]').click()
+            self.assertFalse(drawer.is_visible())
+            page.locator('[data-tab="mesh"]').click()
+            self.assertTrue(drawer.is_visible())
+            self.assertFalse(errors)
+            browser.close()
+
     def test_source_destination_multitopic_filters_and_configuration_sidebar(self):
         try:
             from playwright.sync_api import sync_playwright

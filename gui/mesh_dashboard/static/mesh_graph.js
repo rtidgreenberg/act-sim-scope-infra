@@ -140,8 +140,7 @@
   const PLATFORM_PIN_Y = 35;
   const PLATFORM_PIN_X_SPACING = 210; // 140 * 1.5 (2026-07-23, user ask: widen 50%)
   const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
-  const NODE_DDS_AVERAGE_POINTS = 10;
-  const nodeRates = new Map(); // node name -> latest MAC, DDS writer-TX, and DDS RX rates
+  const nodeRates = new Map(); // node name -> capture-time DDS rate history
   const RESOLUTION_BADGES = {
     init: { label: "INIT", color: "#8a94a6" },
     mission: { label: "MISSION", color: "#e0b84d" },
@@ -487,25 +486,15 @@
   window.__network = network;
   infrastructureStatsToggle.addEventListener("change", () => network.redraw());
 
-  function updateNodeRate(sample, field, valueField) {
-    if (!sample || !sample.observer || !sample.interval_ms) return;
-    const bytes = Array.isArray(valueField)
-      ? valueField.reduce((total, name) => total + (sample[name] || 0), 0)
-      : sample[valueField] || 0;
-    const rate = bytes * 8 / (sample.interval_ms / 1000);
-    const rates = nodeRates.get(sample.observer) || {};
-    if (sample.capture_timestamp <= (rates[`${field}UpdatedAt`] || 0)) return;
-    rates[`${field}UpdatedAt`] = sample.capture_timestamp;
-    if (field === "ddsTx" || field === "ddsRx") {
-      const sampleField = `${field}Samples`;
-      rates[sampleField] = rates[sampleField] || [];
-      rates[sampleField].push(rate);
-      if (rates[sampleField].length > NODE_DDS_AVERAGE_POINTS) rates[sampleField].shift();
-      rates[field] = rates[sampleField].reduce((sum, value) => sum + value, 0) /
-        rates[sampleField].length;
-    } else {
-      rates[field] = rate;
-    }
+  function updateNodeRate(sample) {
+    if (!sample || !sample.observer || sample.domain_id !== 200) return;
+    const rates = nodeRates.get(sample.observer) || {history: new window.ACTTrafficRates.History()};
+    if (rates.sample && sample.capture_timestamp <= rates.sample.capture_timestamp) return;
+    rates.sample = sample;
+    rates.history.add(sample, {
+      tx: sample.tx_bytes * 1000 / sample.interval_ms,
+      rx: sample.rx_bytes * 1000 / sample.interval_ms,
+    });
     nodeRates.set(sample.observer, rates);
     network.redraw();
   }
@@ -524,7 +513,7 @@
       return { x: position.x - width / 2, y: position.y - (height + 30) };
     }
     // Keep platform stats below the node with extra clearance from curved peer links.
-    return { x: position.x - width / 2, y: position.y + 34 };
+    return { x: position.x - width / 2, y: position.y + 82 };
   }
 
   let missionFleet = new Map();
@@ -601,16 +590,13 @@
       ctx.restore();
     });
     nodes.get({ filter: (node) => node.kind === "observer" || node.kind === "peer" }).forEach((node) => {
-      if (!infrastructureStatsToggle.checked) return;
       const rates = nodeRates.get(node.id);
       const position = network.getPositions([node.id])[node.id];
-      if (!rates || !position || rates.macTx == null || rates.macRx == null ||
-          rates.ddsTx == null || rates.ddsRx == null) return;
-      if (["macTx", "macRx", "ddsTx", "ddsRx"].some(
-          field => Date.now() - rates[`${field}UpdatedAt`] > 5000)) return;
+      if (!position) return;
+      const problem = window.ACTTrafficRates.issue(rates?.sample) || rates?.history.problem;
       const lines = [
-        `MAC TX/RX ${formatNodeRatePair(rates.macTx, rates.macRx)}`,
-        `RTPS TX/RX ${formatNodeRatePair(rates.ddsTx, rates.ddsRx)}`,
+        "DDS TX/RX",
+        problem || `${formatNodeRatePair(rates.history.rate("tx") * 8, rates.history.rate("rx") * 8)} (3s)`,
       ];
       ctx.save();
       ctx.font = "10px monospace";
@@ -1017,13 +1003,10 @@
     edgeDetailEl.style.setProperty("--edge-detail-height", `${height}px`);
   }
 
-  function syncActivityLogHeight() {
-    if (!activityPanelEl || !activityLogEl) return;
-    const logTop = activityLogEl.getBoundingClientRect().top;
-    const trafficTop = trafficPanelEl && trafficPanelEl.children.length
-      ? trafficPanelEl.getBoundingClientRect().top : window.innerHeight;
-    const height = Math.max(180, Math.floor(trafficTop - logTop - 8));
-    activityLogEl.style.setProperty("--activity-log-height", `${height}px`);
+  function syncActivityLayout() {
+    if (!activityPanelEl) return;
+    const width = activityPanelEl.getBoundingClientRect().width;
+    document.documentElement.style.setProperty("--mesh-right-inset", `${width ? Math.ceil(width) + 8 : 0}px`);
   }
 
   function linkRowsForPair(a, b) {
@@ -1236,12 +1219,12 @@
     }
     if (!activityEntries.length) {
       activityLogEl.innerHTML = `<div class="activity-empty">Waiting for link activity.</div>`;
-      syncActivityLogHeight();
+      syncActivityLayout();
       return;
     }
     if (!filtered.length) {
       activityLogEl.innerHTML = `<div class="activity-empty">No matching link activity.</div>`;
-      syncActivityLogHeight();
+      syncActivityLayout();
       return;
     }
     activityLogEl.innerHTML = filtered.map((entry) =>
@@ -1251,7 +1234,7 @@
         `<div class="activity-meta">${escHtml(entry.direction)} · ${escHtml(entry.network)} · ${escHtml(entry.time)}</div>` +
       `</div>`
     ).join("");
-    syncActivityLogHeight();
+    syncActivityLayout();
   }
 
   function ingestLinkActivity(snapshot) {
@@ -1340,13 +1323,15 @@
   }
 
   window.addEventListener("resize", syncEdgeDetailHeight);
-  window.addEventListener("resize", syncActivityLogHeight);
+  window.addEventListener("resize", syncActivityLayout);
   if (trafficPanelEl && typeof ResizeObserver !== "undefined") {
     new ResizeObserver(syncEdgeDetailHeight).observe(trafficPanelEl);
-    new ResizeObserver(syncActivityLogHeight).observe(trafficPanelEl);
+  }
+  if (activityPanelEl && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(syncActivityLayout).observe(activityPanelEl);
   }
   syncEdgeDetailHeight();
-  syncActivityLogHeight();
+  syncActivityLayout();
 
   if (activityFilterEl) {
     activityFilterEl.addEventListener("change", () => {
@@ -1381,9 +1366,10 @@
     activityToggleEl.addEventListener("click", () => {
       const collapsed = !activityPanelEl.classList.contains("collapsed");
       activityPanelEl.classList.toggle("collapsed", collapsed);
-      activityToggleEl.textContent = collapsed ? "▸" : "▾";
-      activityToggleEl.title = collapsed ? "expand" : "collapse";
-      syncActivityLogHeight();
+      activityToggleEl.querySelector(".activity-toggle-icon").textContent = collapsed ? "◂" : "▸";
+      activityToggleEl.title = `${collapsed ? "Expand" : "Collapse"} link activity drawer`;
+      activityToggleEl.setAttribute("aria-expanded", String(!collapsed));
+      syncActivityLayout();
     });
   }
   renderActivityLog();
@@ -1678,16 +1664,10 @@
 
       if (msg.type === "traffic_node_stats") {
         if (msg.data.schema_version < 2) return;
-        updateNodeRate(msg.data, "ddsTx", "tx_bytes");
-        updateNodeRate(msg.data, "ddsRx", "rx_bytes");
+        updateNodeRate(msg.data);
         return;
       }
 
-      if (msg.type === "emane_node_stats") {
-        updateNodeRate(msg.data, "macTx", "mac_tx_bytes");
-        updateNodeRate(msg.data, "macRx", "mac_rx_bytes");
-        return;
-      }
 
       if (msg.type === "link_stats") {
         ingestLinkStats(msg.data);
