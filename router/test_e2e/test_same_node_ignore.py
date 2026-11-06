@@ -69,7 +69,7 @@ def test_same_node_publication_ignored_real_publication_routed(
         # join even when no further status change follows (the ignored-writer case, D26).
         status_reader = status_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # The route's "default"-alias input reader requests RELIABLE+TRANSIENT_LOCAL, so
@@ -77,7 +77,7 @@ def test_same_node_publication_ignored_real_publication_routed(
         # be a plain RxO mismatch, not proof of the D15 ignore. (Under the old controller
         # topic-name matching this test never noticed: a VOLATILE app writer "matched" by
         # name — exactly the false-green D64 dissolved.)
-        compatible = writer_qos(reliability="reliable", durability="transient_local")
+        compatible = writer_qos("router_default_writer")
 
         # --- A) same-node router writer: must be ignored, must never match ---
         held.append(peer_router.writer(TOPIC, TYPE, qos=compatible, dtype=cmd_type))

@@ -3,8 +3,6 @@
 #include "LinkStatsCollector.hpp"
 #include "Log.hpp"
 
-#include <rti/core/policy/CorePolicy.hpp>
-
 #include <algorithm>
 #include <limits>
 #include <sstream>
@@ -18,52 +16,6 @@ std::int64_t now_unix_ns() {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
                     .count());
-}
-
-// Probe QoS (link-health.md, D14): RELIABLE + APPLICATION_AUTO (both sides, RxO),
-// VOLATILE, KEEP_LAST(1), a fixed 1-sample send window with a per-sample piggyback
-// heartbeat (writer), zero heartbeat_response_delay (reader). No liveliness — presence
-// stays RouterHealth's job. Validated end-to-end by spikes/link_probe/ (D81 gate).
-dds::pub::qos::DataWriterQos probe_writer_qos(const dds::pub::Publisher &pub) {
-    dds::pub::qos::DataWriterQos qos = pub.default_datawriter_qos();
-    dds::core::policy::Reliability rel = dds::core::policy::Reliability::Reliable();
-    rel->acknowledgment_kind(rti::core::policy::AcknowledgmentKind::APPLICATION_AUTO);
-    qos << rel;
-    qos << dds::core::policy::Durability::Volatile();
-    qos << dds::core::policy::History::KeepLast(1);
-    rti::core::policy::DataWriterProtocol dwp =
-            qos.policy<rti::core::policy::DataWriterProtocol>();
-    dwp.rtps_reliable_writer().min_send_window_size(1);
-    dwp.rtps_reliable_writer().max_send_window_size(1);
-    dwp.rtps_reliable_writer().heartbeats_per_max_samples(1);
-    qos << dwp;
-    return qos;
-}
-
-dds::sub::qos::DataReaderQos probe_reader_qos(const dds::sub::Subscriber &sub) {
-    dds::sub::qos::DataReaderQos qos = sub.default_datareader_qos();
-    dds::core::policy::Reliability rel = dds::core::policy::Reliability::Reliable();
-    rel->acknowledgment_kind(rti::core::policy::AcknowledgmentKind::APPLICATION_AUTO);
-    qos << rel;
-    qos << dds::core::policy::Durability::Volatile();
-    qos << dds::core::policy::History::KeepLast(1);
-    rti::core::policy::DataReaderProtocol drp =
-            qos.policy<rti::core::policy::DataReaderProtocol>();
-    drp.rtps_reliable_reader().min_heartbeat_response_delay(dds::core::Duration::zero());
-    drp.rtps_reliable_reader().max_heartbeat_response_delay(dds::core::Duration::zero());
-    qos << drp;
-    return qos;
-}
-
-// LAN telemetry stream, keyed by (observer, peer): RELIABLE + TRANSIENT_LOCAL +
-// KEEP_LAST(8) so a slightly-late reader still catches recent intervals per pair (the
-// ActRouterMeshStatus shape, deeper history since this is a stream not a snapshot).
-dds::pub::qos::DataWriterQos stats_writer_qos(const dds::pub::Publisher &pub) {
-    dds::pub::qos::DataWriterQos qos = pub.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::TransientLocal();
-    qos << dds::core::policy::History::KeepLast(8);
-    return qos;
 }
 
 // The codebase's first (and only) DataWriterListener — the app-ack RTT sink, on the probe
@@ -152,6 +104,43 @@ public:
             r.rediscovery_in_interval = true;
         }
     }
+
+    void add_writer_topic(const std::string &peer, const std::string &route_name,
+                          const std::string &topic_name, const WriterLinkDeltas &d,
+                          bool rematch) override {
+        RouterLinkTopicStats stats;
+        stats.route_name = route_name;
+        stats.topic_name = topic_name;
+        stats.direction = "writer";
+        stats.rediscovery_in_interval = rematch;
+        stats.pushed_samples = d.pushed_samples;
+        stats.pushed_fragment_bytes = d.pushed_fragment_bytes;
+        stats.pulled_samples = d.pulled_samples;
+        stats.pulled_fragment_bytes = d.pulled_fragment_bytes;
+        stats.nacks_received = d.nacks_received;
+        stats.nack_frags_received = d.nack_frags_received;
+        stats.heartbeats_sent = d.heartbeats_sent;
+        stats.samples_rejected_remote = d.samples_rejected_remote;
+        record_for(peer).topic_stats.push_back(stats);
+    }
+
+    void add_reader_topic(const std::string &peer, const std::string &route_name,
+                          const std::string &topic_name, const ReaderLinkDeltas &d,
+                          bool rematch) override {
+        RouterLinkTopicStats stats;
+        stats.route_name = route_name;
+        stats.topic_name = topic_name;
+        stats.direction = "reader";
+        stats.rediscovery_in_interval = rematch;
+        stats.samples_received = d.samples_received;
+        stats.duplicates_received = d.duplicates_received;
+        stats.heartbeats_received = d.heartbeats_received;
+        stats.nacks_sent = d.nacks_sent;
+        stats.out_of_range_rejected = d.out_of_range_rejected;
+        stats.samples_rejected_local = d.samples_rejected_local;
+        stats.uncommitted_samples = d.uncommitted_samples;
+        record_for(peer).topic_stats.push_back(stats);
+    }
 };
 
 } // namespace
@@ -161,6 +150,9 @@ LinkStatsCollector::LinkStatsCollector(rti::core::cond::AsyncWaitSet &aws,
                                        dds::domain::DomainParticipant lan_participant,
                                        const std::string &observer_router,
                                        const std::string &network,
+                                       const dds::pub::qos::DataWriterQos &probe_writer_qos,
+                                       const dds::sub::qos::DataReaderQos &probe_reader_qos,
+                                       const dds::pub::qos::DataWriterQos &stats_writer_qos,
                                        int period_ms,
                                        const std::string &probe_topic,
                                        const std::string &stats_topic)
@@ -171,11 +163,11 @@ LinkStatsCollector::LinkStatsCollector(rti::core::cond::AsyncWaitSet &aws,
           wan_publisher_(wan_participant),
           wan_subscriber_(wan_participant),
           probe_topic_(wan_participant, probe_topic),
-          probe_writer_(wan_publisher_, probe_topic_, probe_writer_qos(wan_publisher_)),
-          probe_reader_(wan_subscriber_, probe_topic_, probe_reader_qos(wan_subscriber_)),
+          probe_writer_(wan_publisher_, probe_topic_, probe_writer_qos),
+          probe_reader_(wan_subscriber_, probe_topic_, probe_reader_qos),
           lan_publisher_(lan_participant),
           stats_topic_(lan_participant, stats_topic),
-          stats_writer_(lan_publisher_, stats_topic_, stats_writer_qos(lan_publisher_)),
+          stats_writer_(lan_publisher_, stats_topic_, stats_writer_qos),
           acks_(std::make_shared<ProbeAckAccumulator>()),
           shut_down_(false) {
     // Install the app-ack listener on the probe writer alone, with exactly the app-ack

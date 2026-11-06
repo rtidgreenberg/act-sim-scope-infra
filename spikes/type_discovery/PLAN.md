@@ -33,7 +33,7 @@ builtin sample with no TypeLookup round-trip and no `request_types_filter`.
 One UDPv4 domain per part (fresh participants, so Part B is not contaminated by Part A):
 
 - **App** participant owns `act_types.xml` and creates `control_command` endpoints — this is
-  exactly how the real ACT sim publishes (`harness/act/node_sim/python/*` uses
+  exactly how the real ACT sim publishes (`harness_v2/sims/*` uses
   `rti.connextdds` + `QosProvider.type("control_command")`).
 - **Router-like** participant has **no type library at all** and reads `data.type`.
 

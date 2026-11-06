@@ -10,10 +10,8 @@
 # writer lives — so a single Python probe on the control_lan domain drives commands, reads
 # acks + status, and publishes the source sample that activates the route.
 #
-# The output leg uses writer_qos: default (not auto "") so the route reaches ROUTE_ENABLED
-# as soon as the input writer is discovered — no output-reader readiness gate (D45) to
-# satisfy, keeping this test about the command loop, not QoS. This is a single process, so
-# it does NOT hit the D51 two-process auto-QoS deadlock regardless.
+# The output leg uses writer_qos: default to select the fixed production writer profile.
+# The route becomes enabled once its type is learned; no output-reader gate is required.
 #
 # Domain placeholders substituted per test run — see router/test_e2e/conftest.py
 # (control_lan -> admin/input domain, platform_lan -> output domain; wan unused here).
@@ -29,13 +27,21 @@ router:
 types:
   xml: router/config/example_types.xml
 
+qos_libraries:
+  - harness_v2/qos/act_qos_profiles.xml
+
+qos_profiles:
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+
 participants:
   wan_in:
     role: platform
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   lan_out:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
 
 routes:
   - name: admin_r1

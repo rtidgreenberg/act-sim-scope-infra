@@ -1,27 +1,18 @@
 # Repo context & guardrails for AI assistants
 
-This repo is developed inside a VM. The primary working directory
-(`/media/sf_VM_SHARED/ACT/act-sim-scope-infra`) is a **VirtualBox shared folder
-(`vboxsf`)** mounted from the host. It does **not** provide full POSIX filesystem
-semantics. Getting this wrong has corrupted the VM filesystem before.
+This repo is developed on an AWS instance. The checkout is on the instance's normal
+filesystem.
 
-## Filesystem safety (READ FIRST before running anything)
+## Runtime artifact safety (READ FIRST before running anything)
 
-The shared folder (`/media/sf_VM_SHARED/...`, type `vboxsf`) is fine for **source code,
-config, and executables (read + exec)**. It is **unsafe for runtime files**:
+`debug/logs`, `debug/pcap`, and per-node directories such as `debug/platform_30_debug` are
+generated-artifact roots. Use the per-node directories for current container logs and
+`debug/test_reports/<test_id>.*` for compact retained summaries; clear raw artifacts before
+each run and keep source/config files separate from artifacts.
 
-- **No named pipes** — `mkfifo` fails with `Operation not permitted`.
-- **Unreliable `mmap` + file locking** — **SQLite** databases (e.g. Connext **durable
-  writer history**: `*.db`, `*.db-shm`, `*.db-wal`) can corrupt or hang. This is the most
-  likely cause of past VM filesystem damage. Never point DWH / any SQLite file at the share.
-- Files held open by a process across a `SIGKILL` can leave the share in a bad state.
-
-**Rule: write ALL runtime artifacts to a local filesystem, never the share.**
-- Local ext4 is at `/` and `/tmp`; `/dev/shm` is tmpfs. Use `/tmp/...` (or `mktemp -d`)
-  for FIFOs, SQLite/DWH files, logs, and per-test working dirs.
-- Keep the build tree's *sources* on the share, but `cd` runtime processes into a local
-  working dir so relative output files (like `isc_dwh.db`) land locally.
-- A quick guard: `mkfifo "$DIR/.probe"` and abort if it fails — that proves `$DIR` is local.
+Use `/tmp/...` (or `mktemp -d`) for disposable working directories, FIFOs, SQLite/DWH files,
+and other lock-sensitive transient state. Do not leave processes holding runtime files open
+across forced termination; use the owned harness lifecycle for cleanup.
 
 ## DDS / Connext runtime hygiene
 
@@ -53,8 +44,13 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
 - Treat a running mesh as immutable during diagnosis: inspect logs, bridge JSON, and code
   read-only first. Do not patch a generated config or manually kill/relaunch one router in a
   live mesh.
-- Use `harness_v2/scripts/run_mesh.sh up` and `down` as the only normal mesh lifecycle
-  commands. The runner owns its PIDs and cleanup; do not bypass it with ad hoc restarts.
+- Use `harness_v2/scripts/run_mesh.sh up --emane` and `down --emane` as the default live-mesh
+  lifecycle. The containerized EMANE path is the normal launch mode for dashboard and mesh
+  validation; use the host-process path only when explicitly requested or when debugging the
+  host harness itself. The runner owns its PIDs and cleanup; do not bypass it with ad hoc
+  restarts. Set `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0` for the license-only
+  mount before EMANE container lifecycle commands unless a different readable license directory
+  is explicitly provided.
 - Reproduce a configuration failure in a fresh, isolated `/tmp` workdir with **one** platform
   first. Scale to a multi-boat mesh only after that reproduction is understood and torn down.
 - Before starting any new mesh, verify no prior mesh processes and no `/dev/shm/RTI*` or
@@ -62,6 +58,193 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
   another DDS run.
 - Prefer unit tests and builds for controller/UI diagnostic changes. Do not launch a live mesh
   solely to validate code that can be exercised in-process.
+- For EMANE RF Pipe discovery tests, preserve the validated pathloss-event invocation in
+  `harness_v2/scripts/run_container_baseline.sh`: use the range form
+  `emaneevent-pathloss ... "${source_nem}:${target_nem}" 0`. The installed utility also
+  documents target/reference controls, but validate packet counters before changing the
+  harness's nominal RF setup.
+- In this installed EMANE utility, the valid ascending range form `low_nem:high_nem` creates
+  the bidirectional receiver/transmitter matrix for that contiguous NEM range; reversed ranges
+  such as `2:1` are invalid, and wide ranges such as `1:4` affect every NEM pair in the range,
+  not only the selected endpoints. For GUI one-way impairment, use the validated pair-specific form
+  `emaneevent-pathloss -i eth0 -g 224.1.2.8 -p 45702 <tx_nem> <db> -t <rx_nem> -r <tx_nem>`.
+  The same form with `0` resets that direction. A running container with zero
+  `emane_mac_rx_*` and zero Domain 200 discovery packets is an RF/event path failure, not
+  evidence of a DDS QoS mismatch.
+- A successful `emaneevent-pathloss` exit status is not sufficient validation: the incomplete
+  target form `source db --target target` accepted an impairment command yet removed Platform
+  31/32 DDS peers. Validate EMANE RX/drops, Domain 200 discovery/data counters, route delivery
+  percentage, and all expected `PRESENCE_ALIVE`/`ROUTER_OK` peers after every GUI impairment
+  and reset. A good live GUI check is: apply `100 dB` to one direction, observe that only the
+  selected route's delivery drops, reset that same direction to `0 dB`, wait for the delivery
+  window to roll forward, and confirm delivery returns to 100% with all unrelated peers alive.
+- RF Pipe pathloss is not a smooth application-delivery percentage knob in the current config:
+  with `txpower=0 dBm`, `bandwidth=1 MHz`, `systemnoisefigure=4 dB`, and the packaged PCR
+  curve, `90 dB` still maps to about 100% probability of reception while `100 dB` maps to the
+  lossy region. See [`docs/emane/pathloss-scale-and-gui-control.md`](../docs/emane/pathloss-scale-and-gui-control.md)
+  before interpreting or changing dashboard dB controls.
+- For predictable dashboard latency, loss, and bandwidth controls, use CommEffect, not raw
+  RF Pipe pathloss. CommEffect must be present as a shim in each generated EMANE NEM, and this
+  installed EMANE version accepts `defaultconnectivitymode` (not `defaultconnectivity`) plus
+  `enablepromiscuousmode`. Keep `defaultconnectivitymode=on` so nominal traffic flows before
+  the first CommEffectEvent; with it off, startup traffic can drop as `No Profile`. Validate
+  event processing with `shim0 EventReceptionTable` event `103` on every affected NEM. Reset
+  with zero values; `unicast=0` and `broadcast=0` mean no bitrate limit. After a receiver
+  processes a CommEffect event, omitted transmitters can be dropped as `No Profile`, so GUI
+  pair controls must seed zero-effect profiles for all known transmitter NEMs on each affected
+  receiver before overlaying the selected pair's impairment. See
+  [`docs/emane/pathloss-scale-and-gui-control.md`](../docs/emane/pathloss-scale-and-gui-control.md)
+  for the validated command form and status checks.
+- Treat CommEffect state as directional (`tx_nem -> rx_nem`), even when the GUI presents a
+  bidirectional pair. A bidirectional apply must record and reset both directional profiles;
+  otherwise a later one-way reset can leave the reverse path impaired while the dashboard shows
+  only the last zeroed command. This especially affects reliable DDS because ACKNACK/NACK and
+  heartbeat repair traffic needs the reverse WAN path to get through.
+- Delivery dashboard counts are sequence-matched audit facts from `events.jsonl`, not inferred
+  packet counters: sent/received keys are `(run_id, topic, source_node, sequence)` plus receiver.
+  `ControlCommand`, `PlatformCommandAck`, and `RouterHealth` use a 15 s grace window before
+  missing samples count as lost; periodic status/report topics use 2 s. A 100% loss row under
+  sustained bidirectional impairment can be real app-level non-delivery while DDS repair traffic is
+  itself impaired, not necessarily a dashboard accounting bug.
+- `RouterHealth` is now emitted into the same delivery-audit stream by the C++ router presence
+  path, not by the Python sims: `heartbeat_seq` is the audit `sequence`, `send_timestamp` is
+  `sent_at_ns`, and `source_node` is the node prefix before `/` in the router identity. The
+  dashboard should expect control-to-platform and platform-to-control health flows; do not infer
+  all platform-to-platform RouterHealth deliveries unless that routing/visibility is explicitly
+  added and verified.
+- When an EMANE experiment disrupts mesh discovery, do not attempt incremental manual repairs
+  or recreate one router. Recreating only `control-20` can leave DDS discovery empty even when
+  EMANE telemetry is fresh. Use the owned `run_container_baseline.sh down` then `up` lifecycle
+  to rebuild the nominal RF matrix and wait for every peer in `/api/mesh_status`; process uptime
+  or the harness smoke check alone does not prove all platforms rediscovered.
+- The WAN discovery design is explicit unicast UDPv4: Domain 200 uses `initial_peers`, the
+  WAN transport mask is `UDPv4`, and `WAN_RECEIVE_MULTICAST=0`. When peers disappear, first
+  compare EMANE TX/RX and `traffic_stats.jsonl` discovery counters, then inspect Connext
+  matched-participant warnings; do not treat repeated `Failed to get discovered_participant_data`
+  messages as the root cause until RF receive traffic is present.
+- A fixed EMANE `subid` combined with `excludesamesubidfromfilterenable=on` is suspicious,
+  but changing sub-IDs alone did not restore this mesh. Keep the sub-ID experiment separate
+  from pathloss-event and RF-interface diagnostics so A/B results remain attributable.
+
+## Mesh dashboard frontend debugging (lessons learned)
+
+- **Treat static JS as cache-sensitive.** After changing `gui/mesh_dashboard/static/*.js`, bump
+  the version query in `gui/mesh_dashboard/static/index.html` script tags (for example
+  `mesh_graph.js?v=...`, `traffic_chart.js?v=...`, `operator_tabs.js?v=...`) so the browser
+  does not keep executing stale code.
+- If the UI still shows old labels/behavior (for example "Resolution" after a rename to
+  "Mode"), verify which asset revision is actually loaded in the page before changing logic.
+  In browser devtools/automation, inspect `document.querySelectorAll('script[src]')` and
+  confirm the expected `?v=` token is present.
+- For dashboard layout edits, treat `#graph` and `#traffic-panel` as coupled. A fixed
+  `#traffic-panel` height with a mismatched `#graph` bottom offset creates blank gaps or
+  overlap. Keep them synchronized.
+- Prefer content-sized bottom panels for WAN charts and compute `#graph` bottom spacing from
+  the rendered panel height (minus status bar height), then update that spacing on resize.
+- After merging stacked WAN charts into a single canvas, remove obsolete fixed-height
+  assumptions and validate there is no empty panel space at the bottom.
+- When validating GUI fixes, verify both source and runtime behavior:
+  1. no syntax/lint errors,
+  2. expected script revision loaded,
+  3. live DOM/layout metrics (`getBoundingClientRect`) match intent,
+  4. interactive labels/context menus show updated wording.
+- For the Experiment tab specifically, verify the live browser has loaded the current
+  `operator_tabs.js?v=...`, source/destination options come from `/api/mesh_status`, the
+  controller status comes from `/api/emane_controller`, and apply/reset behavior is validated
+  through the GUI path, not only by manually running `emaneevent-pathloss` in a container.
+- After changing Delivery tab metric semantics, update the definitions text box below the table
+  in `gui/mesh_dashboard/static/index.html` in the same change and browser-verify the rendered
+  labels. Current definitions: `Sent` is rolling-window sends, `Received` is rolling-window
+  destination receives, `Lost` is only messages outside the topic grace period that have not been
+  received, and the grace period calls out reliable command/health topics versus periodic
+  status/report topics.
+- When diagnosing mesh graph color, separate topology evidence from link health: solid/dashed
+  edges come from `ActRouterMeshStatus`/`peers_seen`, while orange/red health should come from
+  `ActRouterLinkStats` counters and freshness. Under lossy CommEffect, app/status samples can keep
+  arriving while the `RouterHealth` topic misses its presence deadline; that means degraded health,
+  not necessarily a complete WAN outage.
+- `RouterHealth` presence timing is intentionally slacker than the 1 s heartbeat for lossy EMANE
+  runs: the current XML/code pairing is 8 s deadline (STALE) and 12 s automatic liveliness lease
+  (DEAD). If changing these, update both `harness_v2/qos/act_qos_profiles.xml` and
+  `router/src/core/PresenceMonitor.hpp`, then rebuild/restart the routers; a browser reload alone
+  only picks up static dashboard changes.
+
+### Live CommEffect verification lessons
+
+- Treat every scenario as contaminated until `POST /api/emane_controller` with
+  `{"reset_all":true}` succeeds and a follow-up `GET` reports an empty `impairments` list.
+  Restarting the mesh does not by itself prove the operator experiment state is clean. Record the
+  precondition and reset again after every scenario.
+- The Experiment UI's `pathloss_db=0` is not a generic reset signal: CommEffect applies always use
+  zero pathloss. Reset logic must use the explicit reset flag, otherwise a valid CommEffect apply
+  can be rendered or submitted as a reset. Apply requests are asynchronous; sequence responses so
+  an older response cannot overwrite a newer multi-profile state. Verify multiple profiles through
+  both the UI and `/api/emane_controller`.
+- For complete Delivery coverage, assign platforms to a common team (for example `TEAM_A`) so the
+  platform-to-platform `PlatformData` route is active, and set each platform to `debug` to expose
+  Detail, Mission, Waypoint, Debug, Thruster, and Power status topics. `PlatformData` is not a
+  control-to-platform flow; its expected recipients are other platforms sharing a non-identity
+  team partition. A Delivery resolver that expects every platform will falsely report loss for
+  unassigned peers.
+- In `/api/mesh_status`, each peer has `presence`, `last_seen_delta_ms`, and `health` as sibling
+  fields. `health.overall_state` is the last published RouterHealth summary and can remain
+  `ROUTER_OK` after communication is lost; use the sibling `presence` (`PRESENCE_STALE` or
+  `PRESENCE_DEAD`) for current reachability. Do not diagnose a presence defect by searching inside
+  `health`.
+- For raw EMANE evidence, resolve exact Compose names such as
+  `act-emane-container-baseline-control-20-1` and `...-platform-30-1`; short service names are
+  not valid `docker exec` targets. Check NEM 1 for Control_20 and NEM 2 for Platform_30 with
+  `emanesh localhost get table <nem> all`, especially `shim0 EventReceptionTable` event `103`.
+- The control container maps the dashboard to host port `8080`. Verify `/api/*` from the host only
+  after confirming that mapping. A local WebSocket `101 Switching Protocols` proves the bridge;
+  Dev Tunnel `502/504` failures are forwarding-layer evidence. Use the dashboard transport badge
+  and REST fallback state when deciding whether browser evidence is live.
+
+## Debugging Workflow
+
+Use the repository debug tree as the first place to look for runtime evidence:
+
+- `debug/logs/mesh/`: host-process mesh application logs, including `control.log`,
+  `platform<ID>.log`, simulator and mesh-control logs, `mesh_bridge.log`, and
+  `traffic_monitor.log`. For the containerized EMANE mesh, prefer the live per-node logs under
+  `debug/<node>_debug/logs/` (`router.log`, `mesh_dashboard.log`, `traffic_monitor.log`, etc.);
+  `debug/logs/mesh/` may be stale from an older host-process run.
+- `debug/logs/network_monitor/traffic_stats.jsonl`: append-only WAN traffic samples from
+  the dashboard monitor. The monitor watches DDS domain `200` only and splits discovery
+  and user-data packet counts and bytes.
+- `debug/logs/journal/control.jsonl` and `platform<ID>.jsonl`: JSONL samples captured by
+  the canonical mesh lifecycle from each node's journal/status subscriber, containing
+  `ActRouterControllerJournal` route decisions and `ActRouterStatus` snapshots.
+- `debug/logs/router_e2e/<test-name>/`: rendered e2e configs and subprocess logs. Test
+  failures expose the exact `log_path` to inspect.
+- `debug/pcap/<application>/`: raw packet captures. Use `debug/pcap/router/` for the
+  planned in-process Connext network capture and application-specific subdirectories for
+  other capture tools.
+- `debug/scripts/`: diagnostic tools; keep generated output in the matching `debug/logs/`
+  or `debug/pcap/` application directory.
+
+Recommended triage order:
+
+1. Check the active lifecycle's router logs for process startup, shutdown, DDS discovery, and
+  router errors: `debug/<node>_debug/logs/router.log` for container EMANE runs, or
+  `debug/logs/mesh/` for host-process runs.
+2. Check `debug/logs/journal/router_journal.jsonl` for the controller event, decision,
+   pre/post `state_revision`, and status-publish action.
+3. Check `debug/logs/network_monitor/traffic_stats.jsonl` for WAN discovery versus
+   user-data activity and whether dashboard posting succeeded.
+4. Run `python3 debug/scripts/dds_type_probe.py --domain 20 --wait 5` when a LAN endpoint or
+  inline TypeObject is missing. Use the WAN traffic monitor for domain `200`; do not infer
+  WAN discovery health from a probe that is not configured for the WAN discovery protocol.
+5. Use the live dashboard only after confirming the bridge log and local HTTP endpoint;
+   a blank Dev Tunnel page can be a forwarding problem rather than a WebSocket failure.
+6. For an EMANE mesh with no peers, inspect `debug/<node>_debug/traffic_stats.jsonl` and
+  `debug/<node>_debug/logs/emane.log` before changing DDS QoS. Confirm nonzero RF RX,
+  Domain 200 discovery counters, and the generated `WAN_PEER*`/`WAN_RECEIVE_MULTICAST`
+  values. The router's `Failed to get discovered_participant_data` warnings are often a
+  downstream symptom of missing or unstable RF discovery traffic.
+
+The `/clear` prompt removes generated logs and captures while preserving `.gitkeep`
+directory markers. Stop the associated mesh, test, or capture process before clearing.
 
 ## Connext environment (this VM)
 
@@ -70,15 +253,69 @@ config, and executables (read + exec)**. It is **unsafe for runtime files**:
 - CMake pattern: add `${CONNEXTDDS_DIR}/resource/cmake` to `CMAKE_MODULE_PATH`,
   `find_package(RTIConnextDDS "7.7.0" REQUIRED COMPONENTS core)`, generate types with
   `connextdds_rtiddsgen_run(... LANG "C++11" ...)`, link `RTIConnextDDS::cpp2_api`.
-  Reference build: `relay/cpp/CMakeLists.txt`.
+  Reference build: `spikes/isc_recovery/relay/cpp/CMakeLists.txt`.
 - Modern C++ (C++11) API. Proven entity/QoS/`key_value()` patterns live in
-  `relay/cpp/isc_relay.cxx`.
+  `spikes/isc_recovery/relay/cpp/isc_relay.cxx`.
 - **Generated types use DIRECT public data members, not accessors.** Connext 7.7 follows the
   updated OMG IDL-to-C++11 mapping, so `rtiddsgen` emits struct fields as public members with
   `{}` initializers — write `s.target_node = "x";` / `s.routes.push_back(r);` / `s.routes.at(0)`,
   **not** the old getter/setter pairs (`s.target_node("x")`). Sequences are vector-like
   `omg::types::bounded_sequence<T, N>` (unbounded IDL sequences default to cap `100`). Verified
   against the `router/admin/RouterAdminTypes.idl` codegen.
+
+## Docker Connext setup and test workflow
+
+- Build the supported image from `docker/connext-7.7/`:
+  `docker compose -f docker/connext-7.7/compose.yaml build`. The image installs the RTI
+  7.7.0 SDK from RTI's Debian repository and `rti.connext==7.7.0` from PyPI; it does not
+  require a host Connext SDK.
+- The fixed host directory `/home/dgreenberg/rti_connext_dds-7.7.0` is **license-only**.
+  It must contain `rti_license.dat` and is mounted at `/shared:ro`; use
+  `RTI_LICENSE_FILE=/shared/rti_license.dat`. Do not use this directory as a Docker build
+  context or assume it contains headers, `rti_versions.xml`, or the SDK.
+- After adding a user to the Docker group, start a new shell. Until then use
+  `sg docker -c '...'`; do not use `sudo docker`.
+- For a disposable unit-test/build container, mount the checkout writable because CTest
+  writes `router/build/Testing/Temporary/LastTest.log`:
+  ```bash
+  sg docker -c 'docker run --rm \
+    -v "$PWD":/workspace \
+    -v /home/dgreenberg/rti_connext_dds-7.7.0:/shared:ro \
+    -w /workspace \
+    -e NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0 \
+    -e RTI_LICENSE_FILE=/shared/rti_license.dat \
+    connext:7.7.0 sh -lc "cmake --build router/build -j2 && bash router/run_tests.sh"'
+  ```
+- For e2e validation, mount the checkout read-only and keep all caches, logs, pytest state,
+  and temporary files under `/tmp`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`, `TMPDIR=/tmp`,
+  and run pytest with `-p no:cacheprovider` so `.pytest_cache` is not written to the share.
+  Install pytest only inside the disposable container if the image does not already provide it.
+- Before and after either test mode, check for `pytest`, `router_main`, and mesh processes and
+  for `/dev/shm/RTI*` and `/dev/shm/dds*`. Use host networking for DDS e2e tests, reserve
+  domains through `router/test_e2e/conftest.py`, and never run e2e tests against a live mesh.
+- Rebuild `router/build` after C++ changes; stale binaries can report behavior from older
+  source. The verified clean baseline is `bash router/run_tests.sh` with 4/4 tests passing
+  and `python3 -m pytest -q -p no:cacheprovider router/test_e2e` with 27 tests passing.
+
+## DDS QoS authoring rule
+
+- **All fixed DDS QoS must be authored in external XML profiles.** Do not construct or tune
+  reliability, durability, history, deadline, liveliness, publish mode, RTPS protocol, data
+  representation, transport, discovery, resource-limit, or application-ack behavior in C++
+  or Python code. Add or update profiles in `harness_v2/qos/act_qos_profiles.xml`, then load
+  them through `dds::core::QosProvider` / `QosResolver`.
+- Route endpoint aliases such as `wan_event`, `wan_status`, and internal profiles such as
+  `router_health`, `router_link_probe`, `router_link_stats`, `router_mesh_status`,
+  `router_admin_status`, `router_admin_command`, `router_admin_command_ack`,
+  `router_controller_journal`, `router_default_reader`, and `router_default_writer` are the
+  pattern to follow.
+- Runtime identity/routing state and lifecycle mechanics that are inherently data-dependent,
+  such as `EntityName` from the node/router name, partition membership from operator
+  team/route commands, and the temporary manually-enabled participant factory setting used for
+  disabled-startup ordering, are explicit exceptions. Keep them narrowly scoped and do not use
+  those exceptions to smuggle fixed QoS policy choices back into code.
+- After XML QoS edits, validate with the installed Connext `QosProvider` or XML validator and
+  rebuild `router/build` before relying on the change.
 
 ## Validate Connext specifics — don't guess
 
@@ -151,13 +388,22 @@ real interface (not `lo`) will pick up unrelated host traffic and run forever.
 
 ## Spikes
 
-Experimental proofs live in their own folder (e.g. `relay/`, `spikes/isc_recovery/`) with a
+Experimental proofs live in their own folder (e.g. `spikes/isc_recovery/relay/`) with a
 `PLAN.md`, sources, QoS, a runner, and a `README.md`. Runners must place working dirs on a
 local fs per the rules above.
 
 ## Test harnesses
 
 Two test harnesses are available for debugging and verification:
+
+Before claiming the full test suite is green, verify the environment that is actually running
+the commands. A valid full router gate needs `cmake`/`ctest`, `pytest`, and an importable
+`rti.connextdds` binding in the same shell/container that runs the tests. Do not treat stale
+prebuilt binaries as a full-suite substitute: binaries compiled with `/workspace/...` sample
+paths will fail config tests when run from `/home/ssm-user/...` unless rebuilt or executed from
+the matching mounted path. The Connext Docker image is optional, not assumed; use it only after
+confirming the image exists or Docker daemon access is available, then bind the current checkout
+as `/workspace`, rebuild inside that environment, and run the tests there.
 
 - **C++ unit tests** (`router/test/`): in-process controller/state-machine tests with fakes
   for all DDS seams. Run via `router/run_tests.sh`. **Do not use
@@ -178,19 +424,22 @@ Two test harnesses are available for debugging and verification:
   Key utility: `dds_probe.Probe` (UDPv4-only participant), `AdminChannel` (status reader +
   command writer + ack collector), `write_until_seen` (poll-with-timeout).
 
-- **Type probe** (`harness_v2/scripts/dds_type_probe.py`): standalone diagnostic —
-  `python3 harness_v2/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
+- **Type probe** (`debug/scripts/dds_type_probe.py`): standalone diagnostic —
+  `python3 debug/scripts/dds_type_probe.py --domain 20 [--topic ActTeamAssignment]
   [--wait 5]` — lists every discovered publication/subscription on a domain (topic, type,
   owning participant, name) and whether its inline TypeObject resolved. Surfaces exactly
   the fact `DiscoveryDispatcher.maybe_learn_type()` gates on, so a topic stuck in
   `TOPIC_IDLE` because no publication propagates an inline TypeObject (e.g. WIS writers)
   is immediately visible instead of requiring log-grepping.
 
-- **Live mesh** (`harness_v2/scripts/run_mesh.sh`): launches a full N-platform router mesh
-  (control + platform routers + platform sims + platform_mesh_control processes) with optional
-  WIS + dashboard (`--with-dashboard`). Useful for manual debugging and the standalone
-  `test_team_assignment_e2e.py` script. Logs in `/tmp/act_mesh_run/`. Tear down with
-  `run_mesh.sh down`.
+- **Live mesh** (`harness_v2/scripts/run_mesh.sh --emane`): default launcher for a full
+  N-platform router mesh in containers with EMANE, platform sims, mesh-control helpers, and the
+  dashboard (`--with-dashboard`). Use this path for normal live dashboard/mesh runs, e.g.
+  `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh up --emane --platforms 8 --with-dashboard`,
+  and tear down with
+  `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh down --emane`.
+  The host-process path without `--emane` is for explicit host-only diagnostics. Logs in
+  `debug/logs/mesh/` and generated lifecycle state in the selected workdir.
 
 ## Data model
 

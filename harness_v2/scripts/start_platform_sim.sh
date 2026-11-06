@@ -1,5 +1,5 @@
 #!/bin/bash
-# harness_v2 PLATFORM simulator launcher (trimmed v2 copy of harness/act/scripts).
+# harness_v2 PLATFORM simulator launcher (trimmed v2 copy of the legacy ACT scripts).
 #
 # Usage:
 #   ./start_platform_sim.sh --id <platform_id> [options]
@@ -22,6 +22,8 @@ DESTINATION="Control_20"
 PLATFORM_DOMAIN=""
 ROUTER_NAME=""
 VERBOSITY=2
+RUN_ID=""
+AUDIT_START_FILE=""
 PRINT_CONFIG=false
 
 while [[ $# -gt 0 ]]; do
@@ -31,6 +33,8 @@ while [[ $# -gt 0 ]]; do
         --domain) PLATFORM_DOMAIN="$2"; shift 2 ;;
         --router-name) ROUTER_NAME="$2"; shift 2 ;;
         --verbosity) VERBOSITY="$2"; shift 2 ;;
+        --run-id) RUN_ID="$2"; shift 2 ;;
+        --audit-start-file) AUDIT_START_FILE="$2"; shift 2 ;;
         --print-config) PRINT_CONFIG=true; shift ;;
         --help) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "Error: Unknown option '$1'"; echo "Use --help for usage"; exit 1 ;;
@@ -46,8 +50,12 @@ fi
 [[ -z "$PLATFORM_DOMAIN" ]] && PLATFORM_DOMAIN=$PLATFORM_ID
 [[ -z "$ROUTER_NAME" ]] && ROUTER_NAME="Platform_${PLATFORM_ID}"
 
-LAN_QOS_PROFILE="LAN_QOS_LIB::platform_lan_participant_qos"
+LAN_QOS_PROFILE="ACT_QOS_LIB::lan_platform_participant"
 DOMAIN_ID=$PLATFORM_DOMAIN
+: "${ACT_PROCESS_NAME:=${ROUTER_NAME}-platform-sim}"
+: "${ACT_PARTICIPANT_NAME:=${ROUTER_NAME}/platform_sim}"
+: "${ACT_PARTICIPANT_ROLE:=act.platform_sim}"
+export ACT_PARTICIPANT_NAME ACT_PARTICIPANT_ROLE
 
 echo "
 ================================ PLATFORM SIM CONFIG ================================
@@ -58,12 +66,17 @@ DESTINATION:       $DESTINATION
 LAN_QOS_PROFILE:   $LAN_QOS_PROFILE
 NDDS_QOS_PROFILES: $NDDS_QOS_PROFILES
 VERBOSITY:         $VERBOSITY
+PROCESS_NAME:      $ACT_PROCESS_NAME
+PARTICIPANT_NAME:  $ACT_PARTICIPANT_NAME
+PARTICIPANT_ROLE:  $ACT_PARTICIPANT_ROLE
 ===================================================================================="
 [[ "$PRINT_CONFIG" == true ]] && exit 0
 
-exec python3 "${V2_ROOT}/sims/platform_sim.py" --qos_profile "${LAN_QOS_PROFILE}" \
+exec -a "$ACT_PROCESS_NAME" python3 "${V2_ROOT}/sims/platform_sim.py" --qos_profile "${LAN_QOS_PROFILE}" \
     --domain_id "${DOMAIN_ID}" \
     --source "${ROUTER_NAME}" \
     --destination "${DESTINATION}" \
     --session "${PLATFORM_ID}" \
+    --run-id "${RUN_ID}" \
+    --audit-start-file "${AUDIT_START_FILE}" \
     --verbosity "${VERBOSITY}"

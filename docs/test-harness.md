@@ -11,7 +11,7 @@ and imports [Scope](scope.md)'s shared aggregation lib one-way. Phased build + s
 SDT3d live in [roadmap.md](roadmap.md); repo/override strategy in [architecture.md](architecture.md).
 This doc covers the harness's topology, node anatomy, control surface, and required QoS/code changes.
 
-## 3. Target topology (initial)
+## 3. Target EMANE topology
 
 ```
                  Control_20                Platform_30           Platform_31
@@ -28,6 +28,67 @@ This doc covers the harness's topology, node anatomy, control surface, and requi
    WAN DDS (domain 200) rides emane0  →  EMANE RF Pipe applies bw/delay/loss/pathloss
    LAN DDS (domain 20/30) stays inside the container (loopback/shmem) — never crosses RF
 ```
+
+### Current baseline
+
+`harness_v2/scripts/run_mesh.sh --emane` is the canonical nominal-RF mesh entry point. It starts
+a control node and selected platforms from a versioned topology JSON file. Each node record
+declares its role, LAN domain, NEM ID, RF address, and EMANE-control-network address. The runner
+uses those records to render Compose and router configuration, establish RF links, wait for
+interfaces, capture `emane0`, and compile delivery expectations. WAN participants are pinned to
+`emane0`; LAN participants remain on UDP loopback. The dashboard runs with the control node's
+loopback LAN participant QoS and is exposed through the mesh-owned HTTP port.
+
+The supplied three-node topology passed delivery audit and bounded per-node captures requiring
+decoded RTPS on `emane0` to contain only WAN domain `200`. A non-sequential `Platform_32` topology
+also passed the same dashboard, isolation, audit, and cleanup lifecycle. The old host-process
+behavior remains available without `--emane` as a local diagnostic mode. The Compose engine lives
+in `run_container_baseline.sh` as an internal implementation, not a separate harness.
+
+### WAN traffic observability
+
+Every EMANE node starts a passive `tshark` monitor on its own `emane0`, restricted to WAN domain
+`200`. It writes interval totals to `debug/<node>_debug/traffic_stats.jsonl` and POSTs compact
+summaries over the EMANE control bridge to the dashboard in the control node. The dashboard waits
+for one fresh interval from every topology node before emitting a sample, preventing partial
+network totals from appearing as a whole-network sample. The traffic panel sums only locally
+originated discovery-writer and user-data-writer frames, so each transmit is counted once at its
+sender. Its receiver-view accounting line uses the mean per receiver because a multicast frame can
+be observed by every node. Raw per-node records remain available in JSONL for per-node and post-run
+analysis.
+
+The same monitor polls each local RF Pipe MAC through `emanesh` and reports its cumulative-counter
+transmit/receive delta. The dashboard sums fresh MAC TX deltas across every node as **Mesh RF MAC TX aggregate**:
+bytes/s, packets/s, and drops/s. Because this is a sum of independent senders, it can exceed one
+node's configured 1 Mb/s RF Pipe rate; the panel therefore compares the average per reporting node
+to 1 Mb/s. This is the whole-mesh offered-load measure because every transmission is counted once
+at its sender. The separate `tshark` chart is aggregate interface pressure and includes receiver
+copies; it remains useful for DDS discovery-versus-data analysis but is not a channel-load measure.
+
+Aggregate interface bytes intentionally count every observed transmit/receive copy. For example,
+a packet sent once and received by two peers contributes three interface copies. This represents
+aggregate RF interface pressure, not unique application delivery; the sequenced delivery audit is
+the completion authority. Metrics POSTs use the control bridge and are excluded from `emane0`
+measurement, so they do not add RF observer traffic.
+
+All mesh-generated Compose files, rendered router configurations, lifecycle state, node logs,
+pcaps, JSONL monitor records, and audit reports stay beneath the repository `debug/` directory.
+Use `run_mesh.sh clear --emane --topology <file> --test-id <id>` after teardown to remove the
+selected run's generated state and node/audit artifacts. The runner refuses this action while its
+Compose project is active.
+
+Router Python e2e tests follow the same retained-artifact policy: per-test rendered
+configurations and router/process logs are retained in `debug/logs/router_e2e/`, never in
+`/tmp`. A disposable Docker test run mounts the source checkout read-only and binds only
+`debug/` writable at `/workspace/debug`; `/tmp` is reserved for non-retained interpreter
+caches and package-install state. Run pytest with `-p no:cacheprovider` to avoid creating
+`.pytest_cache` in the checkout.
+
+`harness_v2/scripts/run_emane_rfpipe_feasibility.sh run` is a separate, disposable
+two-NEM prerequisite proof. It creates `emane0` in each container, injects a nominal RF
+Pipe pathloss matrix, and sends one UDP datagram between the two RF addresses. It proves
+the image, container privileges, virtual transport, OTA bridge, and RF Pipe path, but it
+does not run Routing Service, DDS, or any ACT simulator.
 
 ## 4. Node container anatomy
 
@@ -49,6 +110,29 @@ runs **three** cooperating processes via a supervisor/entrypoint:
 **Container requirements:** `--cap-add=NET_ADMIN`, `--device=/dev/net/tun`,
 `sysctl` for multicast; the control bridge is a dedicated compose network.
 
+### Migration checkpoint: container baseline before RF
+
+The working `harness_v2/scripts/run_mesh.sh` harness remains the host-process diagnostic
+tool until the Compose baseline is proven. Its DDS domains isolate simulated LANs, but it
+does not create network namespaces or demonstrate that WAN traffic crosses an impaired
+link. The next implementation phase is therefore a **container isolation baseline**, not
+an ad-hoc Docker bridge WAN:
+
+1. Compose creates one container per control/platform node and an `emane_ctrl` bridge for
+  EMANE OTA/Event Service plus management traffic only.
+2. WAN DDS has no direct Docker bridge route. Once EMANE is added, each WAN participant is
+  pinned to `emane0`; any alternative path is a test failure because it bypasses RF Pipe
+  and CommEffect.
+3. LAN DDS remains node-local. The EMANE slice adds UDP-only LAN QoS plus explicit
+  loopback pinning, allowing packet capture to prove LAN traffic never crosses `emane0`.
+4. The container lifecycle is owned by the harness controller, not shell scripts launched
+  outside it. It creates an isolated run directory on local storage and records all
+  actions there.
+
+This yields a meaningful progression: domain IDs allocate DDS test space; containers
+create network isolation; EMANE owns WAN transport and impairment. The Phase 0.5 exit
+criteria and baseline tests are in [roadmap.md](roadmap.md).
+
 ## Control-plane API (the backbone, §2.5)
 
 Both GUIs, the scenario runner, and scripted/CI tests all sit on one **backend control
@@ -60,6 +144,21 @@ service** exposing primitives across:
 - **State/query:** read topology + metrics (Prometheus / EMANE events).
 
 **Define this control surface before choosing GUI tech.**
+
+### Scenario controller boundary
+
+The scenario controller is the harness's centralized experiment authority. Its initial
+API should be deliberately small: create/reset a run, bring the topology up/down, query
+node health, execute a timed action, and append a durable action/result event to the run
+log. A scenario is a declarative sequence of those actions with stable ids and relative
+times; failures stop the run unless the scenario marks them as expected.
+
+Later adapters implement EMANE link/mobility/CommEffect events, Docker node
+kill/restart, DDS stimulus, and remote-admin actions. Each adapter reports a correlated
+result to the controller so scenarios can make a verdict and export artifacts. Do not put
+this experiment lifecycle or fault policy into `router_main` or a per-node orchestrator:
+those processes make local mission/router decisions, while the controller deliberately
+causes and records faults across the whole topology.
 
 ### Python-relay control surface — custom DDS topics ✅ decided
 The **Python ISC relay's** control surface is **custom DDS topics** (not RS `ServiceAdmin` — we own the relay, so we give it a clean, typed, observable contract). Two patterns, by action type:
@@ -99,6 +198,51 @@ Design rules: **desired + reported topics are `TRANSIENT_LOCAL`/KEEP_LAST** so a
 - **Run/session history** — name runs, browse past runs, load their artifacts for review.
 
 ## Test-operation gaps (scenario runner, §2.6)
+
+### Measurement objectives and correlation method
+
+The harness exists to produce defensible evidence under controlled conditions, not merely
+to demonstrate that messages can flow. Every baseline and fault scenario records a shared
+scenario clock, the requested fault schedule, and measurements from the three distinct
+path segments:
+
+| Question | Ground truth / measurement | Required output |
+|---|---|---|
+| What is DDS network overhead? | Packet capture on `emane0`, classified into user DATA and RTPS discovery/reliability/control traffic; offered application payload bytes from the sims | bytes/s and bytes per delivered application byte, by topic, node pair, and RTPS class |
+| How does DDS react to impairment? | EMANE CommEffect/RF Pipe parameters and events; per-peer `LinkStatsCollector` reliable-protocol totals and interval deltas; app seq/timestamp delivery and RTT | time-aligned traces of NACKs, repair bytes, heartbeats, send-window/backlog, inactive readers, `lost_by_writer`, app delivery, and RTT |
+| Can protocol statistics detect a bad link? | A scenario's labeled transient loss, outage, recovery, delay, and congestion windows | detection latency, recovery latency, precision/recall, and false alarms during a nominal baseline |
+
+Detection begins as an offline correlation exercise. The controller must retain raw counters
+and fault labels before selecting thresholds or a classifier. Candidate signals include
+NACK/repair-byte rate, unacknowledged backlog, send-window contraction, reader inactivity,
+application-ack RTT, and app sequence gaps. A detector may report `nominal`, `degraded`,
+`congested`, or `unreachable` only after the experiment distinguishes network impairment
+from local resource limits, endpoint rediscovery, and quiet traffic. Until then, the UI
+shows the raw measurements and scenario ground truth rather than an unsupported health
+judgment.
+
+The initial fault matrix is: nominal baseline; fixed bandwidth congestion; bounded loss;
+intermittent loss; complete cutout; recovery; and a node kill/restart control case. Each
+fault action is emitted by the scenario controller with a stable id and expected duration,
+so a run can be replayed and metrics windows can be compared across configurations.
+
+### Application delivery audit
+
+The harness must also produce a message-level completion verdict from simulator send/receive
+logs. Expected receivers are compiled from the effective route, content-filter, partition/team,
+endpoint-match, and lifecycle state at each send timestamp; they are not inferred from a raw
+receive count. The full event contract, expectation rules, artifact layout, JSON output, and
+HTML report requirements are defined in [delivery-audit-framework.md](delivery-audit-framework.md).
+
+The audit harness must isolate each active run with an owned Compose project, work directory,
+and node-artifact directories; it must refuse a conflicting active run before clearing any
+evidence. Before stimulus begins, the controller waits for every selected node's simulator
+endpoints and required route output entities, then waits for their required DDS endpoint
+matches to stabilize. A versioned run manifest declares every required topic, its priority,
+minimum sent sample count, completion threshold, and latency policy. The report shows a verdict
+and denominator for each declared topic; an absent required topic is `inconclusive` or `fail`,
+never hidden by an aggregate percentage. Malformed/truncated JSONL is reported as an
+evidence-quality failure and makes the result `inconclusive`.
 
 - **Result capture & verdict** — per-scenario metric windows, **pass/fail vs thresholds**,
   and an **artifact bundle** (metrics CSV, event log, screenshots, optional pcap). This is the

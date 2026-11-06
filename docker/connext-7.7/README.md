@@ -1,14 +1,16 @@
-# Connext DDS 7.7 container
+# Connext DDS 7.7 and EMANE container
 
-This example builds an Ubuntu 22.04 image from the local Connext DDS 7.7
-installation at `/home/dgreenberg/rti_connext_dds-7.7.0` and clones
-`https://github.com/rtidgreenberg/act-sim-scope-infra.git` into
-`/opt/act-sim-scope-infra`. The Connext license is not copied into the image;
-it is mounted only when the container runs.
+This example builds an Ubuntu 22.04 image from RTI's public Debian repository
+and clones `https://github.com/rtidgreenberg/act-sim-scope-infra.git` into
+`/opt/act-sim-scope-infra`. The build installs the full
+`rti-connext-dds-7.7.0` SDK, matching `rti.connext` Python binding, and checksum-pinned
+EMANE 1.5.3 Ubuntu 22.04 bundle. The
+Connext license is not copied into the image; it is mounted only when the
+container runs.
 
 ## Prepare the files
 
-Place the license and any shared configuration at:
+Place the license and any shared configuration in a host directory, for example:
 
 ```text
 docker/connext-7.7/shared/rti_license.dat
@@ -16,7 +18,11 @@ docker/connext-7.7/shared/
 ```
 
 The `shared` directory is mounted at `/shared`; it is not copied into the
-image. Keep the license file out of source control.
+image. It needs only `rti_license.dat`; the Docker image installs the Connext
+SDK itself. Keep the license file out of source control.
+
+Set `CONNEXT_SHARED_DIR` to any license-only host directory containing `rti_license.dat`.
+The fresh-host procedure is in [../../docs/fresh-instance.md](../../docs/fresh-instance.md).
 
 ## Build and start
 
@@ -27,8 +33,10 @@ docker compose build
 docker compose run --rm connext bash
 ```
 
-The host installation path is configured in `compose.yaml` as an additional
-build context. Change that path if Connext 7.7 is installed elsewhere.
+The Dockerfile configures RTI's APT repository, preseeds the RTI license agreement, and
+verifies the EMANE bundle checksum before installing it. The build requires network access to
+`packages.rti.com`, PyPI, and `adjacentlink.com`; it does not require a host Connext or EMANE
+installation. Allocate at least 60 GiB free on Docker's active data root before building.
 
 The container starts in `/opt/act-sim-scope-infra`. To build a specific branch
 or tag:
@@ -47,9 +55,10 @@ Verify the installation from inside the container:
 echo "$NDDSHOME"
 test -r "$RTI_LICENSE_FILE"
 python3 -c 'import rti.connextdds'
+emane --version
 ```
 
-## Run one platform
+## Current harnesses
 
 Build the router once inside the container:
 
@@ -58,18 +67,30 @@ cmake -S router -B router/build -DCONNEXTDDS_ARCH=x64Linux4gcc8.5.0
 cmake --build router/build -j"$(nproc)"
 ```
 
-Then launch one control node, one platform router, and one platform simulator. Runtime
-files remain on the container's local `/tmp` filesystem:
+The canonical EMANE mesh launches its Compose-managed nodes from an explicit topology file.
+Every node's WAN DDS participant uses its `emane0` interface; the dashboard is served from
+the control node:
 
 ```bash
-bash harness_v2/scripts/run_mesh.sh up --platforms 1
+CONNEXT_SHARED_DIR=/path/to/license-dir \
+bash harness_v2/scripts/run_mesh.sh up --emane \
+	--topology harness_v2/topologies/three_node_emane.json --dashboard-port 8080
 ```
 
-When finished, tear down every process tracked by the harness:
+Validate delivery and RF interface isolation, then tear down the owned topology:
 
 ```bash
-bash harness_v2/scripts/run_mesh.sh down
+CONNEXT_SHARED_DIR=/path/to/license-dir \
+bash harness_v2/scripts/run_mesh.sh isolation --emane \
+	--topology harness_v2/topologies/three_node_emane.json
+CONNEXT_SHARED_DIR=/path/to/license-dir \
+bash harness_v2/scripts/run_mesh.sh down --emane \
+	--topology harness_v2/topologies/three_node_emane.json
 ```
+
+Without `--emane`, `run_mesh.sh` retains the host-process mesh as a legacy local diagnostic
+mode. `run_container_baseline.sh` is the internal Compose implementation, not a second public
+harness.
 
 To use different host directories:
 

@@ -31,7 +31,7 @@ The router should support four QoS selection mechanisms:
 1. **QoS profile alias**: named policies such as `platform_wan_udpv4_qos`, `wan_event`,
   `wan_status`, `wan_detail_status`, and LAN downsample aliases such as
   `lan_status_1hz`, each mapped directly to a concrete profile such as
-  `WAN_QOS_LIB::event_qos`.
+  `ACT_QOS_LIB::wan_event`.
 2. **Endpoint assignment**: `input.reader_qos` and `output.writer_qos` select the QoS for
   each leg of the route independently.
 3. **Topic override**: a topic entry may override reader or writer QoS when one topic in
@@ -155,10 +155,10 @@ QoS when it is intentionally changing the app-facing traffic shape, such as `lan
 
 ```yaml
 qos_profiles:
-  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
-  wan_event: WAN_QOS_LIB::event_qos
-  wan_status: WAN_QOS_LIB::status_qos
-  lan_status_1hz: LAN_QOS_LIB::status_1hz_qos
+  wan_participant: ACT_QOS_LIB::wan_router_participant
+  wan_event: ACT_QOS_LIB::wan_event
+  wan_status: ACT_QOS_LIB::wan_status
+  lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 ```
 
 ## Control/Platform Config Example
@@ -191,12 +191,11 @@ control:
   target_router: platform-30-control-platform
 
 types:
-  xml: harness/act/node_sim/datamodel/act_types.xml
+  xml: harness_v2/datamodel/gen/ActTypes.xml
 
 qos_libraries:
-  - harness/act/config/qos/lan_qos_lib.xml
-  - harness/act/config/qos/wan_qos_lib.xml
-  - relay/qos_isc.xml
+  - harness_v2/qos/act_qos_profiles.xml
+  - spikes/isc_recovery/relay/qos_isc.xml
 
 participants:
   control_lan:

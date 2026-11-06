@@ -13,7 +13,7 @@
 
 #include "RouteView.hpp"
 #include "ActTypes.hpp"
-#include "RouterEvents.hpp" // EndpointRecord QoS PODs + DerivedWriterQos (D45)
+#include "RouterEvents.hpp" // EndpointRecord QoS PODs
 
 #include <algorithm>
 #include <cstdint>
@@ -37,11 +37,9 @@ struct MatchedEndpoint {
 
 struct TopicRouteState {
     // Endpoint records from builtin discovery, maintained by the controller from raw
-    // records. DEMOTED by D64/D66 from matching authority to derivation-and-diagnosis
-    // input: matched_readers feeds the D39/D42 writer-QoS derivation + in-place deadline
-    // tightening; neither map gates creation or drives teardown any more.
+    // records for diagnosis. Neither map gates creation or drives teardown.
     std::map<std::string, MatchedEndpoint> matched_writers; // guid -> info
-    std::map<std::string, MatchedEndpoint> matched_readers; // auto-QoS output readers
+    std::map<std::string, MatchedEndpoint> matched_readers; // output readers
 
     // Live matched counts from the build's own entities (D64/D66) — the discovery truth.
     // Updated only by stamp-gated TopicMatchChanged events; part of the entity facts
@@ -68,19 +66,16 @@ struct TopicRouteState {
     std::uint64_t lifecycle_events_forwarded = 0; // always 0 until Phase 10 mirrors
 
     // Entity facts of the live build (D45): resolved QoS summaries from
-    // TopicEntitiesReady, the writer deadline currently offered (for in-place
-    // tightening decisions), and the last incompatible-QoS warning. Cleared whenever
+    // TopicEntitiesReady and the last incompatible-QoS warning. Cleared whenever
     // the build they describe stops existing (teardown/abort/error/re-arm).
     std::string reader_qos_summary;
     std::string writer_qos_summary;
     std::string qos_warning;
-    std::int64_t offered_deadline_nanos = kInfiniteNanos;
 
     void clear_entity_facts() {
         reader_qos_summary.clear();
         writer_qos_summary.clear();
         qos_warning.clear();
-        offered_deadline_nanos = kInfiniteNanos;
         input_matched_count = 0;
         output_matched_count = 0;
         samples_forwarded = 0;
@@ -117,8 +112,8 @@ struct ParticipantState {
     // the protected-identity partition default (RouteConfigParser) and the non-removable
     // protection (is_protected_partition_name). platform_wan-only in current configs
     // post-D103 (was team_wan-only before D103 retired it). Explicit, not name-sniffed.
-    // Does NOT drive link-stats WAN-leg detection (that is on_wan) and does NOT select
-    // SPDP2 (that is use_spdp2) — all three are decoupled.
+    // Does NOT drive link-stats WAN-leg detection (that is on_wan). SPDP2 is selected by
+    // the external WAN participant XML profile, not by runtime code.
     bool team_scoped = false;
     // YAML participants.<name>.on_wan (link-stats decomposition, 2026-07-22): true for a
     // participant whose route legs live on the WAN — drives WAN-leg flagging so the
@@ -129,11 +124,6 @@ struct ParticipantState {
     // cleared their `wan: true` for a partition-matching reason, silently un-covering
     // their data legs.
     bool on_wan = false;
-    // YAML participants.<name>.spdp2 (D78, reinstated; D87 retraction reversed by the D92
-    // CORRECTION 2026-07-22): select SPDP2|SEDP discovery for this participant. Set on every
-    // WAN-facing participant (control_wan/platform_wan post-D103). Decoupled from is_wan so
-    // all WAN participants use SPDP2 while only team-scoped ones take the D83 partition.
-    bool use_spdp2 = false;
     // YAML participants.<name>.protected_partition_entries (D103): literal partition
     // values that are auto-seeded into participant_partition at parse time (same
     // auto-seed convention as team_scoped's ${node.name}) and non-removable via
@@ -194,20 +184,6 @@ struct MutableRouterState {
 };
 
 // --- Pure derivations ---
-
-// True if the route's OUTPUT endpoint names no explicit writer QoS (the canonical alias
-// location, D41). Only the output side depends on discovery under D39's asymmetric
-// contract: an auto writer derives deadline/liveliness from the matched local readers at
-// creation, so readiness gates on >=1 discovered local reader. The input reader's auto
-// profile (weakest-request) matches every writer by RxO construction and needs nothing
-// from discovery (D39/D45 — refines the old both-sides predicate).
-bool output_uses_auto_qos(const RouterRouteSpec &spec);
-
-// The writer-side derivation (D39/D42): deadline = min requested period, liveliness
-// kind = max requested kind, lease = min requested lease across the matched readers.
-// derive=false when the output endpoint names an explicit alias.
-DerivedWriterQos derive_writer_qos(const TopicRouteState &topic,
-                                   const RouterRouteSpec &route_spec);
 
 // Find a topic by name within a route spec, or nullptr if absent. The one shared lookup
 // (D44) — RouteEntityFactory and RouterController both scan the same RouterRouteSpec's

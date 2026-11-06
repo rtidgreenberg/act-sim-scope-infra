@@ -133,10 +133,8 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
         assert facts_b0 is not None, f"node B never reported its own routes; " \
             f"log={proc_b.log_path}"
 
-        writer_a = lan_a.writer(TOPIC, TYPE, qos=writer_qos(
-            reliability="reliable", durability="transient_local"), dtype=cmd_type)
-        reader_b = lan_b.reader(TOPIC, TYPE, qos=reader_qos(
-            reliability="reliable", durability="transient_local"), dtype=cmd_type)
+        writer_a = lan_a.writer(TOPIC, TYPE, qos=writer_qos("router_default_writer"), dtype=cmd_type)
+        reader_b = lan_b.reader(TOPIC, TYPE, qos=reader_qos("router_admin_status"), dtype=cmd_type)
 
         # --- E-disabled: disjoint identities, PlatformData never crosses ---
         buckets = write_until_seen(

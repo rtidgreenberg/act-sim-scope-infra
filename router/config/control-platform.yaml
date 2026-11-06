@@ -42,30 +42,30 @@ types:
   xml: harness_v2/datamodel/gen/ActTypes.xml
 
 qos_libraries:
-  - router/qos/type_discovery_qos.xml
-  - harness_v2/qos/lan_qos_lib.xml
-  - harness_v2/qos/wan_qos_lib.xml
-  - relay/qos_isc.xml
+  - harness_v2/qos/act_qos_profiles.xml
 
 qos_profiles:
-  router_lan_participant: ROUTER_TYPE_DISCOVERY_QOS::lan_participant_qos
-  wan_participant: WAN_QOS_LIB::wan_participant_udpv4_qos
-  wan_event: WAN_QOS_LIB::event_qos
-  wan_status: WAN_QOS_LIB::status_qos
-  lan_status_1hz: LAN_QOS_LIB::status_1sec_qos
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+  control_router_lan_participant: ACT_QOS_LIB::lan_control_router_participant
+  wan_participant: ACT_QOS_LIB::wan_router_participant
+  wan_participant_emane: ACT_QOS_LIB::wan_router_participant_emane
+  wan_event: ACT_QOS_LIB::wan_event
+  router_health: ACT_QOS_LIB::router_health
+  wan_status: ACT_QOS_LIB::wan_status
+  lan_event: ACT_QOS_LIB::lan_event
+  lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 
 participants:
   control_lan:
     role: control
     domain: 20
-    qos: router_lan_participant
+    qos: control_router_lan_participant
   control_wan:
     role: control
     domain: 200
     qos: wan_participant
     on_wan: true   # link-stats WAN-leg coverage: this participant's route legs are on the
                    # WAN, so the LinkStatsCollector polls them (is_wan decomposition).
-    spdp2: true    # D78 (reinstated, D92 CORRECTION): WAN participants use SPDP2|SEDP.
     # D103: platform_wan is now team_scoped (see below), so it's no longer on the free
     # default ("") partition D87 relied on for unconditional control<->platform matching.
     # control_wan gets a standing, PROTECTED (non-removable) wildcard entry instead —
@@ -80,6 +80,13 @@ participants:
     # platform_wan endpoint including former team-only ones — bounded by C2 node count
     # (1-2 expected), not team/platform count.
     protected_partition_entries: ["*"]
+  location_wan:
+    role: platform
+    domain: 200
+    qos: wan_participant
+    on_wan: true
+    # Safety locations cross teams without opening team-scoped application data.
+    protected_partition_entries: ["NAVIGATION"]
   platform_lan:
     role: platform
     domain: 30
@@ -100,7 +107,6 @@ participants:
     on_wan: true       # link-stats WAN-leg coverage (is_wan decomposition) — carries the
                        # platform<->C2 status/event/command data legs AND platform<->
                        # platform team traffic (D103).
-    spdp2: true        # D78 (reinstated): SPDP2|SEDP for this WAN participant.
     # participant_partition omitted: defaults to the protected {"${node.name}"} entry
     # alone (D83 — "team disabled by default" falls out of the shared config itself).
     # Team membership / direct-peer taps are added at runtime via
@@ -117,6 +123,7 @@ routes:
     source_side:
       input:
         participant: control_lan
+        reader_qos: lan_event
       output:
         participant: control_wan
         writer_qos: wan_event
@@ -131,6 +138,7 @@ routes:
           parameters: ["${node.name}"]
       output:
         participant: platform_lan
+        writer_qos: lan_event
 
   # Unfiltered control→platform event route (team-control-topic-plan.md). Same shape as
   # control_command but NO CFT filter — all platforms receive all samples. Used for
@@ -209,6 +217,38 @@ routes:
       output:
         participant: control_lan
 
+  - name: platform_locations_to_wan
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    topics:
+      - name: PlatformInitStatus
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: lan_status_1hz
+      output:
+        participant: location_wan
+        writer_qos: wan_status
+        publisher_partition: NAVIGATION
+
+  - name: wan_locations_to_platform
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: platform
+    topics:
+      - name: PlatformInitStatus
+    source_side:
+      input:
+        participant: location_wan
+        reader_qos: wan_status
+        subscriber_partition: NAVIGATION
+      output:
+        participant: platform_lan
+        writer_qos: lan_status_1hz
+
   - name: platform_detail_status
     enabled: false
     forwarding_mode: dynamic_data
@@ -243,6 +283,7 @@ routes:
       - name: PlatformDebugStatus
       - name: PlatformThrusterStatus
       - name: PlatformPowerStatus
+      - name: ActRouterDiagnostics
     source_side:
       input:
         participant: platform_lan
@@ -259,13 +300,36 @@ routes:
       output:
         participant: control_lan
 
-  - name: platform_events
+  - name: platform_command_ack
     enabled: true
     forwarding_mode: dynamic_data
     source: platform
     destination: control
     topics:
       - name: PlatformCommandAck
+    source_side:
+      input:
+        participant: platform_lan
+        reader_qos: lan_event
+      output:
+        participant: platform_wan
+        writer_qos: wan_event
+        publisher_partition: PLATFORM
+    destination_side:
+      input:
+        participant: control_wan
+        reader_qos: wan_event
+        subscriber_partition: PLATFORM
+      output:
+        participant: control_lan
+        writer_qos: lan_event
+
+  - name: platform_events
+    enabled: true
+    forwarding_mode: dynamic_data
+    source: platform
+    destination: control
+    topics:
       - name: ContactReport
     source_side:
       input:

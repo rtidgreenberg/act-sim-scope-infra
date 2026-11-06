@@ -30,18 +30,26 @@
   const HTTP_ORIGIN = `${location.protocol}//${location.host}`;
   const WS_ORIGIN = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
   const REST_URL = `${HTTP_ORIGIN}/api/mesh_status`;
+  const LINK_STATS_URL = `${HTTP_ORIGIN}/api/link_stats`;
   const WS_URL = `${WS_ORIGIN}/ws`;
   const ASSIGN_URL = `${HTTP_ORIGIN}/api/team_assignment`;
   const STATUS_MODE_URL = `${HTTP_ORIGIN}/api/status_resolution`;
   const PLATFORM_STATUS_URL = `${HTTP_ORIGIN}/api/platform_status`;
+  const REST_REFRESH_MS = 500;
+  let websocketConnected = false;
 
-  // Edge color encodes source, not presence (2026-07-23) -- green for a direct mesh_status
-  // edge (this router's own peers list), blue for a relayed peers_seen edge (a peer's own
-  // reported roster, one hop further out). Presence still surfaces via decay/opacity, the
-  // edge label/title, and the node detail panel -- it just no longer has its own hue.
+  // Topology source is line style / metadata; edge color carries observed link state from
+  // ActRouterLinkStats so operators can tell who is receiving traffic and whether counters
+  // show degradation.
   const EDGE_SOURCE_COLOR = {
     mesh_status: "#3aa655",
     peers_seen: "#3a7bd9",
+  };
+  const EDGE_HEALTH_COLOR = {
+    healthy: "#75c991",
+    degraded: "#e0b84d",
+    impaired: "#e6553a",
+    unknown: "#8a94a6",
   };
   // Node color reuses the exact same hue mapping as edge color (2026-07-23, user ask): green
   // always means "direct" (this dashboard has the node's own RouterHealth, same as a
@@ -53,15 +61,28 @@
   const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
   const STATUS_LEVEL_FRESH_MS = 5000;
+  const LINK_MESSAGE_AGE_WARN_MS = 5000;
 
   const platformStatusCache = new Map(); // nodeId -> {primary, detail, debug, updated_at}
+  let latestLinkStatsRows = [];
+  const knownLinkPairs = new Map();
+  const MAX_ACTIVITY_ENTRIES = 100;
+  const ACTIVITY_SAMPLE_LIMIT = 500;
+  const ACTIVITY_STORAGE_KEY = "act.mesh.linkActivity.v1";
+  const activityEntries = loadPersistedActivity();
+  const seenActivitySamples = new Set(activityEntries.map((entry) => entry.sampleKey).filter(Boolean));
+  const seenActivityTopics = new Set(activityEntries.map((entry) => entry.topicName).filter(Boolean));
+  let activitySequence = activityEntries.reduce((maxId, entry) => Math.max(maxId, Number(entry.id || 0)), 0);
+  let activityFilter = "all";
+  let activityTopicFilter = "all";
+  let activityPlatformFilter = "all";
 
   // Edge decay (2026-07-23): fade an edge toward EDGE_MIN_OPACITY as it ages, floor reached
-  // at EDGE_DECAY_WINDOW_MS -- deliberately the same 3s window as the AUTOMATIC liveliness
+  // at EDGE_DECAY_WINDOW_MS -- deliberately the same window as the AUTOMATIC liveliness
   // lease (D75), so a fully-faded edge lines up with when presence itself would flip to
   // STALE/DEAD. asOfMs is the wall-clock point the edge's data was last known-current, not
   // "when the browser happened to receive a message" -- see the two upsertEdge call sites.
-  const EDGE_DECAY_WINDOW_MS = 3000;
+  const EDGE_DECAY_WINDOW_MS = 12000;
   const EDGE_MIN_OPACITY = 0.15;
   const EDGE_DECAY_TICK_MS = 300;
 
@@ -119,17 +140,27 @@
   const PLATFORM_PIN_Y = 35;
   const PLATFORM_PIN_X_SPACING = 210; // 140 * 1.5 (2026-07-23, user ask: widen 50%)
   const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
+  const nodeRates = new Map(); // node name -> capture-time DDS rate history
+  const RESOLUTION_BADGES = {
+    init: { label: "INIT", color: "#8a94a6" },
+    mission: { label: "MISSION", color: "#e0b84d" },
+    debug: { label: "DEBUG", color: "#e6553a" },
+  };
 
   function relayoutPlatformRow() {
-    const rowIds = nodes
-      .get({ filter: (n) => n.kind === "peer" || n.kind === "placeholder" })
-      .map((n) => n.id)
-      .sort();
-    const n = rowIds.length;
+    const rowNodes = nodes.get({ filter: (node) => node.kind === "peer" || node.kind === "placeholder" });
+    rowNodes.sort((left, right) => {
+      const leftTeam = (left.teamNames || [])[0] || "";
+      const rightTeam = (right.teamNames || [])[0] || "";
+      if (!leftTeam && rightTeam) return 1;
+      if (leftTeam && !rightTeam) return -1;
+      return leftTeam.localeCompare(rightTeam) || String(left.id).localeCompare(String(right.id));
+    });
+    const n = rowNodes.length;
     if (!n) return;
     nodes.update(
-      rowIds.map((id, i) => ({
-        id,
+      rowNodes.map((node, i) => ({
+        id: node.id,
         x: (i - (n - 1) / 2) * PLATFORM_PIN_X_SPACING,
         y: PLATFORM_PIN_Y,
         fixed: { x: true, y: true },
@@ -152,11 +183,16 @@
     "#e6553a", "#3aa1e6", "#e6c53a", "#8a4ae6",
     "#3ae6a1", "#e63a8a", "#a1e63a", "#3ae6e6",
   ];
+  const FIXED_TEAM_COLORS = { A: "#3aa1e6", B: "#e6c53a", C: "#8a4ae6",
+    TEAM_A: "#3aa1e6", TEAM_B: "#d2bd65", TEAM_C: "#a481d5" };
   const teamColors = new Map(); // team name -> assigned palette color
-  const teamChips = new Map();  // team name -> DOM span element (for pruning)
   const teamLegendEl = document.getElementById("team-legend");
+  const teamChips = new Map(
+    [...teamLegendEl.querySelectorAll("[data-team]")].map((element) => [element.dataset.team, element])
+  );
   const directLinksToggle = document.getElementById("toggle-direct-links");
   const relayedLinksToggle = document.getElementById("toggle-relayed-links");
+  const infrastructureStatsToggle = document.getElementById("toggle-infrastructure-stats");
 
   // Team filter (interactivity, 2026-07-21): click a team's legend chip to highlight only
   // that team's nodes (others dimmed). Multi-select — click several to widen the set;
@@ -164,6 +200,8 @@
   // client-side view over the same samples — it never changes what's subscribed.
   const activeTeamFilter = new Set();
   let selectedId = null;
+  let selectedEdgeId = null;
+  let selectedLinkKey = null;
   const DIM_OPACITY = 0.2;
   const HIGHLIGHT_DIM_OPACITY = 0.18;
 
@@ -171,6 +209,18 @@
     if (edge.source === "mesh_status") return directLinksToggle.checked;
     if (edge.source === "peers_seen") return relayedLinksToggle.checked;
     return true;
+  }
+
+  function minOpacityForHealth(state) {
+    if (state === "impaired") return 0.75;
+    if (state === "degraded") return 0.55;
+    return EDGE_MIN_OPACITY;
+  }
+
+  function widthForHealth(state) {
+    if (state === "impaired") return 4;
+    if (state === "degraded") return 3;
+    return 2;
   }
 
   function selectedNeighborhood() {
@@ -200,14 +250,13 @@
   function colorForTeam(team) {
     if (teamColors.has(team)) return teamColors.get(team);
     let hash = 0;
-    for (let i = 0; i < team.length; i++) {
-      hash = (hash * 31 + team.charCodeAt(i)) >>> 0;
-    }
-    const color = TEAM_PALETTE[hash % TEAM_PALETTE.length];
+    for (let i = 0; i < team.length; i++) hash = (hash * 31 + team.charCodeAt(i)) >>> 0;
+    const color = FIXED_TEAM_COLORS[team] || TEAM_PALETTE[hash % TEAM_PALETTE.length];
     teamColors.set(team, color);
-    const span = document.createElement("span");
-    span.innerHTML = `<i style="background:${color}"></i> ${team}`;
-    span.style.cursor = "pointer";
+    return color;
+  }
+
+  teamChips.forEach((span, team) => {
     span.addEventListener("click", () => {
       if (activeTeamFilter.has(team)) {
         activeTeamFilter.delete(team);
@@ -218,27 +267,7 @@
       }
       applyViewFilters();
     });
-    teamLegendEl.appendChild(span);
-    teamChips.set(team, span);
-    return color;
-  }
-
-  // Remove team legend chips for teams that no longer have any member nodes.
-  // Called after every sample ingest so the legend stays in sync with the live mesh.
-  function pruneStaleTeams() {
-    const liveTeams = new Set();
-    nodes.get().forEach((n) => {
-      (n.teamNames || []).forEach((t) => liveTeams.add(t));
-    });
-    teamChips.forEach((span, team) => {
-      if (!liveTeams.has(team)) {
-        span.remove();
-        teamChips.delete(team);
-        teamColors.delete(team);
-        activeTeamFilter.delete(team);
-      }
-    });
-  }
+  });
 
   // Dim every node whose team set doesn't intersect the active filter. The observer node
   // (this vantage point) is always kept full — it's "you", relevant regardless of filter.
@@ -264,10 +293,113 @@
         id: e.id,
         hidden: !(sourceVisible && selectedVisible),
         color: { color: e.baseColor, opacity: sourceVisible && selectedVisible ? e.currentOpacity || 1 : HIGHLIGHT_DIM_OPACITY },
+        width: widthForHealth(e.healthState),
       });
     });
     if (nodeUpdates.length) nodes.update(nodeUpdates);
     if (edgeUpdates.length) edges.update(edgeUpdates);
+  }
+
+  function pairMatches(a, b, source, destination) {
+    return (source === a && destination === b) || (source === b && destination === a);
+  }
+
+  function linkStatsIssueScore(row) {
+    const rejects = Number(row.samples_rejected_local || 0) + Number(row.samples_rejected_remote || 0) + Number(row.out_of_range_rejected || 0);
+    const nacks = Number(row.nacks_sent || 0) + Number(row.nacks_received || 0) + Number(row.nack_frags_received || 0);
+    if (rejects > 0 || row.rediscovery_in_interval) return 2;
+    if (nacks > 0 || Number(row.pulled_samples || 0) > 0 || Number(row.duplicates_received || 0) > 0 || Number(row.uncommitted_samples || 0) > 0) return 1;
+    return 0;
+  }
+
+  function receivedCount(row) {
+    return Number(row.samples_received || 0) + Number(row.heartbeats_received || 0);
+  }
+
+  function sentCount(row) {
+    return Number(row.pushed_samples || 0) + Number(row.heartbeats_sent || 0);
+  }
+
+  function directionSummariesForPair(a, b) {
+    return linkRowsForPair(a, b).map((row) => {
+      const observer = nodeNameOf(row.observer_router || "?");
+      const peer = nodeNameOf(row.peer_router || "?");
+      const issues = linkStatsIssueScore(row);
+      const received = receivedCount(row);
+      const sent = sentCount(row);
+      const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+      return { observer, peer, issues, received, sent, ageMs, row };
+    });
+  }
+
+  function directionSummaryText(summary) {
+    const state = summary.received > 0 ? "receiving" : "no receives this interval";
+    const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
+    const ageText = summary.ageMs == null ? "" : `, age ${summary.ageMs} ms`;
+    return `${summary.observer} received from ${summary.peer}: ${summary.received} rx, ${summary.sent} tx${issueText}${ageText} (${state})`;
+  }
+
+  function directionSummaryHtml(summary) {
+    const state = summary.received > 0 ? "receiving" : "no receives this interval";
+    const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
+    const ageText = summary.ageMs == null
+      ? ""
+      : `, <span class="message-age${summary.ageMs > LINK_MESSAGE_AGE_WARN_MS ? " warn" : ""}">age ${escHtml(summary.ageMs)} ms</span>`;
+    return `${escHtml(summary.observer)} received from ${escHtml(summary.peer)}: ${escHtml(summary.received)} rx, ${escHtml(summary.sent)} tx${escHtml(issueText)}${ageText} (${escHtml(state)})`;
+  }
+
+  function healthForPair(a, b) {
+    const directions = directionSummariesForPair(a, b);
+    if (!directions.length) return { state: "unknown", color: EDGE_HEALTH_COLOR.unknown, label: "no link stats yet" };
+    const maxIssue = Math.max(...directions.map((direction) => direction.issues));
+    const staleDirections = directions.filter((direction) => direction.ageMs != null && direction.ageMs > LINK_MESSAGE_AGE_WARN_MS).length;
+    const receivingDirections = directions.filter((direction) => direction.received > 0).length;
+    const directionCount = directions.length;
+    if (receivingDirections === 0) return { state: "impaired", color: EDGE_HEALTH_COLOR.impaired, label: "no observed receives" };
+    if (maxIssue >= 2) return { state: "impaired", color: EDGE_HEALTH_COLOR.impaired, label: `${receivingDirections}/${directionCount} directions receiving, errors/rediscovery` };
+    if (maxIssue === 1 || receivingDirections < directionCount || staleDirections > 0) {
+      return { state: "degraded", color: EDGE_HEALTH_COLOR.degraded, label: `${receivingDirections}/${directionCount} directions receiving, degraded` };
+    }
+    return { state: "healthy", color: EDGE_HEALTH_COLOR.healthy, label: `${receivingDirections}/${directionCount} directions receiving` };
+  }
+
+  function topologyEvidenceForPair(a, b) {
+    const sources = new Set();
+    edges.get().forEach((edge) => {
+      if (pairMatches(a, b, String(edge.from), String(edge.to)) && edge.source) sources.add(edge.source);
+    });
+    return sources;
+  }
+
+  function topologySourceLabel(source) {
+    if (source === "mesh_status") return "direct mesh_status";
+    if (source === "peers_seen") return "relayed peers_seen";
+    return source || "link";
+  }
+
+  function edgeTitle(a, b, source) {
+    const health = healthForPair(a, b);
+    const directions = directionSummariesForPair(a, b);
+    const directionText = directions.length ? `\n${directions.map(directionSummaryText).join("\n")}` : "";
+    return `${a} <-> ${b}\nobserved health: ${health.label}\ntopology evidence: ${topologySourceLabel(source)}${directionText}`;
+  }
+
+  function restyleEdgesForHealth() {
+    const updates = edges.get().map((edge) => {
+      const health = healthForPair(String(edge.from), String(edge.to));
+      return {
+        id: edge.id,
+        baseColor: health.color,
+        healthState: health.state,
+        healthLabel: health.label,
+        title: edgeTitle(String(edge.from), String(edge.to), edge.source),
+        currentOpacity: Math.max(edge.currentOpacity || 1, minOpacityForHealth(health.state)),
+        color: { color: health.color, opacity: Math.max(edge.currentOpacity || 1, minOpacityForHealth(health.state)) },
+        width: widthForHealth(health.state),
+      };
+    });
+    if (updates.length) edges.update(updates);
+    applyViewFilters();
   }
 
   // The wire's RouterHealth.router / observer_node+observer_router carry the full D79
@@ -285,6 +417,20 @@
   function routerLabel(id) {
     return String(id);
   }
+
+  function platformCircleLabel(id) {
+    const match = /^Platform_(\d+)$/.exec(String(id));
+    return match ? `P${match[1]}` : "";
+  }
+
+  function observerCircleLabel(id) {
+    const match = /^Control_(\d+)$/.exec(String(id));
+    return match ? `P${match[1]}` : "";
+  }
+
+  window.ActMissionStyle = {
+    teamColor: colorForTeam, unassignedColor: KNOWN_NODE_COLOR, controlColor: OBSERVER_NODE_COLOR,
+  };
 
   // Every node id in the graph is now just the node name (nodeNameOf, above) -- which is
   // exactly what team_partition's protected/direct-tap entries contain too (D83:
@@ -307,14 +453,20 @@
     );
   }
 
-  function teamBorder(teamNames) {
-    return teamNames.length ? colorForTeam(teamNames[0]) : NO_TEAM_BORDER;
+  function teamFill(teamNames) {
+    return teamNames.length ? colorForTeam(teamNames[0]) : KNOWN_NODE_COLOR;
   }
 
-  const statusEl = document.getElementById("statusbar");
+  const statusEl = document.getElementById("status-text");
+  const transportBadge = document.getElementById("transport-badge");
   let topologyStatus = "connecting…";
   function setStatus(text) {
     statusEl.textContent = text;
+  }
+
+  function setTransportState(state, label) {
+    transportBadge.dataset.state = state;
+    transportBadge.textContent = label;
   }
 
   const nodes = new vis.DataSet();
@@ -326,12 +478,142 @@
       nodes: { shape: "dot", size: 16, font: { size: 13, color: "#e6e8eb" } },
       edges: { width: 2, smooth: { enabled: false } },
       physics: { enabled: false },
-      interaction: { hover: false },
+      interaction: { hover: false, selectConnectedEdges: false },
     }
   );
   // Expose for headless Playwright e2e tests (test_team_assignment_e2e.py) — lets
   // page.evaluate() call network.getPositions() / canvasToDOM() to find node coords.
   window.__network = network;
+  infrastructureStatsToggle.addEventListener("change", () => network.redraw());
+
+  function updateNodeRate(sample) {
+    if (!sample || !sample.observer || sample.domain_id !== 200) return;
+    const rates = nodeRates.get(sample.observer) || {history: new window.ACTTrafficRates.History()};
+    if (rates.sample && sample.capture_timestamp <= rates.sample.capture_timestamp) return;
+    rates.sample = sample;
+    rates.history.add(sample, {
+      tx: sample.tx_bytes * 1000 / sample.interval_ms,
+      rx: sample.rx_bytes * 1000 / sample.interval_ms,
+    });
+    nodeRates.set(sample.observer, rates);
+    network.redraw();
+  }
+
+  function formatNodeRate(bitsPerSec) {
+    return `${(bitsPerSec / 1000).toFixed(0)} kb/s`;
+  }
+
+  function formatNodeRatePair(txBitsPerSec, rxBitsPerSec) {
+    return `${(txBitsPerSec / 1000).toFixed(0)}/${(rxBitsPerSec / 1000).toFixed(0)} kbps`;
+  }
+
+  function nodeRateOverlayPosition(node, position, width, height) {
+    if (node.kind === "observer") {
+      // Keep C2 stats above the control node and out of the link fan-out.
+      return { x: position.x - width / 2, y: position.y - (height + 30) };
+    }
+    // Keep platform stats below the node with extra clearance from curved peer links.
+    return { x: position.x - width / 2, y: position.y + 82 };
+  }
+
+  let missionFleet = new Map();
+  let missionSelected = new Set();
+  window.addEventListener("act-mission-state", (event) => {
+    missionFleet = new Map(event.detail.platforms.map((boat) => [boat.platform, boat]));
+    missionSelected = new Set(event.detail.selected);
+    network.redraw();
+  });
+
+  network.on("afterDrawing", (ctx) => {
+    nodes.get({ filter: (node) => node.kind === "peer" }).forEach((node) => {
+      const boat = missionFleet.get(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!boat || !position) return;
+      const teams = { TEAM_A: ["Alpha", "#3aa1e6"], TEAM_B: ["Bravo", "#d2bd65"], TEAM_C: ["Reserve", "#a481d5"] };
+      const team = teams[boat.squad] || ["Unassigned", KNOWN_NODE_COLOR];
+      ctx.save();
+      ctx.strokeStyle = boat.squad ? colorForTeam(boat.squad) : KNOWN_NODE_COLOR;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(position.x, position.y, 21, 0, Math.PI * 2); ctx.stroke();
+      if (missionSelected.has(node.id)) {
+        ctx.strokeStyle = "#d7efff"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(position.x, position.y, 25, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.font = "10px sans-serif"; ctx.fillStyle = "#d7efff"; ctx.textAlign = "center";
+      const mission = boat.mission || {};
+      ctx.fillText(`${team[0]} · ${mission.phase || "IDLE"} · ${mission.waypoint_index || 0}/${mission.waypoints_total || 0}`,
+        position.x, position.y + 68);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "peer" && node.resolutionMode }).forEach((node) => {
+      const badge = RESOLUTION_BADGES[node.resolutionMode];
+      const position = network.getPositions([node.id])[node.id];
+      if (!badge || !position) return;
+      ctx.save();
+      ctx.font = "bold 9px sans-serif";
+      const width = ctx.measureText(badge.label).width + 12;
+      const height = 17;
+      const x = position.x - width / 2;
+      const y = position.y - 34;
+      ctx.fillStyle = badge.color;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 4);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(badge.label, position.x, y + height / 2);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "peer" }).forEach((node) => {
+      const label = platformCircleLabel(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!label || !position) return;
+      ctx.save();
+      ctx.font = "bold 10px sans-serif";
+      ctx.fillStyle = "#14181f";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, position.x, position.y);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "observer" }).forEach((node) => {
+      const label = observerCircleLabel(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!label || !position) return;
+      ctx.save();
+      ctx.font = "bold 10px sans-serif";
+      ctx.fillStyle = "#14181f";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, position.x, position.y);
+      ctx.restore();
+    });
+    nodes.get({ filter: (node) => node.kind === "observer" || node.kind === "peer" }).forEach((node) => {
+      const rates = nodeRates.get(node.id);
+      const position = network.getPositions([node.id])[node.id];
+      if (!position) return;
+      const problem = window.ACTTrafficRates.issue(rates?.sample) || rates?.history.problem;
+      const lines = [
+        "DDS TX/RX",
+        problem || `${formatNodeRatePair(rates.history.rate("tx") * 8, rates.history.rate("rx") * 8)} (3s)`,
+      ];
+      ctx.save();
+      ctx.font = "10px monospace";
+      const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 10;
+      const height = 28;
+      const overlayPos = nodeRateOverlayPosition(node, position, width, height);
+      const x = overlayPos.x;
+      const y = overlayPos.y;
+      ctx.fillStyle = "rgba(24, 28, 36, 0.9)";
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = "#e0b84d";
+      ctx.fillText(lines[0], x + 5, y + 11);
+      ctx.fillStyle = "#75c991";
+      ctx.fillText(lines[1], x + 5, y + 23);
+      ctx.restore();
+    });
+  });
 
   // --- Detail panel (interactivity, 2026-07-21) ---------------------------------------
   // Click a node -> side panel with its full RouterHealth. All fields already live on the
@@ -344,18 +626,42 @@
   }
 
   const detailEl = document.getElementById("detail");
-  const collapsedDetailSections = new Set();
+  const expandedDetailSections = new Set();
 
   function detailRow(k, v) {
     return `<div class="detail-row"><span class="k">${k}</span>` +
            `<span class="v">${v}</span></div>`;
   }
 
+  function edgeDetailRow(k, v, stateClass) {
+    return `<div class="edge-detail-row${stateClass ? ` ${stateClass}` : ""}">` +
+           `<span class="k">${escHtml(k)}</span><span class="v">${escHtml(v)}</span></div>`;
+  }
+
+  function formatCount(value) {
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? n.toLocaleString() : "0";
+  }
+
+  function formatRtt(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n) || n <= 0) return "-";
+    if (n >= 1000) return `${(n / 1000).toFixed(1)} ms`;
+    return `${Math.round(n)} us`;
+  }
+
+  function statsClass(value) {
+    const n = Number(value || 0);
+    return n > 0 ? "warn" : "";
+  }
+
   function detailSection(nodeId, sectionId, title, content) {
     const key = `${nodeId}:${sectionId}`;
-    const open = collapsedDetailSections.has(key) ? "" : " open";
-    return `<details class="detail-section" data-section-key="${key}"${open}>` +
-      `<summary>${title}</summary><div class="detail-section-content">${content}</div></details>`;
+    const expanded = expandedDetailSections.has(key);
+    const state = expanded ? " expanded" : "";
+    return `<section class="detail-section${state}" data-section-key="${key}">` +
+      `<button type="button" class="detail-section-toggle" aria-expanded="${expanded}">${title}</button>` +
+      `<div class="detail-section-content">${content}</div></section>`;
   }
 
   function badge(label, active) {
@@ -413,6 +719,13 @@
     return result;
   }
 
+  function resolutionModeFromHealth(health) {
+    const routeStates = routeStatesFromHealth(health);
+    if (routeStates.debug === "ROUTE_ENABLED") return "debug";
+    if (routeStates.mission === "ROUTE_ENABLED") return "mission";
+    return "init";
+  }
+
   function routeBadge(label, routeState) {
     // Green = route enabled/forwarding; amber = waiting/resolving; red = error; grey = disabled/unknown
     let bg, fg;
@@ -433,6 +746,31 @@
       `border-radius:10px;background:${bg};color:${fg};font-size:11px;` +
       `text-transform:uppercase;" title="${safeTitle}">${label}</span>`;
   }
+
+  const routerDiagnosticsCache = new Map();
+  let routerDiagnosticsRequest = 0;
+  async function refreshRouterDiagnostics() {
+    const request = ++routerDiagnosticsRequest;
+    try {
+      const response = await fetch("/api/router_diagnostics");
+      if (!response.ok) throw new Error(`Diagnostics HTTP ${response.status}`);
+      const snapshot = await response.json();
+      if (request !== routerDiagnosticsRequest) return;
+      routerDiagnosticsCache.clear();
+      for (const row of snapshot.rows) routerDiagnosticsCache.set(row.router, row);
+    } catch (error) {
+      if (request !== routerDiagnosticsRequest) return;
+      routerDiagnosticsCache.clear();
+      console.warn("Router diagnostics refresh failed", error);
+    } finally {
+      if (request === routerDiagnosticsRequest && selectedId !== null) renderDetail(selectedId);
+    }
+  }
+  setInterval(() => {
+    if (selectedId !== null) renderDetail(selectedId);
+    refreshRouterDiagnostics();
+  }, 2000);
+  refreshRouterDiagnostics();
 
   function renderPlatformDataSection(nodeId) {
     // Derive badge state from route status in RouterHealth (authoritative, comes over WAN)
@@ -481,8 +819,24 @@
 
     // Route detail table (when routes array is available from health)
     if (health && Array.isArray(health.routes) && health.routes.length) {
-      let routeHtml = "";
-      health.routes.forEach((rs) => {
+      const diagnostics = routerDiagnosticsCache.get(health.router);
+      let diagnosticState = diagnostics && diagnostics.state;
+      if (diagnosticState === "live") {
+        if (diagnostics.data.config_hash !== health.config_hash) {
+          diagnosticState = "configuration mismatch";
+        } else if (diagnostics.data.state_revision !== health.state_revision) {
+          diagnosticState = "awaiting matching health revision";
+        } else if (Date.now() - diagnostics.received_at > 5000 ||
+                   Date.now() - diagnostics.data.send_timestamp / 1e6 > 5000) {
+          diagnosticState = "stale";
+        }
+      }
+      const diagnosticRoutes = diagnosticState === "live" ? diagnostics.data.routes : [];
+      let routeHtml = detailRow("full diagnostics",
+        diagnostics ? escHtml(diagnosticState) : "unavailable (enable debug for platform detail)");
+      health.routes.forEach((summary) => {
+        const detail = diagnosticRoutes.find(route => route.route_name === summary.route_name);
+        const rs = {...(detail || {}), ...summary};
         const stateShort = (rs.state || "").replace("ROUTE_", "");
         const fwd = rs.samples_forwarded != null ? rs.samples_forwarded : "?";
         const isUnhealthy = rs.state === "ROUTE_ERROR" || rs.state === "ROUTE_DEGRADED";
@@ -524,6 +878,11 @@
         }
       });
       html += detailSection(nodeId, "route-status", "Route Status", routeHtml);
+      if (diagnosticRoutes.length) {
+        html += detailSection(nodeId, "router-diagnostics", "Full router diagnostics",
+          `<pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;">` +
+          `${escHtml(JSON.stringify(diagnostics.data, null, 2))}</pre>`);
+      }
     }
 
     return html;
@@ -536,7 +895,6 @@
       const data = await resp.json();
       if (data && typeof data === "object") {
         platformStatusCache.set(nodeId, data);
-        if (selectedId === nodeId) renderDetail(nodeId);
       }
     } catch (_err) {
       // Best-effort refresh only.
@@ -584,14 +942,17 @@
       `<div class="detail-title">${id}</div>` + body;
     detailEl.querySelector(".detail-close").addEventListener("click", hideDetail);
     detailEl.querySelectorAll(".detail-section").forEach((section) => {
-      section.querySelector("summary").addEventListener("click", (event) => {
+      const toggle = section.querySelector(".detail-section-toggle");
+      toggle.addEventListener("click", (event) => {
         event.preventDefault();
-        if (section.open) {
-          section.removeAttribute("open");
-          collapsedDetailSections.add(section.dataset.sectionKey);
+        event.stopPropagation();
+        const expanded = !section.classList.contains("expanded");
+        section.classList.toggle("expanded", expanded);
+        toggle.setAttribute("aria-expanded", String(expanded));
+        if (expanded) {
+          expandedDetailSections.add(section.dataset.sectionKey);
         } else {
-          section.setAttribute("open", "");
-          collapsedDetailSections.delete(section.dataset.sectionKey);
+          expandedDetailSections.delete(section.dataset.sectionKey);
         }
       });
     });
@@ -604,14 +965,448 @@
     applyViewFilters();
   }
 
+  const edgeDetailPanelEl = document.getElementById("edge-detail-panel");
+  const edgeDetailEl = document.getElementById("edge-detail");
+  const activityPanelEl = document.getElementById("activity-panel");
+  const activityLogEl = document.getElementById("activity-log");
+  const activityToggleEl = document.getElementById("activity-toggle");
+  const activityLinkSelectEl = document.getElementById("activity-link-select");
+  const activityFilterEl = document.getElementById("activity-filter");
+  const activityTopicFilterEl = document.getElementById("activity-topic-filter");
+  const activityPlatformFilterEl = document.getElementById("activity-platform-filter");
+  const activityCountEl = document.getElementById("activity-count");
+  const trafficPanelEl = document.getElementById("traffic-panel");
+
+  function linkPairKey(a, b) {
+    const left = String(a);
+    const right = String(b);
+    return left < right ? `${left}|${right}` : `${right}|${left}`;
+  }
+
+  function rememberLinkPair(a, b, source) {
+    const key = linkPairKey(a, b);
+    const existing = knownLinkPairs.get(key) || {};
+    knownLinkPairs.set(key, { key, a: existing.a || String(a), b: existing.b || String(b), source: source || existing.source || "link" });
+    return key;
+  }
+
+  function linkLabel(pair) {
+    return `${pair.a} <-> ${pair.b}`;
+  }
+
+  function syncEdgeDetailHeight() {
+    if (!edgeDetailEl) return;
+    const detailTop = edgeDetailEl.getBoundingClientRect().top;
+    const trafficTop = trafficPanelEl && trafficPanelEl.children.length
+      ? trafficPanelEl.getBoundingClientRect().top : window.innerHeight;
+    const height = Math.max(180, Math.floor(trafficTop - detailTop - 8));
+    edgeDetailEl.style.setProperty("--edge-detail-height", `${height}px`);
+  }
+
+  function syncActivityLayout() {
+    if (!activityPanelEl) return;
+    const width = activityPanelEl.getBoundingClientRect().width;
+    document.documentElement.style.setProperty("--mesh-right-inset", `${width ? Math.ceil(width) + 8 : 0}px`);
+  }
+
+  function linkRowsForPair(a, b) {
+    return latestLinkStatsRows.filter((row) => {
+      const observer = nodeNameOf(row.observer_router || "");
+      const peer = nodeNameOf(row.peer_router || "");
+      return (observer === a && peer === b) || (observer === b && peer === a);
+    }).sort((left, right) => String(left.observer_router).localeCompare(String(right.observer_router)));
+  }
+
+  function linkRowsForEdge(edge) {
+    if (!edge) return [];
+    return linkRowsForPair(String(edge.from), String(edge.to));
+  }
+
+  function renderStatsSection(row) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+    const title = `${observer} -> ${peer}`;
+    const nacks = Number(row.nacks_received || 0) + Number(row.nacks_sent || 0) + Number(row.nack_frags_received || 0);
+    const rejects = Number(row.samples_rejected_local || 0) + Number(row.samples_rejected_remote || 0) + Number(row.out_of_range_rejected || 0);
+    return `<section class="edge-detail-section">` +
+      `<div class="edge-detail-title">${escHtml(title)} <span class="edge-detail-subtitle">${escHtml(row.network || "wan")}</span></div>` +
+      `<div class="edge-detail-grid">` +
+        edgeDetailRow("pushed", formatCount(row.pushed_samples)) +
+        edgeDetailRow("pulled/repair", formatCount(row.pulled_samples), statsClass(row.pulled_samples)) +
+        edgeDetailRow("NACKs received", formatCount(row.nacks_received), statsClass(row.nacks_received)) +
+        edgeDetailRow("NACK frags", formatCount(row.nack_frags_received), statsClass(row.nack_frags_received)) +
+        edgeDetailRow("heartbeats sent", formatCount(row.heartbeats_sent)) +
+        edgeDetailRow("remote rejects", formatCount(row.samples_rejected_remote), statsClass(row.samples_rejected_remote)) +
+        edgeDetailRow("received", formatCount(row.samples_received)) +
+        edgeDetailRow("duplicates", formatCount(row.duplicates_received), statsClass(row.duplicates_received)) +
+        edgeDetailRow("NACKs sent", formatCount(row.nacks_sent), statsClass(row.nacks_sent)) +
+        edgeDetailRow("uncommitted", formatCount(row.uncommitted_samples), statsClass(row.uncommitted_samples)) +
+        edgeDetailRow("heartbeats received", formatCount(row.heartbeats_received)) +
+        edgeDetailRow("local rejects", formatCount(rejects), statsClass(rejects)) +
+        edgeDetailRow("RTT mean", formatRtt(row.rtt_mean_us)) +
+        edgeDetailRow("RTT min/max", `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}`) +
+        edgeDetailRow("rediscovery", row.rediscovery_in_interval ? "yes" : "no", row.rediscovery_in_interval ? "bad" : "") +
+        edgeDetailRow("age", ageMs == null ? "-" : `${ageMs} ms`, ageMs != null && ageMs > LINK_MESSAGE_AGE_WARN_MS ? "warn" : "") +
+      `</div>` +
+      (nacks > 0 ? `<div class="edge-detail-subtitle" style="margin-top:6px;color:#e0b84d;">NACK/repair activity in the latest interval.</div>` : "") +
+      `</section>`;
+  }
+
+  function topicStatTotal(row, fields) {
+    return fields.reduce((sum, field) => sum + Number(row[field] || 0), 0);
+  }
+
+  function renderTopicStatsTable(linkRows) {
+    const topicRows = [];
+    linkRows.forEach((linkRow) => {
+      (linkRow.topic_stats || []).forEach((topicRow) => {
+        const direction = topicRow.direction || "";
+        const suffix = direction === "writer" ? " (w)" : direction === "reader" ? " (r)" : "";
+        topicRows.push({
+          topic: `${topicRow.topic_name || "-"}${suffix}`,
+          nacks: topicStatTotal(topicRow, ["nacks_received", "nack_frags_received", "nacks_sent"]),
+          repair: topicStatTotal(topicRow, ["pulled_samples", "duplicates_received"]),
+          heartbeats: topicStatTotal(topicRow, ["heartbeats_sent", "heartbeats_received"]),
+          samples: topicStatTotal(topicRow, ["pushed_samples", "samples_received"]),
+          uncommitted: Number(topicRow.uncommitted_samples || 0),
+        });
+      });
+    });
+    if (!topicRows.length) {
+      return `<div class="edge-detail-empty">Per-topic link counters have not arrived on ActRouterLinkStats yet.</div>`;
+    }
+    const body = topicRows.map((row) => `<tr><td>${escHtml(row.topic)}</td>` +
+      `<td>${formatCount(row.samples)}</td><td>${formatCount(row.nacks)}</td>` +
+      `<td>${formatCount(row.repair)}</td><td>${formatCount(row.heartbeats)}</td>` +
+      `<td>${formatCount(row.uncommitted)}</td></tr>`).join("");
+    return `<table class="edge-detail-table"><thead><tr><th>Topic</th><th>Samples</th><th>NACK</th><th>Repair</th><th>HB</th>` +
+      `<th>Uncommitted</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function loadPersistedActivity() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(ACTIVITY_STORAGE_KEY) || "[]");
+      return Array.isArray(parsed) ? pruneActivityArchive(parsed) : [];
+    } catch (_err) {
+      return [];
+    }
+  }
+
+  function pruneActivityArchive(entries) {
+    const countsByTopic = new Map();
+    return entries.filter((entry) => {
+      const topic = entry.topicName || "-";
+      const count = countsByTopic.get(topic) || 0;
+      if (count >= MAX_ACTIVITY_ENTRIES) return false;
+      countsByTopic.set(topic, count + 1);
+      return true;
+    });
+  }
+
+  function persistActivityLog() {
+    try {
+      localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(pruneActivityArchive(activityEntries)));
+    } catch (_err) {
+      // Activity history is best-effort UI state.
+    }
+  }
+
+  function activityTimestamp(row) {
+    const timestamp = Number(row.capture_timestamp || 0);
+    return timestamp > 0 ? new Date(timestamp / 1_000_000).toLocaleTimeString() : new Date().toLocaleTimeString();
+  }
+
+  function activityDirection(row, topicRow) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    return topicRow.direction === "reader" ? `${peer} -> ${observer}` : `${observer} -> ${peer}`;
+  }
+
+  function activityEndpoints(row, topicRow) {
+    const observer = nodeNameOf(row.observer_router || "?");
+    const peer = nodeNameOf(row.peer_router || "?");
+    return topicRow.direction === "reader" ? { source: peer, destination: observer } : { source: observer, destination: peer };
+  }
+
+  function activityTopicLabel(topicRow) {
+    const suffix = topicRow.direction === "writer" ? " (w)" : topicRow.direction === "reader" ? " (r)" : "";
+    return `${topicRow.topic_name || "-"}${suffix}`;
+  }
+
+  function topicActivityBuckets(topicRow) {
+    const nacks = topicStatTotal(topicRow, ["nacks_received", "nack_frags_received", "nacks_sent"]);
+    const repair = topicStatTotal(topicRow, ["pulled_samples", "duplicates_received"]);
+    const rejected = topicStatTotal(topicRow, ["samples_rejected_remote", "out_of_range_rejected", "samples_rejected_local"]);
+    const buckets = [
+      { label: "sample", value: topicStatTotal(topicRow, ["pushed_samples", "samples_received"]) },
+      { label: "hb", value: topicStatTotal(topicRow, ["heartbeats_sent", "heartbeats_received"]) },
+      { label: "nack", value: nacks, state: "bad" },
+      { label: "repair", value: repair, state: repair > 0 ? "warn" : "" },
+      { label: "reject", value: rejected, state: "bad" },
+      { label: "uncommitted", value: Number(topicRow.uncommitted_samples || 0), state: "warn" },
+    ];
+    if (topicRow.rediscovery_in_interval) buckets.push({ label: "rediscovery", value: 1, state: "warn" });
+    return buckets.filter((bucket) => bucket.value > 0);
+  }
+
+  function appendActivityEntry(row, topicRow, bucket) {
+    const endpoints = activityEndpoints(row, topicRow);
+    activityEntries.unshift({
+      id: ++activitySequence,
+      sampleKey: [row.observer_router, row.peer_router, row.network, row.capture_timestamp].join("|"),
+      topicName: topicRow.topic_name || "-",
+      topic: activityTopicLabel(topicRow),
+      metric: bucket.label,
+      filterGroup: bucket.filterGroup || bucket.label,
+      value: bucket.value,
+      state: bucket.state || "",
+      direction: `${endpoints.source} -> ${endpoints.destination}`,
+      source: endpoints.source,
+      destination: endpoints.destination,
+      network: row.network || "wan",
+      time: activityTimestamp(row),
+    });
+    activityEntries.splice(0, activityEntries.length, ...pruneActivityArchive(activityEntries));
+  }
+
+  function setSelectOptions(selectEl, values, allLabel, currentValue) {
+    if (!selectEl) return "all";
+    const sorted = Array.from(values).sort((left, right) => left.localeCompare(right));
+    const nextValue = currentValue !== "all" && values.has(currentValue) ? currentValue : "all";
+    selectEl.innerHTML = `<option value="all">${escHtml(allLabel)}</option>` +
+      sorted.map((value) => `<option value="${escHtml(value)}">${escHtml(value)}</option>`).join("");
+    selectEl.value = nextValue;
+    return nextValue;
+  }
+
+  function syncActivityFilterOptions() {
+    const platforms = new Set();
+    activityEntries.forEach((entry) => {
+      if (entry.source) platforms.add(entry.source);
+      if (entry.destination) platforms.add(entry.destination);
+    });
+    activityTopicFilter = setSelectOptions(activityTopicFilterEl, seenActivityTopics, "All topics", activityTopicFilter);
+    activityPlatformFilter = setSelectOptions(activityPlatformFilterEl, platforms, "All platforms", activityPlatformFilter);
+  }
+
+  function syncLinkInspectorOptions() {
+    if (!activityLinkSelectEl) return;
+    const pairs = Array.from(knownLinkPairs.values()).sort((left, right) => linkLabel(left).localeCompare(linkLabel(right)));
+    const keepValue = selectedLinkKey && knownLinkPairs.has(selectedLinkKey) ? selectedLinkKey : "";
+    activityLinkSelectEl.innerHTML = `<option value="">Inspect link</option>` +
+      pairs.map((pair) => `<option value="${escHtml(pair.key)}">${escHtml(linkLabel(pair))}</option>`).join("");
+    activityLinkSelectEl.value = keepValue;
+  }
+
+  function renderActivityLog() {
+    if (!activityLogEl) return;
+    syncActivityFilterOptions();
+    const matching = activityEntries.filter((entry) => {
+      if (activityFilter === "all") return true;
+      if (activityFilter === "issue") return entry.state === "bad" || entry.state === "warn";
+      return entry.filterGroup === activityFilter;
+    }).filter((entry) => {
+      if (activityTopicFilter !== "all" && entry.topicName !== activityTopicFilter) return false;
+      if (activityPlatformFilter !== "all" && entry.source !== activityPlatformFilter && entry.destination !== activityPlatformFilter) return false;
+      return true;
+    });
+    const filtered = matching.slice(0, MAX_ACTIVITY_ENTRIES);
+    if (activityCountEl) {
+      const hasActiveFilter = activityFilter !== "all" || activityTopicFilter !== "all" || activityPlatformFilter !== "all";
+      activityCountEl.textContent = !hasActiveFilter
+        ? String(filtered.length) : `${filtered.length}/${matching.length}`;
+    }
+    if (!activityEntries.length) {
+      activityLogEl.innerHTML = `<div class="activity-empty">Waiting for link activity.</div>`;
+      syncActivityLayout();
+      return;
+    }
+    if (!filtered.length) {
+      activityLogEl.innerHTML = `<div class="activity-empty">No matching link activity.</div>`;
+      syncActivityLayout();
+      return;
+    }
+    activityLogEl.innerHTML = filtered.map((entry) =>
+      `<div class="activity-entry${entry.state ? ` ${entry.state}` : ""}">` +
+        `<div class="activity-main"><span class="activity-topic">${escHtml(entry.topic)} ${escHtml(entry.metric)}</span>` +
+        `<span class="activity-value">${formatCount(entry.value)}</span></div>` +
+        `<div class="activity-meta">${escHtml(entry.direction)} · ${escHtml(entry.network)} · ${escHtml(entry.time)}</div>` +
+      `</div>`
+    ).join("");
+    syncActivityLayout();
+  }
+
+  function ingestLinkActivity(snapshot) {
+    let changed = false;
+    (snapshot?.rows || []).forEach((row) => {
+      const sampleKey = [row.observer_router, row.peer_router, row.network, row.capture_timestamp].join("|");
+      if (seenActivitySamples.has(sampleKey)) return;
+      seenActivitySamples.add(sampleKey);
+      if (seenActivitySamples.size > ACTIVITY_SAMPLE_LIMIT) {
+        const oldest = seenActivitySamples.values().next().value;
+        seenActivitySamples.delete(oldest);
+      }
+      (row.topic_stats || []).forEach((topicRow) => {
+        if (topicRow.topic_name) seenActivityTopics.add(topicRow.topic_name);
+        topicActivityBuckets(topicRow).forEach((bucket) => {
+          appendActivityEntry(row, topicRow, bucket);
+          changed = true;
+        });
+      });
+    });
+    if (changed) persistActivityLog();
+    renderActivityLog();
+  }
+
+  function renderLinkDetail(pair, source) {
+    if (!pair) {
+      hideEdgeDetail();
+      return;
+    }
+    selectedLinkKey = pair.key;
+    selectedEdgeId = null;
+    const a = String(pair.a);
+    const b = String(pair.b);
+    const rows = linkRowsForPair(a, b);
+    const health = healthForPair(a, b);
+    const evidence = topologyEvidenceForPair(a, b);
+    const evidenceText = evidence.size ? Array.from(evidence).map(topologySourceLabel).join(", ") : "no current topology edge";
+    const directions = directionSummariesForPair(a, b);
+    const statsHtml = rows.length
+      ? rows.map(renderStatsSection).join("")
+      : `<div class="edge-detail-empty">No ActRouterLinkStats sample has arrived yet for ${escHtml(a)} <-> ${escHtml(b)}.</div>`;
+    edgeDetailEl.innerHTML =
+      `<section class="edge-detail-section">` +
+        `<div class="edge-detail-title">${escHtml(a)} <span class="edge-detail-subtitle"><-></span> ${escHtml(b)}</div>` +
+        `<div class="edge-detail-grid">` +
+          edgeDetailRow("health", health.label, health.state === "healthy" ? "" : health.state === "impaired" ? "bad" : "warn") +
+          edgeDetailRow("topology evidence", evidenceText) +
+        `</div>` +
+        (directions.length
+          ? `<div class="edge-detail-subtitle" style="margin-top:6px;">${directions.map(directionSummaryHtml).join("; ")}</div>`
+          : `<div class="edge-detail-subtitle" style="margin-top:6px;">No directional receive counters observed for this pair.</div>`) +
+      `</section>` +
+      statsHtml +
+      `<section class="edge-detail-section">` +
+        `<div class="edge-detail-title">Per-topic link counters</div>` +
+        renderTopicStatsTable(rows) +
+      `</section>`;
+    edgeDetailPanelEl.style.display = "block";
+    syncLinkInspectorOptions();
+    syncEdgeDetailHeight();
+  }
+
+  function renderEdgeDetail(edgeId) {
+    selectedEdgeId = edgeId;
+    const edge = edges.get(edgeId);
+    if (!edge) {
+      hideEdgeDetail();
+      return;
+    }
+    const key = rememberLinkPair(edge.from, edge.to, edge.source);
+    selectedEdgeId = edgeId;
+    renderLinkDetail(knownLinkPairs.get(key), edge.source);
+  }
+
+  function ingestLinkStats(snapshot) {
+    ingestLinkActivity(snapshot);
+    latestLinkStatsRows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+    latestLinkStatsRows.forEach((row) => {
+      const observer = nodeNameOf(row.observer_router || "");
+      const peer = nodeNameOf(row.peer_router || "");
+      if (observer && peer) rememberLinkPair(observer, peer, row.network || "link");
+    });
+    syncLinkInspectorOptions();
+    if (selectedLinkKey) renderLinkDetail(knownLinkPairs.get(selectedLinkKey));
+    restyleEdgesForHealth();
+  }
+
+  window.addEventListener("resize", syncEdgeDetailHeight);
+  window.addEventListener("resize", syncActivityLayout);
+  if (trafficPanelEl && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(syncEdgeDetailHeight).observe(trafficPanelEl);
+  }
+  if (activityPanelEl && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(syncActivityLayout).observe(activityPanelEl);
+  }
+  syncEdgeDetailHeight();
+  syncActivityLayout();
+
+  if (activityFilterEl) {
+    activityFilterEl.addEventListener("change", () => {
+      activityFilter = activityFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  if (activityTopicFilterEl) {
+    activityTopicFilterEl.addEventListener("change", () => {
+      activityTopicFilter = activityTopicFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  if (activityPlatformFilterEl) {
+    activityPlatformFilterEl.addEventListener("change", () => {
+      activityPlatformFilter = activityPlatformFilterEl.value;
+      renderActivityLog();
+    });
+  }
+  if (activityLinkSelectEl) {
+    activityLinkSelectEl.addEventListener("change", () => {
+      const key = activityLinkSelectEl.value;
+      if (!key) {
+        hideEdgeDetail();
+        return;
+      }
+      hideDetail();
+      renderLinkDetail(knownLinkPairs.get(key));
+    });
+  }
+  if (activityToggleEl) {
+    activityToggleEl.addEventListener("click", () => {
+      const collapsed = !activityPanelEl.classList.contains("collapsed");
+      activityPanelEl.classList.toggle("collapsed", collapsed);
+      activityToggleEl.querySelector(".activity-toggle-icon").textContent = collapsed ? "◂" : "▸";
+      activityToggleEl.title = `${collapsed ? "Expand" : "Collapse"} link activity drawer`;
+      activityToggleEl.setAttribute("aria-expanded", String(!collapsed));
+      syncActivityLayout();
+    });
+  }
+  renderActivityLog();
+
+  function hideEdgeDetail() {
+    selectedEdgeId = null;
+    selectedLinkKey = null;
+    edgeDetailEl.innerHTML = "";
+    edgeDetailPanelEl.style.display = "none";
+    if (activityLinkSelectEl) activityLinkSelectEl.value = "";
+    syncEdgeDetailHeight();
+  }
+
+  const edgeDetailClose = edgeDetailPanelEl.querySelector(".ed-close");
+  if (edgeDetailClose) edgeDetailClose.addEventListener("click", hideEdgeDetail);
+
   network.on("selectNode", (p) => {
     if (p.nodes.length) {
+      hideEdgeDetail();
       renderDetail(p.nodes[0]);
       refreshPlatformStatus(p.nodes[0]);
       applyViewFilters();
     }
   });
   network.on("deselectNode", () => hideDetail());
+
+  network.on("selectEdge", (p) => {
+    if (p.nodes && p.nodes.length) return;
+    if (p.edges.length) {
+      hideDetail();
+      renderEdgeDetail(p.edges[0]);
+      applyViewFilters();
+    }
+  });
+  network.on("deselectEdge", () => {
+    if (!network.getSelection().edges.length) hideEdgeDetail();
+  });
 
   directLinksToggle.addEventListener("change", applyViewFilters);
   relayedLinksToggle.addEventListener("change", applyViewFilters);
@@ -640,14 +1435,30 @@
   // so no clock-sync assumption either way).
   function upsertEdge(reporterId, subjectId, presence, opts) {
     opts = opts || {};
-    const baseColor = EDGE_SOURCE_COLOR[opts.source] || "#999999";
     const isRelayed = opts.source === "peers_seen";
+    const reporter = nodes.get(reporterId);
+    const subject = nodes.get(subjectId);
+    const isPlatformEdge = reporter && subject && reporter.kind !== "observer" &&
+      subject.kind !== "observer";
+    const sharedTeam = isPlatformEdge && (reporter.teamNames || []).find((team) =>
+      (subject.teamNames || []).includes(team));
+    const health = healthForPair(reporterId, subjectId);
+    const baseColor = health.color;
+    const curveType = reporterId < subjectId ? "curvedCW" : "curvedCCW";
     edges.update({
       id: `${reporterId}->${subjectId}`, from: subjectId, to: reporterId, arrows: "to",
       label: "",
       dashes: isRelayed ? [8, 6] : false,
+      isPlatformEdge, curveType,
+      smooth: isPlatformEdge ? { enabled: true, type: curveType, roundness: 0.18 } :
+        { enabled: false },
       source: opts.source,
+      topologyColor: sharedTeam ? colorForTeam(sharedTeam) : (EDGE_SOURCE_COLOR[opts.source] || "#999999"),
+      healthState: health.state,
+      healthLabel: health.label,
+      width: widthForHealth(health.state),
       color: { color: baseColor, opacity: 1 },
+      title: edgeTitle(reporterId, subjectId, opts.source),
       hidden: opts.source ? !edgeVisibleBySource({ source: opts.source }) : false,
       baseColor, asOfMs: opts.asOfMs != null ? opts.asOfMs : Date.now(),
       currentOpacity: 1,
@@ -655,17 +1466,8 @@
     refreshParallelEdges(subjectId, reporterId);
   }
 
-  // Tried curvedCW/CCW here (2026-07-23) to fan the reciprocal mesh_status/peers_seen pair
-  // between the same two routers apart instead of one drawing on top of the other -- reverted
-  // same day (user ask: straight point-to-point edges only). Also found empirically that
-  // vis's curvedCW/CCW rendering put the arrowhead at the wrong end relative to the DataSet's
-  // own from/to/arrows:"to" (confirmed via a debug dump of the live edge data: `to` was
-  // correctly the receiving node, but the visual arrow tip rendered at the *other* end) -- so
-  // straight edges aren't just simpler here, they're the correct choice. A reciprocal pair
-  // between the same two nodes goes back to drawing as one overlapping line (both edges still
-  // present/correct in the DataSet, reachable via hover/click) -- a known tradeoff of
-  // straight-only, not a bug. Undirected key so it groups a pair regardless of which one is
-  // `from`/`to`.
+  // Platform-to-platform edges arc in opposite deterministic directions so reciprocal peer
+  // observations remain separately visible. Control-to-platform edges remain straight.
   function undirectedPairKey(a, b) {
     return a < b ? `${a} ${b}` : `${b} ${a}`;
   }
@@ -673,7 +1475,12 @@
   function refreshParallelEdges(a, b) {
     const key = undirectedPairKey(a, b);
     const siblings = edges.get({ filter: (e) => undirectedPairKey(e.from, e.to) === key });
-    edges.update(siblings.map((e) => ({ id: e.id, smooth: { enabled: false } })));
+    edges.update(siblings.map((e) => ({
+      id: e.id,
+      smooth: siblings.length > 1 && e.isPlatformEdge ?
+        { enabled: true, type: e.curveType, roundness: e.isPlatformEdge ? 0.18 : 0.14 } :
+        { enabled: false },
+    })));
   }
 
   // reporterId here matches upsertEdge's reporterId (id/pruning key); the visual `to` field
@@ -700,10 +1507,12 @@
     edges.get().forEach((e) => {
       if (e.asOfMs == null || !e.baseColor) return;
       const frac = Math.max(0, Math.min(1, (now - e.asOfMs) / EDGE_DECAY_WINDOW_MS));
+      const opacity = Math.max(1 - frac * (1 - EDGE_MIN_OPACITY), minOpacityForHealth(e.healthState));
       updates.push({
         id: e.id,
-        currentOpacity: 1 - frac * (1 - EDGE_MIN_OPACITY),
-        color: { color: e.baseColor, opacity: 1 - frac * (1 - EDGE_MIN_OPACITY) },
+        currentOpacity: opacity,
+        color: { color: e.baseColor, opacity },
+        width: widthForHealth(e.healthState),
       });
     });
     if (updates.length) edges.update(updates);
@@ -717,7 +1526,8 @@
     if (!data || !data.observer_node || !data.observer_router) return;
     const observerId = data.observer_node; // already just the node name (RouterMeshStatus)
     nodes.update({ id: observerId, label: routerLabel(observerId), color: OBSERVER_NODE_COLOR,
-                   kind: "observer", ...OBSERVER_PIN_FIELDS });
+             size: 22, font: { color: "transparent" }, kind: "observer",
+             ...OBSERVER_PIN_FIELDS });
 
     const directPeers = new Set();
     const sampleNodeNames = new Set(
@@ -737,11 +1547,12 @@
       const teamNames = deriveTeamNames(health, sampleNodeNames);
       nodes.update({
         id: peerId, label: routerLabel(peerId),
-        color: { background: KNOWN_NODE_COLOR, border: teamBorder(teamNames) },
-        borderWidth: 4,
+        color: { background: teamFill(teamNames), border: KNOWN_NODE_COLOR },
+        borderWidth: 4, size: 22, font: { color: "transparent" },
         // Stashed for the detail panel (interactivity) + team filter — read back from the
         // DataSet on click, so the panel never re-parses the wire.
         kind: "peer", health: health, teamNames: teamNames,
+        resolutionMode: resolutionModeFromHealth(health),
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
         ...PLATFORM_ROW_Y_FIELDS,
         ...(c2PinFields(health) || {}),
@@ -795,32 +1606,44 @@
       }
     });
     if (n) {
-      pruneStaleTeams();                        // remove chips for teams with no members
       applyViewFilters();                      // new nodes respect active filters/highlight
-      if (selectedId) renderDetail(selectedId); // live-refresh an open panel in place
     }
     return n;
   }
 
   async function seedFromRest() {
     try {
-      const resp = await fetch(REST_URL);
-      if (!resp.ok) {
-        setStatus(`REST seed failed: HTTP ${resp.status}`);
-        return;
-      }
-      const n = ingestSampleArray(await resp.json());
+      const n = await refreshFromRest();
       setStatus(`Seeded ${n} sample(s) from REST — connecting WebSocket…`);
     } catch (err) {
+      setTransportState("error", "REST unavailable");
       setStatus(`REST seed error: ${err} — connecting WebSocket…`);
     }
+  }
+
+  async function refreshFromRest() {
+    const [meshResponse, linkResponse] = await Promise.all([
+      fetch(REST_URL),
+      fetch(LINK_STATS_URL),
+    ]);
+    if (!meshResponse.ok) throw new Error(`mesh REST HTTP ${meshResponse.status}`);
+    const n = ingestSampleArray(await meshResponse.json());
+    if (linkResponse.ok) ingestLinkStats(await linkResponse.json());
+    if (!websocketConnected) setTransportState("rest", "REST polling");
+    return n;
   }
 
   // Single always-on push socket -- no connection-creation POST, no HELLO handshake, no
   // bind_datareader frame (that was all WIS's own application-level protocol; the bridge
   // just pushes {"data": {...}} directly, same envelope as the REST seed).
   function connectWebSocket() {
+    websocketConnected = false;
     const ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      websocketConnected = true;
+      setTransportState("websocket", "WebSocket live");
+    };
 
     ws.onmessage = (evt) => {
       let msg;
@@ -829,12 +1652,25 @@
       } catch (_err) {
         return;
       }
+      window.dispatchEvent(new CustomEvent("act-dashboard-message", { detail: msg }));
 
       if (msg.type === "platform_status") {
         if (msg.platform && msg.data) {
           platformStatusCache.set(msg.platform, msg.data);
-          if (selectedId === msg.platform) renderDetail(selectedId);
+          if (selectedId === msg.platform) renderDetail(msg.platform);
         }
+        return;
+      }
+
+      if (msg.type === "traffic_node_stats") {
+        if (msg.data.schema_version < 2) return;
+        updateNodeRate(msg.data);
+        return;
+      }
+
+
+      if (msg.type === "link_stats") {
+        ingestLinkStats(msg.data);
         return;
       }
 
@@ -846,10 +1682,13 @@
     };
 
     ws.onclose = () => {
+      websocketConnected = false;
+      setTransportState("rest", "REST polling");
       setStatus("WebSocket closed — reconnecting…");
       setTimeout(connectWebSocket, RECONNECT_DELAY_MS);
     };
     ws.onerror = () => {
+      setTransportState("rest", "REST polling");
       setStatus("WebSocket error — reconnecting…");
     };
   }
@@ -873,18 +1712,18 @@
     });
   }
 
-  function publishStatusResolution(platformNode, resolutionMode) {
-    const sample = { platform_node: platformNode, resolution_mode: resolutionMode };
+  function publishStatusResolution(platformNode, mode) {
+    const sample = { platform_node: platformNode, mode };
     return fetch(STATUS_MODE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(sample),
     }).then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setStatus(`Resolution ${platformNode} → ${resolutionMode}`);
+      setStatus(`Mode ${platformNode} → ${mode === "debug" ? "Debug" : "Auto (mission state)"}`);
       refreshPlatformStatus(platformNode);
     }).catch((err) => {
-      setStatus(`Status resolution failed: ${err}`);
+      setStatus(`Status mode update failed: ${err}`);
     });
   }
 
@@ -925,7 +1764,7 @@
     return el;
   }
 
-  // Inline team-name input modal — replaces window.prompt() which is not supported
+  // Inline team-selection modal — replaces window.prompt() which is not supported
   // in VS Code's Simple Browser (throws "prompt() is not supported").
   const teamInputModal = document.createElement("div");
   teamInputModal.id = "team-input-modal";
@@ -935,9 +1774,11 @@
     `<div style="background:#1e2028;border:1px solid #3a3f4a;border-radius:6px;padding:16px 20px;` +
     `min-width:280px;box-shadow:0 8px 24px rgba(0,0,0,.6);font:13px/1.6 sans-serif;color:#e6e8eb;">` +
     `<div id="team-input-label" style="margin-bottom:8px;"></div>` +
-    `<input id="team-input-field" type="text" style="width:100%;box-sizing:border-box;` +
+    `<select id="team-input-field" style="width:100%;box-sizing:border-box;` +
     `padding:6px 10px;background:#14181f;border:1px solid #3a3f4a;border-radius:4px;` +
-    `color:#e6e8eb;font:13px sans-serif;outline:none;" />` +
+    `color:#e6e8eb;font:13px sans-serif;outline:none;"><option value="TEAM_A">Alpha</option>` +
+    `<option value="TEAM_B">Bravo</option><option value="TEAM_C">Reserve</option>` +
+    `<option value="">Unassigned</option></select>` +
     `<div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">` +
     `<button id="team-input-cancel" style="padding:4px 14px;background:#2a2d38;border:1px solid #3a3f4a;` +
     `border-radius:4px;color:#e6e8eb;cursor:pointer;font:13px sans-serif;">Cancel</button>` +
@@ -954,7 +1795,8 @@
 
   function showTeamInput(nodeId) {
     teamInputLabel.textContent = `Team name for ${nodeId}:`;
-    teamInputField.value = "";
+    const currentTeam = (nodes.get(nodeId).teamNames || [])[0] || "";
+    teamInputField.value = ["TEAM_A", "TEAM_B", "TEAM_C"].includes(currentTeam) ? currentTeam : "";
     teamInputModal.style.display = "flex";
     teamInputField.focus();
     return new Promise((resolve) => { teamInputResolve = resolve; });
@@ -988,17 +1830,12 @@
     ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
       publishTeamAssignment(nodeId, "");
     }));
-    ctxMenu.appendChild(ctxItem("Resolution: Init", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Auto (Init / Mission)", (nodeId) => {
       publishStatusResolution(nodeId, "init");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);
     }));
-    ctxMenu.appendChild(ctxItem("Resolution: Mission", (nodeId) => {
-      publishStatusResolution(nodeId, "mission");
-      network.selectNodes([nodeId]);
-      renderDetail(nodeId);
-    }));
-    ctxMenu.appendChild(ctxItem("Resolution: Debug", (nodeId) => {
+    ctxMenu.appendChild(ctxItem("Mode: Debug", (nodeId) => {
       publishStatusResolution(nodeId, "debug");
       network.selectNodes([nodeId]);
       renderDetail(nodeId);
@@ -1008,5 +1845,12 @@
     ctxMenu.style.display = "block";
   });
 
+  fetch(LINK_STATS_URL).then((resp) => resp.ok ? resp.json() : null)
+    .then(ingestLinkStats).catch(() => {});
+  setInterval(() => {
+    if (!websocketConnected) {
+      refreshFromRest().catch(() => setTransportState("error", "REST unavailable"));
+    }
+  }, REST_REFRESH_MS);
   seedFromRest().then(connectWebSocket);
 })();

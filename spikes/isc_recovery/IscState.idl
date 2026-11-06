@@ -1,6 +1,6 @@
 // Minimal keyed test type for the instance-state recovery spike.
 //
-// Mirrors the relay/cpp/ActState.idl shape so this rig reuses the proven Modern C++
+// Mirrors the spikes/isc_recovery/relay/cpp/ActState.idl shape so this rig reuses the proven Modern C++
 // entity-creation and key_value() recovery paths.
 //
 //   key_id  — the instance key; its instance_state is the lifecycle signal under test.

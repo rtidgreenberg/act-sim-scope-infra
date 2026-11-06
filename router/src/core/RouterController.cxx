@@ -639,40 +639,6 @@ void RouterController::apply_subscription(const EndpointRecord &rec) {
         entry.deadline_nanos = rec.deadline_nanos;
         entry.liveliness_kind = rec.liveliness_kind;
         entry.lease_nanos = rec.lease_nanos;
-        maybe_tighten_deadline(r->second, t->second, rec.topic_name);
-    }
-}
-
-// A later local reader with a tighter deadline than the live build's offer is
-// accommodated in place via set_qos — no entity recreation, no D32 teardown (D39).
-// Only meaningful for auto-output routes on a FORWARDING build; a build still CREATING
-// is re-checked when its TopicEntitiesReady lands (apply_entities_ready).
-void RouterController::maybe_tighten_deadline(RouteState &route, TopicRouteState &topic,
-                                              const std::string &topic_name) {
-    if (!output_uses_auto_qos(route.desired)
-        || topic.topic_state != RouterRouteTopicState::TOPIC_FORWARDING) {
-        return;
-    }
-    DerivedWriterQos d = derive_writer_qos(topic, route.desired);
-    if (d.deadline_nanos >= topic.offered_deadline_nanos) {
-        return; // never relax; equal is a no-op
-    }
-    std::string summary = factory_->update_writer_deadline(
-            route.desired.route_name, topic_name, d.deadline_nanos);
-    if (summary.empty()) {
-        Log::warn("deadline_tighten_failed",
-                  {{"route", route.desired.route_name}, {"topic", topic_name}});
-        topic.qos_warning = "writer:DEADLINE(update-failed)";
-        return;
-    }
-    Log::info("deadline_tightened",
-              {{"route", route.desired.route_name}, {"topic", topic_name},
-               {"deadline", summary}});
-    topic.offered_deadline_nanos = d.deadline_nanos;
-    topic.writer_qos_summary = summary;
-    // A transient DEADLINE mismatch warning recorded before the tighten is now stale.
-    if (topic.qos_warning == "writer:DEADLINE") {
-        topic.qos_warning.clear();
     }
 }
 
@@ -802,7 +768,26 @@ void RouterController::apply_presence_tick() {
                                       : RouterOverallState::ROUTER_OK;
     const std::vector<RouterRouteStatus> route_statuses = build_route_statuses();
     for (size_t i = 0; i < route_statuses.size(); ++i) {
-        hb.routes.push_back(route_statuses[i]);
+        RouterCompactRouteHealth route;
+        route.route_name = route_statuses[i].route_name;
+        route.state = route_statuses[i].state;
+        route.discovery_state = route_statuses[i].discovery_state;
+        route.samples_forwarded = route_statuses[i].samples_forwarded;
+        hb.routes.push_back(route);
+    }
+    const auto debug_route = state_.routes.find("platform_debug_status");
+    if (node_role_ == "control" ||
+            (debug_route != state_.routes.end() && debug_route->second.desired.desired_enabled)) {
+        RouterDiagnostics diagnostics;
+        diagnostics.router = hb.router;
+        diagnostics.config_hash = hb.config_hash;
+        diagnostics.snapshot_seq = hb.heartbeat_seq;
+        diagnostics.send_timestamp = hb.send_timestamp;
+        diagnostics.state_revision = hb.state_revision;
+        for (const auto &route : route_statuses) {
+            diagnostics.routes.push_back(route);
+        }
+        presence_->publish_diagnostics(diagnostics);
     }
     // team_partition is deliberately NOT filled in here. Unlike every other field above
     // (derived from state_, the controller's own config-mirrored copy), team_partition is
@@ -858,9 +843,6 @@ void RouterController::apply_entities_ready(const ControllerEvent &e) {
     topic.topic_state = RouterRouteTopicState::TOPIC_FORWARDING;
     topic.reader_qos_summary = e.reader_qos_summary;
     topic.writer_qos_summary = e.writer_qos_summary;
-    // A reader that arrived while the build was in flight may request a tighter
-    // deadline than the derivation the build was issued with — re-check now (D39).
-    maybe_tighten_deadline(r->second, topic, e.topic_name);
 }
 
 void RouterController::apply_teardown_complete(const ControllerEvent &e) {
@@ -939,15 +921,6 @@ void RouterController::apply_qos_warning(const ControllerEvent &e) {
     if (e.entity_generation != topic.entity_generation) {
         return; // stale stamp (D23)
     }
-    // A DEADLINE mismatch the tightening already resolved can still be in flight from
-    // the dispatch thread (status fired before set_qos landed) — drop it rather than
-    // record a warning that no longer describes the offer.
-    if (e.qos_warning == "writer:DEADLINE") {
-        DerivedWriterQos d = derive_writer_qos(topic, r->second.desired);
-        if (d.deadline_nanos >= topic.offered_deadline_nanos) {
-            return;
-        }
-    }
     topic.qos_warning = e.qos_warning;
 }
 
@@ -982,13 +955,8 @@ void RouterController::reconcile_topic(RouteState &route, const std::string &top
         }
         topic.entity_generation = next_generation(); // D23 stamp at build
         topic.topic_state = RouterRouteTopicState::TOPIC_CREATING;
-        // Writer-side derivation from the readers currently known via builtin discovery
-        // (D39/D42, best-effort input — possibly none, then the strong baseline); the
-        // offer is remembered so later readers can tighten the deadline in place.
-        DerivedWriterQos derived = derive_writer_qos(topic, route.desired);
-        topic.offered_deadline_nanos = derived.deadline_nanos;
         factory_->create_topic_entities(*route.view, topic_name,
-                                        topic.entity_generation, derived);
+                                        topic.entity_generation);
         break;
     }
     case RouterRouteTopicState::TOPIC_CREATING:

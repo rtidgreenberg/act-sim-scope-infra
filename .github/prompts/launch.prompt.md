@@ -14,7 +14,8 @@ Use the fixed resources below so `/teardown` can clean up precisely:
 
 Follow this sequence exactly:
 1. Read `.github/copilot-instructions.md` and preserve its runtime filesystem/DDS safety rules.
-2. Preflight without changing anything: verify `router/build/router_main` exists or can be built; verify port `18081` is free; verify no `router_main`, `state_reader`, `state_writer`, or mesh Python processes are already running; and verify no `/dev/shm/RTI*` or `/dev/shm/dds*` entries remain. If any check fails, stop and report the precise blocker. Do not use `pkill` or manually kill any process.
+2. Preflight without changing anything: verify Docker Engine is reachable and the current user can invoke `docker` without `sudo`; verify `/home/dgreenberg/rti_connext_dds-7.7.0/rti_license.dat` is readable (this mount supplies only the license; the image installs Connext from RTI's APT repository); verify `router/build/router_main` exists or can be built; verify port `18081` is free; verify no `router_main`, `state_reader`, `state_writer`, or mesh Python processes are already running; and verify no `/dev/shm/RTI*` or `/dev/shm/dds*` entries remain. If any check fails, stop and report the precise blocker. Do not use `pkill` or manually kill any process.
+   If Docker is installed but this shell has not received the `docker` group membership yet, run Docker commands through `sg docker -c '...'` for this launch; do not use `sudo` for Docker commands. A newly added group membership normally requires a new login session.
 3. Build and start the committed Docker environment from the repository root, mounting the current checkout at `/workspace` and the license directory at `/shared`:
    ```bash
    CONNEXT_WORKSPACE_DIR="$PWD" CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 docker compose -f docker/connext-7.7/compose.yaml up -d --build

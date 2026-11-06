@@ -18,6 +18,8 @@
 - [Connext Investigation Review](connext-investigation-review.md): Connext 7.7 API findings, design decisions, concerns, required spikes, and confidence updates.
 - [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
 - [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.
+- [RouterHealth Wire-Size Review](router-health-wire-size-review.md): measured heartbeat field costs, compact heartbeat/detail separation, bitpacking recommendations, and compatibility/size-budget checks (review only).
+- [EMANE Stats and Health Optimization Plan](emane-stats-and-health-optimization-plan.md): live MAC/capture reconciliation, fragment-aware accounting, the default-off infrastructure view, compact heartbeat/debug diagnostics, and operational rollout safeguards (proposal only).
 - [Link Metrics](link-health.md): capture-first per-peer WAN link metrics from reliable protocol statistics (NACKs, repair traffic, send-window backpressure, RTT probe via app-ack on a dedicated `RouterLinkProbe` topic); health *inference* deferred until a link-degradation correlation experiment (D14); multi-network posture: one WAN participant per network, never multi-homed (D18).
 - [Mission Orchestrator (early concept capture)](orchestrator-design.md): a separate per-node process, not a router decision — single arbiter of control is the platform itself; C2 sends mission state (not commands) over a regular route; C2 liveliness comes free from the existing presence roster since C2 is just another router-role mesh node. Not yet a design-decisions.md entry.
 - [SPDP2/Boot-Init Tasks](spdp2-and-boot-init-tasks.md): two sequential, self-contained task assignments (hand off to a fresh session) — (1) root-cause D87's SPDP2 delayed-enable failure and decide go/no-go on reviving it; (2) a wildcard-partition-before-any-routes boot pattern for full-mesh roster collection without leaking team-topic SEDP metadata, timing-dependent on task 1's outcome.
@@ -154,7 +156,7 @@ coding starts:
 ## ACT Routes To Replace First
 
 The ACT submodule uses these channels in
-[harness/act/config/routing/routing_service_config.xml](../../harness/act/config/routing/routing_service_config.xml):
+[harness_v2 router configuration](../../router/config/control-platform.yaml):
 
 | ACT flow | Topics | Current Routing Service behavior | POC router behavior |
 |---|---|---|---|
@@ -166,7 +168,7 @@ The ACT submodule uses these channels in
 | Platform team traffic | `PlatformData` | platform LAN to `team_wan`; participant-level partition initially node-specific such as `PLATFORM_30`, changed to uppercase team name at runtime | route pair using a team participant partition updated by control command |
 
 The ACT DynamicData types come from
-[harness/act/node_sim/datamodel/act_types.xml](../../harness/act/node_sim/datamodel/act_types.xml):
+[harness_v2 data model](../../harness_v2/datamodel/ActTypes.idl):
 
 - `control_command` on topic `ControlCommand`
 - `control_command_ack` on topic `PlatformCommandAck`

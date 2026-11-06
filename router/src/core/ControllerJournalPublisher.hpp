@@ -37,6 +37,7 @@ public:
     ControllerJournalPublisher(
         dds::domain::DomainParticipant participant,
         rti::core::cond::AsyncWaitSet &aws,
+        const dds::pub::qos::DataWriterQos &writer_qos,
         const std::string &topic_name = "ActRouterControllerJournal");
 
     void record(const ControllerJournalRecord &rec) override;

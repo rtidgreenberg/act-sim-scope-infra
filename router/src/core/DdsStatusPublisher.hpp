@@ -27,6 +27,8 @@ public:
     // status after enable. status_topic is the RouterStatus topic (e.g. "ActRouterStatus");
     // ack_topic defaults to the command-status.md RouterCommandAck topic name.
     DdsStatusPublisher(dds::domain::DomainParticipant participant,
+                       const dds::pub::qos::DataWriterQos &status_writer_qos,
+                       const dds::pub::qos::DataWriterQos &ack_writer_qos,
                        const std::string &status_topic,
                        const std::string &ack_topic = "ActRouterCommandAck");
 

@@ -29,6 +29,32 @@ From the **repo root** (paths in the configs are repo-root-relative):
 pytest router/test_e2e -v
 ```
 
+## QoS source of truth
+
+Normal test participants, readers and writers load
+[`ACT_QOS_LIB`](../../harness_v2/qos/act_qos_profiles.xml), the same XML library
+used by the deployed router, dashboard and journal subscriber. There is no test
+QoS library or parallel set of policy defaults. The probe defaults use
+`lan_router_participant`, `router_default_reader` and `router_default_writer`;
+WAN probes explicitly select `wan_router_participant`, including its SPDP2
+discovery settings. Domain IDs and runtime identity/partition membership remain
+test-specific. WAN timing and transport-variable defaults also come from the XML,
+not a separate test environment tuning table.
+
+Explicit policy overrides are allowed only through `incompatible_reader_qos`
+and `incompatible_writer_qos` in incompatibility tests. These start from a named
+production profile and change only the policies being tested. Normal calls to
+`reader_qos` and `writer_qos` accept a profile name, not independent policy values.
+
+Empty route aliases also load the fixed production default profiles. A peer
+requesting a tighter deadline produces an incompatibility warning; it does not
+retune the router's writer or clear that warning as if an update succeeded.
+
+For a disposable Docker run, mount the checkout read-only and bind only its `debug/`
+directory writable at `/workspace/debug`. Set `PYTHONPYCACHEPREFIX=/tmp/pycache`,
+`TMPDIR=/tmp`, and use `-p no:cacheprovider` so interpreter caches and pytest state do
+not become retained run artifacts.
+
 ## What this covers today
 
 Most tests use dedicated trimmed fixtures (`router/config/e2e_*.yaml` — see
@@ -38,7 +64,7 @@ by role exactly as deployed:
 
 - **`test_control_platform_full.py`** — Phase 7d (D71, plan E5/E6): the full production
   config as a control+platform pair; all three enabled routes cross the WAN (CFT'd
-  `control_command`, `platform_init_status` on the real `LAN_QOS_LIB` profile, and
+  `control_command`, `platform_init_status` on the real `ACT_QOS_LIB` profile, and
   the two-type `platform_events`); per-route `samples_forwarded` advances via the D63
   1 s refresh tick while `state_revision` provably does not move.
 - **`test_detail_status_toggle.py`** — Phase 7d (D71, plan E7): `platform_detail_status`
@@ -58,6 +84,10 @@ by role exactly as deployed:
   (the `msg.destination` ContentFilteredTopic).
 - **`test_platform_status_route.py`** — platform app publishes `PlatformInitStatus`;
   asserts it's forwarded to the control app.
+- **`test_platform_mesh_control.py`** — dashboard-equivalent `TeamAssignment` and
+  `PlatformStatusMode` samples cross the control routes to the per-platform control
+  process; asserts its local router command is accepted and that Mission, Debug, and
+  Init produce the expected detail/debug route states.
 - **`test_discovery_startup.py`** — regression test for the D52 disabled-startup fix:
   launches the router pair on fresh domains and asserts both sides discover each other's
   participant *promptly* (within 10s, far below the 30s SPDP retry), parametrized over 6
@@ -101,13 +131,14 @@ by role exactly as deployed:
 Getting these two fixtures to actually forward data surfaced two genuine bugs, not
 test-fixture quirks — see `docs/cpp_router/design-decisions.md` D51 for the full analysis:
 
-1. **Auto-QoS output-readiness deadlock.** A Phase 5 auto-QoS ("") output writer won't
+1. **Auto-QoS output-readiness deadlock — subsequently retired.** A Phase 5 auto-QoS ("") output writer wouldn't
    build until it has already discovered a matched reader, which two *independent*
    `router_main` processes each waiting on the other's not-yet-built WAN entity can never
    satisfy. Both fixtures route around it with `writer_qos: default` on the WAN-crossing
    output leg instead of `""` — a real, general limitation (not just these fixtures), though
    `control-platform.yaml` doesn't hit it today since its WAN legs already use non-empty
-   named aliases.
+   named aliases. The current create-and-observe path no longer has this gate, and
+   empty aliases now select fixed XML defaults rather than deriving QoS.
 2. **A real discovery bug in the router's own code — FIXED in D52.** Two `router_main`
    processes started back-to-back sometimes had one never see the other's participant at
    all (~50%+ flake). This was initially suspected to be Connext's default 30s SPDP
@@ -125,8 +156,13 @@ test-fixture quirks — see `docs/cpp_router/design-decisions.md` D51 for the fu
 
 ## Notes
 
-- Runtime artifacts (rendered per-test configs, subprocess logs) go under `/tmp/router_e2e/`
-  — never the repo/share, per the repo's filesystem-safety rule.
+- Runtime artifacts (rendered per-test configs, subprocess logs) go under
+  `debug/logs/router_e2e/`. This is the repository's retained artifact root; tests must
+  not write runtime logs elsewhere in the checkout or under `/tmp`.
+- Disposable container state stays under `/tmp`; it is limited to Python bytecode,
+  pytest cache suppression, package-install state, and other non-retained temporary
+  files. The test command must leave its router logs and rendered configurations in
+  `debug/logs/router_e2e/`.
 - **Test isolation is domain-id-only for now.** Each test gets unique DDS domain ids
   (`conftest.py`'s `unique_domains` fixture) so tests within one pytest run don't collide.
   A stronger, DomainParticipant-level **PARTITION** per test run (an RTI extension to

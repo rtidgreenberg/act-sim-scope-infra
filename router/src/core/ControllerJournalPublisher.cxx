@@ -5,44 +5,23 @@
 #include "Log.hpp"
 
 #include <dds/core/cond/StatusCondition.hpp>
-#include <rti/core/policy/CorePolicy.hpp>
-
-#include <cstdint>
-
 namespace router {
 
 namespace {
 
-// D49: "falling behind" is meaningful only as the cache approaches the KEEP_LAST(256) depth
-// (the send window is unlimited, so write() never blocks — old samples are just overwritten).
-// Half the depth is the rising-edge threshold; a keeping-up reader keeps unacked well below it.
 const std::int32_t kBacklogThreshold = 128;
-
-// D49 QoS: RELIABLE + KEEP_LAST(256) + reliable send window LENGTH_UNLIMITED (value -1, the
-// documented unlimited sentinel) so write() never blocks the controller strand.
-dds::pub::qos::DataWriterQos make_journal_qos(const dds::pub::Publisher &publisher) {
-    dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::History::KeepLast(256);
-
-    rti::core::policy::DataWriterProtocol dwp =
-        qos.policy<rti::core::policy::DataWriterProtocol>();
-    dwp.rtps_reliable_writer().min_send_window_size(-1);
-    dwp.rtps_reliable_writer().max_send_window_size(-1);
-    qos << dwp;
-    return qos;
-}
 
 } // namespace
 
 ControllerJournalPublisher::ControllerJournalPublisher(
         dds::domain::DomainParticipant participant,
         rti::core::cond::AsyncWaitSet &aws,
+                const dds::pub::qos::DataWriterQos &writer_qos,
         const std::string &topic_name)
         : aws_(aws),
           publisher_(participant),
           topic_(participant, topic_name),
-          writer_(publisher_, topic_, make_journal_qos(publisher_)),
+                    writer_(publisher_, topic_, writer_qos),
           behind_(false),
           shut_down_(false) {
     dds::pub::DataWriter<ControllerJournalRecord> writer = writer_;

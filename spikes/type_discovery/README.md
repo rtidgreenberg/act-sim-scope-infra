@@ -7,7 +7,7 @@ reader — and use it for named `DynamicData` access and content filtering. See
 
 ## Run
 
-From the repo root (so `harness/act/node_sim/datamodel/act_types.xml` resolves):
+From the repo root (so `harness_v2/datamodel/gen/ActTypes.xml` resolves):
 
 ```bash
 python3 spikes/type_discovery/type_discovery_spike.py [base_domain_id]

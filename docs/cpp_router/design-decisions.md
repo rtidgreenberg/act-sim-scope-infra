@@ -1249,7 +1249,7 @@ the generated-type fast path ships first by design.
 
 **Context.** Phase 3 forwarded a compile-time *generated* type (`RouterStatus`, already in the
 build). Phase 4's `control_command` route forwards an ACT type defined only in
-`harness/act/node_sim/datamodel/act_types.xml` (`control_command { base_type msg }`, with
+`harness_v2/datamodel/gen/ActTypes.xml` (`control_command { base_type msg }`, with
 `msg.destination : string`). Nothing generates ACT types into the router build, so Phase 4 forced
 a fork the plan never resolved: codegen the ACT types vs forward DynamicData. Both validated
 supported in 7.7 Modern C++ (`ask_connext_question`, 2026-07-09).
@@ -1857,7 +1857,7 @@ also multi-type). `platform-team.yaml`'s flat `input`/`output` route shape (no
    test mains — `RouteConfigParser` → `TypeResolver` → `ParticipantRegistry` →
    `DdsStatusPublisher` → `AsyncWaitSet`/`AsyncWaitSetDispatcher` → `QosResolver` →
    `DynamicRouteFactory` → `RouterController` → `DiscoveryDispatcher` — runs until
-   `SIGINT`/`SIGTERM` (mirroring the existing `relay/cpp/isc_relay.cxx` signal idiom), then
+  `SIGINT`/`SIGTERM` (mirroring the existing `spikes/isc_recovery/relay/cpp/isc_relay.cxx` signal idiom), then
    shuts down in the proven order (`route_disp.shutdown()` → `discovery.shutdown()` →
    `drain.stop()` → `aws.stop()`). `--role`/`--node-name` CLI overrides let one config file
    be launched twice, once per node role, matching how `control-platform.yaml` is meant to
@@ -1872,7 +1872,7 @@ also multi-type). `platform-team.yaml`'s flat `input`/`output` route shape (no
    the resolved path if a file is missing, rather than inventing a path-rewriting rule the
    YAML wasn't authored for. `router/README.md`'s run examples are corrected accordingly.
 4. Two real, in-scope bugs fixed: `control-platform.yaml`'s `platform_primary_status` route
-   named its topic `PlatformStatus`; the real ACT system (`harness/act/node_sim/python/*`,
+  named its topic `PlatformStatus`; the legacy ACT reference system's node simulator,
    `act_types.xml`) uses `PlatformPrimaryStatus` — corrected. The stale "Phase 0" status
    blurb in `router/README.md` is updated to Phases 0-5 shipped / Phase 6 next.
 5. Since neither committed production YAML can run as a single process today (item above),
@@ -2461,14 +2461,14 @@ contracts).
 **Context.** The deferred D45 work. `control-platform.yaml` names aliases on both endpoints
 (`writer_qos: wan_event`, `reader_qos: wan_status`, `reader_qos: lan_status_1hz`) and on
 participants (`qos: control_wan_udpv4_qos`). Three parsing/resolution gaps: `qos_profiles:`
-(the `wan_event → WAN_QOS_LIB::event_qos` indirection) is unparsed; `is_resolvable_qos_alias`
+(the `wan_event → ACT_QOS_LIB::wan_event` indirection) is unparsed; `is_resolvable_qos_alias`
 rejects everything but `""`/`"default"`; participant `qos:` is not applied.
 
 **Validated against 7.7** (`ask_connext_question`, 2026-07-14): construct one
 `dds::core::QosProvider` over several files with
 `rti::core::QosProviderParams params; params.url_profile(urls); dds::core::QosProvider(params);`
-then fetch named QoS with `provider.datareader_qos("WAN_QOS_LIB::status_qos")` /
-`provider.datawriter_qos("WAN_QOS_LIB::status_qos")`. Profile-name format is exactly
+then fetch named QoS with `provider.datareader_qos("ACT_QOS_LIB::wan_status")` /
+`provider.datawriter_qos("ACT_QOS_LIB::wan_status")`. Profile-name format is exactly
 `"Library::Profile"`.
 
 **Decision.**
@@ -2516,7 +2516,7 @@ on paper:
    so **`WAN_TIMEOUT_SEC` must be > 30** (XML default 100) or the participant fails to create
    with "Inconsistent QoS".
 3. **`control-platform.yaml` named a non-existent profile (now fixed):** `lan_status_1hz →
-   LAN_QOS_LIB::status_1hz_qos` (the lib has `status_1sec_qos`). Fixed to `status_1sec_qos`.
+  ACT_QOS_LIB::lan_status_1s`.
    `validate_qos_aliases` must still check profile **existence in the loaded provider**, not
    just the `is_resolvable_qos_alias` string rule, so this class of error is caught at load.
 
@@ -3185,7 +3185,7 @@ production `control-platform.yaml` (literal domains 20/30/200 — the suite's
 `unique_domains` spreading starts at 40, no collision) loaded twice by role via the
 standard `router_pair` fixture; all three enabled routes cross the WAN
 (`control_command` through the destination CFT, `platform_primary_status` with the
-app writer on the REAL `LAN_QOS_LIB::status_1sec_qos` profile, `platform_events`
+app writer on the REAL `ACT_QOS_LIB::lan_status_1s` profile, `platform_events`
 carrying BOTH wire-learned types through one route); `platform_detail_status` rides
 along DISABLED; then E6 — `samples_forwarded` ≥1 appears via the tick, advances during
 a write window while `state_revision` provably does NOT move (counter/revision pairs
@@ -5117,7 +5117,7 @@ sides still see nothing of each other. Existing evidence strongly supports it (D
 `spikes/dp_partition_monitor/`), but none of it is a byte-for-byte test of this exact
 shape.
 
-**Out of scope.** `harness/act/` (the older harness, including
+**Out of scope.** The legacy ACT use-cases reference (including
 `routing_service_config.xml` and `remote_admin.cxx`'s hardcoded `team_wan` admin-tool
 target) is historical and untouched by this decision — only `harness_v2`-referencing
 config (this router's own `control-platform.yaml` et al.) is in scope.

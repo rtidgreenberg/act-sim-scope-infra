@@ -82,17 +82,6 @@ std::uint64_t AsyncWaitSetDispatcher::forwarded(const std::string &route,
     return it == runtimes_.end() ? 0 : it->second->forwarded();
 }
 
-std::string AsyncWaitSetDispatcher::set_writer_deadline(const std::string &route,
-                                                        const std::string &topic,
-                                                        std::int64_t deadline_nanos) {
-    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
-        runtimes_.find(key(route, topic));
-    if (it == runtimes_.end()) {
-        return std::string();
-    }
-    return it->second->set_writer_deadline(deadline_nanos);
-}
-
 bool AsyncWaitSetDispatcher::set_partitions(const std::string &route,
                                             const std::string &topic,
                                             const std::string &subscriber_partition,

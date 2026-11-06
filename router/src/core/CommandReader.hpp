@@ -40,6 +40,7 @@ public:
     CommandReader(rti::core::cond::AsyncWaitSet &aws,
                   RouterController &controller,
                   dds::domain::DomainParticipant participant,
+                  const dds::sub::qos::DataReaderQos &reader_qos,
                   const std::string &target_node,
                   const std::string &target_router,
                   const std::string &command_topic = "ActRouterCommand");

@@ -39,6 +39,189 @@ bugs found against it are kept as historical record (they're real, reproduced fi
 but are no longer how this dashboard actually runs — see "How it works" and "Running it
 against a real mesh" for the current mechanism.
 
+## Traffic layers and compact router diagnostics
+
+### WAN Wire Delivery
+
+Delivery measures **source WAN interface TX to destination WAN interface RX**,
+not LAN publication, DDS reader acceptance, or application consumption. Each node's
+traffic monitor writes `wan_events.jsonl` by parsing raw RTPS in domain 200.
+The EMANE launcher supplies `WAN_DELIVERY_NODES` with the actual node/IP map;
+host-only captures without a distinct per-node WAN mapping cannot provide this metric.
+
+Samples match on domain, physical writer GUID, RTPS sequence, source IP and
+destination IP. IP and RTPS fragmentation are reconstructed; repair traffic and
+duplicate copies to the same destination node count once. Unicast fanout counts
+once per destination node, not per reader or UDP port. Multicast and unmapped
+destinations are explicitly unsupported, not assigned inferred recipients.
+
+Rows are grouped by **discovered writer QoS**: Reliable, Best Effort, then
+Unknown QoS. A complete writer discovery ParameterList may omit default-valued
+QoS: an absent reliability parameter restores the standard DataWriter default,
+Reliable (DDSI-RTPS 2.3 Table 9.14 and DDS 1.4 RELIABILITY defaults). Explicit
+Best Effort overrides that default. Missing discovery stays unknown; malformed
+discovery is reported as a capture error, not defaulted. Topic names and local
+configuration do not determine captured QoS. The ParameterList terminator is
+required, but its length is ignored as specified by DDSI-RTPS 2.3 section 9.4.2.11.
+Reliable samples have a 15-second observation grace period, other groups 2 seconds.
+The rolling window is anchored to source sends, so late repair corrects an earlier
+missing observation while its send remains in the window. A reporting-mode change
+does not reinterpret LAN samples or erase captured history. Mode is an explicit
+display filter only.
+
+**Avg recovery** reports the mean original WAN send to complete WAN receipt for
+Reliable samples received after a confirmed retry. Confirmation requires an
+ACKNACK or NACK_FRAG requesting that writer/sequence at the source, followed by
+repeat DATA/DATA_FRAG for the same destination and matching reader. Original
+fanout copies, acknowledgements without missing bits, first-attempt deliveries,
+and still-missing samples do not contribute. A fragmented receipt finishes when
+all fragments arrive, not when its first fragment arrives. Each sample contributes
+once, including multiple-retry recoveries, in its original rolling send window;
+the loss grace period does not delay this metric. The parenthesized count exposes
+the average's sample size. No confirmed recoveries shows a dash, not zero;
+unavailable capture coverage shows Unknown. Missing request/retry observations
+can omit recoveries, so a dash does not prove that no retransmissions occurred.
+This includes loss detection and retry delays, not just repair-packet latency.
+
+A left-side reading guide explains the continuously sliding 30-second window,
+why steady-rate counts level off, and the difference between settled summary
+cards and newer receives in the table. Reliable rows use blue and Best Effort
+rows use teal, matching the guide; Unknown QoS stays neutral. Text headings
+identify each group without relying on color. On narrow screens the guide
+stacks above the counters.
+
+Source and Destination filters constrain the direction of the displayed flows.
+The Topics menu supports any combination of topics, with Select all and Clear
+controls. These filters also update the comparison cards; they do not change
+capture or accounting. The existing either-end Node and Mode filters remain
+available, including mission-selection integration. Explicit source, destination,
+and topic choices survive a temporary absence of observations.
+
+The **Configured WAN QoS** sidebar lists the selected topics' configured WAN
+writer and reader profiles, reliability, history/depth, durability, deadline, and
+liveliness lease. With all topics selected, expand individual topic headings.
+These settings are resolved from the active router YAML's QoS libraries once at
+dashboard startup, including inherited XML policies; the reader and writer can
+have different settings. Dedicated RouterHealth/RouterLinkProbe profiles are
+included alongside forwarding routes. Auto-QoS legs are marked as runtime-learned
+instead of receiving invented static settings. This is a configuration reference,
+**not a writer association or a fallback for observed QoS classification**.
+Configured enabled states follow side-specific overrides, then the route-level
+setting, defaulting to disabled, just like the router. They are startup settings,
+not the current state after runtime mode changes. Both scalar and per-role
+`presence_participant` configurations are supported.
+
+The canonical launchers pass `--router-config` to the bridge. Standalone launches
+should pass the YAML actually used by the router; without it, the sidebar
+explicitly reports unavailable configuration. Config edits are not hot-reloaded
+as though they had already been deployed. `GET /api/delivery_config` exposes this
+startup configuration snapshot. Capture diagnostics remain fleet-wide and are
+labeled separately from the filtered table.
+
+Capture status exposes fresh contributors, unsupported paths, incomplete samples,
+and invalid observations. Flows without fresh enabled source/destination captures
+show Unknown loss and are excluded from comparison summaries. Coverage must span
+the entire selected delivery window: startup, capture rotation/restarts, unhealthy
+capture reports, or missing reporting intervals restart this coverage period.
+Parser-error totals remain cumulative diagnostics; only new errors invalidate
+the reporting interval. An error-counter reset also restarts coverage. A historical
+error does not prevent recovery after a full clean window.
+A fresh live report alone does not establish historical coverage; loss and recovery
+averages stay Unknown until a full uninterrupted window is available. Kernel capture drops
+are unreported, not zero: missing observations are not proof of RF loss. Captures
+on different hosts require synchronized clocks. Existing application `events.jsonl`
+audits remain separate diagnostics and never feed this tab.
+
+The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
+every fresh page. Enabling it adds DDS heartbeat/probe, discovery,
+reliability/control, and mixed/unknown chart series. Node DDS TX/RX rates remain
+visible independently of that checkbox. Mesh presentation is DDS-only: MAC
+values are retained in diagnostic collection/API responses, not drawn as a
+competing traffic rate or used to scale the chart.
+It changes presentation only. RouterLinkStats, link activity, health, connected
+peers, route badges, and mission/delivery operations remain available when unchecked.
+
+**Link activity** is a right-edge drawer that starts collapsed as a vertical tab.
+Click its title to expand it alongside the graph or collapse it again. Filters
+stack above the scrollable activity list, and the drawer stops above the WAN
+chart. The graph reserves the drawer's width so activity does not cover nodes.
+
+Normal chart rates count known application-carrying **Ethernet frames**, including
+their transport overhead and any piggybacked protocol submessages, not just serialized
+application payload. RouterHealth and RouterLinkProbe are infrastructure; debug
+diagnostic traffic is operator-selected application telemetry. LAN-only RouterLinkStats
+publication bytes do not enter the domain-200 WAN chart. Ambiguous topic roles stay
+mixed/unknown and produce a lower-bound warning rather than fabricated application bytes.
+
+The DDS values are domain-200 RTPS traffic captured at `emane0`, not native EMANE
+MAC counters and not payload-only throughput. Node rates include all captured DDS
+traffic in each direction. Network chart rates sum sender TX rates, never RX copies,
+using the latest capture window common to all expected contributors.
+
+Monitor schema 3 assigns each physical frame to its original capture-time window,
+not the time tshark finishes decoding it. Reporting waits two seconds for decoding
+and holds windows containing unresolved IP fragments until reassembly/expiry.
+Late rows are explicitly counted and invalidate rates rather than being moved
+into the next interval. Every window intersecting a capture restart is flagged.
+Node and chart averages require three contiguous seconds of valid capture coverage;
+gaps, restarts, invalid rows, stale sources, and incomplete network coverage clear
+the average and show unavailable/warming instead of a depressed rate. Graph lines
+break at invalid windows and missing capture intervals. Older processing-time monitors are explicitly unavailable
+until upgraded. Freshness uses the report time, while bandwidth uses capture time.
+
+Stale/missing contributors are explicitly unavailable/partial. Packet reassembly counts
+all physical fragments in their original windows; monitor startup precedes DDS discovery and cached full
+writer identities support capture rotation/restart. Live kernel-drop counts are
+unreported, not zero; capture health means no detected parser/fragment/rotation error.
+Container startup waits for the canonical launcher to establish the nominal RF matrix
+before enabling DDS; use the owned mesh lifecycle rather than starting individual nodes.
+
+Runtime participant profiles inherit `ACT_QOS_LIB::participant_discovery_base`,
+which disables RTPX default-domain announcements with an infinite announcement
+period. The journal subscriber uses the external UDPv4-only
+`router_journal_participant` profile, and standalone bridge launches also use the
+XML LAN base rather than factory defaults. Ordinary SPDP/SPDP2 and SEDP
+discovery are unchanged. RTI tools must explicitly join the desired domains;
+automatic domain discovery through RTPX is no longer available.
+
+LAN profiles inherit `ACT_QOS_LIB::lan_participant_base`, which denies `emane0`
+for UDPv4. This prevents LAN participants from advertising/receiving on the radio
+interface and sending their discovery multicast there, while preserving their
+other LAN interfaces and existing loopback allow-list. WAN profiles do not inherit
+this deny-list; the EMANE WAN profile still explicitly allows `emane0`.
+DDS domain IDs separate discovery/matching and UDP port ranges, not physical
+interfaces: unrestricted LAN discovery can otherwise be sent over the radio
+directly, without a forwarded application route. An interface deny-list is not a
+firewall for explicitly addressed unicast; outgoing unicast still follows OS routes.
+Restart all mesh participants through the owned lifecycle to apply the XML change;
+running participants do not hot-reload it.
+
+RouterHealth is a 1 Hz Best Effort, KEEP_LAST(1) latest-state heartbeat on the WAN;
+new heartbeats supersede missed ones without reliable repair traffic. Both endpoints
+use the external `router_health` profile. Commands and acknowledgements retain their
+Reliable event profiles. Delivery groups health under Best Effort with a 2-second
+observation grace period; presence deadline/liveliness timing is separate and unchanged.
+RouterHealth contains compact route summaries and the always-on peer roster.
+Full platform `ActRouterDiagnostics` snapshots follow `platform_debug_status` only
+while debug is enabled. C2-local diagnostics remain LAN-local. The bridge exposes
+`GET /api/router_diagnostics` and WebSocket `router_diagnostics` updates; the graph
+refreshes diagnostics through REST so freshness is checked even if publishing stops.
+Full detail is displayed only for a current matching configuration/revision and
+debug-entry timestamp. The expandable **Full router diagnostics** section includes
+the complete snapshot, including desired configuration, matching, QoS and errors.
+Compact state remains authoritative.
+
+Aggregate responses include `aggregated_at_ms` to order REST/WebSocket snapshots
+independently of the newest source timestamp. Late contributor corrections replace
+the current chart point and its averaging weight rather than adding duplicate history.
+Reported debug-route state, not a remembered UI request, controls diagnostics eligibility.
+The browser expires displayed diagnostics even while refresh requests are pending,
+invalidates detail after failed refreshes, and never reopens a closed panel on polling.
+
+**Schema rollout:** rebuild/restart routers and all consumers with the matching
+IDL/generated XML. Mixed old/new RouterHealth and RouterMeshStatus are not a supported
+rolling deployment. See [measurements, implementation and remaining acceptance gates](../../docs/cpp_router/emane-stats-and-health-optimization-plan.md).
+
 ## How it works
 
 `server/mesh_bridge.py` is a small standalone Python process: one `DomainParticipant` on

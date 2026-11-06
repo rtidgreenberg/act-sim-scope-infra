@@ -57,9 +57,7 @@ PLATFORM_NODE = "Platform_30"  # config node.name; the control_command CFT param
                                # A NAME, not a domain — unaffected by the H3 remapping.
 
 QOS_LIB_FILES = [
-    "harness_v2/qos/lan_qos_lib.xml",
-    "harness_v2/qos/wan_qos_lib.xml",
-    "relay/qos_isc.xml",
+    "harness_v2/qos/act_qos_profiles.xml",
 ]
 
 ENABLED_ROUTES = ["control_command", "platform_init_status", "platform_events"]
@@ -83,18 +81,18 @@ def test_full_control_platform_config(
     # input reader resolves to, guaranteeing RxO compatibility (the 7a technique).
     qos_prov = dds.QosProvider(";".join(str(REPO_ROOT / f) for f in QOS_LIB_FILES))
     status_writer_qos = qos_prov.datawriter_qos_from_profile(
-        "LAN_QOS_LIB::status_1sec_qos")
+        "ACT_QOS_LIB::lan_status_1s")
 
     control_app = Probe(unique_domains["control_lan"])
     platform_app = Probe(unique_domains["platform_lan"])
     try:
         control_status = control_app.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
         platform_status = platform_app.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # App-side endpoints for every route topic, all created up front: each LAN

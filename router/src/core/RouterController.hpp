@@ -107,11 +107,6 @@ private:
     void apply_link_stats_tick();
     void apply_mesh_tick();
 
-    // Tighten a FORWARDING build's writer deadline in place when the derivation over
-    // the current matched readers is stricter than the offer (D39/D45).
-    void maybe_tighten_deadline(RouteState &route, TopicRouteState &topic,
-                                const std::string &topic_name);
-
     // Drive one topic toward its desired state per the D2/D8/D11 tables.
     void reconcile_topic(RouteState &route, const std::string &topic_name);
     void reconcile_route(RouteState &route);

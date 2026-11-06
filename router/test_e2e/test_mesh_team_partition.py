@@ -32,7 +32,7 @@ from pathlib import Path
 import rti.connextdds as dds
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from conftest import CONFIG_DIR, start_router  # noqa: E402
+from conftest import CONFIG_DIR, REPO_ROOT, start_router  # noqa: E402
 from util.dds_probe import (  # noqa: E402
     AdminChannel, COMMAND_KIND, Probe, reader_qos)
 
@@ -67,9 +67,10 @@ def _partition_cmd(command_type, node_name, command_id, kind, partition_name):
 
 
 def health_reader(probe, provider):
+    qos = dds.QosProvider(str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"))
     return probe.reader(
         HEALTH_TOPIC, "RouterHealth",
-        qos=reader_qos(reliability="reliable", durability="transient_local"),
+        qos=qos.datareader_qos_from_profile("ACT_QOS_LIB::router_health"),
         dtype=provider.type("RouterHealth"))
 
 
@@ -78,7 +79,7 @@ def mesh_reader(probe, provider):
     # both are RxO policies, so this reader must match on each independently.
     return probe.reader(
         MESH_TOPIC, "RouterMeshStatus",
-        qos=reader_qos(reliability="best_effort", durability="volatile"),
+        qos=reader_qos("router_mesh_status"),
         dtype=provider.type("RouterMeshStatus"))
 
 
@@ -165,7 +166,7 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
     # at the PARTICIPANT level to discover every platform's heartbeat directly (the
     # RouterHealth endpoints themselves never override Publisher/Subscriber partition,
     # so once participant-level discovery succeeds, SEDP/data matching is unconditional).
-    wan_probe = Probe(domains["wan"], spdp2=True, participant_partition=["*"])
+    wan_probe = Probe(domains["wan"], participant_profile="wan_router_participant", participant_partition=["*"])
     control_lan_probe = Probe(domains["control_lan"])
     lan_a = Probe(unique_domains["platform_lan"])
     lan_b = Probe(unique_domains["platform_lan"] + 1000)

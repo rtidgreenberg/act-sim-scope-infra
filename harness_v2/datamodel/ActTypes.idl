@@ -24,9 +24,13 @@ struct control_command {
     @key
     string<100> source;
     string<100> destination;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> command_id;
     string<64> command_type;
-    sequence<octet, 100> payload;
+    sequence<octet, 8192> payload;
     int64 timestamp;
 };
 
@@ -34,6 +38,10 @@ struct control_command_ack {
     @key
     string<100> source;
     string<100> destination;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> command_id;
     boolean accepted;
     string<256> message;
@@ -50,11 +58,20 @@ struct platform_status {
 struct platform_init_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float latitude;
     float longitude;
     float altitude_m;
     float heading_deg;
     float speed_knots;
+    float time_scale;
+    float minimum_separation_m;
+    string<32> navigation_state;
+    string<64> mission_id;
+    string<32> mission_phase;
     uint32 heartbeat_seq;
     int64 timestamp;
 };
@@ -62,6 +79,10 @@ struct platform_init_status {
 struct platform_detail_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float roll_deg;
     float pitch_deg;
     float yaw_deg;
@@ -74,6 +95,10 @@ struct platform_detail_status {
 struct platform_mission_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<64> mission_id;
     string<32> mission_phase;
     uint16 waypoint_index;
@@ -87,6 +112,10 @@ struct platform_mission_status {
 struct platform_waypoint_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint16 waypoint_id;
     float wp_latitude;
     float wp_longitude;
@@ -100,6 +129,10 @@ struct platform_waypoint_status {
 struct platform_debug_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint32 cpu_usage_pct;
     uint32 mem_usage_pct;
     uint32 disk_usage_pct;
@@ -114,6 +147,10 @@ struct platform_debug_status {
 struct platform_thruster_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     uint8 thruster_id;
     float rpm;
     float commanded_rpm;
@@ -126,6 +163,10 @@ struct platform_thruster_status {
 struct platform_power_status {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     float bus_voltage;
     float bus_current;
     float battery_voltage;
@@ -140,6 +181,10 @@ struct platform_power_status {
 struct platform_data {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<32> sensor_id;
     float water_temperature_c;
     float salinity_psu;
@@ -155,6 +200,10 @@ struct platform_data {
 struct contact_report {
     @key
     string<100> source;
+    string<64> run_id;
+    string<100> source_node;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
     string<32> contact_id;
     string<32> classification;
     float bearing_deg;
@@ -349,6 +398,23 @@ struct RouterPeerRef {
     int64 last_seen_delta_ms;
 };
 
+struct RouterCompactRouteHealth {
+    string route_name;
+    RouterRouteOperationalState state;
+    RouterRouteDiscoveryState discovery_state;
+    uint64 samples_forwarded;
+};
+
+struct RouterDiagnostics {
+    @key
+    string router;
+    string config_hash;
+    uint64 snapshot_seq;
+    int64 send_timestamp;
+    uint64 state_revision;
+    sequence<RouterRouteStatus> routes;
+};
+
 struct RouterHealth {
     @key
     string router;
@@ -363,7 +429,7 @@ struct RouterHealth {
     RouterOverallState overall_state;
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
-    sequence<RouterRouteStatus> routes;
+    sequence<RouterCompactRouteHealth> routes;
 };
 
 struct RouterMeshPeer {
@@ -442,6 +508,26 @@ struct RouterLinkProbe {
     int64  send_timestamp;
 };
 
+struct RouterLinkTopicStats {
+    string route_name;
+    string topic_name;
+    string direction;
+    boolean rediscovery_in_interval;
+
+    uint64 pushed_samples;   uint64 pushed_fragment_bytes;
+    uint64 pulled_samples;   uint64 pulled_fragment_bytes;
+    uint64 nacks_received;   uint64 nack_frags_received;
+    uint64 heartbeats_sent;
+    uint64 samples_rejected_remote;
+
+    uint64 samples_received; uint64 duplicates_received;
+    uint64 heartbeats_received;
+    uint64 nacks_sent;
+    uint64 out_of_range_rejected;
+    uint64 samples_rejected_local;
+    uint32 uncommitted_samples;
+};
+
 struct RouterLinkStats {
     @key
     string observer_router;
@@ -468,6 +554,8 @@ struct RouterLinkStats {
 
     uint32 rtt_count;
     uint32 rtt_min_us;  uint32 rtt_mean_us;  uint32 rtt_max_us;
+
+    sequence<RouterLinkTopicStats, 128> topic_stats;
 };
 
 // ============================================================================

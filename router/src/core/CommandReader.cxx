@@ -8,26 +8,15 @@
 
 namespace router {
 
-namespace {
-
 // D47: the CFT parameters are this router's own identity strings, known here as plain
 // std::string (not YAML scalars) — so they are wrapped in single quotes directly, with no
 // D43 quote-vs-plain ambiguity to resolve.
 std::string sql_quote(const std::string &s) { return "'" + s + "'"; }
 
-dds::sub::qos::DataReaderQos make_reader_qos(const dds::sub::Subscriber &subscriber) {
-    dds::sub::qos::DataReaderQos qos = subscriber.default_datareader_qos();
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::Volatile();
-    qos << dds::core::policy::History::KeepLast(16);
-    return qos;
-}
-
-} // namespace
-
 CommandReader::CommandReader(rti::core::cond::AsyncWaitSet &aws,
                              RouterController &controller,
                              dds::domain::DomainParticipant participant,
+                             const dds::sub::qos::DataReaderQos &reader_qos,
                              const std::string &target_node,
                              const std::string &target_router,
                              const std::string &command_topic)
@@ -39,7 +28,7 @@ CommandReader::CommandReader(rti::core::cond::AsyncWaitSet &aws,
                dds::topic::Filter("target_node = %0 AND target_router = %1",
                                   std::vector<std::string>{sql_quote(target_node),
                                                            sql_quote(target_router)})),
-          reader_(subscriber_, cft_, make_reader_qos(subscriber_)),
+        reader_(subscriber_, cft_, reader_qos),
           shut_down_(false) {
     dds::sub::DataReader<RouterCommand> reader = reader_;
     dds::sub::cond::ReadCondition cond(

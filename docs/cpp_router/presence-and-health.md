@@ -40,9 +40,12 @@ needs cross-WAN visibility) — distinct from the LAN-local admin command/status
   roster as a compact edge list — `peers_seen`: one `{router (name), presence}` pair per
   tracked peer (D79) — so a single WAN observer can build the who-sees-who node map from
   this topic alone.
-- **QoS:** `RELIABLE`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (late joiners get last state),
+- **QoS:** `BEST_EFFORT`, `KEEP_LAST(1)`, `TRANSIENT_LOCAL` (retained latest state,
+  but late-join replay is not guaranteed with Best Effort),
   `DEADLINE ≈ 1.5–2×` heartbeat period, `LIVELINESS = AUTOMATIC` with a finite lease
-  (≈ 2–3× period). Periodic heartbeat write (e.g. 1 s).
+  (≈ 2–3× period). Periodic heartbeat write (1 s). The external `router_health`
+  profile configures both endpoints. New heartbeats supersede missed state without
+  ACK/retry traffic; mission commands and acknowledgements remain Reliable.
 - **QoS is deliberately untouched by link-metrics capture (D14).** `RouterHealth` doubles as
   the *passive* stats bellwether — the `LinkStatsCollector` polls this pair's protocol
   statistics like any WAN pair (known offered rate; signal even when data routes are idle) —

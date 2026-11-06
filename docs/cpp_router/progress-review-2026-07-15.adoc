@@ -67,7 +67,7 @@ Independent verification run for this review:
 * `ctest`: 4/4 passed (`config_identity`, `controller_phase1`, `admin_types`, `route_config`).
 * `python3 -m pytest router/test_e2e -q`: **14 passed in 49.96 s** — including the new
   Phase 7a `test_qos_alias_route.py` against the real production QoS libraries
-  (`harness/act/config/qos/{lan,wan}_qos_lib.xml`) and real alias names.
+  (`harness_v2/qos/act_qos_profiles.xml`) and canonical profile names.
 
 == What is working well
 

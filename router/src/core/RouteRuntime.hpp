@@ -26,8 +26,6 @@
 // AsyncWaitSet serializes dispatch of a single condition, so pump never runs
 // concurrently with itself. Teardown detaches ALL conditions on the control strand —
 // blocking barriers that guarantee no handler is in flight — before close() is called.
-// set_writer_deadline runs on the control strand and only touches the (thread-safe)
-// writer QoS setter, never dispatcher state.
 
 #pragma once
 
@@ -73,10 +71,6 @@ struct RouteTopicRuntimeBase : public IWanStatsSource {
 
     virtual std::uint64_t forwarded() const = 0;
 
-    // In-place mutable deadline update on the output writer (D39). Returns the writer's
-    // new QoS summary, or "" on failure.
-    virtual std::string set_writer_deadline(std::int64_t deadline_nanos) = 0;
-
     // In-place partition change on this build's Subscriber (input leg) and Publisher
     // (output leg) — 7b/D69. Pub/sub PARTITION is runtime-mutable via set_qos with
     // automatic rematching (D15), so no entity recreation; the rematch surfaces through
@@ -98,7 +92,8 @@ public:
     // reader_on_wan/writer_on_wan (Phase 9, D81): set by the factory when the endpoint's
     // participant is the WAN participant — collect_wan_stats then polls that leg's
     // per-matched-endpoint protocol statuses. Both false = never registered (no WAN leg).
-    RouteTopicRuntime(dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
+    RouteTopicRuntime(const std::string &route_name, const std::string &topic_name,
+                      dds::sub::DataReader<T> reader, dds::pub::DataWriter<T> writer,
                       dds::pub::Publisher publisher, dds::sub::Subscriber subscriber,
                       dds::topic::ContentFilteredTopic<T> cft = dds::core::null,
                       std::function<void(const std::string &)> on_qos_warning
@@ -107,7 +102,9 @@ public:
                       std::function<void(bool, std::int32_t)> on_match
                               = std::function<void(bool, std::int32_t)>(),
                       bool reader_on_wan = false, bool writer_on_wan = false)
-        : reader_(reader),
+                : route_name_(route_name),
+                    topic_name_(topic_name),
+                    reader_(reader),
           writer_(writer),
           publisher_(publisher),
           subscriber_(subscriber),
@@ -145,10 +142,10 @@ public:
     // the AWS worker never touches them.
     void collect_wan_stats(LinkStatsSink &sink) override {
         if (writer_on_wan_) {
-            poll_writer_wan_stats(writer_, writer_prev_, sink);
+            poll_writer_wan_stats(writer_, writer_prev_, sink, route_name_, topic_name_);
         }
         if (reader_on_wan_) {
-            poll_reader_wan_stats(reader_, reader_prev_, sink);
+            poll_reader_wan_stats(reader_, reader_prev_, sink, route_name_, topic_name_);
         }
     }
 
@@ -178,16 +175,6 @@ public:
         return count_.load(std::memory_order_relaxed);
     }
 
-    std::string set_writer_deadline(std::int64_t deadline_nanos) override {
-        dds::pub::qos::DataWriterQos q;
-        if (!try_apply_qos(writer_, q, [deadline_nanos](dds::pub::qos::DataWriterQos &qos) {
-                qos << dds::core::policy::Deadline(duration_from_nanos(deadline_nanos));
-            })) {
-            return std::string();
-        }
-        return QosResolver::summarize(q);
-    }
-
     bool set_partitions(const std::string &subscriber_partition,
                         const std::string &publisher_partition) override {
         dds::sub::qos::SubscriberQos sq;
@@ -211,6 +198,9 @@ public:
     }
 
 private:
+    std::string route_name_;
+    std::string topic_name_;
+
     // Drain the input reader through our condition and forward each valid sample to the
     // output writer. Phase 3 forwards live data only; Phase 10 will mirror the
     // dispose/unregister meta-samples here. A single bad sample must never kill the loop.

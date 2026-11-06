@@ -78,8 +78,8 @@ def test_two_types_forward_from_one_process(
 
     # The route's "default"-alias legs are RELIABLE+TRANSIENT_LOCAL — app endpoints
     # must offer/request compatibly (D67 lesson).
-    compatible_w = writer_qos(reliability="reliable", durability="transient_local")
-    compatible_r = reader_qos(reliability="reliable", durability="transient_local")
+    compatible_w = writer_qos("router_default_writer")
+    compatible_r = reader_qos("router_admin_status")
 
     in_probe = Probe(in_domain)
     out_probe = Probe(out_domain)
@@ -87,7 +87,7 @@ def test_two_types_forward_from_one_process(
     try:
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # (E4c) The first topic's writer appears alone: PlatformCommandAck builds and

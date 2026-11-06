@@ -42,4 +42,4 @@ c++ -std=gnu++11 -DRTI_64BIT -DRTI_LINUX -DRTI_STATIC -DRTI_UNIX \
 
 ## Requirements
 
-`rti.connextdds` (Connext 7.7) and `harness/act/node_sim/datamodel/act_types.xml`.
+`rti.connextdds` (Connext 7.7) and `harness_v2/datamodel/gen/ActTypes.xml`.

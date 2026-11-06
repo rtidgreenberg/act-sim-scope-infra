@@ -4,65 +4,14 @@
 #include "Log.hpp"
 
 #include <dds/sub/ddssub.hpp>
-#include <rti/core/policy/CorePolicy.hpp> // D101: PublishMode::Asynchronous (mesh_writer_qos)
-
+#include <cstdlib>
+#include <fstream>
 #include <iterator> // std::next (prune_dead_locked's handle sweep)
 #include <sstream>
 
 namespace router {
 
 namespace {
-
-// RouterHealth QoS (presence-and-health.md, D75): RELIABLE + TRANSIENT_LOCAL +
-// KEEP_LAST(1), DEADLINE 2 s, AUTOMATIC liveliness lease 3 s. Same shape both sides
-// (RxO-compatible by construction).
-template <typename QosT>
-QosT health_qos(QosT qos) {
-    qos << dds::core::policy::Reliability::Reliable();
-    qos << dds::core::policy::Durability::TransientLocal();
-    qos << dds::core::policy::History::KeepLast(1);
-    qos << dds::core::policy::Deadline(
-            dds::core::Duration::from_millisecs(kHealthDeadlineMs));
-    qos << dds::core::policy::Liveliness::Automatic().lease_duration(
-            dds::core::Duration::from_millisecs(kHealthLivelinessLeaseMs));
-    return qos;
-}
-
-dds::pub::qos::DataWriterQos mesh_writer_qos(const dds::pub::Publisher &publisher) {
-    // LAN state topic. BEST_EFFORT + VOLATILE (D100): ActRouterMeshStatus republishes on
-    // its own periodic MeshTick (kMeshPublishPeriodMs, 0.5s) regardless of change, so an
-    // occasionally-dropped sample self-heals on the next tick — RELIABLE's retry/ack
-    // machinery (and its blocking potential on this writer under backpressure) buys
-    // nothing here. TRANSIENT_LOCAL was dropped too (D98 kept it, D100 removes it): under
-    // BEST_EFFORT, TRANSIENT_LOCAL's late-joiner replay burst is itself just another
-    // best-effort sample with no retry/repair if lost -- RTI's own docs are explicit that
-    // TRANSIENT_LOCAL's replay is only GUARANTEED effective paired with RELIABLE. Keeping
-    // it would have offered a repair mechanism that doesn't actually repair anything,
-    // while still paying its retained-sample bookkeeping cost. A late-joining reader now
-    // just waits for the next periodic MeshTick (worst case ~0.5s) instead of an
-    // unreliable "instant" replay attempt -- simpler, and no less correct in practice.
-    // The WIS reader profile (wis_config.xml.template) and both e2e mesh_reader() test
-    // helpers must match: BEST_EFFORT + VOLATILE (RxO: both policies must independently
-    // satisfy offered >= requested).
-    //
-    // D101: ASYNCHRONOUS publish mode. mesh_writer_.write() (publish_mesh()) is called
-    // from publish_mesh_tick(), which — like publish_heartbeat() — runs on the controller
-    // strand (MeshTick, D98); that strand must never block behind a DDS send (see
-    // PresenceMonitor.hpp's threading doc, and Interfaces.hpp's IPresencePublisher
-    // contract). BEST_EFFORT already removes the ack-wait blocking a RELIABLE writer could
-    // hit; ASYNCHRONOUS additionally moves the actual network send itself off the calling
-    // thread onto Connext's own async-publish thread (confirmed via ask_connext_question,
-    // 7.7.0: the send happens on an RTI Publisher-owned thread, shared by every
-    // asynchronous writer on this Publisher — lan_publisher_ carries only this one writer,
-    // so no contention with another topic). Cheap insurance against any remaining local
-    // resource-limit stall, on top of (not instead of) BEST_EFFORT.
-    dds::pub::qos::DataWriterQos qos = publisher.default_datawriter_qos();
-    qos << dds::core::policy::Reliability::BestEffort();
-    qos << dds::core::policy::Durability::Volatile();
-    qos << dds::core::policy::History::KeepLast(1);
-    qos << rti::core::policy::PublishMode::Asynchronous();
-    return qos;
-}
 
 const char *presence_name(RouterPresenceState s) {
     switch (s) {
@@ -73,6 +22,55 @@ const char *presence_name(RouterPresenceState s) {
     return "?";
 }
 
+std::int64_t now_unix_ns() {
+    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string trim_newline(std::string value) {
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string read_run_id(const std::string &debug_dir) {
+    const char *env = std::getenv("ACT_RUN_ID");
+    if (env != nullptr && *env != '\0') {
+        return env;
+    }
+    if (debug_dir.empty()) {
+        return "";
+    }
+    std::ifstream input(debug_dir + "/run_id");
+    std::string value;
+    std::getline(input, value);
+    return trim_newline(value);
+}
+
+std::string json_escape(const std::string &value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        switch (c) {
+        case '\\': out += "\\\\"; break;
+        case '"': out += "\\\""; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+std::string node_from_router(const std::string &router) {
+    const std::string::size_type slash = router.find('/');
+    return slash == std::string::npos ? router : router.substr(0, slash);
+}
+
 } // namespace
 
 PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
@@ -80,6 +78,10 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  dds::domain::DomainParticipant lan_participant,
                                  const std::string &node_name,
                                  const std::string &router_name,
+                                 const dds::sub::qos::DataReaderQos &health_reader_qos,
+                                 const dds::pub::qos::DataWriterQos &health_writer_qos,
+                                 const dds::pub::qos::DataWriterQos &mesh_writer_qos,
+                                 const dds::pub::qos::DataWriterQos &diagnostics_writer_qos,
                                  dds::domain::DomainParticipant team_scoped_participant,
                                  const std::string &health_topic,
                                  const std::string &mesh_topic)
@@ -91,14 +93,22 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           wan_publisher_(wan_participant),
           wan_subscriber_(wan_participant),
           health_topic_(wan_participant, health_topic),
-          health_writer_(wan_publisher_, health_topic_,
-                         health_qos(wan_publisher_.default_datawriter_qos())),
-          health_reader_(wan_subscriber_, health_topic_,
-                         health_qos(wan_subscriber_.default_datareader_qos())),
+          health_writer_(wan_publisher_, health_topic_, health_writer_qos),
+          health_reader_(wan_subscriber_, health_topic_, health_reader_qos),
           lan_publisher_(lan_participant),
           mesh_topic_(lan_participant, mesh_topic),
-          mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos(lan_publisher_)),
+          mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos),
+          diagnostics_topic_(lan_participant, "ActRouterDiagnostics",
+                             rti::topic::dynamic_type<RouterDiagnostics>::get()),
+          diagnostics_writer_(lan_publisher_, diagnostics_topic_, diagnostics_writer_qos),
           shut_down_(false) {
+    const char *debug_dir = std::getenv("NODE_DEBUG_DIR");
+    if (debug_dir != nullptr && *debug_dir != '\0') {
+        audit_run_id_ = read_run_id(debug_dir);
+        if (!audit_run_id_.empty()) {
+            audit_path_ = std::string(debug_dir) + "/events.jsonl";
+        }
+    }
     // Heartbeat data (valid + instance-state transitions -> ALIVE/DEAD).
     dds::sub::cond::ReadCondition data_cond(
             health_reader_, dds::sub::status::DataState::any(),
@@ -192,6 +202,7 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     }
     try {
         health_writer_.write(out);
+        log_router_health_audit("sent", out);
     } catch (const dds::core::NotEnabledError &) {
         // Defensive symmetry with DdsStatusPublisher (D52): ticks only start after
         // enable_all(), so this should not happen in practice.
@@ -208,6 +219,16 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
 // (kMeshPublishPeriodMs), on top of the existing on-change publishes in
 // on_health_data/on_health_reader_status (which still fire immediately on a transition
 // rather than waiting on either tick's period).
+void PresenceMonitor::publish_diagnostics(const RouterDiagnostics &snapshot) {
+    try {
+        diagnostics_writer_.write(rti::core::xtypes::convert(snapshot));
+    } catch (const dds::core::NotEnabledError &) {
+        Log::debug("diagnostics_skipped_not_enabled", {});
+    } catch (const std::exception &e) {
+        Log::warn("diagnostics_publish_failed", {{"error", e.what()}});
+    }
+}
+
 void PresenceMonitor::publish_mesh_tick() {
     publish_mesh();
 }
@@ -216,8 +237,10 @@ void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
     // The bellwether pair: writer -> every peer's RouterHealth reader, reader <- every
     // peer's RouterHealth writer. Same discovery-DB attribution + self-delta as a route
     // WAN leg (D81), reusing the shared poll so there is one implementation.
-    poll_writer_wan_stats(health_writer_, health_writer_prev_, sink);
-    poll_reader_wan_stats(health_reader_, health_reader_prev_, sink);
+    poll_writer_wan_stats(health_writer_, health_writer_prev_, sink,
+                          "presence", "RouterHealth");
+    poll_reader_wan_stats(health_reader_, health_reader_prev_, sink,
+                          "presence", "RouterHealth");
 }
 
 void PresenceMonitor::on_health_data() {
@@ -308,6 +331,7 @@ void PresenceMonitor::on_health_data() {
                 // peers_seen's existing 100-cap, so keeping it costs nothing D77 was
                 // guarding against.
                 e.last_seen = std::chrono::steady_clock::now();
+                log_router_health_audit("received", ev.hb);
             } else {
                 // Liveliness lost or participant purged -> DEAD (the roster passes
                 // through STALE first on a real crash — deadline fires before the
@@ -338,6 +362,31 @@ void PresenceMonitor::on_health_data() {
     if (changed) {
         publish_mesh();
     }
+}
+
+void PresenceMonitor::log_router_health_audit(const std::string &event,
+                                              const RouterHealth &hb) {
+    if (audit_path_.empty() || audit_run_id_.empty()) {
+        return;
+    }
+    const std::string source_node = node_from_router(hb.router);
+    if (source_node.empty() || hb.heartbeat_seq == 0 || hb.send_timestamp == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(audit_mutex_);
+    std::ofstream output(audit_path_, std::ios::app);
+    if (!output) {
+        return;
+    }
+    output << "{\"event\":\"" << json_escape(event)
+           << "\",\"node\":\"" << json_escape(node_name_)
+           << "\",\"recorded_at_ns\":" << now_unix_ns()
+           << ",\"run_id\":\"" << json_escape(audit_run_id_)
+           << "\",\"sent_at_ns\":" << hb.send_timestamp
+           << ",\"sequence\":" << hb.heartbeat_seq
+           << ",\"source\":\"" << json_escape(hb.router)
+           << "\",\"source_node\":\"" << json_escape(source_node)
+           << "\",\"topic\":\"RouterHealth\"}\n";
 }
 
 void PresenceMonitor::on_health_reader_status() {

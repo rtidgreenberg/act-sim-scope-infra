@@ -88,18 +88,18 @@ def test_controller_journal_records_and_no_backlog(
         # reader cache would overwrite the first before a polling take() sees it.
         journal_reader = probe.reader(
             JOURNAL_TOPIC, "ControllerJournalRecord",
-            qos=reader_qos(reliability="reliable", keep_all=True), dtype=journal_type)
+            qos=reader_qos("router_controller_journal"), dtype=journal_type)
         journal = JournalCollector(journal_reader)
         status_reader = probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
         cmd_writer = probe.writer(
             "ActRouterCommand", "RouterCommand",
-            qos=writer_qos(reliability="reliable", durability="volatile"), dtype=cmd_type)
+            qos=writer_qos("router_admin_command"), dtype=cmd_type)
         ack_reader = probe.reader(
             "ActRouterCommandAck", "RouterCommandAck",
-            qos=reader_qos(reliability="reliable", durability="volatile"), dtype=ack_type)
+            qos=reader_qos("router_admin_command_ack"), dtype=ack_type)
         acks = AckCollector(ack_reader)
 
         # The journal is VOLATILE — match the writer before driving events, else the first

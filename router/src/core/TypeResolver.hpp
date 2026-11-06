@@ -7,8 +7,10 @@
 //     route topic's DynamicType is learned FROM THE WIRE: DiscoveryDispatcher reads the
 //     COMPLETE type object inline off builtin discovery (`data->type()`, the rti_view
 //     model — spike-proven, spikes/type_discovery/) and registers it here per topic,
-//     first-learned-wins per topic per process (D66). The router carries NO local type
-//     objects for forwarded payloads; the XML loader below remains only as a legacy/
+//     first-learned-wins per topic per process (D66). Application payload types are not
+//     locally provisioned. The router-owned diagnostic producer registers its generated
+//     type locally because its own publication bypasses remote discovery. The XML loader
+//     below remains only as a legacy/
 //     debug path and is not on the route-build path.
 //
 // Thread-safety: register_discovered_type is called from AsyncWaitSet worker threads

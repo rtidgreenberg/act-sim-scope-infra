@@ -1,7 +1,8 @@
 # Exhaustive review — `harness_v2/` and the C++ router — 2026-08-11
 
 Scope: everything under `harness_v2/` (datamodel, QoS libs, sims, scripts) and `router/`
-(src, config, test, test_e2e, CMake). GUI (`gui/mesh_dashboard/`) and the v1 `harness/` are
+(src, config, test, test_e2e, CMake). GUI (`gui/mesh_dashboard/`) and the removed v1 scaffold
+are
 out of scope except where `run_mesh.sh` launches them. Reviewed at commit `777f8df`,
 working tree clean.
 
@@ -713,11 +714,11 @@ at parse time.
 The IDL fields are the ones worth deciding about deliberately: they are on the wire, so
 consumers can see them and reasonably assume they mean something.
 
-## L4 — `relay/qos_isc.xml` is loaded but unused, and claims default-QoS status
+## L4 — the retired ISC QoS profile was loaded but unused, and claimed default-QoS status
 
-`control-platform.yaml:47` lists `relay/qos_isc.xml` in `qos_libraries:`, but no
-`qos_profiles:` alias resolves into it — every alias points at `WAN_QOS_LIB::` or
-`LAN_QOS_LIB::` (lines 50-54). The file declares:
+The older `control-platform.yaml` listed the ISC QoS profile in `qos_libraries:`, but no
+`qos_profiles:` alias resolved into it. The current configuration uses the single
+`ACT_QOS_LIB` source and no longer loads the retired ISC profile. The old file declared:
 
 ```xml
 <qos_library name="ActIscLibrary">

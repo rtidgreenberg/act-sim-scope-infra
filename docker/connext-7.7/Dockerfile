@@ -3,6 +3,9 @@ FROM ubuntu:22.04
 ARG CONNEXT_VERSION=7.7.0
 ARG ACT_REPO_URL=https://github.com/rtidgreenberg/act-sim-scope-infra.git
 ARG ACT_REPO_REF=
+ARG EMANE_VERSION=1.5.3
+ARG EMANE_RELEASE=1
+ARG EMANE_BUNDLE_SHA256=451f513d6dbfe80bbd7b9f5d9ca3ac66046edd593fd2251b8a2d6934a27ab26e
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NDDSHOME=/opt/rti.com/rti_connext_dds-${CONNEXT_VERSION} \
@@ -11,12 +14,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
+        curl \
         git \
         gcc \
         g++ \
         make \
         cmake \
         iproute2 \
+        libcap2-bin \
         libglib2.0-0 \
         libgtk2.0-0 \
         openjdk-11-jre-headless \
@@ -26,16 +31,35 @@ RUN apt-get update \
         tshark \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=connext-host bin /opt/rti.com/rti_connext_dds-7.7.0/bin
-COPY --from=connext-host doc /opt/rti.com/rti_connext_dds-7.7.0/doc
-COPY --from=connext-host include /opt/rti.com/rti_connext_dds-7.7.0/include
-COPY --from=connext-host lib /opt/rti.com/rti_connext_dds-7.7.0/lib
-COPY --from=connext-host resource /opt/rti.com/rti_connext_dds-7.7.0/resource
-COPY --from=connext-host third_party /opt/rti.com/rti_connext_dds-7.7.0/third_party
-COPY --from=connext-host rti_versions.xml /opt/rti.com/rti_connext_dds-7.7.0/rti_versions.xml
+RUN setcap cap_net_raw=eip /usr/bin/dumpcap
+
+RUN curl -fsSL -o /usr/share/keyrings/rti-official-archive.gpg \
+        https://packages.rti.com/deb/official/repo.key \
+    && printf 'deb [arch=%s signed-by=%s] %s %s main\n' \
+        "$(dpkg --print-architecture)" \
+        /usr/share/keyrings/rti-official-archive.gpg \
+        https://packages.rti.com/deb/official \
+        "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+        > /etc/apt/sources.list.d/rti.list \
+    && printf '%s\n' \
+        'rti-connext-dds-7.7.0-common rti-connext-dds-7.7.0/license/accepted select true' \
+        | debconf-set-selections \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y rti-connext-dds-7.7.0 \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir \
-    "$NDDSHOME"/resource/python_api/rti_connext-${CONNEXT_VERSION}-cp310-*.whl
+    "rti.connext==${CONNEXT_VERSION}"
+
+RUN curl -fsSL -o /tmp/emane.tar.gz \
+        "https://adjacentlink.com/downloads/emane/emane-${EMANE_VERSION}-release-${EMANE_RELEASE}.ubuntu-22_04.amd64.tar.gz" \
+    && echo "${EMANE_BUNDLE_SHA256}  /tmp/emane.tar.gz" | sha256sum -c - \
+    && mkdir /tmp/emane \
+    && tar -xzf /tmp/emane.tar.gz -C /tmp/emane \
+    && dpkg -i /tmp/emane/*/debs/ubuntu-22_04/amd64/*.deb || true \
+    && apt-get update \
+    && apt-get install --no-install-recommends -fy \
+    && rm -rf /var/lib/apt/lists/* /tmp/emane /tmp/emane.tar.gz
 
 RUN printf '%s\n' \
     'export NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0' \

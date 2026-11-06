@@ -167,10 +167,12 @@ and the platform mesh control process is a thin, stateless translator:
 Platform Mesh Control Process (per platform):
   - Subscribes: TeamAssignment on platform_lan (domain <platform_id>)
   - Publishes:  RouterCommand on platform_lan (domain <platform_id>)
-  - Targets:    (target_node=Platform_XX, target_router=platform-XX-control-platform)
+  - Targets:    (target_node=Platform_XX, target_router=<rendered router.name>)
 ```
 
-No WAN participant needed — everything is on the platform's own LAN domain. The
+The launcher passes the rendered `router.name` explicitly; it must not derive the target
+from the platform LAN domain, because isolated tests may remap that domain. No WAN
+participant needed — everything is on the platform's own LAN domain. The
 `control_command` route already did the WAN bridging.
 
 **Reaction logic:**

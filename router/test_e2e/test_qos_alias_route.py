@@ -4,8 +4,8 @@ Python port of the mechanism spikes/qos_alias/qos_alias_spike.py proved standalo
 driven through the real router_main binary (config/e2e_qos_alias.yaml): ONE router, route
 qos_alias_r1, named XML aliases on BOTH legs — reader_qos: wan_status / writer_qos:
 wan_event — plus the shared wan_participant profile applied to wan_in/wan_out. Uses
-the real production QoS libraries (harness_v2/qos/{lan,wan}_qos_lib.xml,
-relay/qos_isc.xml) and real alias names, not a synthetic stand-in.
+the real production QoS libraries (`harness_v2/qos/{lan,wan}_qos_lib.xml`) and
+real alias names, not a synthetic stand-in.
 
 Asserts the plan's E1/E2 evidence:
   1. a route using wan_status/wan_event aliases forwards a sample end-to-end.
@@ -20,10 +20,10 @@ import sys
 import time
 from pathlib import Path
 
-# The three qos_libraries: files this config loads are templated with 13 env vars (peer
+# The QoS libraries this config loads are templated with 13 env vars (peer
 # locators + WAN tuning) — set before importing rti.connextdds / launching the router
 # subprocess (which inherits this process's env). Shared defaults live in conftest
-# (WAN_QOS_ENV_DEFAULTS); see docs/cpp_router/design-decisions.md D60/D65.
+# Peer locators are isolated; policy-variable defaults come from production XML.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import set_wan_qos_env, start_router, render_config, REPO_ROOT  # noqa: E402
 set_wan_qos_env()
@@ -35,10 +35,8 @@ TOPIC = "QosAliasCmd"
 TYPE = "ExampleCommand"
 ROUTE = "qos_alias_r1"
 EXAMPLE_TYPES_XML = "router/config/example_types.xml"
-WAN_QOS_LIB_FILES = [
-    "harness_v2/qos/lan_qos_lib.xml",
-    "harness_v2/qos/wan_qos_lib.xml",
-    "relay/qos_isc.xml",
+QOS_PROFILE_FILES = [
+    "harness_v2/qos/act_qos_profiles.xml",
 ]
 
 
@@ -64,18 +62,18 @@ def test_qos_alias_route_resolves_and_forwards(
     # Same production QoS-library provider the router resolves aliases against — building
     # the app-side peer QoS from the SAME named profiles (not hand-guessed policies)
     # guarantees RxO compatibility, the technique spikes/qos_alias/ already validated.
-    qos_files = [str(REPO_ROOT / f) for f in WAN_QOS_LIB_FILES]
+    qos_files = [str(REPO_ROOT / f) for f in QOS_PROFILE_FILES]
     qos_prov = dds.QosProvider(";".join(qos_files))
-    app_writer_qos = qos_prov.datawriter_qos_from_profile("WAN_QOS_LIB::status_qos")
-    app_reader_qos = qos_prov.datareader_qos_from_profile("WAN_QOS_LIB::event_qos")
+    app_writer_qos = qos_prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_status")
+    app_reader_qos = qos_prov.datareader_qos_from_profile("ACT_QOS_LIB::wan_event")
 
-    in_probe = Probe(in_domain)
-    out_probe = Probe(out_domain)
+    in_probe = Probe(in_domain, participant_profile="wan_router_participant")
+    out_probe = Probe(out_domain, participant_profile="wan_router_participant")
     alive = lambda: router.is_alive()  # noqa: E731
     try:
         status_reader = in_probe.reader(
             "ActRouterStatus", "RouterStatus",
-            qos=reader_qos(reliability="reliable", durability="transient_local"),
+            qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
         # App writer: same wan_status profile the router's input reader (wan_status alias)

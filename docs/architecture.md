@@ -154,7 +154,7 @@ This sim/test infra lives in a **new private repo** (the ACT repo is public, and
 Analyzer is internal** — it must not appear in a public repo). ⚠️ The current `docs/` +
 `sim/` scaffold is **uncommitted** in the public ACT repo — relocate it; do not commit here.
 
-**Recommended layout — split by product (Scope = deployable, harness = internal):**
+**Current layout — split by product (Scope = deployable, harness_v2 = active internal harness):**
 ```
 scope/   (private, but a deployable DELIVERABLE — self-contained, no harness deps)
 ├── backend/                  # FastAPI: collector + data/query API
@@ -162,21 +162,17 @@ scope/   (private, but a deployable DELIVERABLE — self-contained, no harness d
 ├── analyzer/                 # RTPS Analyzer integration (INTERNAL)
 └── observability/            # collector-service + Grafana dashboards config
 
-harness/    (private, INTERNAL test/sim only — client of the Scope)
-├── act/                      # git submodule → public rticonnextdds-usecases-act (pinned)
-├── overrides/                # private QoS/sim overrides (UDP-only, seq/ts, emane0 pinning)
-├── docker/ compose/ emane/   # node image, compose, EMANE configs
-├── backend/                  # FastAPI: control-plane + scenario runner (consumes Scope API)
-├── gui/                      # NiceGUI control console
-└── scenarios/
+ harness_v2/ (private, INTERNAL test/sim only — active client of the Scope)
+├── scripts/ sims/            # current launchers, simulators, and mesh controls
+├── qos/ datamodel/           # active QoS and ACT data model
+└── ...                       # current Phase 0.5+ harness surfaces
+references/legacy_harness/    # pinned public ACT use-cases submodule for reference
 docs/EMANE_SIMULATION_PLAN.md
 ```
-ACT stays clean/public. ✅ **Decided: ONE private repo** with `scope/` and `harness/` as
-internal packages (not separate repos) for now. Keep the **one-way dependency a hard package
-boundary** (`scope/` imports nothing from `harness/`) so that if this gains traction, the
-the Scope lifts out into its own productized/deliverable repo cheaply. RTI already uses
-submodules, so ACT-as-submodule under `harness/` is idiomatic; build context = repo root,
-`Dockerfile.node` COPYs `act/…` + `overrides/…`.
+ACT stays clean/public. The active harness is `harness_v2/`; the pinned ACT use-cases
+submodule is retained under `references/legacy_harness/` for comparison and reference only.
+Keep the **one-way dependency a hard package boundary** (`scope/` imports nothing from
+`harness_v2/`) so the Scope can still lift out into its own productized repo cheaply.
 
 **Decisions:** ✅ ACT as **git submodule**. ✅ ACT stays **pristine** — the sim applies
 **private overrides**, never edits the submodule.

@@ -219,21 +219,19 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             }
             ps.role = get_str(p, "role");
             ps.qos_profile_alias = get_str(p, "qos");
-            // Three orthogonal per-participant flags (the is_wan decomposition, 2026-07-22):
+            // Two orthogonal per-participant flags (the is_wan decomposition, 2026-07-22):
             //   team_scoped (D83) — protected-identity partition default + non-removable
             //     protection. platform_wan-only post-D103 (team_wan retired). Was the old
             //     conflated `wan:` key.
             //   on_wan       — this participant's route legs are on the WAN; drives link-stats
             //     WAN-leg detection (RouteEntityFactory). EVERY WAN participant.
-            //   spdp2 (D78)  — SPDP2|SEDP discovery. EVERY WAN participant.
-            // on_wan and spdp2 mark the same set today but stay separate: one is a link-stats
-            // concern, the other a discovery-protocol choice.
-            // A fourth, independent flag (D103): protected_partition_entries — literal
+            // SPDP2|SEDP discovery is now fixed in the WAN XML participant profile, not a
+            // YAML/code QoS switch.
+            // A third, independent flag (D103): protected_partition_entries — literal
             // non-removable partition values (e.g. control_wan's standing "*" wildcard),
             // parsed below alongside participant_partition.
             ps.team_scoped = p["team_scoped"] && p["team_scoped"].as<bool>();
             ps.on_wan = p["on_wan"] && p["on_wan"].as<bool>();
-            ps.use_spdp2 = p["spdp2"] && p["spdp2"].as<bool>();
 
             // participant_partition (D83): a sequence of names, or a single scalar name
             // for convenience — either way the ${node.name} token is substituted (same

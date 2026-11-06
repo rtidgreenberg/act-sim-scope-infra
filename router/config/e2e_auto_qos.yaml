@@ -1,12 +1,9 @@
-# e2e_auto_qos.yaml — single router_main fixture for the Phase 5 auto-QoS e2e test
-# (router/test_e2e/test_auto_qos.py). Python port of the retired C++ test/test_auto_qos.cxx.
+# e2e_auto_qos.yaml — fixed default-profile and incompatibility e2e fixture
+# (router/test_e2e/test_auto_qos.py).
 #
-# ONE router process (role: platform) owns both legs of route auto_r1, with auto ("") QoS
-# on input AND output — the real D39/D42/D45 asymmetric auto-QoS path, NOT routed around
-# with writer_qos: default. This does NOT hit the D51/D52 two-process auto-QoS deadlock:
-# there is only one router, and the app writer/readers the Python test creates are the
-# matched peers, exactly like the C++ test's wan_in (dom A, app writer) -> lan_out (dom B,
-# app readers) topology.
+# ONE router process (role: platform) owns both legs of route auto_r1. Empty QoS aliases
+# select the production router_default_reader and router_default_writer profiles.
+# Discovered peer requests must not derive or retune these fixed policies.
 #
 # Domain placeholders substituted per test run — see router/test_e2e/conftest.py
 # (control_lan -> input domain, platform_lan -> output domain; wan unused here).
@@ -22,13 +19,21 @@ router:
 types:
   xml: router/config/example_types.xml
 
+qos_libraries:
+  - harness_v2/qos/act_qos_profiles.xml
+
+qos_profiles:
+  router_lan_participant: ACT_QOS_LIB::lan_router_participant
+
 participants:
   wan_in:
     role: platform
     domain: __DOMAIN_CONTROL_LAN__
+    qos: router_lan_participant
   lan_out:
     role: platform
     domain: __DOMAIN_PLATFORM_LAN__
+    qos: router_lan_participant
 
 routes:
   - name: auto_r1

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "nodes": [
+    {
+      "id": "control_20",
+      "role": "control",
+      "lan_domain": 20,
+      "emane": {"nem_id": 1, "ip": "10.88.0.1", "control_ip": "172.29.250.11"}
+    },
+    {
+      "id": "platform_30",
+      "role": "platform",
+      "lan_domain": 30,
+      "emane": {"nem_id": 2, "ip": "10.88.0.2", "control_ip": "172.29.250.12"}
+    },
+    {
+      "id": "platform_31",
+      "role": "platform",
+      "lan_domain": 31,
+      "emane": {"nem_id": 3, "ip": "10.88.0.3", "control_ip": "172.29.250.13"}
+    }
+  ]
+}

@@ -50,7 +50,9 @@ inline std::string wan_handle_key(const dds::core::InstanceHandle &h) {
 template <typename T>
 void poll_writer_wan_stats(dds::pub::DataWriter<T> &writer,
                            std::map<std::string, WriterTotals> &prev,
-                           LinkStatsSink &sink) {
+                           LinkStatsSink &sink,
+                           const std::string &route_name = std::string(),
+                           const std::string &topic_name = std::string()) {
     dds::core::InstanceHandleSeq subs = dds::pub::matched_subscriptions(writer);
     std::map<std::string, WriterTotals> next;
     for (auto it = subs.begin(); it != subs.end(); ++it) {
@@ -103,6 +105,9 @@ void poll_writer_wan_stats(dds::pub::DataWriter<T> &writer,
         }
         next[key] = tot;
         sink.add_writer(peer, d, rematch);
+        if (!route_name.empty() || !topic_name.empty()) {
+            sink.add_writer_topic(peer, route_name, topic_name, d, rematch);
+        }
     }
     prev.swap(next);
 }
@@ -111,7 +116,9 @@ void poll_writer_wan_stats(dds::pub::DataWriter<T> &writer,
 template <typename T>
 void poll_reader_wan_stats(dds::sub::DataReader<T> &reader,
                            std::map<std::string, ReaderTotals> &prev,
-                           LinkStatsSink &sink) {
+                           LinkStatsSink &sink,
+                           const std::string &route_name = std::string(),
+                           const std::string &topic_name = std::string()) {
     dds::core::InstanceHandleSeq pubs = dds::sub::matched_publications(reader);
     std::map<std::string, ReaderTotals> next;
     for (auto it = pubs.begin(); it != pubs.end(); ++it) {
@@ -163,6 +170,9 @@ void poll_reader_wan_stats(dds::sub::DataReader<T> &reader,
                 static_cast<std::uint32_t>(st.uncommitted_sample_count()); // gauge
         next[key] = tot;
         sink.add_reader(peer, d, rematch);
+        if (!route_name.empty() || !topic_name.empty()) {
+            sink.add_reader_topic(peer, route_name, topic_name, d, rematch);
+        }
     }
     prev.swap(next);
 }

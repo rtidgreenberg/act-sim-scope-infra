@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Focused unit tests for immutable delivery-audit expectation snapshots."""
+
+import importlib.util
+import unittest
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SPEC = importlib.util.spec_from_file_location("delivery_audit_report",
+                                              SCRIPT_DIR / "delivery_audit_report.py")
+REPORT = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(REPORT)
+COMPILER_SPEC = importlib.util.spec_from_file_location(
+    "compile_delivery_expectations", SCRIPT_DIR / "compile_delivery_expectations.py")
+COMPILER = importlib.util.module_from_spec(COMPILER_SPEC)
+COMPILER_SPEC.loader.exec_module(COMPILER)
+
+
+MANIFEST = {
+    "nodes": ["control_20", "platform_30"],
+    "topics": {
+        "ControlCommand": {"minimum_sent": 1, "completion_threshold_percent": 100},
+        "PlatformInitStatus": {"minimum_sent": 1, "completion_threshold_percent": 100},
+    },
+}
+EXPECTATIONS = {
+    "ControlCommand": {
+        "enabled": True, "source_nodes": ["Control_20"],
+        "recipient_rule": {"kind": "sample_destination", "nodes": ["Platform_30"]},
+    },
+    "PlatformInitStatus": {
+        "enabled": True, "source_nodes": ["Platform_30"],
+        "recipient_rule": {"kind": "fixed_nodes", "nodes": ["Control_20"]},
+    },
+}
+
+
+def event(kind, topic, source, sequence, node, **extra):
+    return {"event": kind, "topic": topic, "source_node": source,
+            "sequence": sequence, "node": node, **extra}
+
+
+class DeliveryAuditExpectationTests(unittest.TestCase):
+    def test_shared_location_snapshot_includes_peers_not_source(self):
+        manifest = {**MANIFEST, "run_id": "r1", "shared_platform_locations": True,
+                    "nodes": ["control_20", "platform_30", "platform_31"]}
+        expectation = COMPILER.compile_expectations(manifest)["topics"]["PlatformInitStatus"]
+        self.assertEqual(["Control_20", "Platform_31"],
+                         REPORT.expected_receivers({"source_node": "Platform_30"}, expectation))
+        legacy = COMPILER.compile_expectations({**manifest, "shared_platform_locations": False})
+        self.assertEqual(["Control_20"],
+                         REPORT.expected_receivers({"source_node": "Platform_30"},
+                                                   legacy["topics"]["PlatformInitStatus"]))
+
+    def analyze(self, events, expectations=EXPECTATIONS):
+        return REPORT.analyze(events, [Path("events.jsonl")], [], MANIFEST, expectations, "r1")
+
+    def test_targeted_command_uses_snapshot_destination_rule(self):
+        report = self.analyze([
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_30"),
+            event("received", "ControlCommand", "Control_20", 1, "Platform_30"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
+        ])
+        self.assertEqual("pass", report["verdict"])
+
+    def test_unknown_destination_is_not_counted_as_loss(self):
+        expectations = {**EXPECTATIONS, "ControlCommand": {**EXPECTATIONS["ControlCommand"],
+                        "enabled": False}}
+        report = self.analyze([
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_99"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
+        ], expectations)
+        self.assertEqual(1, len(report["not_expected"]))
+        self.assertEqual("pass", report["verdict"])
+
+    def test_receive_outside_snapshot_is_unexpected(self):
+        report = self.analyze([
+            event("sent", "ControlCommand", "Control_20", 1, "Control_20",
+                destination="Platform_30"),
+            event("received", "ControlCommand", "Control_20", 1, "Control_20"),
+            event("sent", "PlatformInitStatus", "Platform_30", 1, "Platform_30"),
+            event("received", "PlatformInitStatus", "Platform_30", 1, "Control_20"),
+        ])
+        self.assertEqual("fail", report["verdict"])
+        self.assertEqual(1, len(report["unexpected"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

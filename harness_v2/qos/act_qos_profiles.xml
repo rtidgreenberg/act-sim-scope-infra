@@ -1,0 +1,935 @@
+<?xml version="1.0"?>
+
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.3.0/rti_dds_qos_profiles.xsd">
+
+  <configuration_variables>
+    <element>
+      <name>ACT_PARTICIPANT_NAME</name>
+      <value>act-process</value>
+    </element>
+    <element>
+      <name>ACT_PARTICIPANT_ROLE</name>
+      <value>act.process</value>
+    </element>
+    <element>
+      <name>CONTROL_LAN_PEER1</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>CONTROL_LAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>CONTROL_LAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER1</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>PLATFORM_LAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER2</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER3</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER4</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER5</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER6</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER7</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER8</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER9</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER10</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_PEER11</name>
+      <value>127.0.0.1</value>
+    </element>
+    <element>
+      <name>WAN_HB_RETRIES</name>
+      <value>10</value>
+    </element>
+    <element>
+      <name>WAN_RECEIVE_MULTICAST</name>
+      <value>0</value>
+    </element>
+    <element>
+      <name>WAN_TTL</name>
+      <value>6</value>
+    </element>
+    <element>
+      <name>WAN_HB_PERIOD_SEC</name>
+      <value>3</value>
+    </element>
+    <element>
+      <name>WAN_TIMEOUT_SEC</name>
+      <value>300</value>
+    </element>
+    <element>
+      <name>WAN_MAX_BLOCKING_SEC</name>
+      <value>15</value>
+    </element>
+  </configuration_variables>
+
+  <qos_library name="ACT_QOS_LIB">
+    <qos_profile name="participant_discovery_base">
+      <domain_participant_qos>
+        <discovery_config>
+          <!-- Disable RTPX tool announcements, not ordinary domain discovery. -->
+          <default_domain_announcement_period>
+            <sec>DURATION_INFINITE_SEC</sec>
+            <nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </default_domain_announcement_period>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_participant_base"
+                 base_name="ACT_QOS_LIB::participant_discovery_base">
+      <domain_participant_qos>
+        <transport_builtin>
+          <udpv4>
+            <deny_interfaces_list>
+              <element>emane0</element>
+            </deny_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="router_journal_participant"
+                 base_name="ACT_QOS_LIB::lan_participant_base">
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <!--
+    ____________________________________________________________________________
+
+                      QOS Profiles used on the LAN side
+    ____________________________________________________________________________
+    -->
+
+    <qos_profile name="lan_transport_loopback" base_name="ACT_QOS_LIB::lan_participant_base">
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+          <udpv4>
+            <allow_interfaces_list>
+              <element>127.0.0.1</element>
+            </allow_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_router_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
+      <domain_participant_qos>
+        <discovery_config>
+          <request_types_filter>*</request_types_filter>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_control_router_participant" base_name="ACT_QOS_LIB::lan_participant_base">
+      <domain_participant_qos>
+        <discovery_config>
+          <request_types_filter>*</request_types_filter>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_platform_participant" base_name="ACT_QOS_LIB::lan_transport_loopback">
+
+      <domain_participant_qos>
+        <participant_name>
+          <name>$(ACT_PARTICIPANT_NAME)</name>
+          <role_name>$(ACT_PARTICIPANT_ROLE)</role_name>
+        </participant_name>
+
+        <!-- Match QoS in your Platform LAN -->
+
+        <discovery>
+          <initial_peers>
+            <element>$(PLATFORM_LAN_PEER1)</element>
+            <element>$(PLATFORM_LAN_PEER2)</element>
+            <element>$(PLATFORM_LAN_PEER3)</element>
+          </initial_peers>
+        </discovery>
+
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_control_participant" base_name="ACT_QOS_LIB::lan_participant_base">
+      <domain_participant_qos>
+        <participant_name>
+          <name>$(ACT_PARTICIPANT_NAME)</name>
+          <role_name>$(ACT_PARTICIPANT_ROLE)</role_name>
+        </participant_name>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_status" base_name="BuiltinQosLib::Generic.Common">
+      <!-- 
+        This profile is intended for Periodic "STATUS" data. 
+
+        Deadline: INF [Default]
+        Liveliness: INF [Default]
+        -->
+
+      <datawriter_qos>
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- How many samples to keep around. BEST_EFFORT only needs 1 as it doesn't resend -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+      </datawriter_qos>
+
+      <datareader_qos>
+
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- KEEP_LAST will overwrite data if cache is "full" -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>50</depth>
+        </history>
+
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="lan_status_1s" base_name="ACT_QOS_LIB::lan_status">
+
+      <!-- Inheriting the status_qos profile and just adding a time based filter to downsample -->
+
+      <datareader_qos>
+        <!-- 
+          We want to downsample on the LAN "Input" Routing Service reader before 
+          it goes into Routing Service 
+          This minimizes resource usage as high rate data is not processed at full rate
+          -->
+        <time_based_filter>
+          <minimum_separation>
+            <sec>1</sec>
+            <nanosec>0</nanosec>
+          </minimum_separation>
+        </time_based_filter>
+      </datareader_qos>
+
+    </qos_profile>
+
+
+    <qos_profile name="lan_event" base_name="BuiltinQosLib::Generic.Common">
+      <!-- Update here per an Aperiodic Command Data Pattern/your system -->
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+      </datareader_qos>
+
+    </qos_profile>
+
+    <!--              
+    ____________________________________________________________________________
+    
+                      QOS Profiles used across the WAN/COMMS link       
+    ____________________________________________________________________________
+    -->
+
+    <qos_profile name="wan_router_participant_base" base_name="ACT_QOS_LIB::participant_discovery_base">
+
+      <!-- 
+        This profile is intended for use across a network comms link. 
+        It assumes an instance of RTI's Routing Service is on both ends and is using Connext 7.3.0 
+        -->
+      <domain_participant_qos>
+
+
+        <!-- Minimizes participant discovery packets -->
+        <base_name>
+          <element>BuiltinQosSnippetLib::Optimization.Discovery.Participant.Compact</element>
+        </base_name>
+
+        <transport_builtin>
+          <!-- Select only the UDP transport/ Disable SHMEM -->
+          <mask>UDPv4</mask>
+
+          <!-- Set Multicast TTL -->
+          <udpv4>
+            <multicast_ttl>$(WAN_TTL)</multicast_ttl>
+          </udpv4>
+        </transport_builtin>
+
+
+        <discovery_config>
+          <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
+
+          <!-- Router WAN legs create DynamicData routes from discovered TypeObjects. -->
+          <request_types_filter>*</request_types_filter>
+
+          <!-- 
+            Defines amount of messages broadcast on startup to announce a participants presence. 
+            DEFAULT: 5.
+            This can cause issues when many participants are "announcing" themselves at the same time. 
+            -->
+          <initial_participant_announcements>3</initial_participant_announcements>
+
+          <!-- 
+            Adjust how often applications will assert their presence here per requirements
+            These are very lightweight messages but period can be extended to optimize network usage.
+            DEFAULT: 30 secs 
+            -->
+          <participant_liveliness_assert_period>
+            <sec>30</sec>
+            <!-- nanosec defaults to infinite- ensure a value is always set -->
+            <nanosec>0</nanosec>
+          </participant_liveliness_assert_period>
+
+          <!-- 
+            This is the timeout period by which other applications will consider this to
+            be "offline" and remove from internal database.
+
+            Must be > participant_liveliness_assert_period
+
+            If you are getting a lot of timeout's due to lossy comms this can be 
+            extended to minimize re-discovery events.
+
+            Adjust per system behavior/requirements
+
+            Currently set to WAN System Timeout
+
+            DEFAULT: 100 secs 
+            -->
+          <participant_liveliness_lease_duration>
+            <sec>$(WAN_TIMEOUT_SEC)</sec>
+            <nanosec>0</nanosec>
+          </participant_liveliness_lease_duration>
+
+          <!-- Adjust Discovery Heartbeat per RTT of WAN network -->
+          <publication_writer>
+            <low_watermark>0</low_watermark>
+            <high_watermark>1</high_watermark>
+            <heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </heartbeat_period>
+            <fast_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </fast_heartbeat_period>
+            <late_joiner_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </late_joiner_heartbeat_period>
+            <max_heartbeat_retries>$(WAN_HB_RETRIES)</max_heartbeat_retries>
+            <heartbeats_per_max_samples>0</heartbeats_per_max_samples>
+            <min_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_nack_response_delay>
+            <max_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_nack_response_delay>
+          </publication_writer>
+          <subscription_writer>
+            <low_watermark>0</low_watermark>
+            <high_watermark>1</high_watermark>
+            <heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </heartbeat_period>
+            <fast_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </fast_heartbeat_period>
+            <late_joiner_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </late_joiner_heartbeat_period>
+            <max_heartbeat_retries>1000</max_heartbeat_retries>
+            <heartbeats_per_max_samples>0</heartbeats_per_max_samples>
+            <min_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_nack_response_delay>
+            <max_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_nack_response_delay>
+          </subscription_writer>
+          <publication_reader>
+            <min_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_heartbeat_response_delay>
+            <max_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_heartbeat_response_delay>
+          </publication_reader>
+          <subscription_reader>
+            <min_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_heartbeat_response_delay>
+            <max_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_heartbeat_response_delay>
+          </subscription_reader>
+
+        </discovery_config>
+
+        <!-- Disable legacy TypeCode and TypeObject v1. LENGTH_AUTO (-2) retains
+             TypeObject v2 TypeLookup replies for on-demand inspection. -->
+        <resource_limits>
+          <type_code_max_serialized_length>0</type_code_max_serialized_length>
+          <type_object_max_serialized_length>-2</type_object_max_serialized_length>
+        </resource_limits>
+
+        <!-- Uncomment below to enable CRC checking for all messages -->
+        <!-- 
+          <wire_protocol>
+            <compute_crc>true</compute_crc>
+            <check_crc>true</check_crc>
+          </wire_protocol> 
+          -->
+
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="wan_router_participant" base_name="ACT_QOS_LIB::wan_router_participant_base">
+
+      <domain_participant_qos>
+        <transport_builtin>
+          <mask>UDPv4</mask>
+
+          <udpv6>
+
+            <!-- Adjust Multicast TTL as required using ENV variable -->
+            <multicast_ttl>$(WAN_TTL)</multicast_ttl>
+
+            <!-- Increase the receive socket buffer size to improve performance. -->
+            <recv_socket_buffer_size>2097152</recv_socket_buffer_size>
+          </udpv6>
+        </transport_builtin>
+        <discovery>
+          <initial_peers>
+            <element>$(WAN_PEER)</element>
+            <element>$(WAN_PEER2)</element>
+            <element>$(WAN_PEER3)</element>
+            <element>$(WAN_PEER4)</element>
+            <element>$(WAN_PEER5)</element>
+            <element>$(WAN_PEER6)</element>
+            <element>$(WAN_PEER7)</element>
+            <element>$(WAN_PEER8)</element>
+            <element>$(WAN_PEER9)</element>
+            <element>$(WAN_PEER10)</element>
+            <element>$(WAN_PEER11)</element>
+          </initial_peers>
+
+          <multicast_receive_addresses>
+          <element>$(WAN_RECEIVE_MULTICAST)</element>
+          </multicast_receive_addresses>
+        </discovery>
+      </domain_participant_qos>
+
+    </qos_profile>
+
+    <qos_profile name="wan_router_participant_emane"
+                 base_name="ACT_QOS_LIB::wan_router_participant">
+      <domain_participant_qos>
+        <transport_builtin>
+          <udpv4>
+            <allow_interfaces_list>
+              <element>emane0</element>
+            </allow_interfaces_list>
+          </udpv4>
+        </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="wan_status" base_name="BuiltinQosLib::Generic.Common">
+      <!-- 
+        This profile is intended for Periodic "STATUS" data. 
+
+        Deadline: INF [Default]
+        Liveliness: INF [Default]
+        -->
+
+      <datawriter_qos>
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- 
+            How many samples to keep around on a PER INSTANCE basis. 
+            BEST_EFFORT only needs 1 as it doesn't resend 
+          -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+      </datawriter_qos>
+
+      <datareader_qos>
+
+        <!-- Messages are sent once, does NOT ensure delivery -->
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- KEEP_LAST will overwrite data if cache is "full" -->
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>50</depth>
+        </history>
+
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="wan_event" base_name="BuiltinQosLib::Generic.Common">
+      <!-- 
+        QoS profile for Event Messages(Commands/CommandAck/ContactReport etc) across the comms link.
+
+        Currently Liveliness(Small heartbeats to maintain "presence") is disabled 
+        for bandwidth optimization as well as for Content Filtering use
+    
+        Liveliness: INF - DISABLED (DEFAULT)
+        Deadline: INF - DISABLED (DEFAULT) 
+        Durability: VOLATILE - DISABLED (DEFAULT)
+        -->
+
+      <datawriter_qos>
+        <!-- 
+          This spins up a separate thread to send out samples asynchronously
+          Commands tend to be larger and including "repairs" can bog down the main write thread
+          -->
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+        </publish_mode>
+
+        <!-- Messages are resent if not delivered -->
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+
+          <!-- 
+            Will block with KEEP_ALL if the queue is "full" from samples not being
+            acknowledged 
+          -->
+          <max_blocking_time>
+            <sec>$(WAN_MAX_BLOCKING_SEC)</sec>
+            <nanosec>0</nanosec>
+          </max_blocking_time>
+        </reliability>
+
+        <!-- 
+          KEEP_ALL will not overwrite any samples, only removed from queue if 
+          acknowledged by ALL readers
+        -->
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+
+        <protocol>
+
+          <rtps_reliable_writer>
+
+            <!-- 
+              Will give up on needing acknowledgement per reader if no response received from
+              reader after $WAN_TIMEOUT_SEC
+
+              Will still send messages but will be BEST_EFFORT
+              -->
+            <max_heartbeat_retries>$(WAN_HB_RETRIES)</max_heartbeat_retries>
+
+            <!-- Adjust Heartbeat per RTT of WAN network -->
+            <low_watermark>0</low_watermark>
+            <high_watermark>1</high_watermark>
+            <heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </heartbeat_period>
+            <fast_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </fast_heartbeat_period>
+            <late_joiner_heartbeat_period>
+              <sec>$(WAN_HB_PERIOD_SEC)</sec>
+              <nanosec>0</nanosec>
+            </late_joiner_heartbeat_period>
+            <heartbeats_per_max_samples>0</heartbeats_per_max_samples>
+            <min_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_nack_response_delay>
+            <max_nack_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_nack_response_delay>
+
+          </rtps_reliable_writer>
+        </protocol>
+
+      </datawriter_qos>
+
+      <!-- Data Reader QOS -->
+      <datareader_qos>
+
+        <!-- Messages are resent if not delivered -->
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+
+        <!-- 
+          Queue for samples being provided to the application
+
+          KEEP_ALL will not overwrite older messages
+          -->
+        <history>
+          <kind>KEEP_ALL_HISTORY_QOS</kind>
+        </history>
+
+        <!-- 
+          This increases the buffer of messages before they are fully received 
+          FIFO and provided to the application.
+
+          In scenarios with high latency/long RTT(Round Trip Time) it allows for
+          missing dropped samples.
+
+          Default: 256
+          -->
+        <protocol>
+          <rtps_reliable_reader>
+            <receive_window_size>512</receive_window_size>
+
+          </rtps_reliable_reader>
+        </protocol>
+
+      </datareader_qos>
+
+    </qos_profile>
+
+    <qos_profile name="router_health" base_name="ACT_QOS_LIB::wan_event">
+      <!--
+        RouterHealth presence heartbeat on the WAN participant.
+
+        Periodic latest-state data uses best effort: the next heartbeat supersedes a
+        missed one. Override reliability at both endpoints while retaining the existing
+        base defaults and presence-specific cache/deadline/liveliness settings.
+      -->
+
+      <datawriter_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+        <deadline>
+          <period>
+            <sec>2</sec>
+            <nanosec>0</nanosec>
+          </period>
+        </deadline>
+
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration>
+            <sec>3</sec>
+            <nanosec>0</nanosec>
+          </lease_duration>
+        </liveliness>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+
+        <deadline>
+          <period>
+            <sec>2</sec>
+            <nanosec>0</nanosec>
+          </period>
+        </deadline>
+
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration>
+            <sec>3</sec>
+            <nanosec>0</nanosec>
+          </lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_mesh_status" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+        </publish_mode>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_status" base_name="ACT_QOS_LIB::lan_event">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datawriter_qos>
+      <datareader_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_default_reader" base_name="BuiltinQosLib::Generic.Common">
+      <datareader_qos>
+        <reliability>
+          <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_default_writer" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_command" base_name="ACT_QOS_LIB::lan_event">
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_admin_command_ack" base_name="ACT_QOS_LIB::lan_event">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>16</depth>
+        </history>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_controller_journal" base_name="ACT_QOS_LIB::lan_event">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>256</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_writer>
+            <min_send_window_size>-1</min_send_window_size>
+            <max_send_window_size>-1</max_send_window_size>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="router_link_probe" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <acknowledgment_kind>APPLICATION_AUTO_ACKNOWLEDGMENT_MODE</acknowledgment_kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_writer>
+            <min_send_window_size>1</min_send_window_size>
+            <max_send_window_size>1</max_send_window_size>
+            <heartbeats_per_max_samples>1</heartbeats_per_max_samples>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+
+      <datareader_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <acknowledgment_kind>APPLICATION_AUTO_ACKNOWLEDGMENT_MODE</acknowledgment_kind>
+        </reliability>
+        <durability>
+          <kind>VOLATILE_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>1</depth>
+        </history>
+        <protocol>
+          <rtps_reliable_reader>
+            <min_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </min_heartbeat_response_delay>
+            <max_heartbeat_response_delay>
+              <sec>0</sec>
+              <nanosec>0</nanosec>
+            </max_heartbeat_response_delay>
+          </rtps_reliable_reader>
+        </protocol>
+      </datareader_qos>
+    </qos_profile>
+
+    <qos_profile name="router_link_stats" base_name="ACT_QOS_LIB::lan_event">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+        </reliability>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+        <history>
+          <kind>KEEP_LAST_HISTORY_QOS</kind>
+          <depth>8</depth>
+        </history>
+      </datawriter_qos>
+      <datareader_qos>
+        <durability>
+          <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+        </durability>
+      </datareader_qos>
+    </qos_profile>
+
+
+  </qos_library>
+
+</dds>
