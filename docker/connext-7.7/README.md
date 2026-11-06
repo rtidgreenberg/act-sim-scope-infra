@@ -71,6 +71,12 @@ The canonical EMANE mesh launches its Compose-managed nodes from an explicit top
 Every node's WAN DDS participant uses its `emane0` interface; the dashboard is served from
 the control node:
 
+Container WAN discovery uses `1@` unicast peer descriptors, probing participant
+IDs 0 and 1 on each node rather than IDs 0 through 10. This covers the two WAN
+participants currently hosted by a platform router without sweeping unused
+candidate ports. The legacy host-process mesh retains its larger range because
+many nodes share the same host/domain there.
+
 ```bash
 CONNEXT_SHARED_DIR=/path/to/license-dir \
 bash harness_v2/scripts/run_mesh.sh up --emane \

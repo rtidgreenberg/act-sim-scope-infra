@@ -141,7 +141,8 @@ do_up() {
     # was fine. "10@127.0.0.1" raises the probed range to ids 0..10 (11 slots) -- covers
     # control_wan (1) + up to 10 platforms x 1 domain-200 participant each post-D103
     # (was up to 5 platforms x 2 before); kept at 10 rather than shrunk since a larger
-    # window is harmless headroom, not a tightness requirement.
+    # window is required headroom for co-located nodes. The container mesh uses
+    # 1@ per distinct node host to avoid probing this larger unused port range.
     export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 WAN_PEER=10@127.0.0.1
     export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1
     export WAN_HB_PERIOD_SEC=1 WAN_HB_RETRIES=10 WAN_MAX_BLOCKING_SEC=1

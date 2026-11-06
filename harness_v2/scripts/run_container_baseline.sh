@@ -209,14 +209,14 @@ write_compose() {
     local compose_file="$WORKDIR/compose.yaml" id
     WAN_PEERS=()
     if [[ "$EMANE_ENABLED" == 1 ]]; then
-        WAN_PEERS+=("10@builtin.udpv4://${EMANE_IP[control_20]}")
+        WAN_PEERS+=("1@builtin.udpv4://${EMANE_IP[control_20]}")
         for id in $(platform_ids); do
-            WAN_PEERS+=("10@builtin.udpv4://${EMANE_IP[platform_${id}]}")
+            WAN_PEERS+=("1@builtin.udpv4://${EMANE_IP[platform_${id}]}")
         done
     else
-        WAN_PEERS+=("10@control-20")
+        WAN_PEERS+=("1@control-20")
         for id in $(platform_ids); do
-            WAN_PEERS+=("10@platform-${id}")
+            WAN_PEERS+=("1@platform-${id}")
         done
     fi
     cat > "$compose_file" <<EOF

@@ -231,3 +231,23 @@ Discovery TX rather than Unknown TX.
 - [Platform_30 independent verification](../../debug/test_reports/spdp2-burst-verification-20261106-platform_30.json)
 - [Corrected dashboard snapshot](../../debug/test_reports/spdp2-classification-fixed-20261106.png)
 - [Post-deployment windows](../../debug/test_reports/spdp2-classification-fixed-20261106.json)
+
+### Container peer range reduced to `1@` (2026-11-06)
+
+The container renderer now probes participant IDs 0 and 1 per node instead of
+0 through 10. The separate host-process mesh keeps its larger range because
+its nodes share one host/domain. An isolated render regression covers both EMANE
+and non-EMANE container descriptors.
+
+After an owned six-platform restart, independent 36-second captures showed the
+Control_20 periodic bootstrap burst falling from 54 packets to zero, and
+Platform_30 from 125 packets / 28,750 bytes to 17 packets / 3,910 bytes.
+Both captures reported zero drops, and every remaining bootstrap destination
+port was 57410 or 57412. The live network Discovery TX three-second peak fell
+from 527.0 to 97.6 kb/s; Unknown TX remained zero and all six peers stayed healthy.
+Some probes remain because not every retained address/port is a compatible peer.
+
+- [Reduced-discovery dashboard](../../debug/test_reports/dds-peer-one-20261106.png)
+- [Live reduced-discovery windows](../../debug/test_reports/dds-peer-one-20261106.json)
+- [Control_20 narrowed-range capture](../../debug/test_reports/dds-peer-one-control_20-20261106.json)
+- [Platform_30 narrowed-range capture](../../debug/test_reports/dds-peer-one-platform_30-20261106.json)

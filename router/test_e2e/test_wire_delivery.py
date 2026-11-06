@@ -3,6 +3,7 @@
 import ast
 import json
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -687,6 +688,34 @@ class ProductionTestQosTests(unittest.TestCase):
             policy.kind = base.reliability.kind
             incompatible.reliability = policy
             self.assertEqual(incompatible, base)
+
+
+class ContainerDiscoveryTests(unittest.TestCase):
+    def test_container_peers_probe_ids_zero_and_one(self):
+        with tempfile.TemporaryDirectory(prefix="container-discovery-") as work:
+            root = Path(work)
+            script = root / "harness_v2/scripts/run_container_baseline.sh"
+            config = root / "router/config/control-platform.yaml"
+            script.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / "harness_v2/scripts/run_container_baseline.sh", script)
+            shutil.copyfile(ROOT / "router/config/control-platform.yaml", config)
+            for emane in (False, True):
+                with self.subTest(emane=emane):
+                    output = root / "debug/mesh_runs" / ("emane" if emane else "container")
+                    with patch.dict("os.environ", {"CONNEXT_SHARED_DIR": str(root)}):
+                        subprocess.run(
+                            ["bash", str(script), "render", "--platforms", "2",
+                             "--workdir", str(output), *(["--emane"] if emane else [])],
+                            check=True, capture_output=True, text=True, timeout=15)
+                    peers = re.findall(r"^\s+WAN_PEER(?:\d+)?: (.+)$",
+                                       (output / "compose.yaml").read_text(), re.MULTILINE)
+                    expected = ({"1@builtin.udpv4://10.88.0.1",
+                                 "1@builtin.udpv4://10.88.0.2",
+                                 "1@builtin.udpv4://10.88.0.3"} if emane else
+                                {"1@control-20", "1@platform-30", "1@platform-31"})
+                    self.assertEqual(len(peers), 33)
+                    self.assertEqual(set(peers), expected)
 
 
 class WireBridgeTests(unittest.TestCase):
