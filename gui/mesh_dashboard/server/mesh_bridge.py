@@ -249,6 +249,7 @@ class DdsBridge:
         self.link_stats_reader = dds.DynamicData.DataReader(
             subscriber, link_stats_topic, link_stats_qos)
         self.link_stats_cache = {}
+        self.link_stats_received_at = {}
         self.team_topic = dds.DynamicData.Topic(self.participant, TEAM_ASSIGNMENT_TOPIC, team_type)
         ack_topic = dds.DynamicData.Topic(
             self.participant, CONTROL_COMMAND_ACK_TOPIC, control_command_ack_type)
@@ -405,8 +406,10 @@ class DdsBridge:
                         sample.get("peer_router", ""),
                         sample.get("network", ""),
                     )
+                    sample["telemetry_sample_id"] = uuid.uuid4().hex
                     with self.cache_lock:
                         self.link_stats_cache[key] = sample
+                        self.link_stats_received_at[key] = time.monotonic()
                     self._broadcast({"type": "link_stats", "data": self.link_stats_snapshot()})
 
             self.poll_audit_events()
@@ -488,7 +491,12 @@ class DdsBridge:
 
     def link_stats_snapshot(self):
         with self.cache_lock:
-            rows = list(self.link_stats_cache.values())
+            now = time.monotonic()
+            rows = [
+                dict(sample, telemetry_age_ms=max(
+                    0, (now - self.link_stats_received_at[key]) * 1000))
+                for key, sample in self.link_stats_cache.items()
+            ]
         rows.sort(key=lambda row: (
             row.get("observer_router", ""),
             row.get("peer_router", ""),

@@ -62,6 +62,7 @@
   const RECONNECT_DELAY_MS = 3000;
   const STATUS_LEVEL_FRESH_MS = 5000;
   const LINK_MESSAGE_AGE_WARN_MS = 5000;
+  const HEARTBEAT_RTT_MAX_AGE_MS = 32000;
 
   const platformStatusCache = new Map(); // nodeId -> {primary, detail, debug, updated_at}
   let latestLinkStatsRows = [];
@@ -327,7 +328,7 @@
       const issues = linkStatsIssueScore(row);
       const received = receivedCount(row);
       const sent = sentCount(row);
-      const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+      const ageMs = linkStatsAgeMs(row);
       return { observer, peer, issues, received, sent, ageMs, row };
     });
   }
@@ -335,7 +336,7 @@
   function directionSummaryText(summary) {
     const state = summary.received > 0 ? "receiving" : "no receives this interval";
     const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
-    const ageText = summary.ageMs == null ? "" : `, age ${summary.ageMs} ms`;
+    const ageText = summary.ageMs == null ? "" : `, age ${Math.round(summary.ageMs)} ms`;
     return `${summary.observer} received from ${summary.peer}: ${summary.received} rx, ${summary.sent} tx${issueText}${ageText} (${state})`;
   }
 
@@ -344,7 +345,7 @@
     const issueText = summary.issues >= 2 ? ", errors/rediscovery" : summary.issues === 1 ? ", degraded counters" : "";
     const ageText = summary.ageMs == null
       ? ""
-      : `, <span class="message-age${summary.ageMs > LINK_MESSAGE_AGE_WARN_MS ? " warn" : ""}">age ${escHtml(summary.ageMs)} ms</span>`;
+      : `, <span class="message-age${summary.ageMs > LINK_MESSAGE_AGE_WARN_MS ? " warn" : ""}">age ${escHtml(Math.round(summary.ageMs))} ms</span>`;
     return `${escHtml(summary.observer)} received from ${escHtml(summary.peer)}: ${escHtml(summary.received)} rx, ${escHtml(summary.sent)} tx${escHtml(issueText)}${ageText} (${escHtml(state)})`;
   }
 
@@ -644,8 +645,9 @@
   }
 
   function formatRtt(value) {
-    const n = Number(value || 0);
-    if (!Number.isFinite(n) || n <= 0) return "-";
+    if (value == null) return "unavailable";
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return "unavailable";
     if (n >= 1000) return `${(n / 1000).toFixed(1)} ms`;
     return `${Math.round(n)} us`;
   }
@@ -1025,7 +1027,17 @@
   function renderStatsSection(row) {
     const observer = nodeNameOf(row.observer_router || "?");
     const peer = nodeNameOf(row.peer_router || "?");
-    const ageMs = row.capture_timestamp ? Math.max(0, Math.round(Date.now() - Number(row.capture_timestamp) / 1_000_000)) : null;
+    const ageMs = linkStatsAgeMs(row);
+    const sampleAgeMs = row.rtt_valid !== true || row.rtt_last_sample_age_ms == null || ageMs == null
+      ? null : Number(row.rtt_last_sample_age_ms) + ageMs;
+    const fresh = sampleAgeMs != null && Number.isFinite(sampleAgeMs) &&
+      sampleAgeMs >= 0 && sampleAgeMs <= HEARTBEAT_RTT_MAX_AGE_MS;
+    const telemetryFresh = ageMs != null && ageMs <= LINK_MESSAGE_AGE_WARN_MS;
+    const rttState = row.rtt_valid !== true ? "unavailable"
+      : sampleAgeMs == null ? "unavailable (freshness unknown)"
+      : !fresh || !telemetryFresh ? "unavailable (stale)"
+      : Number(row.rtt_count) > 0 ? "available" : "unavailable (no interval samples)";
+    const intervalAvailable = rttState === "available";
     const title = `${observer} -> ${peer}`;
     const nacks = Number(row.nacks_received || 0) + Number(row.nacks_sent || 0) + Number(row.nack_frags_received || 0);
     const rejects = Number(row.samples_rejected_local || 0) + Number(row.samples_rejected_remote || 0) + Number(row.out_of_range_rejected || 0);
@@ -1044,13 +1056,26 @@
         edgeDetailRow("uncommitted", formatCount(row.uncommitted_samples), statsClass(row.uncommitted_samples)) +
         edgeDetailRow("heartbeats received", formatCount(row.heartbeats_received)) +
         edgeDetailRow("local rejects", formatCount(rejects), statsClass(rejects)) +
-        edgeDetailRow("RTT mean", formatRtt(row.rtt_mean_us)) +
-        edgeDetailRow("RTT min/max", `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}`) +
+        edgeDetailRow("Heartbeat RTT", rttState, intervalAvailable ? "" : "warn") +
+        edgeDetailRow("Heartbeat RTT samples", formatCount(row.rtt_count)) +
+        edgeDetailRow("Heartbeat RTT mean", intervalAvailable ? formatRtt(row.rtt_mean_us) : "unavailable") +
+        edgeDetailRow("Heartbeat RTT min/max", intervalAvailable
+          ? `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}` : "unavailable") +
+        edgeDetailRow("RTT last sample age", sampleAgeMs == null || !Number.isFinite(sampleAgeMs) || sampleAgeMs < 0
+          ? "unavailable" : `${Math.round(sampleAgeMs)} ms`, fresh ? "" : "warn") +
+        edgeDetailRow("Last heartbeat ack age", row.rtt_valid === true
+          ? formatRtt(row.rtt_last_ack_age_us) : "unavailable") +
         edgeDetailRow("rediscovery", row.rediscovery_in_interval ? "yes" : "no", row.rediscovery_in_interval ? "bad" : "") +
-        edgeDetailRow("age", ageMs == null ? "-" : `${ageMs} ms`, ageMs != null && ageMs > LINK_MESSAGE_AGE_WARN_MS ? "warn" : "") +
+        edgeDetailRow("age", ageMs == null ? "-" : `${Math.round(ageMs)} ms`, ageMs != null && ageMs > LINK_MESSAGE_AGE_WARN_MS ? "warn" : "") +
       `</div>` +
+      `<div class="edge-detail-subtitle" style="margin-top:6px;">Heartbeat RTT is application-observed round-trip elapsed time minus the remote peer's wait before its scheduled heartbeat. Ack age is that subtracted wait, not RTT; receive dispatch and send queueing can remain. Interval RTT is unavailable without samples, when the last measurement is over 32 s old, or when stats telemetry is over 5 s old.</div>` +
       (nacks > 0 ? `<div class="edge-detail-subtitle" style="margin-top:6px;color:#e0b84d;">NACK/repair activity in the latest interval.</div>` : "") +
       `</section>`;
+  }
+
+  function linkStatsAgeMs(row) {
+    return row._telemetryAgeMs == null ? null
+      : row._telemetryAgeMs + Math.max(0, performance.now() - row._telemetryReceivedAt);
   }
 
   function topicStatTotal(row, fields) {
@@ -1311,7 +1336,22 @@
 
   function ingestLinkStats(snapshot) {
     ingestLinkActivity(snapshot);
-    latestLinkStatsRows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+    const keyOf = row => JSON.stringify([row.observer_router, row.peer_router, row.network]);
+    const previous = new Map(latestLinkStatsRows.map(row => [keyOf(row), row]));
+    const now = performance.now();
+    latestLinkStatsRows = (Array.isArray(snapshot?.rows) ? snapshot.rows : []).map(row => {
+      const old = previous.get(keyOf(row));
+      let age = typeof row.telemetry_sample_id === "string" && row.telemetry_sample_id &&
+        Number.isFinite(row.telemetry_age_ms) && row.telemetry_age_ms >= 0
+        ? row.telemetry_age_ms : null;
+      if (age != null && old && old._telemetryAgeMs != null &&
+          old.telemetry_sample_id === row.telemetry_sample_id) {
+        // Repeated REST/WS cache snapshots must never rejuvenate the same sample.
+        age = Math.max(age, old._telemetryAgeMs +
+          Math.max(0, now - old._telemetryReceivedAt));
+      }
+      return {...row, _telemetryAgeMs: age, _telemetryReceivedAt: now};
+    });
     latestLinkStatsRows.forEach((row) => {
       const observer = nodeNameOf(row.observer_router || "");
       const peer = nodeNameOf(row.peer_router || "");
@@ -1517,6 +1557,7 @@
     });
     if (updates.length) edges.update(updates);
     applyViewFilters();
+    if (selectedLinkKey !== null) renderLinkDetail(knownLinkPairs.get(selectedLinkKey));
   }
   setInterval(tickEdgeDecay, EDGE_DECAY_TICK_MS);
 

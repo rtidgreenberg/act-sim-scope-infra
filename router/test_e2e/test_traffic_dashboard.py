@@ -19,6 +19,132 @@ STATIC = Path(__file__).resolve().parents[2] / "gui/mesh_dashboard/static"
 
 @unittest.skipIf(sync_playwright is None, "Playwright is required for browser verification")
 class TrafficDashboardTests(unittest.TestCase):
+    def test_heartbeat_rtt_interval_validity_age_and_open_inspector_expiry(self):
+        document = (STATIC / "index.html").read_text()
+        html = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", document)
+        graph_src = re.search(r'<script src="(mesh_graph\.js[^"]+)"', document).group(1)
+        now = int(time.time() * 1000)
+        mesh = {"observer_node": "Control_20", "observer_router": "Control_20/router",
+                "peers": [{"health": {
+                    "router": "Platform_30/router", "role": "platform",
+                    "overall_state": "ROUTER_OK", "session_id": 123,
+                    "heartbeat_seq": 42, "routes": [], "peers_seen": [],
+                }, "presence": "PRESENCE_ALIVE", "last_seen_delta_ms": 0}]}
+        row = {"observer_router": "Control_20/router", "peer_router": "Platform_30/router",
+               "network": "wan", "capture_timestamp": now * 1_000_000,
+               "telemetry_sample_id": "sample-0", "telemetry_age_ms": 0,
+               "rtt_valid": True, "rtt_count": 1, "rtt_min_us": 45_000,
+               "rtt_mean_us": 45_000, "rtt_max_us": 45_000,
+               "rtt_last_sample_age_ms": 250, "rtt_last_ack_age_us": 680_000}
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(args=["--no-sandbox"])
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            def serve(route):
+                url = route.request.url
+                payload = ([{"data": mesh}] if "mesh_status" in url
+                           else {"rows": [row]} if "link_stats" in url else {"rows": []})
+                if "/mesh_graph.js" in url:
+                    route.fulfill(content_type="text/javascript", path=str(STATIC / "mesh_graph.js"))
+                elif "/api/" in url:
+                    route.fulfill(content_type="application/json", body=json.dumps(payload))
+                else:
+                    route.fulfill(content_type="text/html", body=html)
+
+            page.route("**/*", serve)
+            page.goto("http://telemetry.test/")
+            page.evaluate("""now => {
+                window.clockNow = now;
+                Date.now = () => window.clockNow;
+                window.monotonicNow = 1000;
+                performance.now = () => window.monotonicNow;
+                window.WebSocket = class { constructor() { window.meshSocket = this; } };
+            }""", now)
+            page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
+            page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
+            page.add_script_tag(url=f"http://telemetry.test/{graph_src}")
+            self.assertIn("?v=20261106-passive-heartbeat-rtt-v2", graph_src)
+            self.assertTrue(page.locator(f'script[src="http://telemetry.test/{graph_src}"]').count())
+            page.wait_for_function("window.__network.body.data.edges.length > 0 && window.meshSocket")
+            page.evaluate("""() => {
+                const edge = window.__network.body.data.edges.get()[0];
+                window.__network.emit('selectEdge', {edges: [edge.id]});
+            }""")
+            inspector = page.locator("#edge-detail")
+            page.wait_for_function("document.querySelector('#edge-detail').textContent.includes('45.0 ms')")
+
+            def value(label):
+                return inspector.locator(".edge-detail-row").filter(
+                    has=page.locator(".k", has_text=re.compile(f"^{re.escape(label)}$"))
+                ).locator(".v").inner_text()
+
+            def send(**changes):
+                row.update(changes)
+                row["telemetry_sample_id"] += "-next"
+                page.evaluate("""row => window.meshSocket.onmessage({
+                    data: JSON.stringify({type: 'link_stats', data: {rows: [row]}})
+                })""", row)
+
+            self.assertEqual(value("Heartbeat RTT"), "available")
+            self.assertEqual(value("Heartbeat RTT mean"), "45.0 ms")
+            self.assertEqual(value("Heartbeat RTT min/max"), "45.0 ms / 45.0 ms")
+            self.assertEqual(value("RTT last sample age"), "250 ms")
+            self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
+            self.assertIn("minus the remote peer's wait", inspector.inner_text())
+            send(rtt_count=0)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (no interval samples)")
+            self.assertEqual(value("Heartbeat RTT mean"), "unavailable")
+            send(rtt_last_sample_age_ms=6000)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (no interval samples)")
+            self.assertEqual(value("RTT last sample age"), "6000 ms")
+            self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
+            send(rtt_count=1, rtt_min_us=0, rtt_mean_us=0, rtt_max_us=0,
+                 rtt_last_ack_age_us=0)
+            self.assertEqual(value("Heartbeat RTT mean"), "0 us")
+            self.assertEqual(value("Last heartbeat ack age"), "0 us")
+            send(rtt_valid=False)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable")
+            self.assertEqual(value("RTT last sample age"), "unavailable")
+            self.assertEqual(value("Last heartbeat ack age"), "unavailable")
+            send(rtt_valid=True, rtt_last_sample_age_ms=None)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (freshness unknown)")
+            send(rtt_last_sample_age_ms=32000)
+            self.assertEqual(value("Heartbeat RTT"), "available")
+            send(rtt_last_sample_age_ms=32001)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (stale)")
+            send(rtt_last_sample_age_ms=250, rtt_last_ack_age_us=680_000)
+            for wall_jump in (86_400_000, -172_800_000):
+                page.evaluate("jump => window.clockNow += jump", wall_jump)
+                send()
+                self.assertEqual(value("Heartbeat RTT"), "available")
+                self.assertEqual(value("RTT last sample age"), "250 ms")
+            page.evaluate("window.monotonicNow += 6000")
+            page.evaluate("""row => window.meshSocket.onmessage({
+                data: JSON.stringify({type: 'link_stats', data: {rows: [row]}})
+            })""", row)
+            page.wait_for_function("document.querySelector('#edge-detail').textContent.includes('unavailable (stale)')")
+            self.assertEqual(value("RTT last sample age"), "6250 ms")
+            self.assertEqual(value("Heartbeat RTT min/max"), "unavailable")
+            self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
+            send(telemetry_age_ms=6000)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (stale)")
+            send(telemetry_age_ms=0)
+            self.assertEqual(value("Heartbeat RTT"), "available")
+            send(telemetry_age_ms=5000)
+            self.assertEqual(value("Heartbeat RTT"), "available")
+            send(telemetry_age_ms=5001)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (stale)")
+            send(telemetry_age_ms=None)
+            self.assertEqual(value("Heartbeat RTT"), "unavailable (freshness unknown)")
+            send(telemetry_age_ms=0)
+            page.evaluate("window.monotonicNow += 6000")
+            page.wait_for_function("document.querySelector('#edge-detail').textContent.includes('unavailable (stale)')")
+            self.assertEqual(value("RTT last sample age"), "6250 ms")
+            self.assertEqual(errors, [])
+            browser.close()
+
     def test_default_view_toggle_history_scale_and_layout(self):
         document = (STATIC / "index.html").read_text()
         html = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", document)
@@ -141,11 +267,11 @@ class TrafficDashboardTests(unittest.TestCase):
             page.set_viewport_size({"width": 1280, "height": 900})
             page.wait_for_timeout(100)
             self.assertIn("shared scale 800.0 kb/s", page.evaluate("window.drawn"))
-            self.assertTrue(any("heartbeat/probe TX peak" in text for text in page.evaluate("window.drawn")))
+            self.assertTrue(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
             page.evaluate("window.drawn = []")
             toggle.uncheck()
             self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
-            self.assertFalse(any("heartbeat/probe TX peak" in text for text in page.evaluate("window.drawn")))
+            self.assertFalse(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
             self.assertTrue(page.locator("#toggle-direct-links").is_checked())
             self.assertTrue(page.locator("#toggle-relayed-links").is_checked())
             sample["aggregated_at_ms"] = sample["capture_timestamp"] + 1

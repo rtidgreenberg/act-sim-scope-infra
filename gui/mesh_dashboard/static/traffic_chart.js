@@ -10,7 +10,7 @@
   const MAX_POINTS = 300;  // rolling visual history
   const SERIES = [
     {key: "application_tx", label: "WAN application TX", color: "#3a7bd9"},
-    {key: "infrastructure_tx", label: "Router heartbeat/probe TX", color: "#b88ce0"},
+    {key: "infrastructure_tx", label: "Router heartbeat TX", color: "#b88ce0"},
     {key: "discovery_tx", label: "Discovery TX", color: "#3aa655"},
     {key: "reliability_tx", label: "Reliability/control TX", color: "#e0944c"},
     {key: "mixed_tx", label: "Mixed TX", color: "#e0ce64"},
