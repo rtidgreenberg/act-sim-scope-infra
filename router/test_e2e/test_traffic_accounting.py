@@ -47,6 +47,47 @@ class AccountingTests(unittest.TestCase):
                 self.assertEqual(classify_packet(WRITER, control), "reliability")
         self.assertEqual(classify_packet(WRITER, "0x15,0x07"), "mixed")
 
+    def test_spdp2_discovery_writers_do_not_require_topic_metadata(self):
+        for entity in ("0x00010082", "00:01:00:82", "0x00010182", "0xff010182"):
+            with self.subTest(entity=entity):
+                self.parser.process(frame(**{
+                    "frame.len": "230", "rtps.sm.wrEntityId": entity,
+                    "rtps.sm.id": "0x09,0x15",
+                }))
+                self.assertEqual(classify_packet(entity, "0x09,0x15"), "discovery")
+                counters = self.accumulator.drain()[200]
+                self.assertEqual(counters["discovery_bytes"], 230)
+                self.assertEqual(counters["discovery_tx_bytes"], 230)
+                self.assertEqual(counters["unknown_tx_bytes"], 0)
+                self.assertEqual(counters["application_tx_bytes"], 0)
+                self.assertEqual(counters["tx_bytes"], 230)
+                self.assertEqual(counters["tx_packets"], 1)
+
+    def test_spdp2_control_and_bundled_frames_keep_exclusive_accounting(self):
+        for entities, submessages, frame_class, tx_class in (
+            ("0x00010182", "0x07", "reliability", "discovery"),
+            ("0x00010182", "0x15,0x07", "mixed", "discovery"),
+            ("0x00010082," + WRITER, "0x15,0x15", "mixed", "mixed"),
+        ):
+            with self.subTest(entities=entities, submessages=submessages):
+                self.parser.process(frame(**{
+                    "rtps.sm.wrEntityId": entities, "rtps.sm.id": submessages,
+                }))
+                self.assertEqual(classify_packet(entities, submessages), frame_class)
+                counters = self.accumulator.drain()[200]
+                self.assertEqual(counters[f"{tx_class}_tx_bytes"], 120)
+                self.assertEqual(counters["tx_bytes"],
+                                 sum(counters[f"{kind}_tx_bytes"] for kind in TX_CLASSES))
+
+    def test_other_vendor_specific_writers_remain_unknown(self):
+        for entity in ("0x00019982", "0xff020082"):
+            with self.subTest(entity=entity):
+                self.parser.process(frame(**{"rtps.sm.wrEntityId": entity}))
+                self.assertEqual(classify_packet(entity, "0x15"), "unknown")
+                counters = self.accumulator.drain()[200]
+                self.assertEqual(counters["unknown_tx_bytes"], 120)
+                self.assertEqual(counters["discovery_tx_bytes"], 0)
+
     def test_icmp_quoted_udp_is_not_counted_as_transmitted_rtps(self):
         self.parser.process(frame(**{
             "ip.proto": "1,17", "ip.src": "10.0.0.1,10.0.0.2",

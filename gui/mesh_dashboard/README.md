@@ -152,6 +152,9 @@ application payload. RouterHealth and RouterLinkProbe are infrastructure; debug
 diagnostic traffic is operator-selected application telemetry. LAN-only RouterLinkStats
 publication bytes do not enter the domain-200 WAN chart. Ambiguous topic roles stay
 mixed/unknown and produce a lower-bound warning rather than fabricated application bytes.
+SPDP2 bootstrap/configuration traffic is recognized by its verified built-in writer
+IDs, without requiring SEDP topic metadata. Other RTI-specific writer IDs are not
+automatically treated as discovery.
 
 The DDS values are domain-200 RTPS traffic captured at `emane0`, not native EMANE
 MAC counters and not payload-only throughput. Node rates include all captured DDS

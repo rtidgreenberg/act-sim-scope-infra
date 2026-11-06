@@ -9,6 +9,8 @@ from pathlib import Path
 
 
 DISCOVERY_KINDS = {0xc2, 0xc3, 0xc4, 0xc7}
+# Connext 7.7 transport_common.h: SPDP2 bootstrap, config, and secure config writers.
+SPDP2_DISCOVERY_WRITERS = {0x00010082, 0x00010182, 0xff010182}
 WRITER_KINDS = {0x02, 0x03}
 DATA_SUBMESSAGES = {0x02, 0x03, 0x10, 0x11, 0x14, 0x15, 0x16, 0x18, 0x81}
 CONTROL_SUBMESSAGES = {0x06, 0x07, 0x08, 0x12, 0x13, 0x17, 0x19,
@@ -37,12 +39,17 @@ def entity_ids(text):
     return [int(value.replace(":", ""), 16) for value in values(text)]
 
 
+def is_discovery_entity(entity):
+    return entity & 0xff in DISCOVERY_KINDS or entity in SPDP2_DISCOVERY_WRITERS
+
+
 def classify_packet(entity_text, submessage_text):
-    kinds = {entity & 0xff for entity in entity_ids(entity_text)}
+    entities = entity_ids(entity_text)
+    kinds = {entity & 0xff for entity in entities}
     submessages = {int(value, 0) for value in values(submessage_text)}
     classes = set()
     if submessages & DATA_SUBMESSAGES:
-        if kinds & DISCOVERY_KINDS:
+        if any(is_discovery_entity(entity) for entity in entities):
             classes.add("discovery")
         if kinds & WRITER_KINDS:
             classes.add("data")
@@ -118,13 +125,13 @@ class FrameAccounting:
     def _tx_class(self, domain, prefix, entity_text, submessage_text):
         entities = entity_ids(entity_text)
         submessages = {int(value, 0) for value in values(submessage_text)}
-        kinds = {entity & 0xff for entity in entities}
+        discovery = any(is_discovery_entity(entity) for entity in entities)
         if not submessages & DATA_SUBMESSAGES:
-            if kinds & DISCOVERY_KINDS:
+            if discovery:
                 return "discovery"
             return "reliability" if submessages & CONTROL_SUBMESSAGES else "unknown"
         roles = set()
-        if kinds & DISCOVERY_KINDS:
+        if discovery:
             roles.add("discovery")
         for entity in entities:
             if entity & 0xff not in WRITER_KINDS:

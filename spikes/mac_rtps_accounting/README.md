@@ -193,3 +193,41 @@ drop-free future captures; ongoing kernel drops remain unreported by the monitor
 
 - [Platform_30 capture-window verification](../../debug/test_reports/dds-capture-windows-20261106.json)
 - [Control_20 capture-window verification](../../debug/test_reports/dds-capture-windows-control-20261106.json)
+
+### SPDP2 discovery classification correction (2026-11-06)
+
+Periodic Unknown TX spikes were traced to the SPDP2 bootstrap discovery writer
+`0x00010082`, verified against Connext 7.7's installed `transport_common.h`.
+The classifier now recognizes that writer and the verified configuration writers
+`0x00010182` and `0xff010182` as discovery, not unknown application traffic.
+Other vendor-specific writer IDs remain unknown unless independently identified.
+
+The captured fleet burst contained 804 Ethernet frames / 184,488 bytes in one
+capture window, recurring every 30 seconds. That is a 1,475.9 kb/s one-second
+peak, 492.0 kb/s over the displayed three-second average, or 49.2 kb/s averaged
+over the 30-second cycle. These are Ethernet byte rates, not RF airtime.
+An independent Platform_30 capture confirmed 125 bootstrap frames of 230 bytes
+each (28,750 bytes), with zero capture drops. Reclassification changes the
+category, not the physical byte/packet totals.
+
+- [Captured dashboard spike](../../debug/test_reports/unknown-tx-spikes-20261106T205702Z-peak.png)
+- [Live window snapshots](../../debug/test_reports/unknown-tx-spikes-20261106T205702Z.json)
+- [Platform_30 packet evidence](../../debug/test_reports/unknown-tx-spikes-20261106T205702Z-platform30.json)
+
+Follow-up independent captures matched the canonical monitor exactly on Control_20
+(54 frames / 11,988 bytes) and Platform_30 (125 frames / 28,750 bytes), with zero
+capture drops on both. Replaying those frames through the corrected classifier
+moved every byte to discovery and left zero unknown bytes. Destination-port
+snapshots confirmed multiple candidate participant ports; Platform_30's burst
+contained two distinct participant GUIDs, not duplicated dashboard accounting.
+
+After an owned mesh restart, two periodic burst windows reported 192,372 discovery
+bytes and zero unknown bytes, including ordinary discovery traffic alongside the
+bootstrap burst. All seven nodes preserved exclusive TX byte conservation, all six
+platform peers were alive/healthy, and the live browser showed the spike under
+Discovery TX rather than Unknown TX.
+
+- [Control_20 independent verification](../../debug/test_reports/spdp2-burst-verification-20261106-control_20.json)
+- [Platform_30 independent verification](../../debug/test_reports/spdp2-burst-verification-20261106-platform_30.json)
+- [Corrected dashboard snapshot](../../debug/test_reports/spdp2-classification-fixed-20261106.png)
+- [Post-deployment windows](../../debug/test_reports/spdp2-classification-fixed-20261106.json)
