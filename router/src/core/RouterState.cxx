@@ -141,6 +141,10 @@ std::string participant_fingerprint(const ParticipantState &participant) {
     for (std::size_t i = 0; i < participant.participant_partition.size(); ++i) {
         os << '|' << participant.participant_partition.at(i);
     }
+    os << "|team";
+    for (const auto &name : participant.team_partition) {
+        os << '|' << name;
+    }
     return os.str();
 }
 

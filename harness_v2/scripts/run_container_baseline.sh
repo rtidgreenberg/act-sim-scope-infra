@@ -395,7 +395,7 @@ up() {
         render_config "$id" "$WORKDIR/control-platform-${id}.yaml"
         printf ',"platform_%s"' "$id" >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     done
-    printf '],"shared_platform_locations":true,"topics":{"ControlCommand":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformInitStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
+    printf '],"shared_platform_locations":true,"router_health_scope":"full_mesh","topics":{"ControlCommand":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformInitStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
         >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     python3 "$V2_ROOT/scripts/compile_delivery_expectations.py" \
         --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json" \

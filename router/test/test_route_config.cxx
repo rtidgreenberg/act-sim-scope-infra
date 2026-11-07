@@ -190,12 +190,7 @@ int main() {
         }
     }
 
-    // --- D83/D103: platform_wan (team_wan's role absorbed under D103) carries the
-    // protected node-identity partition entry by default, control_wan carries a standing
-    // protected wildcard instead (needed to keep matching platform_wan now that it's off
-    // the free default partition), and the team routes (folded into control-platform.yaml
-    // by D80, retargeted to platform_wan by D103) parse in role-pair form and always
-    // resolve to source_side (same-role pair) ---
+    // Single WAN: global discovery, private/team endpoint membership, global navigation.
     {
         RouteConfig cfg;
         std::string err;
@@ -211,10 +206,12 @@ int main() {
             // is_wan decomposition: platform_wan is BOTH team-partition-scoped and on the
             // WAN (D103: absorbed team_wan's role).
             CHECK(platform_wan->team_scoped);
+            CHECK(platform_wan->team_partitions_on_endpoints);
+            CHECK(platform_wan->team_partition == std::vector<std::string>({"Platform_30"}));
             CHECK(platform_wan->on_wan);
             CHECK(platform_wan->participant_partition.size() == 1);
             if (platform_wan->participant_partition.size() == 1) {
-                CHECK(platform_wan->participant_partition.at(0) == "Platform_30"); // ${node.name}
+                CHECK(platform_wan->participant_partition.at(0) == "SHARED");
             }
         }
         CHECK(control_wan != nullptr);
@@ -227,13 +224,23 @@ int main() {
             CHECK(!control_wan->team_scoped);
             CHECK(control_wan->participant_partition.size() == 1);
             if (control_wan->participant_partition.size() == 1) {
-                CHECK(control_wan->participant_partition.at(0) == "*");
+                CHECK(control_wan->participant_partition.at(0) == "SHARED");
             }
             CHECK(control_wan->protected_partition_entries.size() == 1);
             if (control_wan->protected_partition_entries.size() == 1) {
-                CHECK(control_wan->protected_partition_entries.at(0) == "*");
+                CHECK(control_wan->protected_partition_entries.at(0) == "SHARED");
             }
-            CHECK(is_protected_partition_name(*control_wan, cfg.node_name, "*"));
+            CHECK(is_protected_partition_name(*control_wan, cfg.node_name, "SHARED"));
+        }
+        CHECK(cfg.participants.size() == 4);
+        for (const auto &participant : cfg.participants) {
+            CHECK(participant.name != "location_wan");
+        }
+        const auto *locations = find_route(cfg, "platform_locations_to_wan");
+        CHECK(locations != nullptr);
+        if (locations) {
+            CHECK(locations->output.participant == "platform_wan");
+            CHECK(locations->output.publisher_partition == "NAVIGATION");
         }
         const RouterRouteSpec *t1 = find_route(cfg, "platform_team_to_wan");
         const RouterRouteSpec *t2 = find_route(cfg, "wan_team_to_platform");

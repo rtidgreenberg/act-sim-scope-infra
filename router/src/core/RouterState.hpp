@@ -115,6 +115,8 @@ struct ParticipantState {
     // Does NOT drive link-stats WAN-leg detection (that is on_wan). SPDP2 is selected by
     // the external WAN participant XML profile, not by runtime code.
     bool team_scoped = false;
+    bool team_partitions_on_endpoints = false;
+    std::vector<std::string> team_partition;
     // YAML participants.<name>.on_wan (link-stats decomposition, 2026-07-22): true for a
     // participant whose route legs live on the WAN — drives WAN-leg flagging so the
     // LinkStatsCollector polls each leg's per-matched-endpoint protocol statuses

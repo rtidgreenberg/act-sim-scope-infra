@@ -86,9 +86,9 @@ public:
             //     incompatible-QoS event.
             dds::topic::Topic<T> out_topic = find_or_create_topic(out_dp, topic_name);
             dds::pub::qos::PublisherQos pub_qos = out_dp.default_publisher_qos();
-            if (!view.spec.output.publisher_partition.empty()) {
-                pub_qos << dds::core::policy::Partition(
-                        view.spec.output.publisher_partition);
+            const auto output_partitions = endpoint_partitions(view.spec.output, false);
+            if (!output_partitions.empty()) {
+                pub_qos << dds::core::policy::Partition(output_partitions);
             }
             dds::pub::Publisher publisher(out_dp, pub_qos);
             dds::pub::qos::DataWriterQos wqos =
@@ -113,9 +113,9 @@ public:
             dds::sub::qos::DataReaderQos rqos =
                     qos_.reader_qos(view.spec.input.reader_qos);
             dds::sub::qos::SubscriberQos sub_qos = in_dp.default_subscriber_qos();
-            if (!view.spec.input.subscriber_partition.empty()) {
-                sub_qos << dds::core::policy::Partition(
-                        view.spec.input.subscriber_partition);
+            const auto input_partitions = endpoint_partitions(view.spec.input, true);
+            if (!input_partitions.empty()) {
+                sub_qos << dds::core::policy::Partition(input_partitions);
             }
             dds::sub::Subscriber subscriber(in_dp, sub_qos);
             dds::sub::DataReader<T> reader(dds::core::null);
@@ -231,8 +231,8 @@ public:
 
     bool update_route_partitions(const std::string &route,
                                  const std::string &topic_name,
-                                 const std::string &subscriber_partition,
-                                 const std::string &publisher_partition) override {
+                                 const std::vector<std::string> &subscriber_partition,
+                                 const std::vector<std::string> &publisher_partition) override {
         return dispatcher_.set_partitions(route, topic_name, subscriber_partition,
                                           publisher_partition);
     }
@@ -284,6 +284,21 @@ protected:
                                             const std::string &name) const = 0;
 
 private:
+    std::vector<std::string> endpoint_partitions(
+            const RouterRouteEndpointSpec &endpoint, bool input) const {
+        const auto &name = input ? endpoint.subscriber_partition : endpoint.publisher_partition;
+        if (!name.empty()) {
+            return {name};
+        }
+        if (registry_.team_partitions_on_endpoints(endpoint.participant)) {
+            if (!controller_) {
+                throw std::runtime_error("team endpoint partitions require a controller");
+            }
+            return controller_->route_partition_names(endpoint, input);
+        }
+        return {};
+    }
+
     // Topics are reused across rebuilds (readers/writers/parents close on teardown, the
     // base topic does not), so find-or-create avoids a duplicate-topic error on rebuild.
     dds::topic::Topic<T> find_or_create_topic(dds::domain::DomainParticipant dp,

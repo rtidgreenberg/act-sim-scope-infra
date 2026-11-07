@@ -5207,3 +5207,22 @@ validity expires after 32 seconds and includes age/remote-wait telemetry.
 assignability is not promised. Larger peer caps require explicit serialized-size and
 wire-fragmentation budgets. LP-7's SPDP2 consolidation remains unimplemented.
 See [implementation and acceptance plan](router-health-passive-rtt-plan.md).
+
+## D122 — Single WAN participant with endpoint-scoped team membership (2026-11-07, accepted)
+
+The active control/platform config merges `location_wan` into `platform_wan`.
+All WAN participants discover on protected `SHARED`; `NAVIGATION`, `CONTROL` and
+`PLATFORM` remain endpoint audiences. Team routes inherit a separate private/team
+Publisher/Subscriber partition set, opened after assignment. This intentionally
+accepts global endpoint metadata visibility, replacing the active configuration's
+participant-level team discovery isolation.
+
+The user selected single DP after the measured 32-platform comparison and explicitly
+retained production's 3 s health leases. The 30 s experiment is architecture evidence,
+not a deployed-bandwidth forecast. Existing team/tap commands retain their wire
+ordinals and operate on endpoint membership only when
+`team_partitions_on_endpoints: true`; legacy configs retain participant scoping.
+Status exposes actual discovery partitions and endpoint membership separately.
+Updates roll back on failure; uncertain routes stop if rollback fails.
+
+See [decision, evidence, compatibility and acceptance record](single-wan-participant.md).

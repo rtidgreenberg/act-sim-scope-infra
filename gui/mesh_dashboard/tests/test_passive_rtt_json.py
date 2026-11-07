@@ -12,6 +12,39 @@ from unittest.mock import Mock
 
 
 class PassiveRttJsonTests(unittest.TestCase):
+    def test_single_wan_health_and_direct_peer_delivery_audiences(self):
+        path = Path(__file__).resolve().parents[1] / "server/mesh_bridge.py"
+        source = ast.parse(path.read_text())
+        bridge_class = next(node for node in source.body
+                            if isinstance(node, ast.ClassDef) and node.name == "DdsBridge")
+        bridge_class.body = [node for node in bridge_class.body
+                             if isinstance(node, ast.FunctionDef) and node.name in
+                             {"_expected_recipients", "_team_names_for_node"}]
+        namespace = {"FIXED_CONTROL_RECIPIENT_TOPICS": set()}
+        exec(compile(ast.Module(body=[bridge_class], type_ignores=[]), str(path), "exec"),
+             namespace)
+        bridge = namespace["DdsBridge"]()
+        nodes = ["Control_20", "Platform_30", "Platform_31", "Platform_32"]
+        bridge._audit_nodes_for_run = lambda _: nodes
+        bridge._health_discovery_is_global = lambda _: True
+        event = {"topic": "RouterHealth", "source_node": "Platform_30", "run_id": "run"}
+        self.assertEqual(bridge._expected_recipients(event),
+                         ["Control_20", "Platform_31", "Platform_32"])
+        bridge._health_discovery_is_global = lambda _: False
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20"])
+        bridge.cache = {"observer": {"peers": [
+            {"health": {"router": "Platform_30/router", "team_partition": ["Platform_30"]}},
+            {"health": {"router": "Platform_31/router",
+                        "team_partition": ["Platform_31", "Platform_30"]}},
+            {"health": {"router": "Platform_32/router", "team_partition": ["Platform_32"]}},
+        ]}}
+        event["topic"] = "PlatformData"
+        self.assertEqual(bridge._expected_recipients(event), ["Platform_31"])
+        event["source_node"] = "Platform_31"
+        self.assertEqual(bridge._expected_recipients(event), ["Platform_30"])
+        event["source_node"] = "Platform_32"
+        self.assertEqual(bridge._expected_recipients(event), [])
+
     def test_poll_and_snapshots_preserve_session_ack_and_rtt_metadata(self):
         path = Path(__file__).resolve().parents[1] / "server/mesh_bridge.py"
         source = ast.parse(path.read_text())

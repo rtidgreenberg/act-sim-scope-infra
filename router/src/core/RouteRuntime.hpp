@@ -74,10 +74,10 @@ struct RouteTopicRuntimeBase : public IWanStatsSource {
     // In-place partition change on this build's Subscriber (input leg) and Publisher
     // (output leg) — 7b/D69. Pub/sub PARTITION is runtime-mutable via set_qos with
     // automatic rematching (D15), so no entity recreation; the rematch surfaces through
-    // the matched-count StatusConditions (D66/D67). Empty string = the default
+    // the matched-count StatusConditions (D66/D67). Empty set = the default
     // partition. Returns false on failure.
-    virtual bool set_partitions(const std::string &subscriber_partition,
-                                const std::string &publisher_partition) = 0;
+    virtual bool set_partitions(const std::vector<std::string> &subscriber_partition,
+                                const std::vector<std::string> &publisher_partition) = 0;
 };
 
 template <typename T>
@@ -175,8 +175,8 @@ public:
         return count_.load(std::memory_order_relaxed);
     }
 
-    bool set_partitions(const std::string &subscriber_partition,
-                        const std::string &publisher_partition) override {
+    bool set_partitions(const std::vector<std::string> &subscriber_partition,
+                        const std::vector<std::string> &publisher_partition) override {
         dds::sub::qos::SubscriberQos sq;
         if (!try_apply_qos(subscriber_, sq,
                            [&subscriber_partition](dds::sub::qos::SubscriberQos &qos) {

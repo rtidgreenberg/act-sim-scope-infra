@@ -50,8 +50,8 @@ public:
     // In-place partition change on a live build's Subscriber/Publisher (7b/D69).
     // Returns false if no runtime exists / the update failed.
     bool set_partitions(const std::string &route, const std::string &topic,
-                        const std::string &subscriber_partition,
-                        const std::string &publisher_partition);
+                        const std::vector<std::string> &subscriber_partition,
+                        const std::vector<std::string> &publisher_partition);
 
     ~AsyncWaitSetDispatcher();
 

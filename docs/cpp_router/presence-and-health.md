@@ -22,6 +22,13 @@ Validated against Connext 7.7.0 (see the reasoning in
 
 ## `RouterHealth` topic
 
+The active [single-WAN configuration](single-wan-participant.md) keeps the existing
+3 s automatic writer/reader leases and 2 s deadline. Global participant discovery
+makes health visible across teams. `RouterHealth.team_partition` now comes from
+the controller's successfully applied endpoint-membership set; legacy participant-
+scoped configs still obtain it from live participant QoS. Its shape and dashboard
+classification remain unchanged.
+
 The single liveliness-bearing WAN topic. It lives on the **WAN participant** (mesh presence
 needs cross-WAN visibility) — distinct from the LAN-local admin command/status plane.
 

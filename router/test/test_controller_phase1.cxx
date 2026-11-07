@@ -47,6 +47,7 @@ struct FakeEntityFactory : IEntityFactory {
         std::uint64_t gen;
         std::string reader_qos, writer_qos;
         std::string sub_partition, pub_partition; // partition updates + creates (7b/D69)
+        std::vector<std::string> sub_partitions, pub_partitions;
     };
     std::vector<Op> creates, teardowns, aborts, partition_updates;
     // Counter the D63 RefreshCounters pull samples, keyed "route|topic" (7d).
@@ -57,6 +58,8 @@ struct FakeEntityFactory : IEntityFactory {
     // failure (e.g. participant not found) for the controller's rollback path.
     std::map<std::string, std::vector<std::string> > participant_partition_applies;
     bool fail_participant_partition_apply = false;
+    bool fail_route_partition_apply = false;
+    unsigned route_partition_failures_remaining = 0;
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
                                std::uint64_t gen) override {
@@ -87,16 +90,22 @@ struct FakeEntityFactory : IEntityFactory {
         aborts.push_back(op);
     }
     bool update_route_partitions(const std::string &route, const std::string &topic,
-                                 const std::string &subscriber_partition,
-                                 const std::string &publisher_partition) override {
+                                 const std::vector<std::string> &subscriber_partition,
+                                 const std::vector<std::string> &publisher_partition) override {
         Op op;
         op.route = route;
         op.topic = topic;
         op.gen = 0;
-        op.sub_partition = subscriber_partition;
-        op.pub_partition = publisher_partition;
+        op.sub_partitions = subscriber_partition;
+        op.pub_partitions = publisher_partition;
+        op.sub_partition = subscriber_partition.empty() ? "" : subscriber_partition.front();
+        op.pub_partition = publisher_partition.empty() ? "" : publisher_partition.front();
         partition_updates.push_back(op);
-        return true;
+        if (route_partition_failures_remaining) {
+            --route_partition_failures_remaining;
+            return false;
+        }
+        return !fail_route_partition_apply;
     }
     std::uint64_t forwarded_count(const std::string &route,
                                   const std::string &topic) const override {
@@ -921,6 +930,95 @@ static void test_set_route_partition() {
 // path (protected identity, not-present reject, idempotent duplicate, live-apply
 // failure rollback) and the D5 fingerprint wiring that makes a partition-only change
 // bump state_revision even though no route changed.
+static void test_team_endpoint_partition_membership() {
+    auto parts = Fixture::participants();
+    ParticipantState wan;
+    wan.name = "platform_wan";
+    wan.team_scoped = true;
+    wan.team_partitions_on_endpoints = true;
+    wan.participant_partition = {"SHARED"};
+    wan.team_partition = {"Platform_30"};
+    parts.push_back(wan);
+    auto send = route_spec("send", true, {topic_spec("Send")});
+    send.input.participant = "platform_lan";
+    send.output.participant = "platform_wan";
+    auto receive = route_spec("receive", true, {topic_spec("Receive")});
+    receive.input.participant = "platform_wan";
+    receive.output.participant = "platform_lan";
+    Fixture f({send, receive}, parts);
+    drive_to_forwarding(f, "send", "Send");
+    drive_to_forwarding(f, "receive", "Receive");
+    CHECK(f.controller.route_partition_names(send.output, false) == wan.team_partition);
+
+    auto add = command(RouterCommandKind::ADD_PARTICIPANT_PARTITION, "team-1");
+    add.participant_name = "platform_wan";
+    add.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.factory.partition_updates.size() == 2);
+    CHECK(f.factory.participant_partition_applies.empty());
+    CHECK(f.controller.state().participants.at("platform_wan").participant_partition ==
+          std::vector<std::string>({"SHARED"}));
+    const std::vector<std::string> assigned = {"Platform_30", "TEAM_A"};
+    CHECK(f.controller.route_partition_names(send.output, false) == assigned);
+    CHECK(f.controller.route_partition_names(receive.input, true) == assigned);
+    for (const auto &op : f.factory.partition_updates) {
+        CHECK((op.route == "send" ? op.pub_partitions : op.sub_partitions) == assigned);
+    }
+    CHECK(f.factory.teardowns.empty());
+    auto navigation = send.output;
+    navigation.publisher_partition = "NAVIGATION";
+    CHECK(f.controller.route_partition_names(navigation, false) ==
+          std::vector<std::string>({"NAVIGATION"}));
+
+    add.command_id = "tap-1";
+    add.partition_name = "Platform_31";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.controller.route_partition_names(send.output, false).size() == 3);
+    auto remove = add;
+    remove.kind = RouterCommandKind::REMOVE_PARTICIPANT_PARTITION;
+    remove.command_id = "remove-1";
+    remove.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(remove));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.controller.route_partition_names(send.output, false) ==
+          std::vector<std::string>({"Platform_30", "Platform_31"}));
+
+    f.factory.route_partition_failures_remaining = 1;
+    add.command_id = "failed-1";
+    add.partition_name = "TEAM_B";
+    const auto revision = f.revision();
+    f.post(ControllerEvent::command_received(add));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.revision() == revision);
+    CHECK(f.factory.teardowns.empty());
+    CHECK(f.controller.route_partition_names(send.output, false) ==
+          std::vector<std::string>({"Platform_30", "Platform_31"}));
+
+    f.factory.fail_route_partition_apply = true;
+    add.command_id = "failed-rollback";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(!f.status.last_ack().accepted);
+    CHECK(f.factory.teardowns.size() == 2);
+    CHECK(f.controller.state().routes.at("send").route_error);
+    CHECK(f.controller.state().routes.at("receive").route_error);
+
+    FakeEntityFactory factory;
+    FakeStatusPublisher status;
+    FakePresencePublisher presence;
+    RouterController controller(Fixture::identity(), {}, parts, &factory, &status,
+                                nullptr, &presence);
+    add.command_id = "health-team";
+    add.partition_name = "TEAM_A";
+    controller.post(ControllerEvent::command_received(add));
+    controller.post(ControllerEvent::presence_tick());
+    controller.drain();
+    CHECK(presence.heartbeats.back().team_partition.size() == 2);
+    CHECK(status.last().participants.at(1).team_partition.size() == 2);
+    CHECK(status.last().participants.at(1).participant_partition.at(0) == "SHARED");
+}
+
 static void test_participant_partition_accept_path() {
     Fixture f(std::vector<RouterRouteSpec>(), Fixture::participants_with_team_wan());
     std::uint64_t rev = f.revision();
@@ -1186,6 +1284,7 @@ int main() {
     RUN(test_disable_tears_down);
     RUN(test_set_route_partition);
     RUN(test_participant_partition_accept_path);
+    RUN(test_team_endpoint_partition_membership);
     RUN(test_participant_partition_protected_wildcard);
     RUN(test_refresh_counters_republish_no_bump);
     RUN(test_history_fifo_eviction);

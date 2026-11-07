@@ -305,6 +305,7 @@ int main(int argc, char **argv) {
             // Only on_wan reaches the registry (WAN-leg link-stats detection); team_scoped is
             // consumed on ParticipantState (protected-identity partition) and never needed here.
             pc.on_wan = p.on_wan;
+            pc.team_partitions_on_endpoints = p.team_partitions_on_endpoints;
             pc.partition_names = p.participant_partition;
             if (!p.qos_profile_alias.empty()) {
                 auto it = cfg.qos_profiles.find(p.qos_profile_alias);
@@ -447,7 +448,7 @@ int main(int argc, char **argv) {
         // (dds::core::null).
         dds::domain::DomainParticipant team_scoped_participant = dds::core::null;
         for (const ParticipantState &p : filtered_participants) {
-            if (p.team_scoped) {
+            if (p.team_scoped && !p.team_partitions_on_endpoints) {
                 team_scoped_participant = registry.get(p.name);
                 break;
             }

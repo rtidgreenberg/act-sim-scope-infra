@@ -289,6 +289,7 @@
   <member name="domain" type="int32"/>
   <member name="participant_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="qos_profile_alias" stringMaxLength="255" type="string"/>
+  <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
 </struct>
 <struct name= "RouterStatus">
   <member name="target_node" stringMaxLength="255" type="string" key="true"/>

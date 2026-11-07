@@ -68,6 +68,8 @@ public:
 
     // Test/observability access (const — routes read state, controller writes it).
     const MutableRouterState &state() const { return state_; }
+    std::vector<std::string> route_partition_names(
+            const RouterRouteEndpointSpec &endpoint, bool input) const;
 
 private:
     // Process one drained event on the strand: fingerprint, process, publish-if-changed,

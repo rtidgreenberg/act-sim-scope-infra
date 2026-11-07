@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import json
 import logging
+import functools
 import math
 import os
 import re
@@ -588,15 +589,15 @@ class DdsBridge:
             return [event["destination"]] if event.get("destination") else []
         if event["topic"] == "PlatformData" and event["source_node"].startswith("Platform_"):
             run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
-            source_teams = self._team_names_for_node(event["source_node"])
-            if not source_teams:
-                return []
+            source_teams = self._team_names_for_node(event["source_node"]) | {event["source_node"]}
             return [node for node in run_nodes
                     if node.startswith("Platform_")
                     and node != event["source_node"]
-                    and source_teams.intersection(self._team_names_for_node(node))]
+                    and source_teams.intersection(self._team_names_for_node(node) | {node})]
         if event["topic"] == "RouterHealth":
             run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
+            if self._health_discovery_is_global(event.get("run_id", "")):
+                return [node for node in run_nodes if node != event["source_node"]]
             if event["source_node"] == "Control_20":
                 return [node for node in run_nodes if node.startswith("Platform_")]
             if event["source_node"].startswith("Platform_"):
@@ -612,6 +613,24 @@ class DdsBridge:
                 return []
             return ["Control_20"]
         return []
+
+    @functools.lru_cache(maxsize=16)
+    def _health_discovery_is_global(self, run_id):
+        path = _THIS_FILE.parents[3] / "debug/test_controller_debug/manifest.json"
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            logger.debug("No manifest for legacy health audience: %s", run_id)
+            return False
+        except (OSError, json.JSONDecodeError):
+            logger.exception("Cannot resolve RouterHealth discovery scope: %s", path)
+            raise
+        if manifest.get("run_id") != run_id:
+            return False
+        scope = manifest.get("router_health_scope", "control_platform")
+        if scope not in ("full_mesh", "control_platform"):
+            raise ValueError(f"Unknown RouterHealth scope: {scope}")
+        return scope == "full_mesh"
 
     def _audit_version(self, flow):
         return self.audit_versions.setdefault(flow, [0, 0])

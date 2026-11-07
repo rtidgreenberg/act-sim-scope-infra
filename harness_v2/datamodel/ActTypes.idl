@@ -362,6 +362,7 @@ struct RouterParticipantStatus {
     int32 domain;
     sequence<string, 16> participant_partition;
     string qos_profile_alias;
+    sequence<string, 16> team_partition;
 };
 
 struct RouterStatus {

@@ -231,6 +231,15 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             // non-removable partition values (e.g. control_wan's standing "*" wildcard),
             // parsed below alongside participant_partition.
             ps.team_scoped = p["team_scoped"] && p["team_scoped"].as<bool>();
+            ps.team_partitions_on_endpoints = p["team_partitions_on_endpoints"] &&
+                    p["team_partitions_on_endpoints"].as<bool>();
+            if (ps.team_partitions_on_endpoints && !ps.team_scoped) {
+                error = "team_partitions_on_endpoints requires team_scoped: true";
+                return false;
+            }
+            if (ps.team_partitions_on_endpoints) {
+                ps.team_partition.push_back(out.node_name);
+            }
             ps.on_wan = p["on_wan"] && p["on_wan"].as<bool>();
 
             // participant_partition (D83): a sequence of names, or a single scalar name
@@ -256,7 +265,7 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
             // into it): is_protected_partition_name's team_scoped check is self-contained
             // off ParticipantState alone, so it stays correct for a ParticipantState built
             // by any caller, not just ones that route through this parser.
-            if (ps.team_scoped &&
+            if (ps.team_scoped && !ps.team_partitions_on_endpoints &&
                 std::find(ps.participant_partition.begin(), ps.participant_partition.end(),
                          out.node_name) == ps.participant_partition.end()) {
                 ps.participant_partition.insert(ps.participant_partition.begin(),

@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 import rti.connextdds as dds
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import CONFIG_DIR, start_router  # noqa: E402
@@ -59,10 +60,15 @@ NODE_B = "Platform_31"
 KIND = COMMAND_KIND
 
 
-def _render(domains, out_name, e2e_tmp_dir):
+def _render(domains, out_name, e2e_tmp_dir, endpoint_scope=False):
     text = (CONFIG_DIR / FIXTURE).read_text()
     text = text.replace("__DOMAIN_PLATFORM_LAN__", str(domains["platform_lan"]))
     text = text.replace("__DOMAIN_WAN__", str(domains["wan"]))
+    if endpoint_scope:
+        text = text.replace("    team_scoped: true",
+                            '    team_partitions_on_endpoints: true\n'
+                            '    protected_partition_entries: ["SHARED"]\n'
+                            '    team_scoped: true')
     out = e2e_tmp_dir / out_name
     out.write_text(text)
     return out
@@ -86,15 +92,23 @@ def _sample(cmd_type, seq):
     return d
 
 
+@pytest.mark.parametrize("endpoint_scope", [False, True])
 def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
-                                   unique_domains):
+                                   unique_domains, endpoint_scope):
     # Distinct platform_lan per node (test isolation); the SAME wan domain for both
     # (production reality: one physical WAN) — repurposing unique_domains' unused
     # "control_lan" key as node B's platform_lan rather than widening the shared fixture.
     domains_a = {"platform_lan": unique_domains["platform_lan"], "wan": unique_domains["wan"]}
     domains_b = {"platform_lan": unique_domains["control_lan"], "wan": unique_domains["wan"]}
-    cfg_a = _render(domains_a, "team_a.yaml", e2e_tmp_dir)
-    cfg_b = _render(domains_b, "team_b.yaml", e2e_tmp_dir)
+    cfg_a = _render(domains_a, "team_a.yaml", e2e_tmp_dir, endpoint_scope)
+    cfg_b = _render(domains_b, "team_b.yaml", e2e_tmp_dir, endpoint_scope)
+
+    observer = None
+    if endpoint_scope:
+        observer = Probe(domains_a["wan"], participant_profile="wan_router_participant",
+                         participant_partition=["SHARED"])
+        publications = observer.participant.publication_reader
+        subscriptions = observer.participant.subscription_reader
 
     proc_a = start_router(router_binary, cfg_a, "platform", e2e_tmp_dir,
                           admin_participant="platform_lan")
@@ -156,12 +170,19 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
         # data-level non-match.
         log_a = proc_a.log_path.read_text()
         log_b = proc_b.log_path.read_text()
-        assert f"topic={TOPIC}" not in log_a or f"origin={NODE_B}/{ROUTER_NAME}" \
-            not in log_a, f"node A's log shows a PlatformData endpoint from node B " \
-            f"despite disjoint platform_wan partitions; log={proc_a.log_path}"
-        assert f"topic={TOPIC}" not in log_b or f"origin={NODE_A}/{ROUTER_NAME}" \
-            not in log_b, f"node B's log shows a PlatformData endpoint from node A " \
-            f"despite disjoint platform_wan partitions; log={proc_b.log_path}"
+        if endpoint_scope:
+            for reader in (publications, subscriptions):
+                records = [data for data, info in
+                           reader.select().state(dds.DataState.any).read()
+                           if info.valid and data.topic_name == TOPIC]
+                assert len(records) == 2, "global discovery must expose both WAN endpoints"
+        else:
+            assert f"topic={TOPIC}" not in log_a or f"origin={NODE_B}/{ROUTER_NAME}" \
+                not in log_a, f"node A's log shows a PlatformData endpoint from node B " \
+                f"despite disjoint platform_wan partitions; log={proc_a.log_path}"
+            assert f"topic={TOPIC}" not in log_b or f"origin={NODE_A}/{ROUTER_NAME}" \
+                not in log_b, f"node B's log shows a PlatformData endpoint from node A " \
+                f"despite disjoint platform_wan partitions; log={proc_b.log_path}"
 
         # --- E-team: ADD_PARTICIPANT_PARTITION platform_wan=TEAM_A on both ---
         adm_a.cmd_writer.write(
@@ -268,6 +289,8 @@ def test_team_partition_membership(router_binary, admin_types_xml, e2e_tmp_dir,
             f"PlatformData never crossed after the direct peer tap; "
             f"logs: a={proc_a.log_path} b={proc_b.log_path}")
     finally:
+        if observer is not None:
+            observer.close()
         lan_a.close()
         lan_b.close()
         proc_a.stop()

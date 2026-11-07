@@ -84,8 +84,8 @@ std::uint64_t AsyncWaitSetDispatcher::forwarded(const std::string &route,
 
 bool AsyncWaitSetDispatcher::set_partitions(const std::string &route,
                                             const std::string &topic,
-                                            const std::string &subscriber_partition,
-                                            const std::string &publisher_partition) {
+                                            const std::vector<std::string> &subscriber_partition,
+                                            const std::vector<std::string> &publisher_partition) {
     std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
         runtimes_.find(key(route, topic));
     if (it == runtimes_.end()) {

@@ -59,6 +59,7 @@ public:
         // team_scoped flag — that concept (protected-identity partition) lives on
         // ParticipantState and never reaches here.
         bool on_wan = false;
+        bool team_partitions_on_endpoints = false;
     };
 
     // autoenable=false creates participants disabled for the D52 disabled-startup
@@ -81,6 +82,9 @@ public:
     // "the WAN participant" — now that a node can have more than one (control_wan and
     // platform_wan; historically also team_wan before D103 retired it).
     bool on_wan(const std::string &name) const;
+    bool team_partitions_on_endpoints(const std::string &name) const {
+        return team_partitions_on_endpoints_.at(name);
+    }
 
     // Enables every participant and, recursively, its builtin readers plus any child
     // entities created while disabled. Safe to call once after conditions are attached
@@ -91,6 +95,7 @@ private:
     std::vector<std::string> names_;
     std::map<std::string, dds::domain::DomainParticipant> participants_;
     std::map<std::string, bool> on_wan_;
+    std::map<std::string, bool> team_partitions_on_endpoints_;
 };
 
 } // namespace router

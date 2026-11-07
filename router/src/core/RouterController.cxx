@@ -459,6 +459,20 @@ void RouterController::handle_disable(const RouterCommand &cmd, RouterCommandAck
     current_cause_ = cmd.command_id;
 }
 
+std::vector<std::string> RouterController::route_partition_names(
+        const RouterRouteEndpointSpec &endpoint, bool input) const {
+    const auto &name = input ? endpoint.subscriber_partition : endpoint.publisher_partition;
+    if (!name.empty()) {
+        return {name};
+    }
+    const auto participant = state_.participants.find(endpoint.participant);
+    if (participant != state_.participants.end() &&
+            participant->second.team_partitions_on_endpoints) {
+        return participant->second.team_partition;
+    }
+    return {};
+}
+
 // Runtime per-route partition change (7b/D69). The command's embedded
 // route.input.subscriber_partition / route.output.publisher_partition become the
 // route's desired values (empty = default partition — callers read the current values
@@ -497,8 +511,10 @@ void RouterController::handle_set_route_partition(const RouterCommand &cmd,
             && st != RouterRouteTopicState::TOPIC_FORWARDING) {
             continue; // no live entities; the next build uses the new view
         }
-        if (!factory_->update_route_partitions(cmd.route_name, t->first, new_sub,
-                                               new_pub)) {
+        if (!factory_->update_route_partitions(
+                    cmd.route_name, t->first,
+                    route_partition_names(route.desired.input, true),
+                    route_partition_names(route.desired.output, false))) {
             // Log-only: a racing teardown means the next build applies the new spec
             // from the re-minted view anyway.
             Log::warn("route_partition_update_failed",
@@ -523,7 +539,9 @@ void RouterController::handle_participant_partition_membership(const RouterComma
         return;
     }
     ParticipantState &ps = p->second;
-    std::vector<std::string> &names = ps.participant_partition;
+    std::vector<std::string> &names = ps.team_partitions_on_endpoints
+            ? ps.team_partition : ps.participant_partition;
+    const auto previous_names = names;
     std::vector<std::string>::iterator found =
             std::find(names.begin(), names.end(), cmd.partition_name);
 
@@ -570,7 +588,51 @@ void RouterController::handle_participant_partition_membership(const RouterComma
         names.erase(found);
     }
 
-    if (!factory_->apply_participant_partition(ps.name, names)) {
+    if (ps.team_partitions_on_endpoints) {
+        const auto apply_routes = [&](bool rollback) {
+            bool ok = true;
+            for (auto &entry : state_.routes) {
+                auto &route = entry.second;
+                if (!((route.desired.input.participant == ps.name &&
+                       route.desired.input.subscriber_partition.empty()) ||
+                      (route.desired.output.participant == ps.name &&
+                       route.desired.output.publisher_partition.empty()))) {
+                    continue;
+                }
+                for (auto &topic : route.topics) {
+                    auto &state = topic.second;
+                    if (state.topic_state != RouterRouteTopicState::TOPIC_CREATING &&
+                        state.topic_state != RouterRouteTopicState::TOPIC_FORWARDING) {
+                        continue;
+                    }
+                    if (!factory_->update_route_partitions(
+                                entry.first, topic.first,
+                                route_partition_names(route.desired.input, true),
+                                route_partition_names(route.desired.output, false))) {
+                        ok = false;
+                        Log::error("team_partition_update_failed",
+                                   {{"route", entry.first}, {"topic", topic.first},
+                                    {"rollback", rollback ? "true" : "false"}});
+                        if (rollback) {
+                            route.route_error = true;
+                            route.last_error = "team partition rollback failed";
+                            state.topic_state = RouterRouteTopicState::TOPIC_TEARING_DOWN;
+                            factory_->teardown_topic_entities(
+                                    entry.first, topic.first, state.entity_generation);
+                        }
+                    }
+                }
+            }
+            return ok;
+        };
+        if (!apply_routes(false)) {
+            names = previous_names;
+            const bool restored = apply_routes(true);
+            ack.message = restored ? "failed to apply team endpoint partitions"
+                                   : "team partition rollback failed; affected routes stopped";
+            return;
+        }
+    } else if (!factory_->apply_participant_partition(ps.name, names)) {
         // Roll back: never claim a set the live participant doesn't have.
         if (adding) {
             names.pop_back();
@@ -789,12 +851,12 @@ void RouterController::apply_presence_tick() {
         }
         presence_->publish_diagnostics(diagnostics);
     }
-    // team_partition is deliberately NOT filled in here. Unlike every other field above
-    // (derived from state_, the controller's own config-mirrored copy), team_partition is
-    // polled live off the real DomainParticipantQos.partition by PresenceMonitor itself,
-    // the same place peers_seen is filled (D77) — ground truth off the actual DDS entity,
-    // not a state mirror that could in principle drift from it. See PresenceMonitor::
-    // publish_heartbeat.
+    for (const auto &entry : state_.participants) {
+        if (entry.second.team_partitions_on_endpoints) {
+            hb.team_partition = entry.second.team_partition;
+        }
+    }
+    // Legacy participant-scoped configurations are still polled by PresenceMonitor.
     presence_->publish_heartbeat(hb);
 }
 
@@ -1097,6 +1159,7 @@ std::shared_ptr<const RouterStatus> RouterController::build_snapshot() const {
         ps.domain = p->second.domain;
         ps.participant_partition = p->second.participant_partition;
         ps.qos_profile_alias = p->second.qos_profile_alias;
+        ps.team_partition = p->second.team_partition;
         s->participants.push_back(ps);
     }
 

@@ -41,8 +41,8 @@ struct IEntityFactory {
     // (the caller logs; a future rebuild uses the re-minted view's new spec anyway).
     virtual bool update_route_partitions(const std::string &route_name,
                                          const std::string &topic_name,
-                                         const std::string &subscriber_partition,
-                                         const std::string &publisher_partition) = 0;
+                                         const std::vector<std::string> &subscriber_partition,
+                                         const std::vector<std::string> &publisher_partition) = 0;
     // Apply a participant's FULL partition name set to its live DomainParticipantQos via
     // set_qos (D83; ADD/REMOVE_PARTICIPANT_PARTITION mutate the controller's state to the
     // desired set first, then call this to push it to the real entity — same in-place

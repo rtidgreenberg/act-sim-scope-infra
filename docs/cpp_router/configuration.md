@@ -53,20 +53,17 @@ For the POC, keep the rule simple:
 - Platform/control WAN routes set publisher and subscriber partitions independently. For
   example, platform command readers subscribe on `CONTROL`, while platform status writers
   publish on `PLATFORM`.
-- `platform_wan` owns a participant-level partition for discovery and group-level
-  scoping (D103: retires the separate `team_wan` participant, folding its role
-  directly into `platform_wan`; `team_scoped: true` is what marks it as carrying this
-  mechanism) — and per **D73 (2026-07-16)** it is the **only** team-scope mechanism:
-  team route endpoints use the default partition, and the `inherit_participant`
-  sentinel is **retired** (non-overlapping participant partitions already make the
-  participants mutually invisible and suppress WAN endpoint discovery; a second
-  endpoint-level gate added nothing). `ADD`/`REMOVE_PARTICIPANT_PARTITION` update the
-  group in one place via participant `set_qos` (`SET_PARTICIPANT_PARTITION` is itself
-  retired, D73). `control_wan` additionally carries a standing, protected wildcard
-  (`protected_partition_entries: ["*"]`, D103) to keep matching `platform_wan` now that
-  it's off the free default partition. The example below predates D73/D103 and its
-  `inherit_participant` lines and `team_wan` participant drop out when Phase 10/D103
-  land.
+- The active config uses one WAN participant per role with protected discovery
+  partition `SHARED` (D122). `location_wan` is merged into `platform_wan`; navigation
+  remains on explicit endpoint partition `NAVIGATION`.
+- `team_scoped: true` plus `team_partitions_on_endpoints: true` makes omitted route
+  endpoint partitions inherit a separate private/team/direct-peer partition set.
+  Explicit endpoint partitions override it. Existing ADD/REMOVE_PARTICIPANT_PARTITION
+  commands update these live parents, not participant discovery QoS, in this mode.
+  Status reports actual `participant_partition` and separate `team_partition`.
+  Legacy configs with the opt-in omitted retain D73/D103 participant-level isolation.
+  See [the migration contract](single-wan-participant.md); the historical example
+  below is not the current runnable config.
 - **WAN participants are never multi-homed (D18).** When a node has multiple physical
   networks (e.g. mesh radio + SATCOM), the config defines **one WAN participant per unique
   network**, each pinned to its interface via the UDPv4 builtin transport

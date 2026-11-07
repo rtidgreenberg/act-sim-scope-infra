@@ -58,6 +58,7 @@ ParticipantRegistry::ParticipantRegistry(const std::vector<Config> &configs,
             participants_.emplace(cfg.name, dp);
             names_.push_back(cfg.name);
             on_wan_.emplace(cfg.name, cfg.on_wan);
+            team_partitions_on_endpoints_.emplace(cfg.name, cfg.team_partitions_on_endpoints);
             Log::info("participant_created",
                       {{"name", cfg.name},
                        {"domain", std::to_string(cfg.domain)},

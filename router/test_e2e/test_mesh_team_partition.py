@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 import rti.connextdds as dds
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import CONFIG_DIR, REPO_ROOT, start_router  # noqa: E402
@@ -45,11 +46,16 @@ MESH_TOPIC = "ActRouterMeshStatus"
 KIND = COMMAND_KIND
 
 
-def _render(domains, out_name, e2e_tmp_dir):
+def _render(domains, out_name, e2e_tmp_dir, endpoint_scope=False):
     text = (CONFIG_DIR / FIXTURE).read_text()
     text = text.replace("__DOMAIN_CONTROL_LAN__", str(domains["control_lan"]))
     text = text.replace("__DOMAIN_WAN__", str(domains["wan"]))
     text = text.replace("__DOMAIN_PLATFORM_LAN__", str(domains["platform_lan"]))
+    if endpoint_scope:
+        text = text.replace("    team_scoped: true",
+                            '    team_partitions_on_endpoints: true\n'
+                            '    protected_partition_entries: ["SHARED"]\n'
+                            '    team_scoped: true')
     out = e2e_tmp_dir / out_name
     out.write_text(text)
     return out
@@ -137,16 +143,17 @@ def _wait(fn, predicate, timeout_s, check_alive, poll_s=0.2):
     return value
 
 
+@pytest.mark.parametrize("endpoint_scope", [False, True])
 def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_dir,
-                                      unique_domains):
+                                      unique_domains, endpoint_scope):
     domains = {
         "control_lan": unique_domains["control_lan"],
         "wan": unique_domains["wan"],
     }
     cfg_a = _render({**domains, "platform_lan": unique_domains["platform_lan"]},
-                     "team_a.yaml", e2e_tmp_dir)
-    cfg_b = _render({**domains, "platform_lan": unique_domains["platform_lan"] + 1000},
-                     "team_b.yaml", e2e_tmp_dir)
+                     "team_a.yaml", e2e_tmp_dir, endpoint_scope)
+    cfg_b = _render({**domains, "platform_lan": 201},
+                     "team_b.yaml", e2e_tmp_dir, endpoint_scope)
 
     control_proc = start_router(router_binary, cfg_a, "control", e2e_tmp_dir,
                                 node_name="Control_20", name="e2e-control-role",
@@ -169,7 +176,7 @@ def test_router_health_team_partition(router_binary, admin_types_xml, e2e_tmp_di
     wan_probe = Probe(domains["wan"], participant_profile="wan_router_participant", participant_partition=["*"])
     control_lan_probe = Probe(domains["control_lan"])
     lan_a = Probe(unique_domains["platform_lan"])
-    lan_b = Probe(unique_domains["platform_lan"] + 1000)
+    lan_b = Probe(201)
     try:
         provider = dds.QosProvider(str(admin_types_xml))
         health = health_reader(wan_probe, provider)
