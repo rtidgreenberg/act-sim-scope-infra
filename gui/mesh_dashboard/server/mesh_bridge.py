@@ -36,6 +36,12 @@ from pathlib import Path
 
 from aiohttp import web
 try:
+    from emane_config import EmaneConfiguration
+except ModuleNotFoundError as exc:
+    if exc.name != "emane_config":
+        raise
+    from gui.mesh_dashboard.server.emane_config import EmaneConfiguration
+try:
     from wire_delivery import WireDelivery
     from delivery_config import load_delivery_config
 except ModuleNotFoundError as exc:
@@ -1760,6 +1766,7 @@ class DdsBridge:
 
 def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app = web.Application()
+    emane_configuration = EmaneConfiguration()
 
     async def on_startup(_app):
         bridge.loop = asyncio.get_running_loop()
@@ -1886,6 +1893,11 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_emane_controller(_request):
         return web.json_response(bridge.emane_controller_status())
 
+    async def get_emane_configuration(_request):
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, emane_configuration.snapshot)
+        return web.json_response(result)
+
     async def post_emane_controller(request):
         try:
             body = await request.json()
@@ -1967,6 +1979,7 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_get("/api/router_diagnostics", get_router_diagnostics)
     app.router.add_get("/api/link_stats", get_link_stats)
     app.router.add_get("/api/emane_controller", get_emane_controller)
+    app.router.add_get("/api/emane_configuration", get_emane_configuration)
     app.router.add_post("/api/emane_controller", post_emane_controller)
     app.router.add_get("/api/delivery_stats", get_delivery_stats)
     app.router.add_get("/api/delivery_config", get_delivery_config)

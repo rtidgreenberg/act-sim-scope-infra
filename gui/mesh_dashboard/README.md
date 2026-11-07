@@ -118,6 +118,24 @@ as though they had already been deployed. `GET /api/delivery_config` exposes thi
 startup configuration snapshot. Capture diagnostics remain fleet-wide and are
 labeled separately from the filtered table.
 
+The **EMANE** tab includes a read-only **Current radio configuration** panel.
+`GET /api/emane_configuration` runs a local `emanesh ... get config <nem> all`
+query, with a three-second timeout and a five-second cache, off the HTTP event
+loop. It shows the dashboard observer's NEM explicitly; other nodes may differ.
+Model-library identities come from that node's generated EMANE XML, while
+parameter values come from the running EMANE process, not XML defaults or traffic
+counters. Missing tools, disabled EMANE, invalid responses, and failed queries
+are shown as unavailable rather than retaining a successful-looking old snapshot.
+
+The summary displays MAC and virtual-transport rates in Mbps, channel width in
+MHz, frequency in GHz, TX power/noise figure, delay/jitter in ms, propagation,
+fading, noise mode, and CommEffect defaults. Expand **All runtime parameters**
+for the complete returned parameter set in native EMANE units. Rates are
+per-radio settings, not a shared mesh-capacity budget or measured goodput;
+channel width is independent of data rate. RF Pipe/CommEffect is not a calibrated
+Silvus/Persistent MIMO, contention, or multi-hop model. This panel changes no
+radio settings; commanded directional impairments remain separate below it.
+
 Capture status exposes fresh contributors, unsupported paths, incomplete samples,
 and invalid observations. Flows without fresh enabled source/destination captures
 show Unknown loss and are excluded from comparison summaries. Coverage must span

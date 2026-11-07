@@ -371,6 +371,23 @@
                            margin: 0; font-size: 12px; }
   .experiment-current dt { color: #8a94a6; }
   .experiment-current dd { margin: 0; color: #e6e8eb; }
+  .experiment-config { margin-bottom: 16px; }
+  .experiment-config h2 { margin: 0 0 8px; font-size: 14px; }
+  .experiment-config p { color: #a7b0c0; font-size: 12px; line-height: 1.5; }
+  .experiment-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+                            gap: 12px 20px; margin: 16px 0; font-size: 12px; }
+  .experiment-config-grid dt { color: #8a94a6; margin-bottom: 5px; }
+  .experiment-config-grid dd { margin: 0; color: #e6e8eb; overflow-wrap: anywhere; }
+  .experiment-config-grid[hidden] { display: none; }
+  .experiment-config details { font-size: 12px; overflow-wrap: anywhere; }
+  .experiment-config summary { cursor: pointer; color: #d7efff; }
+  .experiment-config table { width: 100%; margin-top: 10px; border-collapse: collapse; }
+  .experiment-config th, .experiment-config td { padding: 5px 8px; border-bottom: 1px solid #2c3542;
+                                                text-align: left; vertical-align: top; }
+  .experiment-config td { color: #a7b0c0; }
+  #experiment-config-status { color: #e0b84d; }
+  #experiment-config-status.ready { color: #75c991; }
+  @media (max-width: 700px) { .experiment-config-grid { grid-template-columns: 1fr; } }
   @media (max-width: 700px) { .experiment-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -507,6 +524,20 @@
 </main>
 <main id="experiment-panel" class="workspace-panel">
   <div class="experiment-heading"><h1>EMANE Experiment Controller</h1><span id="experiment-state" class="experiment-state">Checking controller…</span></div>
+  <section class="experiment-card experiment-config" aria-label="Current radio configuration">
+    <h2>Current radio configuration <small>(read-only)</small></h2>
+    <p id="experiment-config-status" role="status">Reading runtime configuration...</p>
+    <dl id="experiment-config-values" class="experiment-config-grid" hidden></dl>
+    <p>Rates are configured per radio/NEM, not a shared whole-mesh cap or measured application goodput.
+      RF channel width (MHz) is separate from data rate (Mbps). The RF Pipe/CommEffect rig is a
+      simplified constrained link, not a calibrated Silvus/Persistent MIMO, contention, or multi-hop model.
+      Commanded path impairments are shown separately below.</p>
+    <details id="experiment-config-details" hidden>
+      <summary>All runtime parameters (native EMANE units)</summary>
+      <table><thead><tr><th>Component</th><th>Parameter</th><th>Value</th></tr></thead>
+        <tbody id="experiment-config-parameters"></tbody></table>
+    </details>
+  </section>
   <div class="experiment-card">
     <div class="experiment-grid">
       <label class="experiment-field">Source node
@@ -611,7 +642,7 @@
 <script src="traffic_rates.js?v=20261106-capture-time-v1"></script>
 <script src="mesh_graph.js?v=20261107-infrastructure-toggle-v1"></script>
 <script src="traffic_chart.js?v=20261107-infrastructure-toggle-v1"></script>
-  <script src="operator_tabs.js?v=20261106-delivery-review-fixes-v1"></script>
+  <script src="operator_tabs.js?v=20261107-emane-runtime-config-v2"></script>
 <script src="mission_map.js?v=20261103-coast-v1"></script>
 <script src="mission.js?v=20261105-state-and-target-toggles-v4"></script>
 </body>

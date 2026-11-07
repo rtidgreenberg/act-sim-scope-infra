@@ -44,6 +44,12 @@
   const experimentCurrentUpdated = document.getElementById("experiment-current-updated");
   const experimentCurrentNetwork = document.getElementById("experiment-current-network");
   const controllerUrl = `${location.protocol}//${location.host}/api/emane_controller`;
+  const configurationUrl = `${location.protocol}//${location.host}/api/emane_configuration`;
+  const configurationStatus = document.getElementById("experiment-config-status");
+  const configurationValues = document.getElementById("experiment-config-values");
+  const configurationDetails = document.getElementById("experiment-config-details");
+  const configurationParameters = document.getElementById("experiment-config-parameters");
+  let configurationRequestVersion = 0;
   const EXPERIMENT_REFRESH_MS = 2000;
   let experimentRequestVersion = 0;
   let missionContext = { selected: [], platforms: [], team: null };
@@ -467,6 +473,7 @@
   }
 
   function refreshExperimentController() {
+    refreshExperimentConfiguration();
     Promise.all([
       fetch(controllerUrl).then((response) => response.json()),
       fetch(`${location.protocol}//${location.host}/api/mesh_status`).then((response) => response.json()),
@@ -475,6 +482,79 @@
       setExperimentEnabled(Boolean(status.available), status.unavailable_reason);
       renderExperimentState(status);
     }).catch(() => setExperimentEnabled(false));
+  }
+
+  async function refreshExperimentConfiguration() {
+    const version = ++configurationRequestVersion;
+    let status;
+    try {
+      const response = await fetch(configurationUrl);
+      if (!response.ok) throw new Error(`Configuration API returned HTTP ${response.status}`);
+      status = await response.json();
+    } catch (error) {
+      status = {available: false, unavailable_reason: error.message};
+    }
+    if (version !== configurationRequestVersion) return;
+    configurationValues.replaceChildren();
+    configurationParameters.replaceChildren();
+    configurationValues.hidden = !status.available;
+    configurationDetails.hidden = !status.available;
+    configurationStatus.classList.toggle("ready", Boolean(status.available));
+    if (!status.available) {
+      configurationStatus.textContent = `Runtime configuration unavailable: ${status.unavailable_reason || "No runtime snapshot provided"}`;
+      return;
+    }
+    configurationStatus.textContent = `${status.observer_node} / NEM ${status.nem_id} only - read ${new Date(status.checked_at_ms).toLocaleTimeString()} (cached up to ${status.cache_ttl_ms / 1000} s). Other nodes may differ.`;
+    const components = status.components || {};
+    const value = (component, parameter) => components[component]?.[parameter] ?? "Unavailable";
+    const scaled = (component, parameter, divisor, unit) => {
+      const raw = components[component]?.[parameter];
+      if (raw == null || raw.trim() === "" || !Number.isFinite(Number(raw))) return "Unavailable";
+      return `${Number((Number(raw) / divisor).toPrecision(8))} ${unit}`;
+    };
+    const models = status.models || {};
+    const modelNames = {rfpipemaclayer: "RF Pipe", transvirtual: "Virtual TAP", commeffectshim: "CommEffect"};
+    const model = (component) => {
+      const library = models[component];
+      return library ? `${modelNames[library] || library} (${library})` : "Not present";
+    };
+    const rows = [
+      ["MAC model", model("mac")],
+      ["Transport model", model("transport")],
+      ["Shim model", model("shim0")],
+      ["MAC nominal rate", scaled("mac", "datarate", 1e6, "Mbps")],
+      ["Virtual transport rate", scaled("transport", "bitrate", 1e6, "Mbps")],
+      ["RF channel width", scaled("phy", "bandwidth", 1e6, "MHz")],
+      ["RF frequency", scaled("phy", "frequency", 1e9, "GHz")],
+      ["TX power", scaled("phy", "txpower", 1, "dBm")],
+      ["System noise figure", scaled("phy", "systemnoisefigure", 1, "dB")],
+      ["MAC delay", scaled("mac", "delay", 0.001, "ms")],
+      ["MAC jitter", scaled("mac", "jitter", 0.001, "ms")],
+      ["Propagation / fading", `${value("phy", "propagationmodel")} / ${value("phy", "fading.model")}`],
+      ["Noise mode", value("phy", "noisemode")],
+      ["CommEffect default connectivity", value("shim0", "defaultconnectivitymode")],
+      ["CommEffect promiscuous mode", value("shim0", "enablepromiscuousmode")],
+    ];
+    for (const [label, text] of rows) {
+      const entry = document.createElement("div");
+      const term = document.createElement("dt");
+      const description = document.createElement("dd");
+      term.textContent = label;
+      description.textContent = text;
+      entry.append(term, description);
+      configurationValues.appendChild(entry);
+    }
+    for (const [component, parameters] of Object.entries(components)) {
+      for (const [parameter, text] of Object.entries(parameters)) {
+        const row = document.createElement("tr");
+        for (const cellText of [component, parameter, text || "(empty)"]) {
+          const cell = document.createElement("td");
+          cell.textContent = cellText;
+          row.appendChild(cell);
+        }
+        configurationParameters.appendChild(row);
+      }
+    }
   }
 
   function rebuildExperimentNodeOptions(mesh) {
