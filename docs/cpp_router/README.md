@@ -16,6 +16,7 @@
 - [Implementation Plan](implementation-plan.md): phased implementation slices, tests, acceptance criteria, open questions, and roadmap relationship.
 - [Design Decisions Log](design-decisions.md): running per-phase decision log (starts where the tenets stop) — currently the Phase 1 contract: state model, transition table, revisioning, idempotency, and test seams (D1–D7).
 - [Connext Investigation Review](connext-investigation-review.md): Connext 7.7 API findings, design decisions, concerns, required spikes, and confidence updates.
+- [Routing Service Replacement Investigation](routing-service-replacement-investigation.md): 7.7.0 processor/custom-topic and native protocol-statistics feasibility, current-router delta matrix, recommended compatibility layer, and migration acceptance gates (investigation only).
 - [ISC Findings & Path Forward](isc-findings.md): the Instance State Consistency investigation and **why ISC is not used** (Scenario A vs B, CORE-13337, the intermediary gap), with spike evidence — the basis for the decision in Tenet 2.
 - [Presence & Health](presence-and-health.md): system-level (router/link) presence via one `RouterHealth` topic instead of per-topic liveliness; membership roster with dead/stale detection; assume-present + presence-driven reset; long-mission discovery-DB hygiene.
 - [RouterHealth Wire-Size Review](router-health-wire-size-review.md): measured heartbeat field costs, compact heartbeat/detail separation, bitpacking recommendations, and compatibility/size-budget checks (review only).
