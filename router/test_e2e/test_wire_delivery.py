@@ -943,6 +943,8 @@ class WireDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(static / "mesh_graph.js"))
             page.add_script_tag(path=str(static / "operator_tabs.js"))
             page.evaluate("""() => {
+                document.querySelector('#toggle-infrastructure-stats').checked = true;
+                document.querySelector('#traffic-panel').hidden = false;
                 document.querySelector('#traffic-panel').innerHTML = '<div style="height:200px"></div>';
                 document.documentElement.style.setProperty('--mesh-bottom-inset', '227px');
             }""")
