@@ -179,6 +179,45 @@ router::poll_writer_wan_stats(
 
 This includes per-matched-publication/per-matched-subscription status getters and participant-name attribution, not merely aggregate reader/writer totals.
 
+### Follow-up: WAN participant peer APIs (2026-11-07)
+
+**API verified:** a separate
+[processor peer-API probe](../../spikes/routing_service_peer_api/README.md)
+compiled and linked against the installed 7.7.0 SDK with `--no-undefined`.
+It traverses both input and output DDS endpoints to their actual owning participant
+and compiles all four requested operations inside processor callbacks:
+
+```cpp
+auto reader = route.input<DynamicData>("wan_input").dds_data_reader();
+auto wan_participant = reader.subscriber().participant();
+
+wan_participant->add_peer(peer);
+wan_participant->remove_peer(peer);
+auto handles = dds::domain::discovered_participants(wan_participant);
+auto data = dds::domain::discovered_participant_data(wan_participant, handle);
+```
+
+The output path is `writer.publisher().participant()`. Choose the configured WAN
+port rather than selecting by domain ID or accidentally traversing the LAN port.
+This is the service-owned participant, not a separate participant created by the
+processor.
+
+**Runtime gate:** the probe was not registered or loaded into a running Routing
+Service. Direct processor-side peer mutation is technically API-feasible, but its
+interaction with shared connections, route teardown/recreation, and remove/re-add
+has not been exercised. The endpoint enabled-lifetime rules below still apply.
+Use one participant-scoped owner for reconciliation rather than having every
+application route mutate the shared peer list.
+
+**Documented alternative:** Routing Service Remote Administration provides
+connection-level `add_peer` and `remove_peer` management operations.
+That is distinct from the direct processor calls compiled here; compilation is
+not a vendor support guarantee for processor-driven participant configuration.
+
+The [C2 discovery report](c2-peer-bootstrap-report.md) establishes the isolated
+add-once/bootstrap semantics on ordinary participants. Combining that workflow
+with a loaded Routing Service processor remains a separate runtime proof.
+
 ### Measurements available at this layer
 
 The current helpers collect:
