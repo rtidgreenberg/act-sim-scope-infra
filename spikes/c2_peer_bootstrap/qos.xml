@@ -1,0 +1,83 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="BootstrapMessage">
+      <member name="source" type="string" stringMaxLength="32"/>
+      <member name="target" type="string" stringMaxLength="32"/>
+      <member name="sequence" type="int32"/>
+      <member name="payload" type="string" stringMaxLength="2048"/>
+    </struct>
+  </types>
+  <qos_library name="Bootstrap">
+    <qos_profile name="base" base_name="BuiltinQosLib::Generic.Common">
+      <domain_participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <property>
+          <value>
+            <element>
+              <name>dds.transport.UDPv4.builtin.parent.allow_interfaces</name>
+              <value>127.0.0.1</value>
+            </element>
+          </value>
+        </property>
+        <discovery>
+          <initial_peers><element>[0]@udpv4://127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+          <accept_unknown_peers>true</accept_unknown_peers>
+        </discovery>
+        <discovery_config>
+          <builtin_discovery_plugins>$(BOOTSTRAP_PROTOCOL) | SEDP</builtin_discovery_plugins>
+          <participant_liveliness_assert_period><sec>1</sec><nanosec>0</nanosec></participant_liveliness_assert_period>
+          <participant_liveliness_lease_duration><sec>4</sec><nanosec>0</nanosec></participant_liveliness_lease_duration>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="SPDP" base_name="Bootstrap::base"/>
+    <qos_profile name="SPDP2" base_name="Bootstrap::base">
+      <domain_participant_qos>
+        <discovery_config>
+          <participant_announcement_period><sec>1</sec><nanosec>0</nanosec></participant_announcement_period>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="C2" base_name="Bootstrap::$(BOOTSTRAP_PROTOCOL)">
+      <domain_participant_qos>
+        <wire_protocol><participant_id>0</participant_id></wire_protocol>
+        <discovery><initial_peers/></discovery>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="Client" base_name="Bootstrap::$(BOOTSTRAP_PROTOCOL)">
+      <domain_participant_qos>
+        <wire_protocol><participant_id>1</participant_id></wire_protocol>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="Open" base_name="Bootstrap::$(BOOTSTRAP_PROTOCOL)">
+      <domain_participant_qos>
+        <wire_protocol><participant_id>2</participant_id></wire_protocol>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="Late" base_name="Bootstrap::$(BOOTSTRAP_PROTOCOL)">
+      <domain_participant_qos>
+        <wire_protocol><participant_id>3</participant_id></wire_protocol>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="Strict" base_name="Bootstrap::$(BOOTSTRAP_PROTOCOL)">
+      <domain_participant_qos>
+        <wire_protocol><participant_id>4</participant_id></wire_protocol>
+        <discovery><accept_unknown_peers>false</accept_unknown_peers></discovery>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="message" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>32</depth></history>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>32</depth></history>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>
