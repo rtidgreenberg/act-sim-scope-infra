@@ -329,6 +329,9 @@ This supports a strong diagnosis of **simulator-data fan-out and interface/domai
 
 ## 10. Recommended ACT replication profiles
 
+Implementation and calibration sequencing against the current ACT setup is drafted in
+[ACT characterization plan](comms-characterization-plan.md).
+
 These are proposed simulation inputs. They have not been implemented or executed by this characterization session.
 
 ### Shared topology and scale
