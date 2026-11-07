@@ -132,10 +132,14 @@ are unreported, not zero: missing observations are not proof of RF loss. Capture
 on different hosts require synchronized clocks. Existing application `events.jsonl`
 audits remain separate diagnostics and never feed this tab.
 
+The workspace tabs are **Graph**, **Mission**, **Delivery**, and **EMANE**.
+
 The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
-every fresh page. Enabling it adds router heartbeat, discovery,
-reliability/control, and mixed/unknown chart series. Node DDS TX/RX rates remain
-visible independently of that checkbox. Mesh presentation is DDS-only: MAC
+every fresh page. It controls both the entire WAN traffic panel (including WAN
+application TX) and node DDS TX/RX overlays. Enabling it shows application,
+router heartbeat, discovery, reliability/control, and mixed/unknown chart series;
+disabling it hides the panel and node rate overlays and returns that space to the
+mesh graph. Traffic history continues updating while hidden. Mesh presentation is DDS-only: MAC
 values are retained in diagnostic collection/API responses, not drawn as a
 competing traffic rate or used to scale the chart.
 It changes presentation only. RouterLinkStats, link activity, health, connected
