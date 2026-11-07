@@ -65,7 +65,7 @@ class TrafficDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{graph_src}")
-            self.assertIn("?v=20261106-passive-heartbeat-rtt-v2", graph_src)
+            self.assertIn("?v=20261107-infrastructure-toggle-v1", graph_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{graph_src}"]').count())
             page.wait_for_function("window.__network.body.data.edges.length > 0 && window.meshSocket")
             page.evaluate("""() => {
@@ -202,10 +202,24 @@ class TrafficDashboardTests(unittest.TestCase):
             }""")
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{chart_src}")
+            self.assertEqual(page.locator('nav[aria-label="Operator workspace"] button').all_text_contents(),
+                             ["Graph", "Mission", "Delivery", "EMANE"])
             self.assertIn("?v=", chart_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{chart_src}"]').count())
             toggle = page.locator("#toggle-infrastructure-stats")
             self.assertFalse(toggle.is_checked())
+            panel = page.locator("#traffic-panel")
+            self.assertFalse(panel.is_visible())
+
+            def assert_panel_hidden():
+                self.assertFalse(panel.is_visible())
+                metrics = page.evaluate("""() => ({
+                    graphBottom: document.querySelector('#graph').getBoundingClientRect().bottom,
+                    statusTop: document.querySelector('#statusbar').getBoundingClientRect().top
+                })""")
+                self.assertLessEqual(abs(metrics["graphBottom"] - metrics["statusTop"]), 1)
+
+            assert_panel_hidden()
             sample = {
                 "scope": "network", "domain_id": 200, "schema_version": 3,
                 "capture_timestamp": int(time.time() * 1000) - 3000,
@@ -248,16 +262,25 @@ class TrafficDashboardTests(unittest.TestCase):
             send(sample)
             sample["capture_timestamp"] += 1000
             send(sample)
-            self.assertTrue(page.locator('[data-series="application_tx"]').is_visible())
+            assert_panel_hidden()
+            self.assertFalse(page.locator('[data-series="application_tx"]').is_visible())
             self.assertFalse(page.locator('[data-series="infrastructure_tx"]').is_visible())
-            assert_stacked_stats(1)
+            assert_stacked_stats(0)
             self.assertEqual(page.locator("#rf-summary").count(), 0)
             self.assertEqual(page.locator('[data-series="mac"]').count(), 0)
             self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
             page.evaluate("window.drawn = []")
             toggle.check()
+            self.assertTrue(panel.is_visible())
+            self.assertTrue(page.locator('[data-series="application_tx"]').is_visible())
             self.assertTrue(page.locator('[data-series="infrastructure_tx"]').is_visible())
             assert_stacked_stats(6)
+            page.set_viewport_size({"width": 1280, "height": 600})
+            page.wait_for_timeout(100)
+            self.assertLessEqual(abs(page.locator("#graph").bounding_box()["height"] +
+                                     page.locator("#graph").bounding_box()["y"] -
+                                     panel.bounding_box()["y"]), 1)
+            self.assertGreater(page.locator("#graph").bounding_box()["height"], 0)
             page.set_viewport_size({"width": 640, "height": 900})
             page.wait_for_timeout(100)
             assert_stacked_stats(6)
@@ -270,6 +293,7 @@ class TrafficDashboardTests(unittest.TestCase):
             self.assertTrue(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
             page.evaluate("window.drawn = []")
             toggle.uncheck()
+            assert_panel_hidden()
             self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
             self.assertFalse(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
             self.assertTrue(page.locator("#toggle-direct-links").is_checked())
@@ -280,6 +304,7 @@ class TrafficDashboardTests(unittest.TestCase):
             send(sample)
             application_label = page.locator('[data-series="application_tx"] .tp-subplot-average')
             self.assertEqual(application_label.inner_text(), "3s avg 27.2 kb/s")
+            assert_panel_hidden()
             self.assertIn("shared scale 80.0 kb/s", page.evaluate("window.drawn"))
             send(dict(sample, aggregated_at_ms=sample["aggregated_at_ms"] - 1,
                       application_tx_bytes_per_second=1))
@@ -318,6 +343,7 @@ class TrafficDashboardTests(unittest.TestCase):
             paths = page.evaluate("window.applicationPaths")
             step = paths[0][1][0] - paths[0][0][0]
             self.assertAlmostEqual(paths[1][0][0] - paths[0][-1][0], 2 * step)
+            toggle.check()
             page.evaluate("""() => {
                 const detail = document.querySelector('#detail');
                 detail.style.display = 'block';
@@ -460,8 +486,12 @@ class TrafficDashboardTests(unittest.TestCase):
                               capture_window_start_ms=now - 5000 + index * 1000)
                 page.evaluate("(sample) => window.meshSocket.onmessage({data: JSON.stringify({type: 'traffic_node_stats', data: sample})})",
                               sample)
-            page.wait_for_function("window.nodeDrawn.includes('8/4 kbps (3s)')")
+            page.evaluate("window.__network.redraw()")
+            page.wait_for_timeout(100)
+            self.assertNotIn("DDS TX/RX", page.evaluate("window.nodeDrawn"))
+            self.assertNotIn("8/4 kbps (3s)", page.evaluate("window.nodeDrawn"))
             page.locator("#toggle-infrastructure-stats").check()
+            page.wait_for_function("window.nodeDrawn.includes('8/4 kbps (3s)')")
             self.assertFalse(page.evaluate("window.nodeDrawn.some(text => text.includes('MAC TX/RX'))"))
             page.evaluate("window.nodeDrawn = []")
             sample.update(capture_timestamp=now - 1000, capture_window_start_ms=now - 2000, capture_gap=True)
@@ -469,6 +499,11 @@ class TrafficDashboardTests(unittest.TestCase):
                           sample)
             page.wait_for_function("window.nodeDrawn.includes('DDS capture incomplete')")
             self.assertNotIn("8/4 kbps (3s)", page.evaluate("window.nodeDrawn"))
+            page.locator("#toggle-infrastructure-stats").uncheck()
+            page.evaluate("window.nodeDrawn = []; window.__network.redraw()")
+            page.wait_for_timeout(100)
+            self.assertNotIn("DDS TX/RX", page.evaluate("window.nodeDrawn"))
+            self.assertNotIn("DDS capture incomplete", page.evaluate("window.nodeDrawn"))
 
             def open_platform():
                 page.evaluate("""() => {

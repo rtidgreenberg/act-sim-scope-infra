@@ -1,8 +1,8 @@
 // traffic_chart.js — WAN DDS traffic time-series sparklines (domain 200).
 // Subscribes to "traffic_stats" WebSocket messages from mesh_bridge.py (which reads
 // DomainTrafficStats published by debug/scripts/domain_traffic_monitor.py). Renders small canvas
-// application-carrying frame rates by default. Optional infrastructure series are
-// also DDS/RTPS Ethernet frames; visible series alone determine scale and peaks.
+// DDS/RTPS Ethernet frame rates when Infrastructure stats is enabled.
+// The entire panel is hidden by default.
 
 (function () {
   "use strict";
@@ -25,6 +25,7 @@
   const infraToggle = document.getElementById("toggle-infrastructure-stats");
   let showInfrastructure = false;
   if (!panel) return;
+  panel.hidden = true;
 
   function syncGraphBottomToPanel() {
     if (!graphEl) return;
@@ -348,6 +349,7 @@
     infraToggle.checked = false;
     infraToggle.addEventListener("change", () => {
       showInfrastructure = infraToggle.checked;
+      panel.hidden = !showInfrastructure;
       domains.forEach(redraw);
       syncGraphBottomToPanel();
     });

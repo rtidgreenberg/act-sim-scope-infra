@@ -194,6 +194,7 @@
   const directLinksToggle = document.getElementById("toggle-direct-links");
   const relayedLinksToggle = document.getElementById("toggle-relayed-links");
   const infrastructureStatsToggle = document.getElementById("toggle-infrastructure-stats");
+  infrastructureStatsToggle.checked = false;
 
   // Team filter (interactivity, 2026-07-21): click a team's legend chip to highlight only
   // that team's nodes (others dimmed). Multi-select — click several to widen the set;
@@ -590,6 +591,7 @@
       ctx.fillText(label, position.x, position.y);
       ctx.restore();
     });
+    if (!infrastructureStatsToggle.checked) return;
     nodes.get({ filter: (node) => node.kind === "observer" || node.kind === "peer" }).forEach((node) => {
       const rates = nodeRates.get(node.id);
       const position = network.getPositions([node.id])[node.id];
@@ -978,6 +980,7 @@
   const activityPlatformFilterEl = document.getElementById("activity-platform-filter");
   const activityCountEl = document.getElementById("activity-count");
   const trafficPanelEl = document.getElementById("traffic-panel");
+  const statusbarEl = document.getElementById("statusbar");
 
   function linkPairKey(a, b) {
     const left = String(a);
@@ -999,8 +1002,9 @@
   function syncEdgeDetailHeight() {
     if (!edgeDetailEl) return;
     const detailTop = edgeDetailEl.getBoundingClientRect().top;
-    const trafficTop = trafficPanelEl && trafficPanelEl.children.length
-      ? trafficPanelEl.getBoundingClientRect().top : window.innerHeight;
+    const trafficRect = trafficPanelEl?.getBoundingClientRect();
+    const trafficTop = trafficRect?.height ? trafficRect.top
+      : window.innerHeight - (statusbarEl?.getBoundingClientRect().height || 0);
     const height = Math.max(180, Math.floor(trafficTop - detailTop - 8));
     edgeDetailEl.style.setProperty("--edge-detail-height", `${height}px`);
   }
