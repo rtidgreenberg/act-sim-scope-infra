@@ -1,0 +1,5 @@
+# topic-pattern input-type WAN-topic union-branch discriminator XML-profile local-key
+PlatformInitStatus* platform_init_status Status navigation 1 wan_status source
+RouterHealth* RouterHealth Status health 2 router_health router
+ControlCommand control_command Event command 1 wan_event source
+PlatformCommandAck* control_command_ack Event ack 2 wan_event source

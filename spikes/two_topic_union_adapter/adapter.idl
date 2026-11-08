@@ -1,0 +1,26 @@
+#include "two_topic_qualification.idl"
+
+@mutable
+struct AdapterStatus {
+    @key string<64> source_node;
+    @key string<64> source_router;
+    @key string<256> instance_id;
+    string<128> original_topic;
+    uint64 session_id;
+    uint64 audit_sequence;
+    string<64> destination;
+    string<32> team_id;
+    QualificationStatusPayload payload;
+};
+
+@mutable
+struct AdapterEvent {
+    @key string<64> source_node;
+    @key string<64> source_router;
+    @key string<256> instance_id;
+    string<128> original_topic;
+    uint64 session_id;
+    uint64 audit_sequence;
+    string<64> destination;
+    QualificationEventPayload payload;
+};

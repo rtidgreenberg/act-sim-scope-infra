@@ -1,0 +1,53 @@
+#include "ActTypes.idl"
+
+enum QualificationStatusKind {
+    Q_NAVIGATION = 1,
+    Q_HEALTH = 2,
+    Q_DEBUG = 3
+};
+
+@mutable
+union QualificationStatusPayload switch (QualificationStatusKind) {
+    case Q_NAVIGATION:
+        @id(10) platform_init_status navigation;
+    case Q_HEALTH:
+        @id(20) RouterHealth health;
+    case Q_DEBUG:
+        @id(30) platform_debug_status debug;
+};
+
+@mutable
+struct QualificationStatus {
+    @key string<64> source_node;
+    @key string<64> source_router;
+    @key string<64> instance_id;
+    uint64 session_id;
+    uint64 audit_sequence;
+    string<64> destination;
+    string<32> team_id;
+    QualificationStatusPayload payload;
+};
+
+enum QualificationEventKind {
+    Q_COMMAND = 1,
+    Q_ACK = 2
+};
+
+@mutable
+union QualificationEventPayload switch (QualificationEventKind) {
+    case Q_COMMAND:
+        @id(10) control_command command;
+    case Q_ACK:
+        @id(20) control_command_ack ack;
+};
+
+@mutable
+struct QualificationEvent {
+    @key string<64> source_node;
+    @key string<64> source_router;
+    @key string<64> instance_id;
+    uint64 session_id;
+    uint64 audit_sequence;
+    string<64> destination;
+    QualificationEventPayload payload;
+};
