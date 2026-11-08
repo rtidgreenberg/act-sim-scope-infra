@@ -23,6 +23,106 @@ Do not model this customer as "hundreds of topics, each sending large samples ov
 
 **Recommended starting point:** 1 CCS plus 2 platforms, a 14-type direct-UMAA profile and a separate aggregated profile, 1 Hz primary status, sparse reliable mission commands, 100-500 byte normal samples, occasional 1.5-4.4 KB mission/contact samples, and explicit startup/rejoin tests. Scale to 7-8 platforms after calibrating the two-platform case.
 
+### 1.1 Proposed WAN data model: Event and Status
+
+**Draft decision (2026-11-08):** use exactly two shared WAN topics:
+**Event** and **Status**, with a typed IDL union inside each. C2 and all platforms
+use the same two names. This is the
+target design, not the current implemented data model. It does not change the
+historical measurements or the reproduction profiles below.
+
+The shared working names are:
+
+| Router role | Event topic | Status topic |
+|---|---|---|
+| C2 | `Event` | `Status` |
+| Platform | `Event` | `Status` |
+
+There are no separate role-specific or per-boat WAN topic names. Source identity
+and role belong in the sample. Two topic names do not guarantee two writers or
+readers: endpoint QoS and health lifecycle requirements may require more.
+Local application topics and LAN-only administration/metrics are outside this
+WAN consolidation.
+
+**Event** carries commands, acknowledgments, and discrete reports that must not
+be overwritten merely because a newer, unrelated event arrives. **Status**
+carries independently maintained latest-state values. Each union case is an
+explicitly typed payload, rather than a string operation name plus opaque bytes.
+
+| Topic | Proposed union contents |
+|---|---|
+| `Event` | Addressed platform commands, team assignment, status-mode control, command acknowledgments, and contact reports; preserve required event and contact lifecycle semantics |
+| `Status` | Primary/navigation, mission, waypoint, environmental/team data, detail, debug, thruster, power, router diagnostics, and RouterHealth from either role |
+
+All platform status belongs in `Status` for this draft. Detail and debug
+are union variants, not separate WAN topics. They can still be enabled or
+disabled at the source; consolidation does not mean publishing every variant
+continuously. Preserve the existing information rather than dropping fields
+solely to reduce topic count.
+
+#### Filtering and independent latest values
+
+Put shared audience-selection fields outside the union: source node, scope
+(`GLOBAL`, `TEAM`, or `C2_ONLY`), team identity, and any required logical instance
+identity. Retain sequence/timestamp information for delivery and freshness
+measurement. Membership versioning and transition rules still need definition.
+**Variant kind is the union discriminator**, not a duplicate envelope field.
+Connext 7.7 qualification now verifies sender-side discriminator/audience filtering
+and selection inside a production struct branch, using
+`payload.navigation.speed_knots`. Each final predicate/type still needs testing;
+see the [qualification results](two-topic-wan-migration-plan.md#33-required-check-results-2026-11-08).
+
+Use DDS ContentFilteredTopics (CFTs) to select variants and samples. The intended
+platform rule is "global status plus my team's status, restricted to the kinds I
+need"; C2 has its own selection. Runtime membership changes update reader filter
+parameters, while publishers tag samples with the current audience information.
+Writer-side execution must be verified so unwanted samples are suppressed before
+WAN transmission. Filters select whole samples, not subsets of payload fields,
+and are not a security authorization mechanism.
+
+Publisher/Subscriber partitions may remain as coarse audience boundaries, but
+cannot distinguish union cases carried by the same writer. Dynamic CFT selection
+requires endpoint-update propagation; static endpoint discovery is not assumed
+to preserve it.
+
+Status keys use source node, source router, and a stable variant-qualified
+instance ID, such as `navigation/primary` or `health/router`. This was selected
+after checking the installed Connext 7.7 generator: a discriminator key annotation
+is unsupported, and keying the whole union also keys its changing payload.
+The union remains unkeyed; no separate kind field is added. With per-instance
+`KEEP_LAST(1)`, a debug update must not replace the
+latest navigation value, nor may one sensor or object replace another. Event
+retention, retry, deduplication, and acknowledgments need separate rules.
+
+#### Open tradeoffs and required migration checks
+
+- Two topic families do not guarantee two writers/readers. Different reliability,
+  history, or other endpoint QoS requirements may still require separate
+  endpoints; priority scheduling alone does not resolve every QoS difference.
+- Use the planned hashed type identifiers and agreed schemas; verify actual inline
+  metadata and TypeLookup behavior. A union still has a full definition to retrieve
+  if unknown. Measure startup/rejoin metadata and total WAN traffic before claiming
+  discovery savings.
+- Move `RouterHealth` into a `Status` union case, preserving presence, route-health,
+  topology, and passive RTT. A dedicated health endpoint on the same topic may
+  still be necessary. The existing separate WAN topic must be removed at accepted
+  cutover, not counted as already consolidated; implementation remains unchanged
+  until the required migration checks pass.
+- Preserve global navigation, team-only data, and C2-only status audiences.
+  Define old-team cached/in-flight sample handling and confirmation of applied
+  membership changes.
+- Update IDL/generated XML, routing, publishers/consumers, WIS/dashboard bindings,
+  audit identities, and tests together when implementation is authorized. Sequence
+  accounting must remain unique across union variants.
+
+For the current source contract and routes, see
+[ActTypes.idl](../harness_v2/datamodel/ActTypes.idl) and
+[control-platform.yaml](../router/config/control-platform.yaml). Health/RTT behavior
+is documented in the
+[passive RouterHealth RTT plan](cpp_router/router-health-passive-rtt-plan.md).
+The implementation sequence and required acceptance checks are in the
+[two-topic WAN migration plan](two-topic-wan-migration-plan.md).
+
 ## 2. Evidence and confidence
 
 Source locations and identifying names are omitted. Evidence IDs below refer to the original locally held materials.

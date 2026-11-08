@@ -98,6 +98,31 @@ The data plane supports:
 
 `zenohd` does not define a static route table in its command-line interface. Topology is established through listen/connect configuration, discovery/scouting, session declarations, and the runtime's routing tables.
 
+### Composite instances and latest-value storage
+
+**Documentation update, 2026-11-08:** a hierarchical key can encode composite
+identity, such as `status/boat30/router1/session42/navigation/primary`.
+Key expressions can select boats, sessions, or variants encoded in that path.
+This is application-defined key identity, not DDS-declared composite key fields
+or arbitrary payload-content filtering.
+
+Configured storage can retain and return the latest value for each matching
+key, as described in the upstream [abstractions manual](https://zenoh.io/docs/manual/abstractions/#storage).
+Thus Zenoh does support last-value storage per composite instance.
+
+Typed payloads and unions are possible, but native key matching does not
+establish reader/writer payload-schema compatibility. Applications or bridges
+must provide schema/version compatibility checks; decoding validation alone
+is not DDS-style discovery-time schema-drift protection. See the
+[schema comparison](zenoh-vs-act-router-feature-gaps.md#schema-drift-dds-checks-compatibility-before-matching).
+
+Do not equate that storage behavior with replacing older samples in an outgoing
+radio queue. The reviewed [1.10.2 queue configuration](https://github.com/eclipse-zenoh/zenoh/blob/1.10.2/DEFAULT_CONFIG.json5)
+documents priority batches, block/drop congestion behavior, and batching, but
+does not establish per-key replacement of pending publications. That behavior
+needs separate version-specific qualification. See the
+[boat-network comparison](zenoh-vs-act-router-feature-gaps.md#boat-network-comparison-instances-last-values-and-radio-backlog).
+
 ### Timestamping
 
 By default, `zenohd` adds a Hybrid Logical Clock timestamp to routed data when the data does not already contain one. The behavior can be disabled with `--no-timestamp` or the corresponding configuration setting.

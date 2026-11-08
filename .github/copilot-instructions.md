@@ -14,6 +14,12 @@ Use `/tmp/...` (or `mktemp -d`) for disposable working directories, FIFOs, SQLit
 and other lock-sensitive transient state. Do not leave processes holding runtime files open
 across forced termination; use the owned harness lifecycle for cleanup.
 
+## Communication style
+
+- Use plain language and concise, direct explanations.
+- Avoid unnecessary jargon; explain technical terms and acronyms when introducing them.
+- Preserve technical accuracy and use simple examples when they help.
+
 ## DDS / Connext runtime hygiene
 
 - **Prefer UDPv4-only transport** for single-host test rigs
