@@ -24,6 +24,10 @@ updates, health, restart handling, diagnostics, and a tested rollout.
 **Field mapping and redesigning command payloads are deferred.** This draft
 does not authorize a live cutover or change running routers.
 
+The [pre-refactor baseline](two-topic-refactor-baseline.md) records the local
+checkpoint commits, fresh-build results, and explicit browser/live-dashboard
+coverage gaps. Use its tag as the implementation comparison point.
+
 ## 1. Target and boundaries
 
 Use exactly two shared DDS topic names on the WAN, used by C2 and every platform:
