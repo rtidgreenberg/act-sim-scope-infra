@@ -1,0 +1,85 @@
+/* @theme rti */
+@import "default";
+
+:root {
+  --rti-blue: #004c97;
+  --rti-orange: #ed8b00;
+  --rti-gray: #63666a;
+  --rti-light-gray: #bbbcbc;
+}
+
+section {
+  background: #ffffff;
+  border-top: 6px solid var(--rti-orange);
+  color: #333333;
+  font-family: "Avenir Next", Arial, "Liberation Sans", sans-serif;
+  font-size: 26px;
+  line-height: 1.3;
+  letter-spacing: 0;
+  padding: 42px 60px 112px;
+}
+
+section::before {
+  background: url("./assets/rti-logo.svg") center / contain no-repeat;
+  bottom: 12px;
+  content: "";
+  height: 88px;
+  left: 30px;
+  position: absolute;
+  width: 94px;
+}
+
+section::after {
+  bottom: 30px;
+  color: var(--rti-gray);
+  font-size: 15px;
+  right: 60px;
+}
+
+footer {
+  bottom: 30px;
+  color: var(--rti-gray);
+  font-size: 15px;
+  left: 145px;
+}
+
+h1, h2, h3 {
+  color: var(--rti-blue);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+h1 { font-size: 42px; line-height: 1.12; margin: 0 0 20px; }
+h2 { font-size: 29px; margin: 14px 0 8px; }
+h3 { font-size: 25px; }
+p { margin: 10px 0; }
+li { margin: 8px 0; }
+strong, a { color: var(--rti-blue); }
+code { background: #f2f4f6; color: var(--rti-blue); font-size: 0.9em; }
+pre { font-size: 22px; margin: 12px 0; }
+table { display: table; font-size: 22px; margin: 14px 0; width: 100%; }
+th { background: var(--rti-blue); color: #ffffff; }
+th, td { line-height: 1.25; padding: 9px 12px; vertical-align: top; }
+tr:nth-child(even) { background: #f2f4f6; }
+blockquote {
+  border-left: 7px solid var(--rti-orange);
+  color: #333333;
+  font-size: 24px;
+  margin: 18px 0 0;
+  padding: 7px 16px;
+}
+
+section.lead {
+  background: var(--rti-blue);
+  color: #ffffff;
+}
+
+section.lead h1 { font-size: 58px; }
+section.lead h1, section.lead h2, section.lead strong { color: #ffffff; }
+section.lead::before { background-image: url("./assets/rti-logo-white.svg"); }
+section.lead::after, section.lead footer { color: #ffffff; }
+section.compact { font-size: 23px; }
+section.compact table { font-size: 20px; }
+section.compact blockquote { font-size: 22px; }
+section.sources { font-size: 22px; }
+section.sources li { margin: 12px 0; }
