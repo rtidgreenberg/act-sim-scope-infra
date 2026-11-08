@@ -1,0 +1,139 @@
+<?xml version='1.0' encoding='utf-8'?>
+<dds>
+  <types>
+    <struct name="ScaleMissionAdd" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="mission_id" type="uint32" />
+      <member name="priority" type="uint32" />
+      <member name="task_count" type="uint32" />
+      <member name="payload" type="octet" sequenceMaxLength="4420" />
+    </struct>
+    <struct name="ScaleTaskElement" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="mission_id" type="uint32" />
+      <member name="task_id" type="uint32" />
+      <member name="duration_s" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="4332" />
+    </struct>
+    <struct name="ScaleContactElement" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="track_id" type="uint32" />
+      <member name="classification" type="uint32" />
+      <member name="latitude" type="float64" />
+      <member name="longitude" type="float64" />
+      <member name="altitude_m" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="4212" />
+    </struct>
+    <struct name="ScaleMissionElement" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="mission_id" type="uint32" />
+      <member name="state" type="uint32" />
+      <member name="progress" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="2716" />
+    </struct>
+    <struct name="ScaleWaypointElement" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="latitude" type="float64" />
+      <member name="longitude" type="float64" />
+      <member name="altitude_m" type="float32" />
+      <member name="speed_mps" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="1521" />
+    </struct>
+    <struct name="ScaleTransferRequest" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="owner_id" type="uint32" />
+      <member name="target_id" type="uint32" />
+      <member name="payload" type="octet" sequenceMaxLength="648" />
+    </struct>
+    <struct name="ScaleControlReport" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="state" type="uint32" />
+      <member name="reason" type="uint32" />
+      <member name="payload" type="octet" sequenceMaxLength="456" />
+    </struct>
+    <struct name="ScaleTransferReport" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="status" type="uint32" />
+      <member name="payload" type="octet" sequenceMaxLength="384" />
+    </struct>
+    <struct name="ScaleControlRequest" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="action" type="uint32" optional="true" />
+      <member name="payload" type="octet" sequenceMaxLength="380" />
+    </struct>
+    <struct name="ScalePose" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="latitude" type="float64" />
+      <member name="longitude" type="float64" />
+      <member name="altitude_m" type="float32" />
+      <member name="heading_deg" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="332" />
+    </struct>
+    <struct name="ScaleVelocity" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="north_mps" type="float32" />
+      <member name="east_mps" type="float32" />
+      <member name="down_mps" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="256" />
+    </struct>
+    <struct name="ScaleMissionReport" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="mission_id" type="uint32" />
+      <member name="state" type="uint32" />
+      <member name="progress" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="180" />
+    </struct>
+    <struct name="ScaleContactReport" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="track_count" type="uint32" />
+      <member name="payload" type="octet" sequenceMaxLength="120" />
+    </struct>
+    <struct name="ScaleSpeed" extensibility="mutable">
+      <member name="source" type="uint32" key="true" />
+      <member name="instance" type="uint32" key="true" />
+      <member name="stamp" type="uint64" />
+      <member name="session" type="uint32" />
+      <member name="metres_per_second" type="float32" />
+      <member name="payload" type="octet" sequenceMaxLength="104" />
+    </struct>
+  </types>
+</dds>

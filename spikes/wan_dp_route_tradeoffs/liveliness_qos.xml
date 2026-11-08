@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="HealthTimingSample">
+      <member name="source" type="string" stringMaxLength="16" key="true"/>
+      <member name="sequence" type="uint64"/>
+      <member name="stamp" type="uint64"/>
+    </struct>
+  </types>
+  <qos_library name="HealthTiming">
+    <qos_profile name="participant" base_name="BuiltinQosLib::Generic.Common">
+      <domain_participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <property>
+          <value>
+            <element>
+              <name>dds.transport.UDPv4.builtin.parent.allow_interfaces</name>
+              <value>127.0.0.1</value>
+            </element>
+          </value>
+        </property>
+        <discovery>
+          <initial_peers><element>2@127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+        </discovery>
+        <discovery_config>
+          <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
+          <initial_participant_announcements>3</initial_participant_announcements>
+          <participant_liveliness_assert_period><sec>30</sec><nanosec>0</nanosec></participant_liveliness_assert_period>
+          <participant_liveliness_lease_duration><sec>100</sec><nanosec>0</nanosec></participant_liveliness_lease_duration>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="lease3" base_name="BuiltinQosLib::Generic.Common">
+      <datawriter_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <deadline><period><sec>2</sec><nanosec>0</nanosec></period></deadline>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>3</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <deadline><period><sec>2</sec><nanosec>0</nanosec></period></deadline>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>3</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="lease30" base_name="HealthTiming::lease3">
+      <datawriter_qos>
+        <liveliness><lease_duration><sec>30</sec><nanosec>0</nanosec></lease_duration></liveliness>
+      </datawriter_qos>
+      <datareader_qos>
+        <liveliness><lease_duration><sec>30</sec><nanosec>0</nanosec></lease_duration></liveliness>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>
