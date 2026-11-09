@@ -701,13 +701,15 @@ class ContainerDiscoveryTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             shutil.copyfile(ROOT / "harness_v2/scripts/run_container_baseline.sh", script)
             shutil.copyfile(ROOT / "router/config/control-platform.yaml", config)
-            for emane in (False, True):
-                with self.subTest(emane=emane):
+            for emane, contract in ((False, "legacy"), (True, "legacy"),
+                                    (False, "two_topic_union"), (True, "two_topic_union")):
+                with self.subTest(emane=emane, contract=contract):
                     output = root / "debug/mesh_runs" / ("emane" if emane else "container")
                     with patch.dict("os.environ", {"CONNEXT_SHARED_DIR": str(root)}):
                         subprocess.run(
                             ["bash", str(script), "render", "--platforms", "2",
-                             "--workdir", str(output), *(["--emane"] if emane else [])],
+                             "--workdir", str(output), *(["--emane"] if emane else []),
+                             *(["--wan-contract", contract] if contract != "legacy" else [])],
                             check=True, capture_output=True, text=True, timeout=15)
                     peers = re.findall(r"^\s+WAN_PEER(?:\d+)?: (.+)$",
                                        (output / "compose.yaml").read_text(), re.MULTILINE)
@@ -717,6 +719,19 @@ class ContainerDiscoveryTests(unittest.TestCase):
                                 {"1@control-20", "1@platform-30", "1@platform-31"})
                     self.assertEqual(len(peers), 33)
                     self.assertEqual(set(peers), expected)
+                    for node in (20, 30, 31):
+                        rendered = (output / f"control-platform-{node}.yaml").read_text()
+                        self.assertEqual("  wan_contract: two_topic_union\n" in rendered,
+                                         contract == "two_topic_union")
+                        self.assertIn("ACT_QOS_LIB::wan_union_status" if contract == "two_topic_union"
+                                      else "ACT_QOS_LIB::wan_status", rendered)
+                        self.assertIn("ACT_QOS_LIB::wan_two_topic_participant" if contract == "two_topic_union"
+                                      else "ACT_QOS_LIB::wan_router_participant", rendered)
+            invalid = subprocess.run(
+                ["bash", str(script), "render", "--wan-contract", "invalid"],
+                capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("--wan-contract must be", invalid.stderr)
 
 
 class WireBridgeTests(unittest.TestCase):

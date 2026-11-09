@@ -16,6 +16,7 @@ EMANE_ENABLED=0
 TOPOLOGY=
 WITH_DASHBOARD=0
 DASHBOARD_PORT=8080
+WAN_CONTRACT=legacy
 PLATFORM_IDS=()
 declare -A EMANE_NEM_ID EMANE_IP EMANE_CONTROL_IP
 WAN_PEERS=()
@@ -30,10 +31,16 @@ while [[ $# -gt 0 ]]; do
         --emane) EMANE_ENABLED=1; shift ;;
         --with-dashboard) WITH_DASHBOARD=1; shift ;;
         --dashboard-port) DASHBOARD_PORT="$2"; shift 2 ;;
-        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
+        --wan-contract) WAN_CONTRACT="$2"; shift 2 ;;
+        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+case "$WAN_CONTRACT" in
+    legacy|two_topic_union) ;;
+    *) echo "--wan-contract must be legacy or two_topic_union" >&2; exit 1 ;;
+esac
 
 load_topology() {
     PLATFORM_IDS=()
@@ -120,6 +127,14 @@ clear_debug_dir() {
     fi
 }
 
+apply_wan_contract() {
+    [[ "$WAN_CONTRACT" == two_topic_union ]] || return 0
+    sed -i -e '/^router:$/a\  wan_contract: two_topic_union' \
+        -e 's/ACT_QOS_LIB::wan_router_participant_emane\b/ACT_QOS_LIB::wan_two_topic_participant_emane/g' \
+        -e 's/ACT_QOS_LIB::wan_router_participant\b/ACT_QOS_LIB::wan_two_topic_participant/g' \
+        -e 's/ACT_QOS_LIB::wan_status\b/ACT_QOS_LIB::wan_union_status/g' "$1"
+}
+
 render_config() {
     local id="$1" output="$2"
     sed -e "s/Platform_30/Platform_${id}/g" \
@@ -129,6 +144,7 @@ render_config() {
     if [[ "$EMANE_ENABLED" == 1 ]]; then
         sed -i 's/qos: wan_participant\b/qos: wan_participant_emane/' "$output"
     fi
+    apply_wan_contract "$output"
 }
 
 render_control_config() {
@@ -137,6 +153,7 @@ render_control_config() {
     if [[ "$EMANE_ENABLED" == 1 ]]; then
         sed -i 's/qos: wan_participant\b/qos: wan_participant_emane/' "$output"
     fi
+    apply_wan_contract "$output"
 }
 
 emane_runtime_yaml() {
@@ -340,6 +357,8 @@ wait_for_emane_interfaces() {
 
 release_audit_start() {
     local deadline=$((SECONDS + 45)) id ready=true
+    local ready_event=route_entities_created
+    [[ "$WAN_CONTRACT" == two_topic_union ]] && ready_event=wan_interest_applied
     while (( SECONDS < deadline )); do
         ready=true
         [[ -f "$REPO_ROOT/debug/control_20_debug/simulator_ready" ]] || ready=false
@@ -348,13 +367,13 @@ release_audit_start() {
         done
         local log
         for log in "$REPO_ROOT/debug/control_20_debug/logs/router.log"; do
-            grep -q 'route_entities_created route=control_command' "$log" 2>/dev/null || ready=false
-            grep -q 'route_entities_created route=platform_init_status' "$log" 2>/dev/null || ready=false
+            grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
+            grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
         done
         for id in $(platform_ids); do
             log="$REPO_ROOT/debug/platform_${id}_debug/logs/router.log"
-            grep -q 'route_entities_created route=control_command' "$log" 2>/dev/null || ready=false
-            grep -q 'route_entities_created route=platform_init_status' "$log" 2>/dev/null || ready=false
+            grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
+            grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
         done
         [[ "$ready" == true ]] && break
         sleep 1

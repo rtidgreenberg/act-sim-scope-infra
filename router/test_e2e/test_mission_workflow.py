@@ -4,6 +4,7 @@ Run with MISSION_DASHBOARD_URL=http://localhost:8080 against an owned mesh with 
 least five platforms (MISSION_PLATFORM_COUNT defaults to 5). This mutates the live
 demo. Default router runs skip this live-container gate; map and contract tests
 remain in the same suite. No browser mission/status responses are simulated.
+Set MISSION_WAN_CONTRACT=two_topic_union for consolidated physical WAN row checks.
 """
 import os
 import math
@@ -43,33 +44,46 @@ def live_mission_dashboard():
         try:
             yield page, errors, external
         finally:
-            command(page, {
-                "operation": "cancel", "targets": list(original),
-            })
-            for platform, squad in original.items():
-                response = page.request.post("/api/team_assignment", data={
-                    "platform_node": platform, "team_name": squad,
-                })
+            try:
+                response = page.request.post("/api/emane_controller", data={"reset_all": True})
                 assert response.ok, response.text()
-            wait_for(page, lambda: all(boat["squad"] == original[boat["platform"]]
-                                      for boat in get(page, "/api/mission_inventory")["platforms"]))
-            for scale in set(original_clock.values()):
+                assert not get(page, "/api/emane_controller")["impairments"]
+                wait_for(page, lambda: all(
+                    boat["available"] for boat in get(page, "/api/mission_inventory")["platforms"]))
                 command(page, {
-                    "operation": "set_time_scale", "time_scale": scale,
-                    "targets": [node for node, value in original_clock.items() if value == scale],
+                    "operation": "cancel", "targets": list(original),
                 })
-            wait_for(page, lambda: all(boat["time_scale"] == original_clock[boat["platform"]]
-                                      for boat in get(page, "/api/mission_inventory")["platforms"]))
-            response = page.request.post("/api/emane_controller", data={"reset_all": True})
-            assert response.ok, response.text()
-            assert not get(page, "/api/emane_controller")["impairments"]
-            browser.close()
+                for platform, squad in original.items():
+                    response = page.request.post("/api/team_assignment", data={
+                        "platform_node": platform, "team_name": squad,
+                    })
+                    assert response.ok, response.text()
+                wait_for(page, lambda: all(boat["squad"] == original[boat["platform"]]
+                                          for boat in get(page, "/api/mission_inventory")["platforms"]))
+                for scale in set(original_clock.values()):
+                    command(page, {
+                        "operation": "set_time_scale", "time_scale": scale,
+                        "targets": [node for node, value in original_clock.items() if value == scale],
+                    })
+                wait_for(page, lambda: all(boat["time_scale"] == original_clock[boat["platform"]]
+                                          for boat in get(page, "/api/mission_inventory")["platforms"]))
+            finally:
+                browser.close()
 
 
 def get(page, path):
     response = page.request.get(path)
     assert response.ok, response.text()
     return response.json()
+
+def wan_topic(original):
+    contract = os.environ.get("MISSION_WAN_CONTRACT", "legacy")
+    if contract == "legacy":
+        return original
+    if contract != "two_topic_union":
+        raise ValueError(f"Unknown MISSION_WAN_CONTRACT: {contract}")
+    return {"ControlCommand": "Event", "PlatformCommandAck": "Event",
+            "PlatformInitStatus": "Status"}[original]
 
 
 def wait_for(page, predicate, timeout=30):
@@ -220,12 +234,13 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
     page, errors, external = live_mission_dashboard
     node = "Platform_30"
     command(page, {"operation": "set_time_scale", "targets": [node], "time_scale": 1})
-    command(page, {"operation": "route", "targets": [node],
-                   "waypoints": [[32.74, -117.38], [32.72, -117.40]]})
+    route = command(page, {"operation": "route", "targets": [node],
+                           "waypoints": [[32.74, -117.38], [32.72, -117.40]]})
+    mission_id = route["commands"][0]["command_id"]
     raw_path = f"/api/platform_status?platform={node}"
     detailed = wait_for(page, lambda: (
         status if (status := get(page, raw_path)["mission"].get("PlatformMissionStatus", {}))
-        .get("mission_phase") == "TRANSIT" else None))
+        .get("mission_phase") == "TRANSIT" and status.get("mission_id") == mission_id else None))
     page.locator('[data-tab="experiment"]').click()
     wait_for(page, lambda: not page.locator("#experiment-apply").is_disabled())
     page.locator("#experiment-source").select_option(node)
@@ -254,7 +269,7 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
             assert any(row["reliability"] == reliability and row["lost"] > 0
                        for row in rows), rows
         assert any(row["source"] == "Platform_31" and row["recipient"] == "Control_20"
-                   and row["topic"] == "PlatformInitStatus" and row["percentage_ready"]
+                   and row["topic"] == wan_topic("PlatformInitStatus") and row["percentage_ready"]
                    and row["lost"] == 0 for row in snapshot["rows"])
         assert get(page, raw_path)["mission"]["PlatformMissionStatus"]["mission_phase"] == "TRANSIT"
         page.locator("#experiment-reset").click()
@@ -264,7 +279,8 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
         assert response.ok, response.text()
     recovered = wait_for(page, lambda: (
         status if (status := get(page, raw_path))["init"]["PlatformInitStatus"]
-        .get("mission_phase") == "CANCELLED" else None))
+        .get("mission_phase") == "CANCELLED" and
+        status["init"]["PlatformInitStatus"].get("mission_id") == mission_id else None))
     # No detailed terminal report arrived: reconciliation must use the compact Init summary.
     assert recovered["mission"]["PlatformMissionStatus"]["mission_phase"] == "TRANSIT"
     assert recovered["init"]["PlatformInitStatus"]["mission_id"] == detailed["mission_id"]
@@ -435,9 +451,11 @@ def test_drag_team_validate_go_and_cross_tab_dds(live_mission_dashboard):
     assert page.evaluate("__network.getPositions()") == graph_positions
     page.locator('[data-tab="delivery"]').click()
     assert page.locator("#delivery-filter-node").input_value() == "mission"
-    wait_for(page, lambda: any(row["topic"] == "ControlCommand" and row["recipient"] in ("Platform_30", "Platform_31") and
+    wait_for(page, lambda: any(row["topic"] == wan_topic("ControlCommand") and row["source"] == "Control_20" and
+                              row["recipient"] in ("Platform_30", "Platform_31") and
                               row["sent"] > 0 and row["received"] > 0 for row in get(page, "/api/delivery_stats")["rows"]))
-    wait_for(page, lambda: any(row["topic"] == "PlatformCommandAck" and row["source"] in ("Platform_30", "Platform_31") and
+    wait_for(page, lambda: any(row["topic"] == wan_topic("PlatformCommandAck") and row["recipient"] == "Control_20" and
+                              row["source"] in ("Platform_30", "Platform_31") and
                               row["sent"] > 0 and row["received"] > 0 for row in get(page, "/api/delivery_stats")["rows"]))
     page.locator('[data-tab="experiment"]').click()
     assert page.locator("#experiment-source").input_value() in ("Platform_30", "Platform_31")
@@ -453,11 +471,12 @@ def test_drag_team_validate_go_and_cross_tab_dds(live_mission_dashboard):
     page.locator('[data-tab="mission"]').click()
     new_draft(page); click_point(page, 500, 370); validate(page)
     assert all(entry["operation"] == "replace_route" for entry in go(page))
-    for topic in ("ControlCommand", "PlatformCommandAck"):
-        wait_for(page, lambda: any(row["topic"] == topic and row.get("percentage_ready") and
+    for topic, sources, recipients in (
+            ("ControlCommand", ("Control_20",), ("Platform_30", "Platform_31")),
+            ("PlatformCommandAck", ("Platform_30", "Platform_31"), ("Control_20",))):
+        wait_for(page, lambda: any(row["topic"] == wan_topic(topic) and row.get("percentage_ready") and
                                   row.get("settled_received", 0) > 0 and row["lost"] == 0 and
-                                  (row["source"] in ("Platform_30", "Platform_31") or
-                                   row["recipient"] in ("Platform_30", "Platform_31"))
+                                  row["source"] in sources and row["recipient"] in recipients
                                   for row in get(page, "/api/delivery_stats")["rows"]))
     wait_for(page, lambda: all(peer["presence"] == "PRESENCE_ALIVE" for sample in get(page, "/api/mesh_status")
                               for peer in sample["data"]["peers"]))
