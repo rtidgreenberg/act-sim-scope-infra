@@ -1,8 +1,9 @@
 // PresenceMonitor.hpp — Phase 8 presence & health (D75; design:
 // docs/cpp_router/presence-and-health.md), re-keyed by the router NAME (D79).
 //
-// Publishes this router's compact RouterHealth heartbeat on the WAN participant (the ONE
-// liveliness-bearing WAN topic), subscribes to peers', maintains the ALIVE/STALE/DEAD
+// Publishes this router's compact RouterHealth heartbeat on the WAN participant
+// (legacy RouterHealth, or the shared Status class), subscribes to peers',
+// maintains the ALIVE/STALE/DEAD
 // roster, and republishes the aggregated connected-router list on the LAN participant as
 // ActRouterMeshStatus. Mesh publish happens twice over: unconditionally on every MeshTick
 // (its own independent cadence, kMeshPublishPeriodMs, for GUI/mesh-dashboard consumers
@@ -61,11 +62,16 @@
 // discovery database (D81), so the old participant_guid_of correlation is gone too —
 // the roster is purely the presence authority.
 //
-// Roster signals (spike-proven, spikes/presence/):
+// Shared Status: a direct health-instance deadline callback queues STALE on MeshTick;
+// 30s after STALE becomes DEAD. Any valid received Status resets ALIVE/countdown.
+// Only the supplied deadline handle is inspected; no coalesced-instance sweep.
+// Health NO_WRITERS/dispose starts the same countdown without a finite liveliness lease.
+//
+// Legacy roster signals (spike-proven, spikes/presence/):
 //   valid heartbeat sample                  -> ALIVE (+summary update)
 //   REQUESTED_DEADLINE_MISSED on the reader -> STALE (policy flag, never a teardown).
 //     The status carries only last_instance_handle, so the handler also sweeps every
-//     ALIVE peer's last_seen against the deadline — coalesced misses (several peers
+//     ALIVE peer's health age against the deadline — coalesced misses (several peers
 //     silent in one dispatch window) all surface in the same pass.
 //   instance NOT_ALIVE_NO_WRITERS           -> DEAD  (liveliness lost / participant purge)
 //   DEAD for longer than kDeadPeerRetentionMs -> forgotten (erased from the roster;
@@ -90,6 +96,8 @@
 #pragma once
 
 #include "HeartbeatRtt.hpp"
+#include "StatusDeadlineQueue.hpp"
+#include "WanAdapterFactory.hpp"
 
 #include "Interfaces.hpp"
 #include "WanStatsPoll.hpp" // Phase 9: the RouterHealth pair is a WAN-stats source (D81)
@@ -102,6 +110,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -124,14 +133,14 @@ const int kMeshPublishPeriodMs = 500;
 // bounded_sequence(100) cap — accumulated DEAD entries with low-sorting names could
 // displace live peers once the roster passed 100 names.
 //
-// Measured from last_seen (the last valid heartbeat), so the clock starts when the peer
-// actually went quiet, not when we noticed. Deliberately much longer than the 12 s
+// Measured from the last valid Status (heartbeat in legacy mode), so the clock starts
+// when the peer actually went quiet, not when we noticed. Much longer than the 12 s
 // liveliness lease: a DEAD transition is information an operator should have time to see
 // on the dashboard before it disappears. Rejoin needs no special handling — the roster is
 // name-keyed, so a returning peer simply re-enters as ALIVE.
 const int kDeadPeerRetentionMs = 60000;
 
-// Also an IWanStatsSource (Phase 9, D81): the RouterHealth writer/reader pair is the
+// Also an IWanStatsSource (Phase 9, D81): the health writer/reader pair is the
 // mandatory idle-mesh bellwether — a known-rate WAN pair the LinkStatsCollector polls so
 // per-peer protocol counters advance even when every data route is idle. router_main
 // registers the monitor with the collector when both are active.
@@ -153,6 +162,7 @@ public:
     // is_wan-decomposition entry). dds::core::null when this process has no team_scoped
     // participant (a control node, or any config without one) — then team_partition is
     // always empty, same as "no team".
+    // wan_types selects the Status envelope; null retains the legacy RouterHealth topic.
     PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                     dds::domain::DomainParticipant wan_participant,
                     dds::domain::DomainParticipant lan_participant,
@@ -164,7 +174,9 @@ public:
                     const dds::pub::qos::DataWriterQos &diagnostics_writer_qos,
                     dds::domain::DomainParticipant team_scoped_participant = dds::core::null,
                     const std::string &health_topic = "RouterHealth",
-                    const std::string &mesh_topic = "ActRouterMeshStatus");
+                    const std::string &mesh_topic = "ActRouterMeshStatus",
+                    dds::core::QosProvider wan_types = dds::core::null,
+                    WanAdapterFactory* shared_status = nullptr);
 
     ~PresenceMonitor();
 
@@ -190,10 +202,18 @@ private:
     struct PeerEntry {
         RouterHealth last_summary;
         RouterPresenceState presence = RouterPresenceState::PRESENCE_ALIVE;
-        std::chrono::steady_clock::time_point last_seen;
+        std::chrono::steady_clock::time_point last_status_received;
+        std::chrono::steady_clock::time_point last_health_received;
+        std::chrono::steady_clock::time_point stale_since;
     };
 
     void on_health_data();
+    void on_health_samples(const dds::core::xtypes::DynamicData* frame,
+                           const dds::sub::SampleInfo* info);
+    void on_status_data(const dds::core::xtypes::DynamicData& frame,
+                        const dds::sub::SampleInfo& info);
+    void apply_status_deadlines();
+    RouterHealth decode_health(const dds::core::xtypes::DynamicData &sample) const;
     void on_health_reader_status();
     void log_router_health_audit(const std::string &event, const RouterHealth &hb);
     // Drop DEAD peers quiet for longer than kDeadPeerRetentionMs, along with their
@@ -220,12 +240,18 @@ private:
     // cached — see the constructor comment and publish_heartbeat. dds::core::null if this
     // process has no team_scoped participant.
     dds::domain::DomainParticipant team_scoped_participant_;
+    WanAdapterFactory* shared_status_;
+    std::shared_ptr<WanStatusCallbacks> status_callbacks_;
+    std::shared_ptr<StatusDeadlineQueue> status_deadlines_ =
+            std::make_shared<StatusDeadlineQueue>(std::size_t{HeartbeatRtt::peer_cap});
+    std::chrono::milliseconds dead_after_stale_{0};
 
     dds::pub::Publisher wan_publisher_;
     dds::sub::Subscriber wan_subscriber_;
-    dds::topic::Topic<RouterHealth> health_topic_;
-    dds::pub::DataWriter<RouterHealth> health_writer_;
-    dds::sub::DataReader<RouterHealth> health_reader_;
+    std::unique_ptr<WanCodec> status_codec_;
+    dds::topic::Topic<dds::core::xtypes::DynamicData> health_topic_;
+    dds::pub::DataWriter<dds::core::xtypes::DynamicData> health_writer_;
+    dds::sub::DataReader<dds::core::xtypes::DynamicData> health_reader_;
     dds::pub::Publisher lan_publisher_;
     dds::topic::Topic<RouterMeshStatus> mesh_topic_;
     dds::pub::DataWriter<RouterMeshStatus> mesh_writer_;

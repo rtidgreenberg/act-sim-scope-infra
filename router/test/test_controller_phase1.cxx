@@ -60,6 +60,16 @@ struct FakeEntityFactory : IEntityFactory {
     bool fail_participant_partition_apply = false;
     bool fail_route_partition_apply = false;
     unsigned route_partition_failures_remaining = 0;
+    bool wan_audiences = false;
+    bool reject_route_update = false;
+    bool uses_wan_audiences() const override { return wan_audiences; }
+    bool validate_route_update(const RouterRouteSpec&, std::string& error) const override {
+        if (reject_route_update) {
+            error = "unsupported audience";
+            return false;
+        }
+        return true;
+    }
 
     void create_topic_entities(const RouteView &view, const std::string &topic,
                                std::uint64_t gen) override {
@@ -930,6 +940,58 @@ static void test_set_route_partition() {
 // path (protected identity, not-present reject, idempotent duplicate, live-apply
 // failure rollback) and the D5 fingerprint wiring that makes a partition-only change
 // bump state_revision even though no route changed.
+static void test_wan_audience_commands() {
+    auto parts = Fixture::participants();
+    ParticipantState wan;
+    wan.name = "platform_wan";
+    wan.on_wan = wan.team_scoped = wan.team_partitions_on_endpoints = true;
+    wan.participant_partition = {"SHARED"};
+    wan.team_partition = {"Platform_30"};
+    parts.push_back(wan);
+    auto send = route_spec("send", true, {topic_spec("Send")});
+    send.input.participant = "platform_lan";
+    send.output.participant = "platform_wan";
+    Fixture f({send}, parts);
+    f.factory.wan_audiences = true;
+    const auto generation = drive_to_forwarding(f, "send", "Send");
+    auto add = command(RouterCommandKind::ADD_PARTICIPANT_PARTITION, "audience-add");
+    add.participant_name = "platform_wan";
+    add.partition_name = "TEAM_A";
+    f.post(ControllerEvent::command_received(add));
+    CHECK(f.status.last_ack().accepted);
+    CHECK(f.factory.partition_updates.empty());
+    CHECK(f.factory.participant_partition_applies.at("platform_wan") ==
+          std::vector<std::string>({"Platform_30", "TEAM_A"}));
+    CHECK(f.controller.state().participants.at("platform_wan").participant_partition ==
+          std::vector<std::string>({"SHARED"}));
+    f.factory.fail_participant_partition_apply = true;
+    add.command_id = "audience-fail";
+    add.partition_name = "TEAM_B";
+    const auto revision = f.revision();
+    f.post(ControllerEvent::command_received(add));
+    CHECK(!f.status.last_ack().accepted && f.revision() == revision);
+    CHECK(f.controller.state().participants.at("platform_wan").team_partition.size() == 2);
+
+    auto update = command(RouterCommandKind::SET_ROUTE_PARTITION, "route-reject", "send");
+    update.route.output.publisher_partition = "TEAM_B";
+    f.factory.reject_route_update = true;
+    f.post(ControllerEvent::command_received(update));
+    CHECK(!f.status.last_ack().accepted && f.revision() == revision);
+    CHECK(f.factory.partition_updates.empty());
+    f.factory.reject_route_update = false;
+    f.factory.route_partition_failures_remaining = 1;
+    update.command_id = "route-rollback";
+    f.post(ControllerEvent::command_received(update));
+    CHECK(!f.status.last_ack().accepted && f.revision() == revision);
+    CHECK(f.factory.partition_updates.size() == 2);
+    CHECK(f.controller.state().routes.at("send").desired.output.publisher_partition.empty());
+    CHECK(f.factory.teardowns.empty());
+    f.post(ControllerEvent::route_entity_error("send", "Send", generation, "input failed"));
+    CHECK(f.factory.aborts.size() == 1 && f.factory.aborts.front().gen == generation);
+    CHECK(f.controller.state().routes.at("send").topics.at("Send").topic_state ==
+          RouterRouteTopicState::TOPIC_ERROR);
+}
+
 static void test_team_endpoint_partition_membership() {
     auto parts = Fixture::participants();
     ParticipantState wan;
@@ -1285,6 +1347,7 @@ int main() {
     RUN(test_set_route_partition);
     RUN(test_participant_partition_accept_path);
     RUN(test_team_endpoint_partition_membership);
+    RUN(test_wan_audience_commands);
     RUN(test_participant_partition_protected_wildcard);
     RUN(test_refresh_counters_republish_no_bump);
     RUN(test_history_fifo_eviction);

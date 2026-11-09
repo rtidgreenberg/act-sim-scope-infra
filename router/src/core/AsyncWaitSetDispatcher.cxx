@@ -3,6 +3,8 @@
 #include "AsyncWaitSetDispatcher.hpp"
 #include "Log.hpp"
 
+#include <stdexcept>
+
 namespace router {
 
 namespace {
@@ -10,15 +12,17 @@ namespace {
 // Detach every condition of a runtime from the AsyncWaitSet. Each detach is the D32
 // blocking barrier: it returns only when any in-flight handler for that condition has
 // completed, so the subsequent close() can never race an active handler.
-void detach_all(rti::core::cond::AsyncWaitSet &aws, RouteTopicRuntimeBase &runtime,
+void detach_all(rti::core::cond::AsyncWaitSet &aws,
+                std::vector<dds::core::cond::Condition> &attached,
                 const std::string &route, const std::string &topic) {
-    std::vector<dds::core::cond::Condition> conds = runtime.conditions();
-    for (size_t i = 0; i < conds.size(); ++i) {
+    while (!attached.empty()) {
         try {
-            aws.detach_condition(conds[i]);
+            aws.detach_condition(attached.back());
+            attached.pop_back();
         } catch (const std::exception &e) {
-            Log::warn("route_detach_failed", {{"route", route}, {"topic", topic},
-                                              {"error", e.what()}});
+            Log::error("route_detach_failed", {{"route", route}, {"topic", topic},
+                                               {"error", e.what()}});
+            throw;
         }
     }
 }
@@ -28,15 +32,32 @@ void detach_all(rti::core::cond::AsyncWaitSet &aws, RouteTopicRuntimeBase &runti
 void AsyncWaitSetDispatcher::attach(const std::string &route, const std::string &topic,
                                     std::unique_ptr<RouteTopicRuntimeBase> runtime) {
     std::vector<dds::core::cond::Condition> conds = runtime->conditions();
-    RouteTopicRuntimeBase *raw = runtime.get();
-    runtimes_[key(route, topic)] = std::move(runtime);
-    for (size_t i = 0; i < conds.size(); ++i) {
-        aws_.attach_condition(conds[i]);
+    const auto name = key(route, topic);
+    if (runtimes_.count(name)) {
+        throw std::runtime_error("runtime already attached: " + name);
     }
-    // Phase 9 (D81): a build with a WAN-side leg registers with the collector so its
-    // per-matched-endpoint protocol statuses are polled on the tick. Strand-only.
-    if (stats_registry_ != nullptr && raw->has_wan_leg()) {
-        stats_registry_->register_source(raw);
+    RuntimeEntry entry;
+    entry.runtime = std::move(runtime);
+    entry.attached.reserve(conds.size());
+    auto inserted = runtimes_.emplace(name, std::move(entry)).first;
+    auto &live = inserted->second;
+    try {
+        for (const auto &condition : conds) {
+            if (condition == dds::core::null) {
+                throw std::invalid_argument("cannot attach a null condition");
+            }
+            aws_.attach_condition(condition);
+            live.attached.push_back(condition);
+        }
+        if (stats_registry_ != nullptr && live.runtime->has_wan_leg()) {
+            stats_registry_->register_source(live.runtime.get());
+            live.registered = true;
+        }
+    } catch (const std::exception &e) {
+        Log::error("route_attach_failed", {{"route", route}, {"topic", topic},
+                                          {"error", e.what()}});
+        detach_and_close(route, topic);
+        throw;
     }
     Log::debug("route_conditions_attached",
                {{"route", route}, {"topic", topic},
@@ -45,18 +66,18 @@ void AsyncWaitSetDispatcher::attach(const std::string &route, const std::string 
 
 bool AsyncWaitSetDispatcher::detach_and_close(const std::string &route,
                                               const std::string &topic) {
-    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
-        runtimes_.find(key(route, topic));
+    auto it = runtimes_.find(key(route, topic));
     if (it == runtimes_.end()) {
         return false;
     }
     // Unregister from the collector before close (D81 — baselines drop with the endpoint;
     // no poll can touch a closing runtime since both run on the strand).
-    if (stats_registry_ != nullptr) {
-        stats_registry_->unregister_source(it->second.get());
+    detach_all(aws_, it->second.attached, route, topic);
+    if (it->second.registered) {
+        stats_registry_->unregister_source(it->second.runtime.get());
+        it->second.registered = false;
     }
-    detach_all(aws_, *it->second, route, topic);
-    it->second->close(); // close condition, then reader, then writer (D32)
+    it->second.runtime->close();
     runtimes_.erase(it);
     Log::debug("route_conditions_detached", {{"route", route}, {"topic", topic}});
     return true;
@@ -64,34 +85,32 @@ bool AsyncWaitSetDispatcher::detach_and_close(const std::string &route,
 
 void AsyncWaitSetDispatcher::shutdown() {
     while (!runtimes_.empty()) {
-        std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
-            runtimes_.begin();
-        if (stats_registry_ != nullptr) {
-            stats_registry_->unregister_source(it->second.get());
+        auto it = runtimes_.begin();
+        detach_all(aws_, it->second.attached, "", "");
+        if (it->second.registered) {
+            stats_registry_->unregister_source(it->second.runtime.get());
+            it->second.registered = false;
         }
-        detach_all(aws_, *it->second, "", "");
-        it->second->close();
+        it->second.runtime->close();
         runtimes_.erase(it);
     }
 }
 
 std::uint64_t AsyncWaitSetDispatcher::forwarded(const std::string &route,
                                                 const std::string &topic) const {
-    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::const_iterator it =
-        runtimes_.find(key(route, topic));
-    return it == runtimes_.end() ? 0 : it->second->forwarded();
+    auto it = runtimes_.find(key(route, topic));
+    return it == runtimes_.end() ? 0 : it->second.runtime->forwarded();
 }
 
 bool AsyncWaitSetDispatcher::set_partitions(const std::string &route,
                                             const std::string &topic,
                                             const std::vector<std::string> &subscriber_partition,
                                             const std::vector<std::string> &publisher_partition) {
-    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>>::iterator it =
-        runtimes_.find(key(route, topic));
+    auto it = runtimes_.find(key(route, topic));
     if (it == runtimes_.end()) {
         return false;
     }
-    return it->second->set_partitions(subscriber_partition, publisher_partition);
+    return it->second.runtime->set_partitions(subscriber_partition, publisher_partition);
 }
 
 AsyncWaitSetDispatcher::~AsyncWaitSetDispatcher() {

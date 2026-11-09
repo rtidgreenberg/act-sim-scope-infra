@@ -496,6 +496,16 @@
 
     </qos_profile>
 
+    <!-- Opt-in contract profile; legacy WAN participants retain their limits. -->
+    <qos_profile name="wan_two_topic_participant"
+                 base_name="ACT_QOS_LIB::wan_router_participant">
+      <domain_participant_qos>
+        <resource_limits>
+          <contentfilter_property_max_length>16384</contentfilter_property_max_length>
+        </resource_limits>
+      </domain_participant_qos>
+    </qos_profile>
+
     <qos_profile name="wan_router_participant_emane"
                  base_name="ACT_QOS_LIB::wan_router_participant">
       <domain_participant_qos>
@@ -506,6 +516,15 @@
             </allow_interfaces_list>
           </udpv4>
         </transport_builtin>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="wan_two_topic_participant_emane"
+                 base_name="ACT_QOS_LIB::wan_router_participant_emane">
+      <domain_participant_qos>
+        <resource_limits>
+          <contentfilter_property_max_length>16384</contentfilter_property_max_length>
+        </resource_limits>
       </domain_participant_qos>
     </qos_profile>
 
@@ -547,6 +566,27 @@
           <depth>50</depth>
         </history>
 
+      </datareader_qos>
+    </qos_profile>
+
+    <!-- Two-topic Status policy. Legacy wan_status and router_health stay unchanged. -->
+    <qos_profile name="wan_union_status" base_name="ACT_QOS_LIB::wan_status">
+      <datawriter_qos>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>2</sec><nanosec>0</nanosec></period></deadline>
+      </datawriter_qos>
+      <datareader_qos>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <deadline><period><sec>2</sec><nanosec>0</nanosec></period></deadline>
+        <property>
+          <value>
+            <element>
+              <name>act.presence.dead_after_stale_ms</name>
+              <value>30000</value>
+            </element>
+          </value>
+        </property>
       </datareader_qos>
     </qos_profile>
 

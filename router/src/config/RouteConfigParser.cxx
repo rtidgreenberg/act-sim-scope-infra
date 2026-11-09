@@ -3,6 +3,7 @@
 #include "config/RouteConfigParser.hpp"
 #include "config/Sha256.hpp"
 #include "core/QosAliasPolicy.hpp"
+#include "core/WanInterests.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -165,6 +166,11 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         // The router half of the identity is a fleet-wide constant under D80's one
         // system-wide config; absent => default "router" (D79 addendum).
         out.router_name = get_str(router, "name", "router");
+        out.wan_contract = get_str(router, "wan_contract", "legacy");
+        if (out.wan_contract != "legacy" && out.wan_contract != "two_topic_union") {
+            error = "router.wan_contract must be legacy or two_topic_union";
+            return false;
+        }
         // router.type_name retired (7c, D70): topic types are wire-learned. A leftover
         // type_name: key in a config is silently ignored.
         out.admin_participant = get_str(router, "admin_participant");
@@ -399,6 +405,102 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
     }
 
     return true;
+}
+
+bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
+    if (cfg.wan_contract == "legacy") {
+        return true;
+    }
+    try {
+        if (cfg.wan_contract != "two_topic_union") {
+            throw std::runtime_error("unknown WAN contract");
+        }
+        if (cfg.types_xml_path.empty() || cfg.qos_library_paths.empty()) {
+            throw std::runtime_error("two_topic_union requires types.xml and qos_libraries");
+        }
+        const auto validate_qos_class = [&](const WanMapping& mapping) {
+            const auto alias = std::string(mapping.qos_profile);
+            const auto profile = std::string(mapping.family) == "Status"
+                    ? "ACT_QOS_LIB::wan_union_status" : "ACT_QOS_LIB::wan_event";
+            const auto configured = cfg.qos_profiles.find(alias);
+            if (configured == cfg.qos_profiles.end() || configured->second != profile) {
+                throw std::runtime_error("two_topic_union requires QoS alias '" + alias
+                                         + "' to use " + profile);
+            }
+        };
+        size_t count = 0;
+        std::map<std::string, ParticipantState> participants;
+        for (const auto& participant : cfg.participants) {
+            participants.emplace(participant.name, participant);
+            if (participant.on_wan &&
+                (participant.role.empty() || participant.role == cfg.node_role)) {
+                ++count;
+                const auto profile = cfg.qos_profiles.at(participant.qos_profile_alias);
+                if (profile != "ACT_QOS_LIB::wan_two_topic_participant" &&
+                    profile != "ACT_QOS_LIB::wan_two_topic_participant_emane") {
+                    throw std::runtime_error("two_topic_union requires its opt-in WAN participant profile");
+                }
+                if (participant.team_scoped && !participant.team_partitions_on_endpoints) {
+                    throw std::runtime_error("two_topic_union requires discovery-independent team state");
+                }
+            }
+        }
+        if (count != 1) {
+            throw std::runtime_error("two_topic_union requires exactly one local WAN participant");
+        }
+        if (!cfg.presence_participant.empty()) {
+            const auto presence = participants.find(cfg.presence_participant);
+            if (presence == participants.end() || !presence->second.on_wan ||
+                (!presence->second.role.empty() && presence->second.role != cfg.node_role)) {
+                throw std::runtime_error("two_topic_union presence must use the local WAN participant");
+            }
+            validate_qos_class(wan_mapping("RouterHealth"));
+        }
+        for (const auto& route : cfg.routes) {
+            const auto& input = participants.at(route.input.participant);
+            const auto& output = participants.at(route.output.participant);
+            if (!input.on_wan && !output.on_wan) {
+                continue;
+            }
+            if (input.on_wan == output.on_wan || route.forwarding_mode != "dynamic_data") {
+                throw std::runtime_error("two_topic_union routes require one LAN/WAN hop in dynamic_data mode");
+            }
+            const bool source = output.on_wan;
+            const auto& lan = source ? route.input : route.output;
+            const auto& wan = source ? route.output : route.input;
+            if (lan.participant != cfg.admin_participant ||
+                !lan.subscriber_partition.empty() || !lan.publisher_partition.empty() ||
+                (source && !lan.filter_expression.empty())) {
+                throw std::runtime_error("two_topic_union requires unpartitioned local admin-LAN endpoints");
+            }
+            for (const auto& topic : route.topics) {
+                const auto& mapping = wan_mapping(topic.name);
+                if (std::string(mapping.branch) == "health") {
+                    throw std::runtime_error("RouterHealth is owned by presence_participant, not application routes");
+                }
+                const auto alias = std::string(mapping.qos_profile);
+                validate_qos_class(mapping);
+                const auto& configured = source ? wan.writer_qos : wan.reader_qos;
+                if (!configured.empty() && configured != "default" && configured != alias) {
+                    throw std::runtime_error("unsupported WAN QoS class for " + topic.name);
+                }
+                const bool command = topic.name == "ControlCommand";
+                const bool mode = topic.name == "ActPlatformStatusMode";
+                if (!wan.filter_expression.empty() &&
+                    (source || (!command && !mode) ||
+                     wan.filter_expression != (command ? "destination = %0" : "platform_node = %0") ||
+                     wan.filter_parameters.size() != 1 ||
+                     wan.filter_parameters.at(0) != "'" + cfg.node_name + "'")) {
+                    throw std::runtime_error("unsupported legacy filter translation for " + topic.name);
+                }
+                wan_interest(route, source ? output : input, cfg.node_name, source, topic.name);
+            }
+        }
+        return true;
+    } catch (const std::exception& exception) {
+        error = std::string("router.wan_contract: ") + exception.what();
+        return false;
+    }
 }
 
 bool validate_qos_aliases(const RouteConfig &cfg, std::string &error) {

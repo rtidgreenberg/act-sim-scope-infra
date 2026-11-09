@@ -29,6 +29,7 @@ public:
     // Phase 9 (D81): the link-stats collector to register WAN-leg runtimes with at attach
     // and unregister at detach/close. nullptr (the default) = no collector, no
     // registration. Set once at wiring time, before any route is built, on the strand.
+    // The registry must outlive this dispatcher and its registered runtimes.
     void set_stats_registry(IWanStatsRegistry *registry) { stats_registry_ = registry; }
 
     // Take ownership of a route runtime and attach its conditions (read condition +
@@ -61,7 +62,12 @@ private:
     }
 
     rti::core::cond::AsyncWaitSet &aws_;
-    std::map<std::string, std::unique_ptr<RouteTopicRuntimeBase>> runtimes_;
+    struct RuntimeEntry {
+        std::unique_ptr<RouteTopicRuntimeBase> runtime;
+        std::vector<dds::core::cond::Condition> attached;
+        bool registered = false;
+    };
+    std::map<std::string, RuntimeEntry> runtimes_;
     IWanStatsRegistry *stats_registry_ = nullptr; // Phase 9 (D81); nullptr = no collector
 };
 

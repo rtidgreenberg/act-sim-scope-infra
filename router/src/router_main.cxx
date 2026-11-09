@@ -5,8 +5,9 @@
 // controller -> entity factory -> forwarding. Route topic types are learned FROM THE
 // WIRE (7c, D64/D70): the DiscoveryDispatcher reads each endpoint's inline SEDP type
 // object and the controller builds a topic's entities once its type arrives — the
-// router carries no local type objects for forwarded payloads and one
-// DynamicRouteFactory serves all types. Runs until SIGINT/SIGTERM.
+// legacy DynamicRouteFactory uses those wire types directly. Opt-in two-topic
+// routing also checks them against the XML catalog before creating shared adapters.
+// Runs until SIGINT/SIGTERM.
 //
 // Usage:
 //   router_main --config <path> [--name <router-instance-name>] [--role <node-role>]
@@ -36,6 +37,7 @@
 #include "core/QosResolver.hpp"
 #include "core/RouterController.hpp"
 #include "core/TypeResolver.hpp"
+#include "core/WanControllerFactory.hpp"
 
 #include "ActTypes.hpp"
 
@@ -146,6 +148,10 @@ int main(int argc, char **argv) {
         }
         if (!presence_participant_override.empty()) {
             cfg.presence_participant = presence_participant_override;
+        }
+        if (!validate_wan_contract(cfg, error)) {
+            Log::error("router.config.wan_contract", {{"config", config_path}, {"error", error}});
+            return 2;
         }
         if (!validate_qos_aliases(cfg, error)) {
             Log::error("router.config.qos_alias", {{"config", config_path}, {"error", error}});
@@ -407,7 +413,9 @@ int main(int argc, char **argv) {
             command_ack_writer_qos = qos_provider->datawriter_qos(kAdminCommandAckProfile);
             command_reader_qos = qos_provider->datareader_qos(kAdminCommandProfile);
             journal_writer_qos = qos_provider->datawriter_qos(kControllerJournalProfile);
-            health_reader_qos = qos_provider->datareader_qos(kRouterHealthProfile);
+            health_reader_qos = qos_provider->datareader_qos(
+                    cfg.wan_contract == "two_topic_union"
+                        ? "ACT_QOS_LIB::wan_union_status" : kRouterHealthProfile);
             health_writer_qos = qos_provider->datawriter_qos(kRouterHealthProfile);
             mesh_writer_qos = qos_provider->datawriter_qos(kRouterMeshStatusProfile);
             link_stats_writer_qos = qos_provider->datawriter_qos(kRouterLinkStatsProfile);
@@ -421,8 +429,30 @@ int main(int argc, char **argv) {
                                       command_ack_writer_qos, "ActRouterStatus");
 
         rti::core::cond::AsyncWaitSet aws;
+        // Registered runtimes must unregister before the collector is destroyed,
+        // including exception unwinding before normal shutdown is reached.
+        std::unique_ptr<LinkStatsCollector> link_stats;
         AsyncWaitSetDispatcher route_disp(aws);
         DynamicRouteFactory factory(registry, types, qos, route_disp);
+        RouterIdentityInfo identity;
+        identity.node_name = cfg.node_name;
+        identity.router_name = cfg.router_name;
+        identity.config_hash = cfg.config_hash;
+        identity.status_id = cfg.router_name + "-" + std::to_string(::getpid());
+        identity.node_role = cfg.node_role;
+        std::unique_ptr<WanControllerFactory> two_topic_factory;
+        IEntityFactory* active_factory = &factory;
+        if (cfg.wan_contract == "two_topic_union") {
+            std::string wan;
+            for (const auto& participant : filtered_participants) {
+                if (participant.on_wan) {
+                    wan = participant.name;
+                }
+            }
+            two_topic_factory.reset(new WanControllerFactory(
+                registry, types, qos, route_disp, types.model_provider(), wan, identity));
+            active_factory = two_topic_factory.get();
+        }
 
         // Phase 6 slice 6b: controller journal (debug analysis). Its backlog StatusCondition
         // attaches to the AWS here, before aws.start()/enable_all() (D52). The writer is
@@ -455,42 +485,28 @@ int main(int argc, char **argv) {
         }
         std::unique_ptr<PresenceMonitor> presence;
         if (!cfg.presence_participant.empty()) {
+            link_stats.reset(new LinkStatsCollector(
+                    admin_dp, router_identity, cfg.presence_participant,
+                    link_stats_writer_qos, cfg.link_stats_period_ms));
+            route_disp.set_stats_registry(link_stats.get());
             presence.reset(new PresenceMonitor(
                     aws, registry.get(cfg.presence_participant), admin_dp,
                     cfg.node_name, cfg.router_name, health_reader_qos, health_writer_qos,
-                    mesh_writer_qos, status_writer_qos, team_scoped_participant));
-        }
-
-        // Link-metrics collector: passive health RTT and WAN protocol counters,
-        // ActRouterLinkStats on the admin (LAN) participant.
-        // Active ONLY when presence is active (no WAN participant => no bellwether, no
-        // reason to collect — D81 item 6). It registers as a WAN-stats source itself the
-        // PresenceMonitor's RouterHealth pair (the idle-mesh bellwether), and the
-        // dispatcher registers each route's WAN leg — the factory flags a leg as WAN via
-        // registry.on_wan(participant_name) (any Config::on_wan participant, i.e.
-        // control_wan and platform_wan post-D103, not only this presence participant).
-        std::unique_ptr<LinkStatsCollector> link_stats;
-        if (presence) {
-            link_stats.reset(new LinkStatsCollector(
-                    admin_dp,
-                    router_identity, cfg.presence_participant,
-                    link_stats_writer_qos,
-                    cfg.link_stats_period_ms));
-            route_disp.set_stats_registry(link_stats.get());
+                    mesh_writer_qos, status_writer_qos, team_scoped_participant,
+                    "RouterHealth", "ActRouterMeshStatus",
+                    cfg.wan_contract == "two_topic_union"
+                        ? types.model_provider() : dds::core::QosProvider(dds::core::null),
+                    two_topic_factory ? &two_topic_factory->adapters() : nullptr));
             link_stats->register_source(presence.get());
         }
 
-        RouterIdentityInfo identity;
-        identity.node_name = cfg.node_name;
-        identity.router_name = cfg.router_name;
-        identity.config_hash = cfg.config_hash;
-        identity.status_id = cfg.router_name + "-" + std::to_string(::getpid());
-        identity.node_role = cfg.node_role;
-
-        RouterController ctrl(identity, cfg.routes, filtered_participants, &factory,
+        RouterController ctrl(identity, cfg.routes, filtered_participants, active_factory,
                               &status_pub, &journal_pub, presence.get(),
                               link_stats.get());
         factory.set_controller(&ctrl);
+        if (two_topic_factory) {
+            two_topic_factory->set_controller(&ctrl);
+        }
         if (presence) {
             // This router owns the producer; its own publication is not rediscovered
             // through the remote-participant discovery path.
@@ -515,6 +531,11 @@ int main(int argc, char **argv) {
         // AsyncWaitSet dispatching, enable the participants. Discovery samples from here
         // on arrive as genuine post-start condition transitions and are never stranded.
         registry.enable_all();
+        if (presence && two_topic_factory) {
+            auto wan = registry.get(cfg.presence_participant);
+            dds::pub::ignore(wan,
+                            two_topic_factory->adapters().status_writer().instance_handle());
+        }
 
         // The controller's constructor-time startup snapshot was written while the admin
         // participant was still disabled (a no-op on a disabled writer), so re-publish it
@@ -566,6 +587,9 @@ int main(int argc, char **argv) {
         // deleting a runtime out from under a poll (Phase 9). With the ticks stopped,
         // everything below runs single-threaded.
         drain.stop();
+        if (two_topic_factory) {
+            two_topic_factory->shutdown();
+        }
         route_disp.shutdown(); // unregisters each WAN route leg from the collector, then closes
         discovery.shutdown();
         command_reader.shutdown();

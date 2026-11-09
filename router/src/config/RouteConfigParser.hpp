@@ -25,6 +25,7 @@ struct RouteConfig {
     // ONLY router identity; router_id is retired). Under D80's one system-wide config
     // this is a fleet-wide constant — optional in the YAML, default "router".
     std::string router_name;
+    std::string wan_contract = "legacy";
     // SHA-256 (full lowercase hex, 64 chars) over the RAW BYTES of the loaded config
     // file, computed once at load (D80/D79-addendum). Stamped into every RouterHealth
     // heartbeat so C2 observes config drift mesh-wide.
@@ -83,5 +84,6 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
 // errors discovered piecemeal at runtime. Returns false and sets error on the first
 // unresolvable alias found.
 bool validate_qos_aliases(const RouteConfig &cfg, std::string &error);
+bool validate_wan_contract(const RouteConfig &cfg, std::string &error);
 
 } // namespace router

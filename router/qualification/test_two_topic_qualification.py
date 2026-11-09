@@ -53,7 +53,7 @@ def peers(unique_domains):
     provider = dds.QosProvider(str(QOS))
     participants = []
     for name in ("qualification/source", "qualification/receiver"):
-        qos = provider.participant_qos_from_profile(PROFILE + "wan_router_participant")
+        qos = provider.participant_qos_from_profile(PROFILE + "wan_two_topic_participant")
         qos.participant_name.name = name
         participants.append(dds.DomainParticipant(unique_domains["wan"], qos))
     try:
@@ -129,9 +129,11 @@ def routed_parent(participant, publisher, partition):
 
 @contextmanager
 def endpoints(peers, types, family="Status", profile="wan_status",
-              expression=None, parameters=(), partition=None):
+              expression=None, parameters=(), partition=None, type_name=None):
     participants, qos = peers
-    type_ = types.type("Qualification" + family)
+    if type_name == "WanStatus" and profile == "wan_status":
+        profile = "wan_union_status"
+    type_ = types.type(type_name or "Qualification" + family)
     topics = [dds.DynamicData.Topic(p, family, type_) for p in participants]
     publisher = routed_parent(participants[0], True, partition)
     subscriber = routed_parent(participants[1], False, partition)
@@ -165,6 +167,182 @@ def endpoints(peers, types, family="Status", profile="wan_status",
 
 def pushed(writer):
     return int(writer.datawriter_protocol_status.pushed_sample_count.total)
+
+
+@pytest.mark.parametrize("family,topic,branch,type_name,key,profile", [
+    ("Event", "ControlCommand", "command", "control_command", "source", "wan_event"),
+    ("Event", "ActTeamAssignment", "team_assignment", "TeamAssignment", "platform_node", "wan_event"),
+    ("Event", "ActPlatformStatusMode", "status_mode", "PlatformStatusMode", "platform_node", "wan_event"),
+    ("Event", "PlatformCommandAck", "command_ack", "control_command_ack", "source", "wan_event"),
+    ("Event", "ContactReport", "contact_report", "contact_report", "source", "wan_event"),
+    ("Status", "PlatformInitStatus", "navigation", "platform_init_status", "source", "wan_status"),
+    ("Status", "PlatformData", "data", "platform_data", "source", "wan_status"),
+    ("Status", "PlatformMissionStatus", "mission", "platform_mission_status", "source", "wan_status"),
+    ("Status", "PlatformWaypointStatus", "waypoint", "platform_waypoint_status", "source", "wan_status"),
+    ("Status", "PlatformDetailStatus", "detail", "platform_detail_status", "source", "wan_status"),
+    ("Status", "PlatformDebugStatus", "debug", "platform_debug_status", "source", "wan_status"),
+    ("Status", "PlatformThrusterStatus", "thruster", "platform_thruster_status", "source", "wan_status"),
+    ("Status", "PlatformPowerStatus", "power", "platform_power_status", "source", "wan_status"),
+    ("Status", "ActRouterDiagnostics", "diagnostics", "RouterDiagnostics", "router", "wan_status"),
+    ("Status", "RouterHealth", "health", "RouterHealth", "router", "router_health"),
+])
+def test_production_cases_round_trip_and_stable_keys(
+    peers, qualification_types, family, topic, branch, type_name, key, profile,
+):
+    if family == "Status":
+        profile = "wan_union_status"
+    frame = dds.DynamicData(qualification_types.type("Wan" + family))
+    frame["source_id"] = "Boat30"
+    frame["instance_id"] = f"{branch}/{len(topic)}:{topic}/6:Boat30"
+    frame["schema_version"] = 1
+    frame["original_topic"] = topic
+    frame["audit_sequence"] = 1
+    with frame.loan_value("payload") as payload:
+        with payload.data.loan_value(branch) as active:
+            active.data[key] = "Boat30"
+            if type_name == "control_command":
+                active.data["payload"] = [0, 1, 127, 255]
+                active.data["command_id"] = "command-1"
+    with endpoints(
+        peers, qualification_types, family=family, profile=profile,
+        type_name="Wan" + family,
+    ) as (writer, reader, _, _, _):
+        handle = writer.register_instance(frame)
+        writer.write(frame)
+        received = []
+
+        def delivered():
+            received.extend(s.data for s in reader.take() if s.info.valid)
+            return bool(received)
+
+        wait_until(delivered)
+        assert received[0] == frame, "Production envelope/payload changed on the wire"
+        frame["audit_sequence"] = 2
+        frame["session_id"] = 99
+        frame["membership_revision"] = 10
+        with frame.loan_value("audience") as audience:
+            audience.data["team_ids"] = ["TEAM_B"]
+        assert writer.register_instance(frame) == handle
+        recovered = writer.key_value(handle)
+        assert recovered["source_id"] == "Boat30"
+        assert recovered["instance_id"] == frame["instance_id"]
+
+
+@pytest.mark.parametrize("selector", ["control", "global"])
+def test_production_boolean_audience_filter(peers, qualification_types, selector):
+    frame = dds.DynamicData(qualification_types.type("WanStatus"))
+    frame["source_id"] = "Boat30"
+    frame["instance_id"] = "navigation/18:PlatformInitStatus/6:Boat30"
+    frame["audit_sequence"] = 1
+    with frame.loan_value("payload") as payload:
+        with payload.data.loan_value("navigation") as active:
+            active.data["source"] = "Boat30"
+    with endpoints(peers, qualification_types, type_name="WanStatus",
+                   expression=f"audience.{selector} = TRUE AND payload._d = 1") as (
+            writer, reader, _, _, _):
+        baseline = pushed(writer)
+        writer.write(frame)
+        time.sleep(0.3)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline
+        frame[f"audience.{selector}"] = True
+        frame["audit_sequence"] = 2
+        writer.write(frame)
+        assert collect_sequences(reader, 1) == [2]
+
+
+def test_production_mixed_audience_filter(peers, qualification_types):
+    frame = dds.DynamicData(qualification_types.type("WanStatus"))
+    frame["source_id"] = "Boat30"
+    frame["instance_id"] = "data/12:PlatformData/6:Boat30"
+    frame["audit_sequence"] = 1
+    frame["audience.team_ids"] = ["Boat30"]
+    with frame.loan_value("payload") as payload:
+        with payload.data.loan_value("data") as active:
+            active.data["source"] = "Boat30"
+    team_expression = " OR ".join(f"audience.team_ids[{index}] = %1" for index in range(16))
+    expression = f"source_id <> %0 AND (payload._d = 2 AND ({team_expression}))"
+    parameters = ["'Boat31'", "'Boat31'"]
+    with endpoints(peers, qualification_types, type_name="WanStatus",
+                   expression=expression,
+                   parameters=parameters) as (writer, reader, cft, _, _):
+        baseline = pushed(writer)
+        writer.write(frame)
+        time.sleep(0.3)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline
+        cft.set_filter(dds.Filter(
+            "source_id <> %0 AND (((audience.global = TRUE) AND (payload._d = 1)) OR "
+            f"(payload._d = 2 AND ({team_expression})))", parameters))
+        frame["audit_sequence"] = 2
+        writer.write(frame)
+        time.sleep(0.3)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline
+        frame["audience.team_ids"] = ["Boat31"]
+        frame["audit_sequence"] = 3
+        writer.write(frame)
+        assert collect_sequences(reader, 1) == [3]
+
+
+def test_full_team_set_exact_membership_sender_filter(peers, qualification_types):
+    expression = " OR ".join(
+        f"audience.team_ids[{index}] = %{interest}"
+        for index in range(16) for interest in range(16)
+    )
+    parameters = ["'TEAM_A'"] + [f"'INTEREST_{index}'" for index in range(1, 16)]
+
+    def sample(sequence, teams, branch="data"):
+        frame = dds.DynamicData(qualification_types.type("WanStatus"))
+        frame["source_id"] = "Boat30"
+        frame["instance_id"] = "data/12:PlatformData/6:Boat30"
+        frame["schema_version"] = 1
+        frame["original_topic"] = "PlatformData"
+        frame["audit_sequence"] = sequence
+        with frame.loan_value("audience") as audience:
+            audience.data["team_ids"] = teams
+        with frame.loan_value("payload") as payload:
+            with payload.data.loan_value(branch) as active:
+                active.data["source" if branch == "data" else "router"] = "Boat30"
+        return frame
+
+    with endpoints(
+        peers, qualification_types, type_name="WanStatus",
+        expression=f"payload._d = 2 AND ({expression})", parameters=parameters,
+    ) as (writer, reader, cft, _, _):
+        baseline = pushed(writer)
+        for sequence, teams in enumerate(([], ["TEAM_B"], ["TEAM_A_extra"]), 1):
+            writer.write(sample(sequence, teams))
+        writer.write(sample(4, ["TEAM_A"], "health"))
+        time.sleep(0.4)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline, "Nonmember DATA was pushed"
+        for sequence, teams in ((10, ["TEAM_A"]), (11, ["TEAM_B"] * 15 + ["TEAM_A"])):
+            writer.write(sample(sequence, teams))
+            assert collect_sequences(reader, 1) == [sequence]
+        for interest in range(16):
+            teams = ["NONMEMBER"] * 16
+            teams[interest] = parameters[interest][1:-1]
+            writer.write(sample(100 + interest, teams))
+            assert collect_sequences(reader, 1) == [100 + interest]
+        assert pushed(writer) == baseline + 18
+        parameters[0] = "'TEAM_B'"
+        cft.filter_parameters = parameters
+        received = []
+
+        def updated():
+            writer.write(sample(12, ["TEAM_B"]))
+            received.extend(sequences(reader))
+            return 12 in received
+
+        wait_until(updated)
+        reader.take()
+        time.sleep(0.2)
+        baseline = pushed(writer)
+        writer.write(sample(13, ["TEAM_A"]))
+        time.sleep(0.4)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline, "Old-team DATA was pushed after convergence"
 
 
 def test_keys_keep_variants_and_sensors_independent(peers, qualification_types):

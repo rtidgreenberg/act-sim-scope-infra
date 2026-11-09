@@ -67,14 +67,13 @@ _domain_counter = itertools.count()
 # That last line is not hypothetical: a first attempt at this fix used base 1000 and the
 # suite failed with "RTIOsapiSocket_bindWithIP: OS bind() failure ... Port 1006 with error
 # 0XD (Permission denied)" on Domain=1023, plus a wire-frugality test whose WAN port range
-# computed as [268900, 269149]. Note the repo guardrail in copilot-instructions.md quotes
-# "~5900-6000" as the ceiling; that is one observed instance of the wrap landing low, not
-# the limit. The limit is 232.
+# computed as [268900, 269149]. The limit is 232.
 #
-# So the usable non-live windows are 0-19, 21-29, 101-199 and 201-232. 101-199 is the only
-# one with real room: 99 ids = 33 triples, against 27 collected tests today.
+# Allocate triples across all usable non-live windows, starting with 101-199.
+# A third-node fixture reserves another triple rather than reusing a live domain.
 E2E_DOMAIN_BASE = 101
 E2E_DOMAIN_MAX = 199
+E2E_DOMAIN_WINDOWS = ((101, 199), (201, 232), (0, 19), (21, 29))
 
 # The literal domains `router/config/control-platform.yaml` declares. That file is
 # deliberately runnable "as literally authored" (router/README.md), so it carries no
@@ -104,22 +103,29 @@ def router_binary():
     return ROUTER_MAIN
 
 
-@pytest.fixture
-def unique_domains():
+def allocate_domains():
     """Three domain ids (control_lan, wan, platform_lan), spread out per test so
-    concurrent runs are unlikely to collide, and allocated from a band the live system
-    never uses (see E2E_DOMAIN_BASE above — H3). Basic domain-id isolation only for now —
+    allocated from windows the live system never uses (see E2E_DOMAIN_WINDOWS above).
+    Separate concurrent runs still require owned network namespaces. Basic domain-id isolation —
     DomainParticipant-level PARTITION isolation (stronger: mismatched partitions block
     discovery entirely) is deferred to a later pass, once the router_main wiring + e2e
     suite are confirmed working end-to-end (docs/cpp_router/design-decisions.md D50)."""
-    base = E2E_DOMAIN_BASE + next(_domain_counter) * 3
-    assert base + 2 <= E2E_DOMAIN_MAX, (
-        f"e2e domain allocator reached {base}, past the {E2E_DOMAIN_MAX} ceiling of the "
-        f"{E2E_DOMAIN_BASE}-{E2E_DOMAIN_MAX} band. Do NOT just raise the ceiling: domain "
-        f"ids above 232 make 7400+250*D exceed 65535, wrap mod 65536, and can land on a "
-        f"privileged port (bind fails with 'Permission denied'). Use 201-232, or free up "
-        f"ids, or move to PARTITION-based isolation (D50).")
+    triples = [base for low, high in E2E_DOMAIN_WINDOWS for base in range(low, high - 1, 3)]
+    index = next(_domain_counter)
+    assert index < len(triples), (
+        "e2e domain allocator exhausted the non-live windows below 233; "
+        "use owned per-test namespaces or release reserved triples, never raise the domain ceiling")
+    base = triples[index]
     return {"control_lan": base, "wan": base + 1, "platform_lan": base + 2}
+
+@pytest.fixture
+def unique_domains():
+    return allocate_domains()
+
+
+@pytest.fixture
+def extra_domains():
+    return allocate_domains()
 
 
 @pytest.fixture

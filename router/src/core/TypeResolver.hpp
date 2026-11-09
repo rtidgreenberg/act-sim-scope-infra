@@ -76,6 +76,12 @@ public:
     void load_types(const std::string &xml_path) {
         provider_ = std::make_shared<dds::core::QosProvider>(xml_path);
     }
+    dds::core::QosProvider model_provider() const {
+        if (!provider_) {
+            throw std::runtime_error("no XML model provider loaded");
+        }
+        return *provider_;
+    }
 
     bool has_dynamic_type(const std::string &type_name) const {
         try {

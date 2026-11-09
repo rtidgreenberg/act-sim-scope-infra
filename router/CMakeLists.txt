@@ -74,6 +74,10 @@ add_executable(router_main
     src/core/LinkStatsCollector.cxx
     src/core/AsyncWaitSetDispatcher.cxx
     src/core/DynamicRouteFactory.cxx
+    src/core/WanCodec.cxx
+    src/core/WanAdapterFactory.cxx
+    src/core/WanInterests.cxx
+    src/core/WanControllerFactory.cxx
     ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
 )
 target_include_directories(router_main PRIVATE
@@ -153,6 +157,8 @@ add_executable(test_route_config
     test/test_route_config.cxx
     src/config/RouteConfigParser.cxx
     src/config/Sha256.cxx
+    src/core/WanInterests.cxx
+    src/core/WanCodec.cxx
     ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
 )
 target_include_directories(test_route_config PRIVATE
@@ -162,3 +168,52 @@ target_compile_definitions(test_route_config PRIVATE
     ROUTER_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
 target_link_libraries(test_route_config RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
 add_test(NAME route_config COMMAND test_route_config)
+
+add_executable(test_wan_codec
+    test/test_wan_codec.cxx
+    src/core/WanCodec.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_wan_codec PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_wan_codec RTIConnextDDS::cpp2_api)
+add_test(NAME wan_codec COMMAND test_wan_codec
+    "${CMAKE_CURRENT_SOURCE_DIR}/../harness_v2/datamodel/gen/ActTypes.xml")
+
+add_executable(test_wan_interests
+    test/test_wan_interests.cxx
+    src/core/WanInterests.cxx
+    src/core/WanCodec.cxx
+    src/config/RouteConfigParser.cxx
+    src/config/Sha256.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES})
+target_include_directories(test_wan_interests PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_wan_interests RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
+add_test(NAME wan_interests COMMAND test_wan_interests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../harness_v2/datamodel/gen/ActTypes.xml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../harness_v2/qos/act_qos_profiles.xml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/control-platform.yaml")
+
+add_executable(test_dispatcher_lifecycle
+    test/test_dispatcher_lifecycle.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(test_dispatcher_lifecycle PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(test_dispatcher_lifecycle RTIConnextDDS::cpp2_api)
+add_test(NAME dispatcher_lifecycle COMMAND test_dispatcher_lifecycle)
+
+add_executable(test_presence_deadlines test/test_presence_deadlines.cxx)
+target_include_directories(test_presence_deadlines PRIVATE src)
+add_test(NAME presence_deadlines COMMAND test_presence_deadlines)
+
+add_executable(wan_adapter_pilot
+    test_e2e/util/wan_adapter_pilot.cxx
+    src/core/WanAdapterFactory.cxx
+    src/core/WanCodec.cxx
+    src/core/WanInterests.cxx
+    src/core/ParticipantRegistry.cxx
+    src/core/AsyncWaitSetDispatcher.cxx
+    ${RouterAdminTypes_CXX11_GENERATED_SOURCES}
+)
+target_include_directories(wan_adapter_pilot PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(wan_adapter_pilot RTIConnextDDS::cpp2_api)

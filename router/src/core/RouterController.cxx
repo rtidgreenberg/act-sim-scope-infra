@@ -483,6 +483,7 @@ std::vector<std::string> RouterController::route_partition_names(
 void RouterController::handle_set_route_partition(const RouterCommand &cmd,
                                                   RouterCommandAck &ack) {
     RouteState &route = state_.routes[cmd.route_name];
+    const auto previous = route.desired;
     const std::string &new_sub = cmd.route.input.subscriber_partition;
     const std::string &new_pub = cmd.route.output.publisher_partition;
 
@@ -494,6 +495,12 @@ void RouterController::handle_set_route_partition(const RouterCommand &cmd,
         return;
     }
 
+    auto proposed = route.desired;
+    proposed.input.subscriber_partition = new_sub;
+    proposed.output.publisher_partition = new_pub;
+    if (!factory_->validate_route_update(proposed, ack.message)) {
+        return;
+    }
     route.desired.input.subscriber_partition = new_sub;
     route.desired.output.publisher_partition = new_pub;
 
@@ -519,6 +526,30 @@ void RouterController::handle_set_route_partition(const RouterCommand &cmd,
             // from the re-minted view anyway.
             Log::warn("route_partition_update_failed",
                       {{"route", cmd.route_name}, {"topic", t->first}});
+            if (factory_->uses_wan_audiences()) {
+                route.desired = previous;
+                std::shared_ptr<RouteView> restored(new RouteView());
+                restored->spec = previous;
+                restored->entity_generation = next_generation();
+                route.view = restored;
+                for (auto& entry : route.topics) {
+                    if (entry.second.topic_state == RouterRouteTopicState::TOPIC_CREATING ||
+                        entry.second.topic_state == RouterRouteTopicState::TOPIC_FORWARDING) {
+                        if (!factory_->update_route_partitions(cmd.route_name, entry.first,
+                                route_partition_names(previous.input, true),
+                                route_partition_names(previous.output, false))) {
+                            Log::error("route_audience_rollback_failed", {{"route", cmd.route_name}});
+                            route.route_error = true;
+                            route.last_error = "audience rollback failed";
+                            entry.second.topic_state = RouterRouteTopicState::TOPIC_TEARING_DOWN;
+                            factory_->teardown_topic_entities(cmd.route_name, entry.first,
+                                                              entry.second.entity_generation);
+                        }
+                    }
+                }
+                ack.message = "audience update failed";
+                return;
+            }
         }
     }
 
@@ -588,7 +619,13 @@ void RouterController::handle_participant_partition_membership(const RouterComma
         names.erase(found);
     }
 
-    if (ps.team_partitions_on_endpoints) {
+    if (factory_->uses_wan_audiences() && ps.on_wan) {
+        if (!factory_->apply_participant_partition(ps.name, names)) {
+            names = previous_names;
+            ack.message = "audience update failed";
+            return;
+        }
+    } else if (ps.team_partitions_on_endpoints) {
         const auto apply_routes = [&](bool rollback) {
             bool ok = true;
             for (auto &entry : state_.routes) {
@@ -960,6 +997,9 @@ void RouterController::apply_entity_error(const ControllerEvent &e) {
         return; // stale stamp (D23)
     }
     // Contained per-topic failure: sibling topics unaffected (D11/D21).
+    if (factory_->uses_wan_audiences()) {
+        factory_->abort_topic_creation(e.route_name, e.topic_name, topic.entity_generation);
+    }
     topic.topic_state = RouterRouteTopicState::TOPIC_ERROR;
     topic.entity_generation = 0;
     topic.last_error = e.error;

@@ -107,7 +107,9 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  const dds::pub::qos::DataWriterQos &diagnostics_writer_qos,
                                  dds::domain::DomainParticipant team_scoped_participant,
                                  const std::string &health_topic,
-                                 const std::string &mesh_topic)
+                                 const std::string &mesh_topic,
+                                 dds::core::QosProvider wan_types,
+                                 WanAdapterFactory* shared_status)
         : aws_(aws),
           node_name_(node_name),
           router_name_(router_name),
@@ -115,11 +117,20 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           health_session_(new_health_session()),
           rtt_(health_session_),
           team_scoped_participant_(team_scoped_participant),
-          wan_publisher_(wan_participant),
-          wan_subscriber_(wan_participant),
-          health_topic_(wan_participant, health_topic),
-          health_writer_(wan_publisher_, health_topic_, health_writer_qos),
-          health_reader_(wan_subscriber_, health_topic_, health_reader_qos),
+          shared_status_(shared_status),
+          wan_publisher_(shared_status ? dds::core::null : dds::pub::Publisher(wan_participant)),
+          wan_subscriber_(shared_status ? dds::core::null : dds::sub::Subscriber(wan_participant)),
+          status_codec_(wan_types == dds::core::null ? nullptr : new WanCodec(wan_types)),
+          health_topic_(shared_status ? dds::core::null
+                  : dds::topic::Topic<dds::core::xtypes::DynamicData>(
+                          wan_participant, health_topic,
+                          rti::topic::dynamic_type<RouterHealth>::get())),
+          health_writer_(shared_status ? dds::core::null
+                  : dds::pub::DataWriter<dds::core::xtypes::DynamicData>(
+                          wan_publisher_, health_topic_, health_writer_qos)),
+          health_reader_(shared_status ? dds::core::null
+                  : dds::sub::DataReader<dds::core::xtypes::DynamicData>(
+                          wan_subscriber_, health_topic_, health_reader_qos)),
           lan_publisher_(lan_participant),
           mesh_topic_(lan_participant, mesh_topic),
           mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos),
@@ -133,6 +144,37 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
         if (!audit_run_id_.empty()) {
             audit_path_ = std::string(debug_dir) + "/events.jsonl";
         }
+    }
+    if (shared_status_) {
+        if (!status_codec_) throw std::runtime_error("shared Status requires the WAN type catalog");
+        const auto text = health_reader_qos.policy<rti::core::policy::Property>().get(
+                "act.presence.dead_after_stale_ms");
+        size_t used = 0;
+        const auto milliseconds = std::stoll(text, &used);
+        if (used != text.size() || milliseconds <= 0) {
+            throw std::runtime_error("act.presence.dead_after_stale_ms must be a positive integer");
+        }
+        dead_after_stale_ = std::chrono::milliseconds(milliseconds);
+        status_callbacks_ = std::make_shared<WanStatusCallbacks>();
+        status_callbacks_->data = [this](const dds::core::xtypes::DynamicData& frame,
+                                         const dds::sub::SampleInfo& info) {
+            on_status_data(frame, info);
+        };
+        const std::weak_ptr<StatusDeadlineQueue> pending = status_deadlines_;
+        status_callbacks_->health_missing = [pending](const dds::core::xtypes::DynamicData& key) {
+            auto queue = pending.lock();
+            if (!queue) return;
+            const auto source = key.value<std::string>("source_id");
+            if (!queue->missed(source)) {
+                Log::warn("presence_deadline_queue_full", {{"source_id", source}});
+            }
+        };
+        shared_status_->bind_status(status_callbacks_);
+        health_writer_ = shared_status_->status_writer();
+        health_reader_ = shared_status_->status_reader();
+        Log::info("presence_monitor_ready", {{"health_topic", "Status"},
+                  {"identity", identity_}, {"dead_after_stale_ms", text}});
+        return;
     }
     // Heartbeat data (valid + instance-state transitions -> ALIVE/DEAD).
     dds::sub::cond::ReadCondition data_cond(
@@ -149,7 +191,7 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
     aws_.attach_condition(reader_status);
     conditions_.push_back(reader_status);
     Log::info("presence_monitor_ready",
-              {{"health_topic", health_topic},
+              {{"health_topic", health_topic_.name()},
                {"mesh_topic", mesh_topic},
                {"identity", identity_}});
 }
@@ -160,6 +202,10 @@ PresenceMonitor::~PresenceMonitor() {
 
 void PresenceMonitor::shutdown() {
     if (shut_down_.exchange(true)) return;
+    if (status_callbacks_) {
+        std::lock_guard<std::mutex> lock(status_callbacks_->mutex);
+        status_callbacks_->data = {};
+    }
     for (const auto &cond : conditions_) {
         try {
             aws_.detach_condition(cond); // D32 blocking barrier per condition
@@ -193,7 +239,6 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             out.team_partition.push_back(n);
         }
     }
-    std::int64_t send_boundary_us;
     {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         std::vector<std::string> eligible;
@@ -214,7 +259,6 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         HeartbeatRtt::rotate_live_coverage(eligible, live_count,
                                           out.peers_seen.max_size(), heartbeat_peer_cursor_);
         const auto now = std::chrono::steady_clock::now();
-        send_boundary_us = monotonic_us(now);
         out.session_id = health_session_;
         out.peers_seen.clear();
         for (const auto &name : eligible) {
@@ -235,31 +279,56 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             RouterPeerRef ref;
             ref.router = entry.first;
             ref.presence = entry.second.presence;
-            // D97: same "now - last heartbeat receipt" math as
-            // build_mesh_locked()'s last_seen_delta_ms, off this router's own
+            // D97: same "now - last Status receipt" math as
+            // build_mesh_locked()'s direct last_seen_delta_ms, off this router's own
             // steady_clock — relative, so it stays meaningful once relayed onto
             // another router's mesh aggregate without needing clock sync.
             ref.last_seen_delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - entry.second.last_seen).count();
+                    now - entry.second.last_status_received).count();
             out.peers_seen.push_back(ref);
         }
         if (out.peers_seen.size() < out.peers_seen.max_size()) {
             heartbeat_peers_truncated_ = false; // roster shrank back under the cap
         }
-        // One boundary after roster construction: remote age and local send history
-        // exclude the same local scheduling wait. DDS calls remain outside the lock.
-        send_boundary_us = monotonic_us(std::chrono::steady_clock::now());
-        for (auto &ref : out.peers_seen) {
-            const auto ack = rtt_.acknowledgment(ref.router, send_boundary_us);
-            ref.ack_session_id = ack.session;
-            ref.ack_heartbeat_seq = ack.sequence;
-            ref.ack_age_at_send_us = ack.age_us;
-        }
-        rtt_.reserve(out.heartbeat_seq, send_boundary_us);
     }
     bool success = false;
     try {
-        health_writer_.write(out);
+        const auto local = rti::core::xtypes::convert(out);
+        WanMetadata metadata;
+        if (status_codec_) {
+            metadata.source_id = node_name_;
+            metadata.source_role = out.role;
+            metadata.run_id = audit_run_id_;
+            metadata.session_id = out.session_id;
+            metadata.audit_sequence = out.heartbeat_seq;
+            metadata.sent_at_ns = out.send_timestamp;
+            metadata.membership_revision = out.state_revision;
+            metadata.global = true;
+        }
+        auto sample = status_codec_
+                ? status_codec_->pack("RouterHealth", local, metadata) : local;
+        // Stamp after envelope conversion so RTT subtracts the encoding wait too.
+        const auto stamp = [&](dds::core::xtypes::DynamicData &health) {
+            auto peers = health.loan_value("peers_seen");
+            std::lock_guard<std::mutex> lk(roster_mutex_);
+            const auto boundary = monotonic_us(std::chrono::steady_clock::now());
+            for (size_t index = 0; index < out.peers_seen.size(); ++index) {
+                const auto ack = rtt_.acknowledgment(out.peers_seen[index].router, boundary);
+                auto ref = peers.get().loan_value(static_cast<uint32_t>(index + 1));
+                ref.get().value<uint64_t>("ack_session_id", ack.session);
+                ref.get().value<uint64_t>("ack_heartbeat_seq", ack.sequence);
+                ref.get().value<uint64_t>("ack_age_at_send_us", ack.age_us);
+            }
+            rtt_.reserve(out.heartbeat_seq, boundary);
+        };
+        if (status_codec_) {
+            auto payload = sample.loan_value("payload");
+            auto health = payload.get().loan_value("health");
+            stamp(health.get());
+        } else {
+            stamp(sample);
+        }
+        health_writer_.write(sample);
         success = true;
         log_router_health_audit("sent", out);
     } catch (const dds::core::NotEnabledError &) {
@@ -293,6 +362,7 @@ void PresenceMonitor::publish_diagnostics(const RouterDiagnostics &snapshot) {
 }
 
 void PresenceMonitor::publish_mesh_tick() {
+    if (shared_status_) apply_status_deadlines();
     publish_mesh();
 }
 
@@ -300,10 +370,12 @@ void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
     // The bellwether pair: writer -> every peer's RouterHealth reader, reader <- every
     // peer's RouterHealth writer. Same discovery-DB attribution + self-delta as a route
     // WAN leg (D81), reusing the shared poll so there is one implementation.
-    poll_writer_wan_stats(health_writer_, health_writer_prev_, sink,
-                          "presence", "RouterHealth");
-    poll_reader_wan_stats(health_reader_, health_reader_prev_, sink,
-                          "presence", "RouterHealth");
+    if (!shared_status_) {
+        poll_writer_wan_stats(health_writer_, health_writer_prev_, sink,
+                              "presence", health_topic_.name());
+        poll_reader_wan_stats(health_reader_, health_reader_prev_, sink,
+                              "presence", health_topic_.name());
+    }
     std::lock_guard<std::mutex> lk(roster_mutex_);
     rtt_.collect(sink, monotonic_us(std::chrono::steady_clock::now()));
     const auto rejected = rtt_.take_rejections();
@@ -312,7 +384,112 @@ void PresenceMonitor::collect_wan_stats(LinkStatsSink &sink) {
     }
 }
 
+RouterHealth PresenceMonitor::decode_health(
+        const dds::core::xtypes::DynamicData &sample) const {
+    const auto local = status_codec_ ? status_codec_->unpack(sample).data : sample;
+    if (!rti::core::xtypes::can_convert<RouterHealth>(local)) {
+        throw std::runtime_error("presence sample is not RouterHealth");
+    }
+    const auto health = rti::core::xtypes::convert<RouterHealth>(local);
+    if (status_codec_ &&
+        (sample.value<std::string>("source_id") != node_from_router(health.router) ||
+         sample.value<uint64_t>("session_id") != health.session_id ||
+         sample.value<uint64_t>("audit_sequence") != health.heartbeat_seq ||
+         sample.value<int64_t>("sent_at_ns") != health.send_timestamp)) {
+        throw std::runtime_error("presence envelope does not match RouterHealth identity/audit");
+    }
+    return health;
+}
+
 void PresenceMonitor::on_health_data() {
+    on_health_samples(nullptr, nullptr);
+}
+
+void PresenceMonitor::on_status_data(const dds::core::xtypes::DynamicData& frame,
+                                     const dds::sub::SampleInfo& info) {
+    if (frame.value<std::string>("original_topic") == "RouterHealth") {
+        on_health_samples(&frame, &info);
+        return;
+    }
+    const auto source = frame.value<std::string>("source_id");
+    std::string identity;
+    {
+        std::lock_guard<std::mutex> lock(roster_mutex_);
+        for (const auto& peer : roster_) {
+            if (node_from_router(peer.first) == source) {
+                identity = peer.first;
+                break;
+            }
+        }
+    }
+    if (identity.empty()) {
+        try {
+            const auto participant = rti::sub::matched_publication_participant_data(
+                    health_reader_, info.publication_handle());
+            const auto name = participant->participant_name().name();
+            if (name.is_set()) identity = name.get();
+            if (identity.empty() || node_from_router(identity) != source) {
+                Log::warn("presence_status_source_mismatch", {{"source_id", source}});
+                return;
+            }
+        } catch (const std::exception& error) {
+            Log::warn("presence_status_source_unresolved", {{"source_id", source},
+                      {"error", error.what()}});
+            return;
+        }
+    }
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(roster_mutex_);
+        auto found = roster_.find(identity);
+        if (found == roster_.end()) {
+            if (roster_.size() >= HeartbeatRtt::peer_cap) {
+                Log::warn("presence_roster_full", {{"router", identity}});
+                return;
+            }
+            found = roster_.emplace(identity, PeerEntry{}).first;
+            found->second.last_summary.router = identity;
+            found->second.last_summary.role = frame.value<std::string>("source_role");
+            changed = true;
+        }
+        auto& peer = found->second;
+        changed = changed || peer.presence != RouterPresenceState::PRESENCE_ALIVE;
+        peer.presence = RouterPresenceState::PRESENCE_ALIVE;
+        peer.last_status_received = status_deadlines_->received(source);
+        peer.stale_since = {};
+        if (changed) ++mesh_revision_;
+    }
+    if (changed) publish_mesh();
+}
+
+void PresenceMonitor::apply_status_deadlines() {
+    const auto events = status_deadlines_->take();
+    std::lock_guard<std::mutex> lock(roster_mutex_);
+    bool changed = false;
+    for (auto& item : roster_) {
+        auto& peer = item.second;
+        const auto event = events.find(node_from_router(item.first));
+        if (event != events.end() && event->second >= peer.last_status_received &&
+            peer.presence == RouterPresenceState::PRESENCE_ALIVE) {
+            peer.presence = RouterPresenceState::PRESENCE_STALE;
+            peer.stale_since = event->second;
+            changed = true;
+            Log::info("presence_peer_stale", {{"router", item.first}});
+        }
+        if (peer.presence == RouterPresenceState::PRESENCE_STALE &&
+            std::chrono::steady_clock::now() - peer.stale_since >= dead_after_stale_) {
+            peer.presence = RouterPresenceState::PRESENCE_DEAD;
+            rtt_.disconnect(item.first);
+            changed = true;
+            Log::info("presence_peer_dead", {{"router", item.first},
+                      {"reason", "no Status after STALE countdown"}});
+        }
+    }
+    if (changed) ++mesh_revision_;
+}
+
+void PresenceMonitor::on_health_samples(const dds::core::xtypes::DynamicData* frame,
+                                       const dds::sub::SampleInfo* info) {
     // Two phases so no DDS call runs under roster_mutex_ — the controller strand's
     // publish_heartbeat() takes the same mutex and must never block route control
     // behind loan iteration. Phase 1 (no lock): drain the loan into plain events.
@@ -338,20 +515,20 @@ void PresenceMonitor::on_health_data() {
                       {{"writer", handle_string(handle)}, {"error", ex.what()}});
         }
     }
-    {
-        auto samples = health_reader_.take();
-        for (auto it = samples.begin(); it != samples.end(); ++it) {
+    const auto append = [&](const dds::core::xtypes::DynamicData* data,
+                            const dds::sub::SampleInfo& sample_info) {
             HealthEvent ev;
             ev.received = std::chrono::steady_clock::now();
-            ev.writer_key = handle_string(it->info().publication_handle());
-            ev.handle_key = [&] {
-                std::ostringstream os;
-                os << it->info().instance_handle();
-                return os.str();
-            }();
-            if (it->info().valid()) {
+            ev.writer_key = handle_string(sample_info.publication_handle());
+            ev.handle_key = handle_string(sample_info.instance_handle());
+            if (sample_info.valid()) {
                 ev.valid = true;
-                ev.hb = it->data();
+                try {
+                    ev.hb = decode_health(*data);
+                } catch (const std::exception &error) {
+                    Log::warn("presence_invalid_sample", {{"error", error.what()}});
+                    return;
+                }
                 if (ev.hb.router == identity_) {
                     // A sample wearing OUR key: normally our own heartbeat (the reader
                     // matches the local writer — publication_handle IS that writer's
@@ -359,17 +536,24 @@ void PresenceMonitor::on_health_data() {
                     // duplicate-identity misconfiguration: it can never enter the
                     // roster (same key = OUR instance), but staying silent would make
                     // the two routers mutually invisible with no clue why.
-                    if (it->info().publication_handle()
+                    if (sample_info.publication_handle()
                         == health_writer_.instance_handle()) {
-                        continue; // own heartbeat
+                        return;
                     }
                     ev.duplicate_identity = true;
                 }
-            } else if (it->info().state().instance_state()
+            } else if (sample_info.state().instance_state()
                        != dds::sub::status::InstanceState::not_alive_no_writers()) {
-                continue; // only NO_WRITERS transitions matter (D75)
+                return;
             }
             events.push_back(std::move(ev));
+    };
+    if (frame) {
+        append(frame, *info);
+    } else {
+        auto samples = health_reader_.take();
+        for (const auto& sample : samples) {
+            append(sample.info().valid() ? &sample.data() : nullptr, sample.info());
         }
     } // loan returned before the lock
     if (events.empty()) {
@@ -430,7 +614,7 @@ void PresenceMonitor::on_health_data() {
                 PeerEntry &e = roster_[ev.hb.router];
                 const bool was_alive =
                         e.presence == RouterPresenceState::PRESENCE_ALIVE
-                        && e.last_seen != std::chrono::steady_clock::time_point();
+                        && e.last_status_received != std::chrono::steady_clock::time_point();
                 // Republish triggers (presence-and-health.md): peer appears, presence
                 // transition, or the peer's state_revision advances.
                 if (!was_alive || e.last_summary.state_revision != ev.hb.state_revision) {
@@ -440,6 +624,7 @@ void PresenceMonitor::on_health_data() {
                     Log::info("presence_peer_alive", {{"router", ev.hb.router}});
                 }
                 e.presence = RouterPresenceState::PRESENCE_ALIVE;
+                e.stale_since = {};
                 e.last_summary = ev.hb;
                 // D97: last_summary.peers_seen is kept (not stripped) so
                 // build_mesh_locked() can re-embed it into RouterMeshPeer.health —
@@ -449,7 +634,10 @@ void PresenceMonitor::on_health_data() {
                 // ActRouterMeshStatus is LAN-only and each entry stays bounded by
                 // peers_seen's existing 100-cap, so keeping it costs nothing D77 was
                 // guarding against.
-                e.last_seen = std::chrono::steady_clock::now();
+                e.last_status_received = shared_status_
+                        ? status_deadlines_->received(node_from_router(ev.hb.router))
+                        : std::chrono::steady_clock::now();
+                e.last_health_received = e.last_status_received;
                 log_router_health_audit("received", ev.hb);
             } else {
                 // Liveliness lost or participant purged -> DEAD (the roster passes
@@ -537,8 +725,8 @@ void PresenceMonitor::on_health_reader_status() {
         };
         // The status carries only last_instance_handle, so coalesced misses (several
         // peers silent inside one dispatch window) would surface just one peer through
-        // the handle. Handle path first for the triggering instance (whose last_seen
-        // delta can still be marginally under the deadline), then a last_seen sweep
+        // the handle. Handle path first for the triggering instance (whose health age
+        // can still be marginally under the deadline), then a health-receipt sweep
         // catches every other overdue ALIVE peer in the same pass.
         auto found = handle_to_name_.find(handle_key);
         if (found != handle_to_name_.end()) {
@@ -549,7 +737,7 @@ void PresenceMonitor::on_health_reader_status() {
         }
         const auto now = std::chrono::steady_clock::now();
         for (auto &entry : roster_) {
-            if (now - entry.second.last_seen
+            if (now - entry.second.last_health_received
                 >= std::chrono::milliseconds(kHealthDeadlineMs)) {
                 mark_stale(entry.first, entry.second);
             }
@@ -570,7 +758,7 @@ bool PresenceMonitor::prune_dead_locked() {
     bool pruned = false;
     for (auto it = roster_.begin(); it != roster_.end();) {
         if (it->second.presence != RouterPresenceState::PRESENCE_DEAD
-            || now - it->second.last_seen < retention) {
+            || now - it->second.last_status_received < retention) {
             ++it;
             continue;
         }
@@ -585,7 +773,7 @@ bool PresenceMonitor::prune_dead_locked() {
                   {{"router", it->first},
                    {"dead_for_ms", std::to_string(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
-                                now - it->second.last_seen).count())}});
+                                now - it->second.last_status_received).count())}});
         rtt_.forget(it->first);
         it = roster_.erase(it);
         pruned = true;
@@ -619,7 +807,7 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
         peer.health = entry.second.last_summary;
         peer.presence = entry.second.presence;
         peer.last_seen_delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - entry.second.last_seen).count();
+                now - entry.second.last_status_received).count();
         // D102: bound + refresh the transitive (second-hand) edges re-embedded from this
         // peer's own cached peers_seen (D97 stopped stripping it). Two problems fixed at
         // once, both from the same root cause -- these nested refs are frozen at whatever
@@ -635,13 +823,15 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
         //      last_seen_delta_ms on every ingest; since this nested delta was never
         //      updated relative to OUR "now", a transitive edge visually "freshened" every
         //      MeshTick even while the underlying data went stale. Fix: age each kept
-        //      edge's delta forward by peer.last_seen_delta_ms (how long OUR OWN view of
-        //      this peer has sat since we last heard from it) -- the peer stamped its
+        //      edge's delta forward by the age of its cached RouterHealth, not by
+        //      activity from other Status branches -- the peer stamped its
         //      delta relative to its own "now" at heartbeat time, so from our perspective
         //      as of right now that edge is (peer's reported delta + our own staleness on
         //      this peer) old.
         {
             const auto reported = peer.health.peers_seen;
+            const auto health_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - entry.second.last_health_received).count();
             peer.health.peers_seen.clear();
             for (const auto &sub : reported) {
                 if (sub.presence != RouterPresenceState::PRESENCE_ALIVE) {
@@ -652,7 +842,7 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
                             // list can't actually exceed the same cap
                 }
                 RouterPeerRef aged = sub;
-                aged.last_seen_delta_ms += peer.last_seen_delta_ms;
+                aged.last_seen_delta_ms += health_age_ms;
                 peer.health.peers_seen.push_back(aged);
             }
         }

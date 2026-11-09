@@ -373,6 +373,125 @@
   <member name="resolution_mode" type="nonBasic"  nonBasicTypeName= "PlatformStatusResolutionMode"/>
   <member name="request_id" stringMaxLength="255" type="string"/>
 </struct>
+<enum name="WanEventKind">
+  <enumerator name="WAN_COMMAND" value="1"/>
+  <enumerator name="WAN_TEAM_ASSIGNMENT" value="2"/>
+  <enumerator name="WAN_STATUS_MODE" value="3"/>
+  <enumerator name="WAN_COMMAND_ACK" value="4"/>
+  <enumerator name="WAN_CONTACT_REPORT" value="5"/>
+</enum> 
+<union name="WanEventPayload" extensibility= "mutable">
+  <discriminator type="nonBasic" nonBasicTypeName="WanEventKind"/>
+  <case>
+    <caseDiscriminator value="(WAN_COMMAND)"/>
+      <member name="command" id="10" type="nonBasic"  nonBasicTypeName= "control_command"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_TEAM_ASSIGNMENT)"/>
+      <member name="team_assignment" id="20" type="nonBasic"  nonBasicTypeName= "TeamAssignment"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_STATUS_MODE)"/>
+      <member name="status_mode" id="30" type="nonBasic"  nonBasicTypeName= "PlatformStatusMode"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_COMMAND_ACK)"/>
+      <member name="command_ack" id="40" type="nonBasic"  nonBasicTypeName= "control_command_ack"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_CONTACT_REPORT)"/>
+      <member name="contact_report" id="50" type="nonBasic"  nonBasicTypeName= "contact_report"/>
+  </case>
+</union>
+<enum name="WanStatusKind">
+  <enumerator name="WAN_NAVIGATION" value="1"/>
+  <enumerator name="WAN_DATA" value="2"/>
+  <enumerator name="WAN_MISSION" value="3"/>
+  <enumerator name="WAN_WAYPOINT" value="4"/>
+  <enumerator name="WAN_DETAIL" value="5"/>
+  <enumerator name="WAN_DEBUG" value="6"/>
+  <enumerator name="WAN_THRUSTER" value="7"/>
+  <enumerator name="WAN_POWER" value="8"/>
+  <enumerator name="WAN_DIAGNOSTICS" value="9"/>
+  <enumerator name="WAN_HEALTH" value="10"/>
+</enum> 
+<union name="WanStatusPayload" extensibility= "mutable">
+  <discriminator type="nonBasic" nonBasicTypeName="WanStatusKind"/>
+  <case>
+    <caseDiscriminator value="(WAN_NAVIGATION)"/>
+      <member name="navigation" id="10" type="nonBasic"  nonBasicTypeName= "platform_init_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_DATA)"/>
+      <member name="data" id="20" type="nonBasic"  nonBasicTypeName= "platform_data"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_MISSION)"/>
+      <member name="mission" id="30" type="nonBasic"  nonBasicTypeName= "platform_mission_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_WAYPOINT)"/>
+      <member name="waypoint" id="40" type="nonBasic"  nonBasicTypeName= "platform_waypoint_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_DETAIL)"/>
+      <member name="detail" id="50" type="nonBasic"  nonBasicTypeName= "platform_detail_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_DEBUG)"/>
+      <member name="debug" id="60" type="nonBasic"  nonBasicTypeName= "platform_debug_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_THRUSTER)"/>
+      <member name="thruster" id="70" type="nonBasic"  nonBasicTypeName= "platform_thruster_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_POWER)"/>
+      <member name="power" id="80" type="nonBasic"  nonBasicTypeName= "platform_power_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_DIAGNOSTICS)"/>
+      <member name="diagnostics" id="90" type="nonBasic"  nonBasicTypeName= "RouterDiagnostics"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_HEALTH)"/>
+      <member name="health" id="100" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>
+  </case>
+</union>
+<struct name= "WanAudience" extensibility= "mutable">
+  <member name="control" type="boolean"/>
+  <member name="global" type="boolean"/>
+  <member name="destination" stringMaxLength="255" type="string"/>
+  <member name="team_ids" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
+</struct>
+<struct name= "WanEvent" extensibility= "mutable">
+  <member name="source_id" stringMaxLength="255" type="string" key="true"/>
+  <member name="instance_id" stringMaxLength="512" type="string" key="true"/>
+  <member name="schema_version" type="uint32"/>
+  <member name="original_topic" stringMaxLength="255" type="string"/>
+  <member name="source_role" stringMaxLength="255" type="string"/>
+  <member name="run_id" stringMaxLength="255" type="string"/>
+  <member name="session_id" type="uint64"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
+  <member name="membership_revision" type="uint64"/>
+  <member name="audience" type="nonBasic"  nonBasicTypeName= "WanAudience"/>
+  <member name="payload" type="nonBasic"  nonBasicTypeName= "WanEventPayload"/>
+</struct>
+<struct name= "WanStatus" extensibility= "mutable">
+  <member name="source_id" stringMaxLength="255" type="string" key="true"/>
+  <member name="instance_id" stringMaxLength="512" type="string" key="true"/>
+  <member name="schema_version" type="uint32"/>
+  <member name="original_topic" stringMaxLength="255" type="string"/>
+  <member name="source_role" stringMaxLength="255" type="string"/>
+  <member name="run_id" stringMaxLength="255" type="string"/>
+  <member name="session_id" type="uint64"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
+  <member name="membership_revision" type="uint64"/>
+  <member name="audience" type="nonBasic"  nonBasicTypeName= "WanAudience"/>
+  <member name="payload" type="nonBasic"  nonBasicTypeName= "WanStatusPayload"/>
+</struct>
 <struct name= "ControllerJournalRecord">
   <member name="target_node" stringMaxLength="255" type="string" key="true"/>
   <member name="target_router" stringMaxLength="255" type="string" key="true"/>

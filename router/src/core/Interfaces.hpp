@@ -25,6 +25,8 @@ namespace router {
 // from the route's production XML profiles by the factory.
 struct IEntityFactory {
     virtual ~IEntityFactory() {}
+    virtual bool uses_wan_audiences() const { return false; }
+    virtual bool validate_route_update(const RouterRouteSpec&, std::string&) const { return true; }
     virtual void create_topic_entities(const RouteView &view,
                                        const std::string &topic_name,
                                        std::uint64_t generation) = 0;
@@ -69,7 +71,7 @@ struct IStatusPublisher {
 
 // Presence heartbeat seam (Phase 8, D75). The controller's PresenceTick handler builds
 // the compact RouterHealth summary from its own state on the strand and hands it here;
-// the real implementation (PresenceMonitor) writes it on the WAN RouterHealth topic.
+// PresenceMonitor writes it on legacy WAN RouterHealth or the health branch of Status.
 // OPTIONAL like the journal: nullptr (the default) disables presence entirely — configs
 // without a presence participant, and every pre-Phase-8 test, are unaffected.
 // Telemetry only: publish_heartbeat() must never block route control and never touches

@@ -9,7 +9,7 @@
 // across the system.
 //
 // Regenerate XML:
-//   $NDDSHOME/bin/rtiddsgen -convertToXml -d harness_v2/datamodel harness_v2/datamodel/ActTypes.idl
+//   $NDDSHOME/bin/rtiddsgen -convertToXml -d harness_v2/datamodel/gen harness_v2/datamodel/ActTypes.idl
 
 // ============================================================================
 // Application payload types
@@ -473,6 +473,112 @@ struct PlatformStatusMode {
     string platform_node;
     PlatformStatusResolutionMode resolution_mode;
     string request_id;
+};
+
+// ============================================================================
+// Two-topic WAN contract v1 (LAN payload types above remain unchanged)
+// ============================================================================
+
+enum WanEventKind {
+    WAN_COMMAND = 1,
+    WAN_TEAM_ASSIGNMENT = 2,
+    WAN_STATUS_MODE = 3,
+    WAN_COMMAND_ACK = 4,
+    WAN_CONTACT_REPORT = 5
+};
+
+@mutable
+union WanEventPayload switch (WanEventKind) {
+    case WAN_COMMAND:
+        @id(10) control_command command;
+    case WAN_TEAM_ASSIGNMENT:
+        @id(20) TeamAssignment team_assignment;
+    case WAN_STATUS_MODE:
+        @id(30) PlatformStatusMode status_mode;
+    case WAN_COMMAND_ACK:
+        @id(40) control_command_ack command_ack;
+    case WAN_CONTACT_REPORT:
+        @id(50) contact_report contact_report;
+};
+
+enum WanStatusKind {
+    WAN_NAVIGATION = 1,
+    WAN_DATA = 2,
+    WAN_MISSION = 3,
+    WAN_WAYPOINT = 4,
+    WAN_DETAIL = 5,
+    WAN_DEBUG = 6,
+    WAN_THRUSTER = 7,
+    WAN_POWER = 8,
+    WAN_DIAGNOSTICS = 9,
+    WAN_HEALTH = 10
+};
+
+@mutable
+union WanStatusPayload switch (WanStatusKind) {
+    case WAN_NAVIGATION:
+        @id(10) platform_init_status navigation;
+    case WAN_DATA:
+        @id(20) platform_data data;
+    case WAN_MISSION:
+        @id(30) platform_mission_status mission;
+    case WAN_WAYPOINT:
+        @id(40) platform_waypoint_status waypoint;
+    case WAN_DETAIL:
+        @id(50) platform_detail_status detail;
+    case WAN_DEBUG:
+        @id(60) platform_debug_status debug;
+    case WAN_THRUSTER:
+        @id(70) platform_thruster_status thruster;
+    case WAN_POWER:
+        @id(80) platform_power_status power;
+    case WAN_DIAGNOSTICS:
+        @id(90) RouterDiagnostics diagnostics;
+    case WAN_HEALTH:
+        @id(100) RouterHealth health;
+};
+
+@mutable
+struct WanAudience {
+    boolean control;
+    boolean global;
+    string destination;
+    sequence<string, 16> team_ids;
+};
+
+// Audience selectors are additive; navigation may address control and all boats.
+// Only source_id and instance_id are keys, including Event with KEEP_ALL retention.
+// rtiddsgen maps bare legacy strings to 255 bytes; the qualified ID needs more.
+@mutable
+struct WanEvent {
+    @key string source_id;
+    @key string<512> instance_id;
+    uint32 schema_version;
+    string original_topic;
+    string source_role;
+    string run_id;
+    uint64 session_id;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
+    uint64 membership_revision;
+    WanAudience audience;
+    WanEventPayload payload;
+};
+
+@mutable
+struct WanStatus {
+    @key string source_id;
+    @key string<512> instance_id;
+    uint32 schema_version;
+    string original_topic;
+    string source_role;
+    string run_id;
+    uint64 session_id;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
+    uint64 membership_revision;
+    WanAudience audience;
+    WanStatusPayload payload;
 };
 
 // ============================================================================
