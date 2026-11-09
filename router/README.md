@@ -31,13 +31,96 @@ wired to run them for real (D46):
 - `config/e2e_control_command.yaml`, `config/e2e_platform_status.yaml` — trimmed,
   `router_main`-runnable fixtures (single type, `qos: ""`) used by the Python e2e suite
   (`test_e2e/`).
-- Tests: 4 C++ unit binaries under `test/` (run via `run_tests.sh`), plus the Python suite
+- Tests: 8 C++ test binaries under `test/` (run via `run_tests.sh`), plus the Python suite
   under `test_e2e/`. (The build tree may still hold binaries for retired targets —
   `test_route_forward`, `test_dynamic_forward`, `test_runtime_spine`, `test_auto_qos`,
-  `test_discovery_smoke` — whose coverage moved to `test_e2e/` under D52. Only the four
-  registered with `add_test` are the suite.)
+  `test_discovery_smoke` — whose coverage moved to `test_e2e/` under D52. Only targets
+  registered with `add_test` belong to the current gate.)
 
 ## Build & test
+
+### Opt-in two-topic WAN migration
+
+The default remains `router.wan_contract: legacy`. The experimental
+`router.wan_contract: two_topic_union` selects shared **Event** and **Status**
+WAN topics with whole-structure adapters; application LAN topics/types remain
+unchanged. See the [migration checkpoint](../docs/two-topic-wan-migration-plan.md#38-controller-and-interest-checkpoint-2026-11-09).
+
+Starting from the production configuration, the isolated controller tests:
+
+- Add `wan_contract: two_topic_union` under `router`.
+- Point the WAN participant QoS alias at
+  `ACT_QOS_LIB::wan_two_topic_participant` (or its `_emane` variant).
+- Point `wan_status` at `ACT_QOS_LIB::wan_union_status`.
+- Keep `router.presence_participant` on the local WAN participant to enable
+  health/presence. Its `health` branch shares the single Status writer/reader
+  with application traffic. Omitting it still disables presence.
+
+Startup validates the Status QoS alias whenever application routes or presence
+require Status, including Event-only and presence-only configurations.
+
+Envelope keys are `source_id + instance_id`; `source_id` is the configured node
+name, not the internal router process name. Session remains non-key metadata.
+Shared Status uses XML-authored best-effort, volatile, KEEP_LAST(1), a 2-second
+deadline and infinite liveliness. The direct deadline listener checks only the
+reported instance: a RouterHealth miss queues STALE for the next mesh tick
+(at most 0.5 seconds later), then DEAD after 30 seconds without further Status.
+Further misses do not restart that countdown. Any valid received Status from
+the source restores ALIVE and cancels it, atomically clearing any older queued
+loss so a subsequent closure starts a new countdown. There is no general deadline-instance
+sweep; a coalesced callback reporting another branch is deliberately ignored.
+RouterHealth NO_WRITERS/dispose notifications start the same countdown, because
+graceful writer closure cancels native deadline monitoring. They do not mark
+the source DEAD immediately or require a finite liveliness lease.
+
+Direct source ages track any valid Status; cached secondhand topology ages track
+only the last RouterHealth receipt. Application updates do not freshen old
+health summaries.
+
+The owned EMANE launcher supports this configuration directly (legacy remains
+the default):
+
+```bash
+CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 \
+  harness_v2/scripts/run_mesh.sh up --emane --platforms 5 \
+  --wan-contract two_topic_union --with-dashboard
+```
+
+Stop an existing mesh through the owned `down --emane` action and rebuild the
+router before changing modes; do not patch generated configs in a running mesh.
+
+The current opt-in boundary requires one local-role WAN participant, the
+configured XML type catalog and QoS library, `dynamic_data` WAN routes with exact
+catalog topics/production WAN class profiles, and an unpartitioned admin LAN.
+Wire-learned original types must equal their catalog definitions. Team membership
+updates change envelope audiences and CFTs, not WAN discovery partitions.
+Existing enable/disable, team membership and supported WAN route-partition
+commands remain available; unsupported LAN partition/control-audience changes
+reject explicitly.
+
+Names must be exact (no `*?[]` patterns), fit the existing 255-byte bound, and
+contain no apostrophes or NULs. Both the combined source-alias team audience and
+aggregate receive interests are bounded to sixteen names. These restrictions
+apply to the opt-in audience path, not legacy partition behavior.
+
+WAN match counts describe shared endpoint-class connectivity, not availability
+of each remote original-topic producer; LAN matches remain topic-specific.
+Health transport, presence transitions, health restart recovery, passive RTT and
+protocol counters are verified; see the
+[health checkpoint](../docs/two-topic-wan-migration-plan.md#311-health-on-status-checkpoint-2026-11-09).
+Application lifecycle/restart/load, health congestion isolation/timing alignment,
+supported clients and cutover/rollback gates remain open. Do not mix incompatible
+WAN contracts or use this as a fleet cutover.
+
+Rebuild and run the isolated controller gate (eight C++ tests plus twelve DDS
+adapter/controller/legacy regressions):
+
+```bash
+bash router/qualification/run_adapter_checks.sh
+bash router/qualification/run_checks.sh
+```
+
+### Legacy build and full suite
 
 Connext 7.7.0, arch `x64Linux4gcc7.3.0` (see the repo `CLAUDE.md`).
 

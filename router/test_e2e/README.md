@@ -57,6 +57,48 @@ not become retained run artifacts.
 
 ## What this covers today
 
+The [two-topic controller tests](test_two_topic_controller.py) additionally run
+three real routers using the opt-in union contract. They cover all fourteen
+application branches with unchanged LAN payload equality, exactly Event/Status
+WAN publication names, addressed commands, broadcast assignments, status mode,
+team joins/leaves, exact-name isolation, route-specific interests, source-alias
+gates, rejected-command rollback, and wire-type readiness/error containment.
+Presence remains enabled: health shares the single `wan_union_status` writer
+and reader with application Status. The fifth controller test checks two-key
+envelope identity/audit fields, exact shared endpoint counts, idle health,
+LAN summaries, passive RTT and physical send/receive counters, health deadline
+STALE, ignored nonhealth deadlines, application-Status recovery, graceful
+NO_WRITERS/dispose, the non-restarting 30-second DEAD countdown, and same-name
+restart with a fresh session. With application traffic the WAN
+publication set is exactly Event/Status; health alone creates only Status.
+Application-only traffic keeps direct source ages fresh while cached health
+topology ages continue increasing; a new health report resets the cached age.
+The WAN observer's built-in publication/subscription readers start before the routers;
+starting it after discovery loses the evidence this assertion needs.
+
+For all five live mission workflows on an owned five-platform two-topic mesh:
+
+```bash
+MISSION_DASHBOARD_URL=http://127.0.0.1:8080 MISSION_PLATFORM_COUNT=5 \
+MISSION_WAN_CONTRACT=two_topic_union \
+python3 -m pytest -vv -p no:cacheprovider router/test_e2e/test_mission_workflow.py
+```
+
+The contract flag selects physical Event/Status delivery rows; command ACKs,
+LAN mission state, motion, team behavior and recovery assertions are unchanged.
+Without that flag the same tests retain legacy wire-topic expectations.
+
+The [adapter runner](../qualification/run_adapter_checks.sh) fresh-builds the
+router and executes nine C++ tests plus twelve DDS checks (four adapter pilots,
+five controller tests and three legacy regressions) in an owned network namespace.
+It retains only compact reports in `debug/test_reports`. It does not run the full
+legacy/Python/browser suite or complete lifecycle/health-congestion/load qualification.
+
+Domain triples are reserved across `101–199`, `201–232`, `0–19` and `21–29`,
+never the live domains and never above 232. Third-node fixtures reserve another
+triple. This allocator does not isolate independent concurrent test runs; use
+owned network namespaces for those.
+
 Most tests use dedicated trimmed fixtures (`router/config/e2e_*.yaml` — see
 `docs/cpp_router/design-decisions.md` D50 for the original rationale). Since Phase 7d
 (D71) the **verbatim production `control-platform.yaml`** is ALSO covered, loaded twice

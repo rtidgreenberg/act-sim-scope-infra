@@ -20,6 +20,197 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - Avoid unnecessary jargon; explain technical terms and acronyms when introducing them.
 - Preserve technical accuracy and use simple examples when they help.
 
+## Active work handoff: two-topic WAN refactor (2026-11-09)
+
+Read the [baseline record](../docs/two-topic-refactor-baseline.md) and
+[eight-phase migration plan](../docs/two-topic-wan-migration-plan.md) before resuming.
+These documents hold the detailed evidence, code surfaces, decisions, and test gates.
+Update this dated handoff as implementation progresses; do not treat it as live state
+without inspecting the current worktree, commits, and runtime ownership first.
+
+### Baseline and implementation status
+
+- Baseline tag: `pre-two-topic-refactor-2026-11-08`, pointing to `008ff4d`.
+  The preceding checkpoints are `4549e87` (separate docs/slides), `86576aa`
+  (plan/comparisons), and `fc44d6b` (union qualification/adapter spike).
+  These checkpoints and tag are local, not pushed; do not push without a request.
+- **Schema/codec, shared adapters and opt-in controller/interests are implemented;
+  canonical production configuration remains legacy.**
+  Production IDL now declares WanEvent/WanStatus and all 15 branches; committed
+  XML is regenerated. [WanCodec](../router/src/core/WanCodec.hpp) and its exact
+  catalog/tests and [WanAdapterFactory](../router/src/core/WanAdapterFactory.hpp)
+  are linked into router_main. `router.wan_contract: two_topic_union` selects
+  [WanControllerFactory](../router/src/core/WanControllerFactory.hpp); omission
+  keeps the legacy factory. Original wire types must equal the XML catalog before
+  binding. Application LAN contracts are unchanged. The health transport slice
+  of Phase 6 was brought forward: presence now uses the health branch of Status,
+  sharing one Status writer/reader with applications, retaining LAN summaries
+  and passive RTT. The user-approved simplification uses `wan_union_status`
+  (BE/volatile/KEEP_LAST(1), 2s deadline, infinite liveliness); a health deadline
+  or health NO_WRITERS/dispose starts STALE -> 30s DEAD. Any valid received
+  Status restores ALIVE; repeated misses never restart the countdown. Only the
+  listener's supplied health handle is examined, with no generic sweep.
+  Dispatcher ownership and detach
+  barriers are hardened; targeted legacy regressions passed.
+- Fresh Connext-container baseline: **5/5 C++ tests; 237 Python tests plus 155
+  subtests passed; 23 browser/live-dashboard checks skipped** (18 lack Playwright,
+  5 require `MISSION_DASHBOARD_URL`). Do not call this complete browser/fleet coverage.
+- Earlier controller checkpoint: fresh router/pilot build and **8/8 C++ tests passed**.
+  [Adapter checks](../router/qualification/run_adapter_checks.sh): **11/11 Python
+  DDS tests passed** (81.70 s), four production adapter pilots, four three-node
+  controller tests and three legacy regressions.
+  Production codec -> DDS -> codec -> original LAN equality, endpoint sharing,
+  alias deduplication, reference removal/re-enable, failure cleanup, stale
+  generations, active-traffic detach, feedback suppression and physical statistics
+  registration are covered. [Union qualification](../router/qualification/run_checks.sh):
+  **28/28 passed**, no skips (60.68 s), matching all sixteen receive-interest
+  parameters and all outgoing membership slots plus mixed audience/filter updates.
+  Controller tests cover all fourteen application cases and exactly Event/Status
+  WAN publication names, command/broadcast/mode routing, team changes, source alias
+  gates, rejected-update rollback and wire-type error containment.
+  Subsequent full regression rerun: **263 passed, 5 skipped, 156 passed subtests**
+  (392.41 s), plus **8/8 C++** and **28/28 qualification** (62.08 s).
+  All eighteen previously skipped offline browser checks now pass after installing
+  Playwright/Chromium in an owned temporary test image. A subsequent owned
+  five-platform EMANE run executed all five live mission workflows: **5/5 passed,
+  zero skips**, 386.08 s. This closes the legacy live-mission regression gap,
+  not live mission qualification of the new contract.
+  Subsequent health-on-Status checks: **8/8 C++ and 13/13 DDS tests passed**
+  (195.63 s), plus a strengthened protocol/RTT health check (18.65 s).
+  Two-topic controller tests now keep presence enabled; health STALE/DEAD,
+  same-name restart/new session, passive RTT, physical counters and continued
+  application traffic are verified. Live two-topic missions were pending then.
+  Those health results describe the prior dedicated-health implementation;
+  the shared-pair simplification and current policy are in §3.12.
+  Latest shared-Status gate: **8/8 C++, 16 DDS regressions plus the strengthened
+  health test (114.68 s), and 20/20 production qualification cases (29.48 s) passed**.
+  Health covers exact shared endpoint counts, ignored nonhealth deadlines,
+  any-Status recovery, the non-restarting 30s countdown, NO_WRITERS/dispose,
+  crash/restart/session recovery and RTT/protocol counters. Native XML assertions
+  verified infinite liveliness; native writer filtering passed with the real
+  shared Status profile. This is not a full-suite/live-two-topic mission gate.
+  Subsequent user-authorized deployment stopped the legacy mesh, rebuilt the
+  persistent router, and launched five platforms with the canonical EMANE
+  `--wan-contract two_topic_union` flag. Native discovery before/after testing
+  confirms exactly one Event and one Status writer/reader on each of six routers.
+  **5/5 live browser mission workflows passed, zero skips, 388.67 s**, including
+  blackout/recovery, reporting/targets, route UI/ACKs/CommEffect/RTB, concurrent
+  multi-team orbits and live goal inheritance/reassignment. Physical wire-row
+  assertions explicitly select the contract; LAN mission assertions remain.
+  **Current mesh is the NEW two-topic design**, still running on port8080 in
+  `debug/mesh_runs/emane`. All five peers ALIVE/ROUTER_OK, missions cancelled,
+  original teams/clocks restored, controller available and impairments empty.
+  Use the owned lifecycle to stop/reconfigure it; never patch running configs.
+  Native matched-participant-data warnings remain; do not claim clean logs.
+  Details are in migration-plan §§3.6-3.13.
+  [Whole-structure adapter spike](../spikes/two_topic_union_adapter/README.md):
+  9 PASS groups and 10 expected rejections, using real DDS participants. It proves
+  whole-structure packing/unpacking, sender filtering, and seen-instance
+  dispose/revive/unregister, not final production restart/load/health integration.
+- Use the verified `connext:7.7.0` container environment from the baseline record,
+  not stale host binaries. Temporary builds/logs were removed; compact local reports
+  under `debug/test_reports` are ignored by Git and may later be cleared/overwritten.
+- The standalone internal brand-guide PDF is deliberately untracked. Preserve it
+  and unrelated work; do not reset the checkout to the baseline tag.
+
+### Live mesh retained for inspection (2026-11-09)
+
+- The user requested leaving the verified mesh running. Check current ownership
+  before another run: Compose project `act-emane-container-baseline`, control
+  plus Platform_30 through Platform_34, **legacy WAN mode**, dashboard port 8080.
+  The persistent router binary was rebuilt from current source before launch.
+- Workdir: `debug/mesh_runs/emane`. Post-test checks confirmed all five peers
+  `PRESENCE_ALIVE` / `ROUTER_OK`, controller available and empty impairments.
+  Test fixtures canceled missions and restored original teams and clocks.
+- Health-on-Status changes were subsequently built/tested in an isolated
+  temporary build, not deployed to this running mesh. The persistent router
+  binary still predates that change: tear down the owned mesh, then rebuild
+  before attempting a two-topic launch. Do not overwrite a live router binary.
+- [Live mission JUnit](../debug/test_reports/phase4_live_missions.xml) and
+  [browser screenshots](../debug/test_reports/phase4_live_mission_screenshots/)
+  are local ignored evidence. Disposable host pytest dependencies are removed.
+- Use the owned lifecycle for teardown, not individual router restarts:
+  `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh down --emane --workdir /home/ssm-user/act-sim-scope-infra/debug/mesh_runs/emane`.
+  Do not run DDS e2e tests against this live mesh.
+
+### Agreed conversion rules
+
+- Exactly two shared WAN topic names: **Event** and **Status**. Existing LAN topics
+  remain behind adapters; RouterHealth and WAN diagnostics become Status cases.
+- Select a predefined branch from a validated topic/type mapping and copy the
+  **whole original DynamicData structure**; decode it back to the allowed original
+  LAN topic/type. Preserve original keys, identity, timestamps, and audit fields.
+  **Field mapping and operation-specific command redesign are deferred**, including
+  rewriting the existing command octet payload. This is not a zero-copy promise.
+- Kind is the union discriminator, not a duplicate envelope field. Status keys are
+  `source_id + instance_id`; source ID is the configured fleet/node name, not
+  the internal router process name. Qualify the instance ID by variant
+  and preserve original topic/key identity. Do not key the whole union payload or
+  attempt a keyed discriminator on 7.7. The user approved the same stable keys
+  for Event (with required KEEP_ALL retention) and no tighter legacy name/key
+  limits. Canonical instance ID: `branch/<topic-length>:<topic>/<key-length>:<key>`.
+  Current generator bare-string limit is 255 bytes, not truly unbounded; the new
+  instance ID is 512 bytes to hold a complete original key. Preserve the full
+  current 16-entry team set. Endpoint queue/admission budgets remain open.
+- Reuse WAN endpoints by Event/Status class, not by legacy topic. Health shares
+  the single Status writer/reader; no dedicated health endpoint class or finite
+  liveliness lease in opt-in mode. Preserve controller generations, detach barriers, loop guards,
+  source enable gates, and one intended logical send/output.
+- Team/data audiences move to CFTs and envelope metadata; partitions may remain
+  for coarse fixed endpoint isolation. After the existing internal team-control
+  command is applied, stamp subsequent team-scoped samples from updated local
+  state and update receive CFT interests. Periodic status may converge gradually:
+  old queued metadata/deliveries and brief new-team gaps are possible; no fleet-wide
+  atomic barrier is required. Required events retain their separate delivery policy.
+- Preserve TeamAssignment broadcast, addressed-command rules, global navigation,
+  and supported multiple audiences/teams. Membership changes do not make all traffic
+  team-scoped. Do not invent receiver rejection of every already-accepted sample.
+
+### Next work and unresolved checks
+
+- Controller/interest checkpoint is verified (migration-plan §3.8). Next is
+  Phase 5: lifecycle/restart/multiple-producer ownership, required-event retention,
+  latest-state replacement, priorities/flow control and bounded load/admission.
+  Settle open acceptance/resource budgets before qualification/cutover.
+- New mode currently requires the XML catalog/QoS library, one local-role WAN
+  participant with an opt-in profile, exact mapped `dynamic_data` WAN routes and
+  unpartitioned endpoints on the admin LAN. Team state updates CFTs and outgoing
+  metadata, not WAN discovery partitions. Unsupported LAN partition/control-audience
+  changes reject explicitly. WAN match counts are shared-class connectivity, not
+  per-original-topic remote producer readiness.
+- Exact audience names retain the 255-byte bound and sixteen-name aggregate limits
+  for receivers and merged source aliases. No wildcard patterns, apostrophes or
+  NULs: the user approved explicit rejection of apostrophe names, not an encoding
+  scheme. Original payload keys and legacy mode are unchanged.
+- Keep qualified CFT discriminator-first ordering: sequence-first full-slot
+  predicates leaked a nonmember on this 7.7 install. Mixed predicates, replacement
+  and sender suppression are now tested. Start the WAN observer's built-in
+  publication reader before routers; late creation loses the discovery evidence.
+- Factory bind/unbind/shutdown runs on the controller strand. Metadata providers
+  run on AWS workers and must use immutable snapshots without reentering the
+  factory. Error callbacks must not throw or reenter; logical errors carry route
+  generations, physical endpoint errors carry physical names/epochs.
+  Pilot filters are deliberately broad plumbing checks, not final audience rules.
+  Application-adapter invalid-data lifecycle samples are diagnosed but not forwarded;
+  complete lifecycle/restart/multiple-producer ownership remains Phase 5.
+- The new opt-in `wan_two_topic_participant` XML profile raises only the filter
+  property limit to 16384 bytes; active legacy profiles retain their limits.
+  A default 256-byte property rejected even a 16-slot filter. Production team
+  qualification covers empty/short/full sequences, exact matches and a health
+  branch excluded by the discriminator, with remote protocol push counters.
+  The `_emane` opt-in variant is also present and preserves its base transport settings.
+- Continue application lifecycle/restart/load; health congestion/timing qualification;
+  evidence/clients; qualification
+  and rollback-tested cutover. Current aggregate role/global/addressed/team CFTs
+  are qualified; future schema compatibility, multi-producer lifecycle ownership,
+  fleet-scale convergence and load remain unverified.
+- Resolve the known health XML/code discrepancy (DDS profile 2 s deadline/3 s lease
+  versus 8/12 s code constants and the 8 s coalesced-peer sweep) without silently
+  retuning behavior. Qualify restart/unseen lifecycle keys, multiple producers,
+  fleet teardown, aggregate filter convergence, and command/health interference.
+- Do not start a live cutover, add permanent legacy WAN topics, or mark integration
+  complete based solely on the passing spike. Apply the runtime-safety rules below.
+
 ## DDS / Connext runtime hygiene
 
 - **Prefer UDPv4-only transport** for single-host test rigs
@@ -42,8 +233,9 @@ across forced termination; use the owned harness lifecycle for cleanup.
   failure is not a threshold you can stay under — it is a wrap that can land anywhere, so
   a domain id can look fine and silently mis-bind or capture nothing.
   Live domains in this repo: `20` (control_lan), `30–99` (platform_lan, one per platform),
-  `200` (WAN). The e2e suite allocates from `101–199` (`conftest.E2E_DOMAIN_BASE`);
-  `0–19`, `21–29` and `201–232` are the other free windows.
+  `200` (WAN). The e2e suite allocates triples across `101–199`, `201–232`,
+  `0–19` and `21–29` (`conftest.E2E_DOMAIN_WINDOWS`). Concurrent independent runs
+  still require owned network namespaces.
 
 ## Mesh debugging safety
 
@@ -169,11 +361,13 @@ across forced termination; use the owned harness lifecycle for cleanup.
   `ActRouterLinkStats` counters and freshness. Under lossy CommEffect, app/status samples can keep
   arriving while the `RouterHealth` topic misses its presence deadline; that means degraded health,
   not necessarily a complete WAN outage.
-- `RouterHealth` presence timing is intentionally slacker than the 1 s heartbeat for lossy EMANE
-  runs: the current XML/code pairing is 8 s deadline (STALE) and 12 s automatic liveliness lease
-  (DEAD). If changing these, update both `harness_v2/qos/act_qos_profiles.xml` and
-  `router/src/core/PresenceMonitor.hpp`, then rebuild/restart the routers; a browser reload alone
-  only picks up static dashboard changes.
+- `RouterHealth` has a known timing discrepancy as of the 2026-11-08 baseline:
+  XML supplies a 2 s deadline/3 s automatic liveliness lease, while code constants
+  retain 8/12 s and the coalesced-peer sweep uses 8 s. Do not assume they agree or
+  infer all production STALE/DEAD behavior from native DDS timing alone. See the
+  [migration plan](../docs/two-topic-wan-migration-plan.md) for the reconciliation
+  gate. If changing policy, update XML and the relevant presence constants/sweep
+  together, then rebuild/restart; a browser reload only picks up static changes.
 
 ### Live CommEffect verification lessons
 
@@ -300,8 +494,11 @@ directory markers. Stop the associated mesh, test, or capture process before cle
   for `/dev/shm/RTI*` and `/dev/shm/dds*`. Use host networking for DDS e2e tests, reserve
   domains through `router/test_e2e/conftest.py`, and never run e2e tests against a live mesh.
 - Rebuild `router/build` after C++ changes; stale binaries can report behavior from older
-  source. The verified clean baseline is `bash router/run_tests.sh` with 4/4 tests passing
-  and `python3 -m pytest -q -p no:cacheprovider router/test_e2e` with 27 tests passing.
+  source. The [2026-11-08 baseline](../docs/two-topic-refactor-baseline.md) records
+  `bash router/run_tests.sh` with 5/5 passing and
+  `python3 -m pytest -q -p no:cacheprovider router/test_e2e` with 237 passing,
+  155 passing subtests, and 23 browser/live-dashboard skips. Record actual current
+  results and skips rather than treating historical counts as a current gate.
 
 ## DDS QoS authoring rule
 
