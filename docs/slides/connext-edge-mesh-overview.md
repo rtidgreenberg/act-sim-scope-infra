@@ -20,18 +20,19 @@ footer: "RTI Connext | Edge mesh overview | 2026-11-10"
 
 # Isolation mechanisms
 
-| Mechanism | Network | Discovery | Logical | Runtime<br>changeable |
-|---|:---:|:---:|:---:|:---:|
-| VLANs / firewall rules | Network paths | — | — | Network admin |
-| Domain ID | Port ranges | Participant + endpoint | — | — |
-| Domain tag | — | Participant + endpoint | — | — |
-| DomainParticipant partitions | — | Participant + endpoint | Subsystem / team | Application |
-| Publisher/Subscriber partitions | — | — | Groups of topics | Application |
-| Topic names | — | — | Topic | — |
-| Content filters | — | — | Sample | Application |
-| Union discriminator | — | — | Sample (variant) | Application |
+| Mechanism | Network | Discovery | Logical | Runtime<br>changeable | Network<br>bandwidth impact |
+|---|:---:|:---:|:---:|:---:|---|
+| VLANs / firewall rules | Network paths | — | — | Network admin | Limits discovery + data reach |
+| Domain ID | Port ranges | Participant + endpoint | — | — | Scopes discovery + data |
+| Domain tag | — | Participant + endpoint | — | — | Less endpoint discovery + data |
+| DomainParticipant partitions | — | Participant + endpoint | Subsystem / team | Application | Less endpoint discovery + data |
+| Publisher/Subscriber partitions | — | — | Groups of topics | Application | Less data; discovery remains |
+| Topics | — | — | Topic | — | Discovery per endpoint; data per match |
+| Content filters | — | — | Sample | Application | Less data if sender-filtered |
+| Union discriminator | — | — | Sample (variant) | Application | Fewer endpoints: less discovery |
 
 **Runtime changeable:** no DDS entity recreation.
+**Bandwidth:** endpoint count drives discovery; sender-side selection reduces user data.
 
 ---
 

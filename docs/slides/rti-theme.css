@@ -85,20 +85,21 @@ section.compact.isolation-matrix table {
   font-size: 18px;
   table-layout: fixed;
 }
-section.isolation-matrix th:nth-child(1) { width: 32%; }
-section.isolation-matrix th:nth-child(2) { width: 15%; }
-section.isolation-matrix th:nth-child(3) { width: 25%; }
-section.isolation-matrix th:nth-child(4) { width: 15%; }
+section.isolation-matrix th:nth-child(1) { width: 26%; }
+section.isolation-matrix th:nth-child(2) { width: 12%; }
+section.isolation-matrix th:nth-child(3) { width: 18%; }
+section.isolation-matrix th:nth-child(4) { width: 11%; }
 section.isolation-matrix th:nth-child(5) { width: 13%; }
+section.isolation-matrix th:nth-child(6) { width: 20%; }
 section.isolation-matrix p { font-size: 20px; }
 section.isolation-matrix th, section.isolation-matrix td {
-  padding: 5px 12px;
+  padding: 2px 12px;
 }
-section.isolation-matrix th:last-child {
+section.isolation-matrix th:nth-child(5) {
   background: var(--rti-orange);
   color: #333333;
 }
-section.isolation-matrix td:last-child {
+section.isolation-matrix td:nth-child(5) {
   background: #fff1df;
 }
 section.sources { font-size: 22px; }
