@@ -1,5 +1,6 @@
 """Opt-in controller routing over Event/Status, including router-owned contact origins."""
 
+import json
 import re
 import time
 from collections import Counter
@@ -10,7 +11,7 @@ import rti.connextdds as dds
 
 from conftest import render_config, set_wan_qos_env, start_router, wait_for_mutual_discovery
 from util.dds_probe import (
-    AdminChannel, COMMAND_KIND, Probe, reader_qos, wait_for_route, write_until_seen,
+    AdminChannel, COMMAND_KIND, Probe, reader_qos, writer_qos, wait_for_route, write_until_seen,
 )
 
 CASES = [
@@ -238,6 +239,186 @@ def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
         sample["audit_sequence"] += 100
         received["audit_sequence"] += 100
         assert receive_contact(writer, sample, received) == handle
+
+
+@pytest.mark.parametrize("topic,type_name,instance_field,family", [
+    ("ContactReport", "contact_report", "contact_id", "Event"),
+    ("PlatformInitStatus", "platform_init_status", "source", "Status"),
+])
+@pytest.mark.parametrize("input_leg", ["lan", "wan"])
+def test_application_instance_lifecycle_through_route(
+        mesh, e2e_tmp_dir, topic, type_name, instance_field, family, input_leg):
+    nodes, wan, _ = mesh
+    source = nodes["Boat30"][1]
+    control = nodes["Control_20"][1]
+    qos_profile = "wan_event" if family == "Event" else "wan_union_status"
+    instance_id = "lifecycle-contact" if topic == "ContactReport" else "Boat30"
+    sample = source.sample(type_name, **{
+        instance_field: instance_id, "audit_sequence": 100, "run_id": "instance-lifecycle",
+    })
+    if topic == "ContactReport":
+        sample["source"] = ""
+    lan_writer = source.writer(topic, type_name)
+    lan_observer = source.reader(topic, type_name)
+    wan_observer = wan.reader(family, "Wan" + family, qos=reader_qos(qos_profile))
+    destination = control.reader(topic, type_name)
+
+    routed_frame = None
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline and routed_frame is None:
+        assert alive(nodes)
+        lan_writer.write(sample)
+        for item in wan_observer.take():
+            if (item.info.valid and item.data["source_id"] == "Boat30"
+                    and item.data["original_topic"] == topic
+                    and item.data["instance_id"] == instance_id):
+                routed_frame = dds.DynamicData(item.data)
+        time.sleep(0.1)
+    assert routed_frame is not None, f"Initial valid LAN-to-WAN forwarding failed: {topic}"
+
+    origin = "Boat30"
+    writer = lan_writer
+    outgoing = sample
+    if input_leg == "wan":
+        origin = "InjectedBoat"
+        outgoing = routed_frame
+        outgoing["source_id"] = origin
+        outgoing["audience.control"] = True
+        if topic == "PlatformInitStatus":
+            instance_id = origin
+            outgoing["instance_id"] = instance_id
+            outgoing["payload.navigation.source"] = origin
+        writer = wan.writer(family, "Wan" + family, qos=writer_qos(qos_profile))
+    assert not writer.qos.writer_data_lifecycle.autodispose_unregistered_instances
+
+    observers = {"wan": wan_observer, "destination_lan": destination}
+    if input_leg == "lan":
+        observers["source_lan"] = lan_observer
+    initial_handles = {}
+    observations = {}
+
+    def collect(stage):
+        found = observations.setdefault(stage, {name: [] for name in observers})
+        for name, reader in observers.items():
+            for item in reader.take():
+                if not item.info.valid:
+                    # Taking the final NO_WRITERS sample can remove the reader's key cache.
+                    matches = item.info.instance_handle == initial_handles.get(name)
+                elif name == "wan":
+                    key = item.data
+                    matches = (key["source_id"] == origin and key["original_topic"] == topic
+                               and key["instance_id"] == instance_id)
+                else:
+                    key = item.data
+                    expected_source = "" if name == "source_lan" and topic == "ContactReport" else origin
+                    matches = key[instance_field] == instance_id and key["source"] == expected_source
+                if not matches:
+                    continue
+                event = {
+                    "valid": item.info.valid,
+                    "state": str(item.info.state.instance_state),
+                    "sequence": int(item.data["audit_sequence"]) if item.info.valid else None,
+                    "same_handle": (name not in initial_handles
+                                    or item.info.instance_handle == initial_handles[name]),
+                }
+                if item.info.valid and name not in initial_handles:
+                    initial_handles[name] = item.info.instance_handle
+                found[name].append(event)
+        return found
+
+    def wait_valid(stage, sequence):
+        outgoing["audit_sequence"] = sequence
+        if input_leg == "wan":
+            branch = "contact_report" if family == "Event" else "navigation"
+            outgoing[f"payload.{branch}.audit_sequence"] = sequence
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            assert alive(nodes)
+            writer.write(outgoing)
+            found = collect(stage)
+            if all(any(event["valid"] and event["sequence"] == sequence
+                       and event["state"] == str(dds.InstanceState.ALIVE)
+                       for event in events) for events in found.values()):
+                assert all(event["same_handle"] for events in found.values() for event in events)
+                return
+            time.sleep(0.1)
+        pytest.fail(f"{topic}/{input_leg}: valid ALIVE forwarding failed at {stage}: {found}")
+
+    wait_valid("initial_alive", 101)
+    missing = []
+    for index, (operation, state) in enumerate((
+            ("dispose", dds.InstanceState.NOT_ALIVE_DISPOSED),
+            ("unregister", dds.InstanceState.NOT_ALIVE_NO_WRITERS)), 1):
+        collect("before_" + operation)
+        handle = writer.register_instance(outgoing)
+        if operation == "dispose":
+            writer.dispose_instance(handle)
+        else:
+            writer.unregister_instance(handle)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            assert alive(nodes)
+            found = collect(operation)
+            if all(any(not event["valid"] and event["state"] == str(state)
+                       for event in events) for events in found.values()):
+                break
+            time.sleep(0.05)
+        for name, events in found.items():
+            if not any(not event["valid"] and event["state"] == str(state) for event in events):
+                missing.append(f"{operation}: {name} did not receive {state}")
+        wait_valid("revived_after_" + operation, 101 + index)
+
+    report = {"topic": topic, "input_leg": input_leg, "origin": origin,
+              "observations": observations, "missing": missing}
+    (e2e_tmp_dir / "instance_lifecycle.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps(report, sort_keys=True))
+    assert not missing, f"{topic}/{input_leg}: " + "; ".join(missing)
+
+
+@pytest.mark.parametrize("operation", ["dispose", "unregister"])
+def test_contact_producer_aliases_share_canonical_lifecycle_key(mesh, operation):
+    nodes, _, _ = mesh
+    source = nodes["Boat30"][1]
+    destination = nodes["Control_20"][1].reader("ContactReport", "contact_report")
+    writer = source.writer("ContactReport", "contact_report")
+    samples = [
+        source.sample("contact_report", source=alias, contact_id="shared-contact",
+                      run_id="alias-lifecycle", audit_sequence=sequence)
+        for alias, sequence in (("ProducerA", 701), ("ProducerB", 702))
+    ]
+    handles = []
+    for sample in samples:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            assert alive(nodes)
+            writer.write(sample)
+            found = [item for item in destination.take()
+                     if item.info.valid and item.data["audit_sequence"] == sample["audit_sequence"]]
+            if found:
+                assert found[0].data["source"] == "Boat30"
+                handles.append(found[0].info.instance_handle)
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail(f"Contact producer alias did not forward: {sample['source']}")
+    assert handles[0] == handles[1]
+    handle = writer.lookup_instance(samples[0])
+    if operation == "dispose":
+        writer.dispose_instance(handle)
+        expected = dds.InstanceState.NOT_ALIVE_DISPOSED
+    else:
+        writer.unregister_instance(handle)
+        expected = dds.InstanceState.NOT_ALIVE_NO_WRITERS
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline:
+        assert alive(nodes)
+        if any(not item.info.valid and item.info.instance_handle == handles[0]
+               and item.info.state.instance_state == expected
+               for item in destination.take()):
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"Producer alias {operation} did not affect the shared canonical contact")
 
 
 def test_team_updates_exact_interests_and_source_alias_gates(mesh):

@@ -1,5 +1,6 @@
 #include "config/RouteConfigParser.hpp"
 #include "core/WanInterests.hpp"
+#include "core/QosResolver.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -17,6 +18,24 @@ int main(int argc, char** argv) {
     }
     dds::core::QosProvider model(argv[1]);
     dds::core::QosProvider profiles(argv[2]);
+    QosResolver resolver(std::make_shared<dds::core::QosProvider>(profiles), {
+        {"event", "ACT_QOS_LIB::wan_event"},
+        {"status", "ACT_QOS_LIB::wan_union_status"},
+        {"lan", "ACT_QOS_LIB::lan_event"}
+    });
+    for (const auto& alias : {"", "default", "event", "status", "lan"}) {
+        const auto original = resolver.reader_qos(alias);
+        auto retained = resolver.lifecycle_reader_qos(alias);
+        const auto lifecycle = retained.policy<dds::core::policy::ReaderDataLifecycle>();
+        CHECK(lifecycle->autopurge_nowriter_instances_delay() == dds::core::Duration::infinite());
+        CHECK(lifecycle->autopurge_disposed_instances_delay() == dds::core::Duration::infinite());
+        CHECK(lifecycle.autopurge_nowriter_samples_delay()
+              == original.policy<dds::core::policy::ReaderDataLifecycle>().autopurge_nowriter_samples_delay());
+        CHECK(lifecycle.autopurge_disposed_samples_delay()
+              == original.policy<dds::core::policy::ReaderDataLifecycle>().autopurge_disposed_samples_delay());
+        retained << original.policy<dds::core::policy::ReaderDataLifecycle>();
+        CHECK(retained == original);
+    }
     profiles.participant_qos("ACT_QOS_LIB::wan_two_topic_participant");
     profiles.participant_qos("ACT_QOS_LIB::wan_two_topic_participant_emane");
     RouteConfig cfg;

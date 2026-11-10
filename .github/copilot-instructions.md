@@ -181,6 +181,15 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 ### Next work and unresolved checks
 
+- **2026-11-10 lifecycle-only finalization:** reviewed and freshly rebuilt the
+  native dispose/unregister relay independently of uncommitted filter-observation
+  and dashboard work. Nine C++ targets, 273 Python tests plus 171 subtests,
+  29 WAN qualification cases, and 21 purge cases passed; 24 optional browser/live
+  checks skipped. Four per-leg cases passed an additional evidence rerun.
+  See migration-plan §3.20.1. The active seven-router EMANE mesh was untouched;
+  no persistent binary rebuild, deployment, or live mission gate was performed.
+  Unseen instances, resource churn, automatic purge and durable restart/replay
+  remain separate gates.
 - Controller/interest checkpoint is verified (migration-plan §3.8). Next is
   Phase 5: lifecycle/restart/multiple-producer ownership, required-event retention,
   latest-state replacement, priorities/flow control and bounded load/admission.
@@ -204,8 +213,8 @@ without inspecting the current worktree, commits, and runtime ownership first.
   factory. Error callbacks must not throw or reenter; logical errors carry route
   generations, physical endpoint errors carry physical names/epochs.
   Pilot filters are deliberately broad plumbing checks, not final audience rules.
-  Application-adapter invalid-data lifecycle samples are diagnosed but not forwarded;
-  complete lifecycle/restart/multiple-producer ownership remains Phase 5.
+  Application lifecycle is now forwarded through existing routes (checkpoint above);
+  unseen-instance, pressure/churn and durable restart/replay qualification remains open.
 - The new opt-in `wan_two_topic_participant` XML profile raises only the filter
   property limit to 16384 bytes; active legacy profiles retain their limits.
   A default 256-byte property rejected even a 16-slot filter. Production team

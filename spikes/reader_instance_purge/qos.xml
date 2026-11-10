@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="PurgeSample">
+      <member name="id" type="string" stringMaxLength="128" key="true"/>
+      <member name="sequence" type="int32"/>
+    </struct>
+  </types>
+  <qos_library name="Purge">
+    <qos_profile name="base" base_name="BuiltinQosLib::Generic.Common">
+      <domain_participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <property>
+          <value>
+            <element>
+              <name>dds.transport.UDPv4.builtin.parent.allow_interfaces</name>
+              <value>127.0.0.1</value>
+            </element>
+          </value>
+        </property>
+        <discovery>
+          <initial_peers><element>udpv4://127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+        </discovery>
+      </domain_participant_qos>
+      <datawriter_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>8</depth></history>
+        <writer_data_lifecycle>
+          <autodispose_unregistered_instances>false</autodispose_unregistered_instances>
+        </writer_data_lifecycle>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>8</depth></history>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="nowriter_2" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_nowriter_instances_delay><sec>2</sec><nanosec>0</nanosec></autopurge_nowriter_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="nowriter_5" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_nowriter_instances_delay><sec>5</sec><nanosec>0</nanosec></autopurge_nowriter_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="infinite" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_nowriter_instances_delay>
+          <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+        </autopurge_nowriter_instances_delay>
+        <autopurge_disposed_instances_delay>
+          <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+        </autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="disposed_0" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>0</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="disposed_2" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>2</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="disposed_5" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>5</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="samples_2" base_name="Purge::base">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_nowriter_samples_delay><sec>2</sec><nanosec>0</nanosec></autopurge_nowriter_samples_delay>
+        <autopurge_disposed_samples_delay><sec>2</sec><nanosec>0</nanosec></autopurge_disposed_samples_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

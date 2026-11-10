@@ -146,6 +146,21 @@ public:
         return provider_->datawriter_qos(default_writer_profile());
     }
 
+    dds::sub::qos::DataReaderQos lifecycle_reader_qos(const std::string &alias) const {
+        auto result = reader_qos(alias);
+        const auto retention = provider_->datareader_qos(
+                "ACT_QOS_LIB::router_lifecycle_reader")
+                .policy<dds::core::policy::ReaderDataLifecycle>();
+        auto lifecycle = result.policy<dds::core::policy::ReaderDataLifecycle>();
+        // Compose only XML-authored instance retention, preserving sample-purge settings.
+        lifecycle->autopurge_nowriter_instances_delay(
+                retention->autopurge_nowriter_instances_delay());
+        lifecycle->autopurge_disposed_instances_delay(
+                retention->autopurge_disposed_instances_delay());
+        result << lifecycle;
+        return result;
+    }
+
     // --- Resolved-QoS summaries for status (D45). Stable, human-readable, compact. ---
 
     static std::string summarize(const dds::sub::qos::DataReaderQos &qos) {

@@ -48,9 +48,9 @@ struct WanStatusCallbacks {
 
 // Bind/unbind/shutdown run on the controller strand. Metadata providers run on
 // AWS workers: read an immutable snapshot and never call back into this factory.
-// Shared readers have one class-wide filter; controller/readiness integration is
-// Phase 4. Health lifecycle samples start the presence countdown; application
-// lifecycle samples are diagnosed, not forwarded, in this pilot.
+// Shared readers have one class-wide filter. Application lifecycle uses the same
+// bound routes and native writer registry as valid data. Health lifecycle starts
+// the presence countdown. Input instance retention is composed from external XML.
 class WanAdapterFactory {
 public:
     using MetadataProvider = std::function<WanMetadata(const dds::core::xtypes::DynamicData&)>;

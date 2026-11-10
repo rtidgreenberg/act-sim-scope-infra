@@ -101,15 +101,15 @@ int main(int argc, char** argv) {
         control_dispatcher.set_stats_registry(&stats);
         platform_dispatcher.set_stats_registry(&stats);
         std::atomic<uint64_t> errors{0};
-        std::atomic<uint64_t> lifecycle_pending{0};
+        std::atomic<uint64_t> warnings{0};
         router::WanAdapterCallbacks callbacks;
-        callbacks.error = [&errors, &lifecycle_pending](
-                const std::string&, const std::string&, uint64_t, const std::string& message) {
-            if (message == "instance lifecycle forwarding is not enabled in this pilot") {
-                lifecycle_pending.fetch_add(1);
-            } else {
-                errors.fetch_add(1);
-            }
+        callbacks.error = [&errors](
+                const std::string&, const std::string&, uint64_t, const std::string&) {
+            errors.fetch_add(1);
+        };
+        callbacks.warning = [&warnings](
+                const std::string&, const std::string&, uint64_t, const std::string&) {
+            warnings.fetch_add(1);
         };
         Factory control(participants, qos, control_dispatcher, types,
                         "control_wan", "Control20", "pilot", callbacks);
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
                     print_factory(platform);
                     std::cout << ",\"stats_sources\":" << stats.sources.size()
                               << ",\"errors\":" << errors.load()
-                              << ",\"lifecycle_pending\":" << lifecycle_pending.load()
+                              << ",\"warnings\":" << warnings.load()
                               << ",\"counts\":{";
                     bool first = true;
                     for (const auto& binding : bindings) {
@@ -206,6 +206,12 @@ int main(int argc, char** argv) {
                     control.bind_destination("bad_filter", "ControlCommand", 100,
                                              "control_lan", "lan_event",
                                              {"INVALID_FIELD = 1", {}});
+                } else if (operation == "filter_command") {
+                    if (!(input >> name) || (name != "Boat30" && name != "OtherBoat")) {
+                        throw std::runtime_error("filter_command needs Boat30 or OtherBoat");
+                    }
+                    platform.update_receive_filter("ControlCommand",
+                        {"payload._d = 1 AND audience.destination = %0", {"'" + name + "'"}});
                 } else if (operation == "shutdown") {
                     platform.shutdown();
                     control.shutdown();

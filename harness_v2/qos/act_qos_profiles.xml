@@ -822,6 +822,22 @@
       </datareader_qos>
     </qos_profile>
 
+    <!-- Composed only into two-topic adapter input readers; legacy profiles are unchanged. -->
+    <qos_profile name="router_lifecycle_reader">
+      <datareader_qos>
+        <reader_data_lifecycle>
+          <autopurge_nowriter_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec>
+            <nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_nowriter_instances_delay>
+          <autopurge_disposed_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec>
+            <nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_disposed_instances_delay>
+        </reader_data_lifecycle>
+      </datareader_qos>
+    </qos_profile>
+
     <qos_profile name="router_default_reader" base_name="BuiltinQosLib::Generic.Common">
       <datareader_qos>
         <reliability>

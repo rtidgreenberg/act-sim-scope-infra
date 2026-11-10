@@ -14,13 +14,14 @@ import rti.connextdds as dds
 from conftest import REPO_ROOT, set_wan_qos_env
 
 
-def wait_until(predicate, timeout=10):
+def wait_until(predicate, timeout=10, context=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
             return
         time.sleep(0.02)
-    raise AssertionError("Timed out waiting for adapter pilot")
+    detail = f": {context()}" if context else ""
+    raise AssertionError("Timed out waiting for adapter pilot" + detail)
 
 
 class Pilot:
@@ -121,9 +122,16 @@ class Rig:
         return writer
 
     def reader(self, index, name, type_name, profile):
+        qos = self.qos.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+        lifecycle = qos.reader_data_lifecycle
+        retention = self.qos.datareader_qos_from_profile(
+            "ACT_QOS_LIB::router_lifecycle_reader").reader_data_lifecycle
+        lifecycle.autopurge_nowriter_instances_delay = retention.autopurge_nowriter_instances_delay
+        lifecycle.autopurge_disposed_instances_delay = retention.autopurge_disposed_instances_delay
+        qos.reader_data_lifecycle = lifecycle
         reader = dds.DynamicData.DataReader(
             self.participants[index], self.topic(index, name, type_name),
-            self.qos.datareader_qos_from_profile("ACT_QOS_LIB::" + profile),
+            qos,
         )
         self.readers.append(reader)
         return reader
@@ -190,7 +198,8 @@ def receive(reader, sequence):
         samples.extend(take_valid(reader))
         return any(sample["audit_sequence"] == sequence for sample in samples)
 
-    wait_until(complete)
+    wait_until(complete, context=lambda: f"wanted {sequence}; received "
+               f"{[sample['audit_sequence'] for sample in samples]}")
     matches = [sample for sample in samples if sample["audit_sequence"] == sequence]
     assert len(matches) == 1
     time.sleep(0.1)
@@ -319,7 +328,8 @@ def test_detach_under_active_traffic(pilot, rig):
         assert take_valid(rig.status_reader) == []
         assert pilot.stats()["platform"]["writers"] == 0
         assert pilot.stats()["errors"] == 0
-        wait_until(lambda: pilot.stats()["lifecycle_pending"] >= 1)
+        wait_until(lambda: any(item.info.state.instance_state == dds.InstanceState.NOT_ALIVE_NO_WRITERS
+                               for item in rig.nav_reader.take()))
     finally:
         stopped.set()
         thread.join(timeout=5)
@@ -362,4 +372,201 @@ def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     counts = pilot.stats()["counts"]
     assert counts["nav_c2"] == counts["nav_global"] == 0
     assert counts["nav_local_destination"] == 1
+    assert pilot.stats()["errors"] == 0
+
+
+def take_states(reader, field):
+    states = {}
+    for item in reader.take():
+        key = item.data if item.info.valid else reader.key_value(item.info.instance_handle)
+        states[key[field]] = item.info.state.instance_state
+    return states
+
+
+def wait_state(reader, field, key, state):
+    seen = {}
+
+    def complete():
+        seen.update(take_states(reader, field))
+        return seen.get(key) == state
+
+    wait_until(complete, context=lambda: f"key {key}; wanted {state}; observed {seen}")
+
+
+def test_native_lifecycle_shared_routes_and_multiple_input_writers(pilot, rig):
+    first = rig.sample("platform_init_status", 301)
+    second = rig.sample("platform_init_status", 302)
+    other_writer = rig.writer(1, "PlatformInitStatus", "platform_init_status", "lan_status_1s")
+    wait_until(lambda: other_writer.publication_matched_status.current_count == 1)
+    for writer, sample in ((rig.nav_writer, first), (other_writer, second)):
+        time.sleep(1.05)
+        writer.write(sample)
+        receive(rig.nav_reader, sample["audit_sequence"])
+        receive(rig.status_reader, sample["audit_sequence"])
+
+    before = pilot.stats()["counts"]
+    rig.nav_writer.dispose_instance(rig.nav_writer.lookup_instance(first))
+    wait_state(rig.status_reader, "instance_id", "Boat30", dds.InstanceState.NOT_ALIVE_DISPOSED)
+    wait_state(rig.nav_reader, "source", "Boat30", dds.InstanceState.NOT_ALIVE_DISPOSED)
+    assert pilot.stats()["counts"] == before
+
+    second["audit_sequence"] = 303
+    time.sleep(1.05)
+    other_writer.write(second)
+    receive(rig.nav_reader, 303)
+    receive(rig.status_reader, 303)
+    before = pilot.stats()["counts"]
+    rig.nav_writer.unregister_instance(rig.nav_writer.lookup_instance(first))
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        for reader, field in ((rig.nav_reader, "source"), (rig.status_reader, "instance_id")):
+            assert take_states(reader, field).get("Boat30") != dds.InstanceState.NOT_ALIVE_NO_WRITERS
+        time.sleep(0.02)
+    assert pilot.stats()["counts"] == before
+
+    pilot.command("unbind nav_c2 3")
+    pilot.command("unbind nav_destination 5")
+    assert rig.nav_reader.subscription_matched_status.current_count == 1
+    other_writer.unregister_instance(other_writer.lookup_instance(second))
+    wait_state(rig.status_reader, "instance_id", "Boat30", dds.InstanceState.NOT_ALIVE_NO_WRITERS)
+    wait_state(rig.nav_reader, "source", "Boat30", dds.InstanceState.NOT_ALIVE_NO_WRITERS)
+    after = pilot.stats()
+    assert after["counts"]["nav_global"] == before["nav_global"]
+    assert after["counts"]["nav_destination_alias"] == before["nav_destination_alias"]
+    assert after["errors"] == after["warnings"] == 0
+
+
+@pytest.mark.parametrize("operation", ["dispose", "unregister"])
+def test_native_lifecycle_after_filter_change_and_unknown_output(pilot, rig, operation):
+    original = rig.sample("control_command", 401)
+    rig.command_writer.write(original)
+    receive(rig.command_reader, 401)
+    frame = receive(rig.event_reader, 401)
+    remote = rig.writer(2, "Event", "WanEvent", "wan_event")
+    wait_until(lambda: remote.publication_matched_status.current_count >= 2)
+
+    def injected(source, destination, sequence):
+        result = dds.DynamicData(frame)
+        result["source_id"] = source
+        result["instance_id"] = source
+        result["audit_sequence"] = sequence
+        result["audience.destination"] = destination
+        result["payload.command.source"] = source
+        result["payload.command.destination"] = destination
+        result["payload.command.audit_sequence"] = sequence
+        return result
+
+    known = injected("KnownRemote", "Boat30", 402)
+    remote.write(known)
+    receive(rig.command_reader, 402)
+    take_valid(rig.event_reader)
+    pilot.command("filter_command OtherBoat")
+    handle = remote.lookup_instance(known)
+    if operation == "dispose":
+        remote.dispose_instance(handle)
+        state = dds.InstanceState.NOT_ALIVE_DISPOSED
+    else:
+        remote.unregister_instance(handle)
+        state = dds.InstanceState.NOT_ALIVE_NO_WRITERS
+    wait_state(rig.command_reader, "source", "KnownRemote", state)
+
+    pilot.command("filter_command Boat30")
+    excluded = injected("NeverMaterialized", "OtherBoat", 403)
+    remote.write(excluded)
+    wait_until(lambda: any(item["audit_sequence"] == 403 for item in take_valid(rig.event_reader)))
+    handle = remote.lookup_instance(excluded)
+    if operation == "dispose":
+        remote.dispose_instance(handle)
+    else:
+        remote.unregister_instance(handle)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        assert "NeverMaterialized" not in take_states(rig.command_reader, "source")
+        time.sleep(0.02)
+    known["audit_sequence"] = 404
+    known["payload.command.audit_sequence"] = 404
+    remote.write(known)
+    receive(rig.command_reader, 404)
+    assert pilot.stats()["errors"] == 0
+
+
+@pytest.mark.parametrize("operation", ["dispose", "unregister"])
+def test_native_lifecycle_with_queued_valid_data(pilot, rig, operation):
+    expected = {f"Burst-{index}" for index in range(8)}
+    for index, key in enumerate(sorted(expected)):
+        sample = rig.sample("control_command", 500 + index)
+        sample["source"] = key
+        rig.command_writer.write(sample)
+        handle = rig.command_writer.lookup_instance(sample)
+        if operation == "dispose":
+            rig.command_writer.dispose_instance(handle)
+        else:
+            rig.command_writer.unregister_instance(handle)
+    state = (dds.InstanceState.NOT_ALIVE_DISPOSED if operation == "dispose"
+             else dds.InstanceState.NOT_ALIVE_NO_WRITERS)
+    seen = {}
+
+    def complete():
+        seen.update(take_states(rig.command_reader, "source"))
+        return all(seen.get(key) == state for key in expected)
+
+    wait_until(complete, context=lambda: f"wanted {state}; observed {seen}; stats={pilot.stats()}")
+    assert pilot.stats()["errors"] == 0
+
+
+def test_malformed_lifecycle_does_not_stop_later_samples(pilot, rig):
+    sample = rig.sample("control_command", 601)
+    rig.command_writer.write(sample)
+    receive(rig.command_reader, 601)
+    frame = receive(rig.event_reader, 601)
+    remote = rig.writer(2, "Event", "WanEvent", "wan_event")
+    wait_until(lambda: remote.publication_matched_status.current_count >= 2)
+    frame["source_id"] = "MalformedRemote"
+    frame["original_topic"] = "UnsupportedTopic"
+    remote.write(frame)
+    wait_until(lambda: pilot.stats()["errors"] >= 1)
+    before = pilot.stats()["errors"]
+    remote.dispose_instance(remote.lookup_instance(frame))
+    wait_until(lambda: pilot.stats()["errors"] > before)
+    sample["audit_sequence"] = 602
+    rig.command_writer.write(sample)
+    receive(rig.command_reader, 602)
+    receive(rig.event_reader, 602)
+
+
+def test_dispose_then_unregister_uses_native_reader_transition_policy(pilot, rig):
+    sample = rig.sample("control_command", 801)
+    source_observer = rig.reader(0, "ControlCommand", "control_command", "lan_event")
+    wait_until(lambda: source_observer.subscription_matched_status.current_count == 1)
+    rig.command_writer.write(sample)
+    receive(source_observer, 801)
+    receive(rig.command_reader, 801)
+    receive(rig.event_reader, 801)
+    handle = rig.command_writer.lookup_instance(sample)
+    rig.command_writer.dispose_instance(handle)
+    for reader, field in ((source_observer, "source"), (rig.event_reader, "instance_id"),
+                          (rig.command_reader, "source")):
+        wait_state(reader, field, "Control20", dds.InstanceState.NOT_ALIVE_DISPOSED)
+    rig.command_writer.unregister_instance(handle)
+    states = {"input": [], "wan": [], "destination": []}
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        for name, reader, field in (
+                ("input", source_observer, "source"),
+                ("wan", rig.event_reader, "instance_id"),
+                ("destination", rig.command_reader, "source")):
+            found = take_states(reader, field)
+            if "Control20" in found:
+                states[name].append(found["Control20"])
+        time.sleep(0.02)
+    if dds.InstanceState.NOT_ALIVE_NO_WRITERS in states["input"]:
+        assert dds.InstanceState.NOT_ALIVE_NO_WRITERS in states["wan"]
+        assert dds.InstanceState.NOT_ALIVE_NO_WRITERS in states["destination"]
+    else:
+        assert all(dds.InstanceState.NOT_ALIVE_NO_WRITERS not in values
+                   for values in states.values()), states
+    sample["audit_sequence"] = 802
+    rig.command_writer.write(sample)
+    receive(rig.command_reader, 802)
+    receive(rig.event_reader, 802)
     assert pilot.stats()["errors"] == 0

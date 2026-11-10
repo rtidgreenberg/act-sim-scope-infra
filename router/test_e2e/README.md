@@ -80,6 +80,57 @@ Contact producers leave `source` empty; the receiving router fills it from the
 WAN `source_id`. Updates with a forged producer source retain the same C2 instance.
 Other payload fields remain unchanged, and `contact_id` supplies the generic
 WAN `instance_id`.
+The application lifecycle gate
+`test_application_instance_lifecycle_through_route` checks ContactReport/Event and
+PlatformInitStatus/Status at both LAN-to-WAN-to-LAN and direct WAN-to-LAN boundaries.
+It observes native `ALIVE`, `NOT_ALIVE_DISPOSED` and `NOT_ALIVE_NO_WRITERS` states;
+unregister is tested with the loaded writer profile's autodispose disabled.
+Valid delivery and revival are required before and after each operation, with
+stable reader instance handles. Invalid samples are identified by previously
+observed handles because taking a final NO_WRITERS sample may remove its key cache.
+
+**Current source result: all four lifecycle cases pass** after implementing
+native lifecycle forwarding through the same bindings and output writers as
+valid data. No blank valid samples or destination-delivery ledger is used.
+The adapter input readers compose infinite NO_WRITERS/DISPOSED instance retention
+from external XML; legacy endpoint profiles are unchanged. Automatic instance
+purging remains deferred.
+
+The adapter pilot additionally covers shared route removal, multiple writers on
+one input key, lifecycle after a non-key CFT update, never-materialized output
+keys, queued valid data followed immediately by lifecycle, and recovery after
+malformed input. Native reader state may accompany queued valid samples, so
+the pump forwards data before applying the final state once per instance in
+that taken batch. This temporary batch grouping is not a persistent instance map.
+Logical valid-data counters exclude lifecycle operations.
+
+Producer ContactReport aliases with the same boat/contact ID intentionally
+share lifecycle as well as data identity, verified by an additional native test
+and approved by the user. No per-producer ownership ledger is introduced.
+This source gate does not qualify live lifecycle behavior or mission workflows.
+Run this isolated gate with:
+
+```bash
+python3 -m pytest -vv -p no:cacheprovider router/test_e2e/test_two_topic_controller.py \
+  -k application_instance_lifecycle_through_route
+```
+
+The historical failing observations are in
+[`routed_instance_lifecycle_summary.json`](../../debug/test_reports/routed_instance_lifecycle_summary.json)
+and the [JUnit report](../../debug/test_reports/routed_instance_lifecycle.xml).
+The passing [initial gate](../../debug/test_reports/native_lifecycle_initial.xml)
+and [adapter/controller gate](../../debug/test_reports/native_lifecycle_targeted.xml)
+are retained separately rather than overwriting the original failure evidence.
+Final broader source qualification passed nine C++ targets, 280 router/dashboard
+Python tests plus 177 subtests (25 browser/live skips), 29 WAN qualification
+cases, and the additional dispose-then-unregister native case. See
+[migration checkpoint 3.20](../../docs/two-topic-wan-migration-plan.md#320-native-lifecycle-implementation-and-isolated-regression-gate-2026-11-10).
+Run broad native suites in separate pytest processes within owned network
+namespaces to stay within the existing domain allocator budget. Packet impairment
+requires the dedicated qualification runner's isolation flag and NET_ADMIN.
+Keep the union controller/adapter/filter modules in a separate pytest process
+from legacy/production-QoS assertions: their fixtures use different WAN peer
+locators, while the probe's QosProvider is cached on first use.
 The WAN observer's built-in publication/subscription readers start before the routers;
 starting it after discovery loses the evidence this assertion needs.
 
@@ -176,7 +227,8 @@ by role exactly as deployed:
   The flat route shape is retired (D80) — team routes are folded into
   `control-platform.yaml`'s role-pair form; `platform-team.yaml` is kept only as a Phase-0
   identity-reader fixture.
-- Phase 11/12 (serialized-CDR fast path, keyed lifecycle mirroring) — not yet implemented.
+- Phase 11/12 (serialized-CDR fast path, general legacy keyed lifecycle mirroring)
+  remains separate from the opt-in two-topic native lifecycle implementation above.
 
 ## Real bugs this suite found (D51)
 

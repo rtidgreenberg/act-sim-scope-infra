@@ -3,9 +3,16 @@
 Date: 2026-11-08
 
 Status: Opt-in production implementation and schema version 2 live deployment
-validated through §3.18. The canonical configuration still defaults to legacy.
+validated through §3.18; native application lifecycle source qualification is
+recorded in §3.20. Live lifecycle acceptance remains separate from source
+qualification. The canonical configuration still defaults to legacy.
 The dated checkpoints below preserve earlier investigation states; general
 application lifecycle/restart/load qualification remains a separate open gate.
+
+The [native instance lifecycle implementation plan](two-topic-native-lifecycle-plan.md)
+records forwarding data and key-only dispose/unregister notifications through
+the same existing routes, including the completed isolated source gate in §3.20.
+Live lifecycle acceptance and the wider restart/load gates remain separate.
 
 Implementation investigation: 2026-11-08. Connext AI was consulted, then its
 load-bearing claims were checked against the installed 7.7.0 generator/binding.
@@ -1088,6 +1095,159 @@ Retained local evidence: [C++](../debug/test_reports/contact_schema2_full_cpp.tx
 [live missions](../debug/test_reports/contact_schema2_live_missions.xml),
 [screenshots](../debug/test_reports/contact_schema2_mission_screenshots/), and
 [deployed binary hashes](../debug/test_reports/contact_schema2_deployed_binaries.json).
+
+### 3.19 Native application lifecycle route gate (2026-11-10)
+
+The requested dispose/unregister verification ran against the current schema
+version 2 production binary in a disposable, network-isolated Connext container,
+without touching the live EMANE mesh. Four native cases cover ContactReport/Event
+and PlatformInitStatus/Status, each with full LAN-to-WAN-to-LAN routing and direct
+WAN injection to isolate the destination adapter.
+
+**All four acceptance cases failed**, 65.02 s, with no setup errors or skips.
+Native source observers see `NOT_ALIVE_DISPOSED` and `NOT_ALIVE_NO_WRITERS`, but
+neither transition crosses the LAN-to-WAN adapter. Direct WAN injection delivers
+both native states to the WAN observer, but neither reaches the destination LAN.
+Source writer autodispose-on-unregister was verified false, so unregister was
+not accidentally tested as dispose. Initial valid delivery and ALIVE revival
+after each operation succeed on every observed leg, retaining reader handles.
+The existing multi-source/multi-contact identity positive control also passed
+in the initial selected run.
+
+Router logs explicitly report `instance lifecycle forwarding is not enabled in
+this pilot`. This is a confirmed application lifecycle implementation gap on
+both adapter boundaries, not a DDS transport failure or evidence that the earlier
+spike's lifecycle implementation was integrated. RouterHealth has separate
+lifecycle processing; its previous checks do not qualify application instances.
+No production behavior was changed by this test-only request. The new tests
+remain deliberately failing, not xfailed; the full gate must not be called green
+until this gap is implemented. Unseen invalid instances, multiple-writer ownership,
+restart cleanup and overload remain additional lifecycle/hardening work.
+
+Retained local evidence: [JUnit](../debug/test_reports/routed_instance_lifecycle.xml)
+and [per-leg native observations](../debug/test_reports/routed_instance_lifecycle_summary.json).
+Test source:
+[application lifecycle gate](../router/test_e2e/test_two_topic_controller.py).
+
+The subsequent [native reader-purge spike](../spikes/reader_instance_purge/README.md)
+ran 21 isolated cases with zero validation failures. Installed 7.7.0 rejects
+finite 2/5-second reader-instance delays at reader construction. With zero delay,
+C++ key lookup and native relay work while the take loan is held (also tested
+for 2100 ms), but lookup fails immediately after loan return. Infinite retention
+preserves lookup through the 5500 ms observation window. These results refine
+the [implementation plan](two-topic-native-lifecycle-plan.md); they do not
+implement either production adapter or clear the four failing acceptance cases.
+
+### 3.20 Native lifecycle implementation and isolated regression gate (2026-11-10)
+
+The user approved infinite reader-instance retention, deferring automatic
+purging. Production adapters now forward application dispose/NO_WRITERS through
+the same route bindings, codec key conversion, and physical output writers as
+valid data. The output operation is native `dispose_instance()` or
+`unregister_instance()` after `lookup_instance()`; lifecycle alone never creates
+an output instance or publishes a blank valid payload.
+
+The XML `ACT_QOS_LIB::router_lifecycle_reader` profile authors both infinite
+reader-instance delays. `QosResolver` composes just those values into each
+two-topic input reader, preserving route sample-purge settings and all other
+policies. Shared legacy profiles are unchanged. No fallback key cache,
+destination-delivery ledger, DDS writer-count replica, or new public factory
+binding API was added. Existing mutexes, route generations and detach barriers
+remain authoritative.
+
+Input handling also accounts for final non-ALIVE state accompanying queued valid
+samples: data is forwarded first, followed by one lifecycle operation per input
+instance in that taken batch. This temporary batch grouping is not a persistent
+instance registry. Per-sample/lifecycle errors are diagnosed without discarding
+the rest of the batch. Logical valid-data counters exclude lifecycle operations.
+RouterHealth's native lifecycle and deadline behavior remain separate and passed
+the existing health/restart gate.
+
+The user explicitly approved the empirically tested alias policy: different
+producer `source` keys for the same boat/contact ID represent one logical contact.
+Either alias's dispose/NO_WRITERS affects that canonical instance, just as their
+regular samples update it. Independent alias ownership is not provided.
+
+Fresh source build and final isolated gates:
+
+- **9/9 C++ targets passed**, including XML retention composition and preservation
+  of the original route reader QoS.
+- **280 router/dashboard Python tests plus 177 subtests passed**, with **25 skips**,
+  in three separate safe-domain-budget pytest processes.
+- **29/29 WAN qualification cases passed**, including the reliable pending-backlog
+  packet-impairment test in its private container network namespace.
+- **One additional dispose-then-unregister native test passed** after the batched
+  suite was collected. It compares output behavior with actual native input
+  notifications rather than synthesizing a suppressed DDS transition.
+
+The router/dashboard skips are 20 offline browser checks without Playwright in
+the disposable runtime and five mission checks without a live mission URL.
+No browser/live-mission gate is claimed for this implementation.
+The first single-process broad attempt hit the existing 52-triple allocator
+limit and lacked the qualification isolation flag; its failures were resolved
+by the final batching and correctly isolated qualification run, not by raising
+domain IDs, weakening tests, or changing production QoS.
+
+The four formerly red cases now pass for Event and Status in both directions.
+Additional native tests cover shared aliases/route removal, multiple writers on
+one input key, non-key filter updates, never-materialized outputs, rapid queued
+data/lifecycle, malformed-input recovery, and canonical contact alias semantics.
+See the [implementation plan](two-topic-native-lifecycle-plan.md) and
+[e2e guide](../router/test_e2e/README.md).
+
+Local evidence: [C++](../debug/test_reports/native_lifecycle_cpp.txt),
+[summary and four passing per-leg observations](../debug/test_reports/native_lifecycle_summary.json),
+[router batch 1](../debug/test_reports/native_lifecycle_router_batch_1.xml),
+[batch 2](../debug/test_reports/native_lifecycle_router_batch_2.xml),
+[batch 3](../debug/test_reports/native_lifecycle_router_batch_3.xml),
+[WAN qualification](../debug/test_reports/native_lifecycle_qualification.xml),
+and [dispose/unregister sequence](../debug/test_reports/native_lifecycle_dispose_unregister.xml).
+The historical failing lifecycle reports in §3.19 are preserved.
+
+The build lived under an owned `/tmp` workspace mounted over the container's
+build path; the persistent router binary was not overwritten. No live deployment
+or mission run was performed. During qualification, the previously running six
+mesh containers were observed stopped; this implementation workflow did not
+restart them. Inspect current runtime ownership before any later deployment.
+Unseen keys, resource-pressure replacement/churn, automatic purge, durable
+restart/replay, and live deployment remain separate gates.
+
+#### 3.20.1 Lifecycle-only finalization gate (2026-11-10)
+
+Reviewed and qualified the lifecycle changes independently of the uncommitted
+writer-filter observations, health-schema changes, and dashboard configuration
+work. The tested source snapshot contains only the native lifecycle adapter,
+XML retention composition, related tests, and reader-purge spike.
+
+Fresh Connext 7.7.0 build and isolated results:
+
+- **9/9 C++ targets passed.**
+- **23/23 native adapter/controller tests passed**, including both lifecycle
+  boundaries, shared routes, multiple writers, alias identity, queued data,
+  dispose/unregister transitions, malformed input, and health/restart behavior.
+- **250 router/dashboard regression tests plus 171 subtests passed; 24 skipped**:
+  19 optional offline browser checks lack Playwright in the disposable runtime,
+  and five live mission checks lack `MISSION_DASHBOARD_URL`.
+- **29/29 WAN qualification cases passed.**
+- **21 reader-purge cases passed**, including eight expected finite-delay
+  rejections. Infinite instance retention remains the selected adapter policy.
+- All four per-leg application lifecycle cases passed again with fresh native
+  observations retained separately; this repeat is not added to the 273 distinct
+  passing Python tests above.
+
+Every DDS container used private network/IPC namespaces, read-only source
+mounts, and temporary build/runtime storage. The existing Control_20 plus six
+platform EMANE mesh was observed running and was not stopped, rebuilt, or
+reconfigured. This source finalization does not qualify live lifecycle delivery,
+mission workflows, restart/replay, unseen instances, or sustained resource churn.
+The canonical legacy default is unchanged.
+
+Retained local evidence: [C++](../debug/test_reports/native_lifecycle_final_cpp.txt),
+[native adapter/controller](../debug/test_reports/native_lifecycle_final_targeted.xml),
+[regressions](../debug/test_reports/native_lifecycle_final_regression.xml),
+[WAN qualification](../debug/test_reports/native_lifecycle_final_qualification.xml),
+[reader purge](../debug/test_reports/native_lifecycle_final_purge.json), and
+[per-leg observations](../debug/test_reports/native_lifecycle_final_per_leg.xml).
 
 ## 4. Audience selection and runtime changes
 

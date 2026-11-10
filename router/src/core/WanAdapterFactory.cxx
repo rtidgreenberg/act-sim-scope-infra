@@ -5,6 +5,7 @@
 #include "ParticipantRegistry.hpp"
 #include "QosResolver.hpp"
 #include "WanInterests.hpp"
+#include "WanStatsPoll.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -100,16 +101,25 @@ private:
     void pump() {
         try {
             const auto samples = reader_.select().condition(condition_).take();
+            std::map<std::string, dds::sub::SampleInfo> instances;
             for (const auto& sample : samples) {
-                if (!sample.info().valid()) {
-                    if (!lifecycle_ || !lifecycle_(sample.info())) {
-                        warn("instance lifecycle forwarding is not enabled in this pilot");
+                try {
+                    instances[wan_handle_key(sample.info().instance_handle())] = sample.info();
+                    if (sample.info().valid() && receive_(sample.data(), sample.info())) {
+                        count_.fetch_add(1);
                     }
+                } catch (const std::exception& e) {
+                    error_(e.what());
+                }
+            }
+            // A final state can accompany queued valid data, not just an invalid sample.
+            for (const auto& instance : instances) {
+                if (instance.second.state().instance_state() == dds::sub::status::InstanceState::alive()) {
                     continue;
                 }
                 try {
-                    if (receive_(sample.data(), sample.info())) {
-                        count_.fetch_add(1);
+                    if (!lifecycle_ || !lifecycle_(instance.second)) {
+                        warn("instance lifecycle has no active route or registered output instance");
                     }
                 } catch (const std::exception& e) {
                     error_(e.what());
@@ -145,6 +155,28 @@ struct Output {
     std::string topic_name;
     std::string qos_alias;
 };
+
+bool forward_instance(Writer& writer, const Data& data, const dds::sub::SampleInfo& info,
+                      bool valid) {
+    if (valid) {
+        writer.write(data);
+        return true;
+    }
+    const auto state = info.state().instance_state();
+    using State = dds::sub::status::InstanceState;
+    require(state == State::not_alive_disposed() || state == State::not_alive_no_writers(),
+            "unexpected invalid-data instance state");
+    const auto handle = writer.lookup_instance(data);
+    if (handle == dds::core::null) {
+        return false;
+    }
+    if (state == State::not_alive_disposed()) {
+        writer.dispose_instance(handle);
+    } else {
+        writer.unregister_instance(handle);
+    }
+    return true;
+}
 
 class OutputRuntime : public RouteTopicRuntimeBase {
 public:
@@ -409,7 +441,7 @@ struct WanAdapterFactory::Impl {
             return;
         }
         const auto& mapping = wan_mapping(binding.topic_name);
-        auto reader_qos = qos.reader_qos(alias);
+        auto reader_qos = qos.lifecycle_reader_qos(alias);
         auto state = std::make_shared<Source>();
         state->qos_alias = alias;
         state->class_key = binding.class_key;
@@ -431,23 +463,40 @@ struct WanAdapterFactory::Impl {
             dds::sub::Subscriber subscriber(dp);
             Reader reader(subscriber, description, reader_qos);
             state->reader = reader;
-            auto receive = [this, state, output](const Data& data, const dds::sub::SampleInfo&) {
+            auto forward = [this, state, output](const Data& data, const dds::sub::SampleInfo& info,
+                                                 bool valid) {
                 std::lock_guard<std::mutex> lock(state->mutex);
                 if (state->routes.empty()) {
                     return false;
                 }
-                auto first = state->routes.begin();
-                auto metadata = first->second.metadata(data);
-                for (auto it = std::next(first); it != state->routes.end(); ++it) {
-                    metadata = merge(metadata, it->second.metadata(data));
+                WanMetadata metadata;
+                metadata.source_id = node;
+                if (valid) {
+                    auto first = state->routes.begin();
+                    metadata = first->second.metadata(data);
+                    for (auto it = std::next(first); it != state->routes.end(); ++it) {
+                        metadata = merge(metadata, it->second.metadata(data));
+                    }
                 }
                 require(metadata.source_id == node,
                         "metadata origin differs from router identity");
-                output->writer.write(codec.pack(state->topic_name, data, metadata));
-                for (auto& route : state->routes) {
-                    route.second.count->fetch_add(1);
+                const auto frame = valid ? codec.pack(state->topic_name, data, metadata)
+                                         : codec.key_frame(state->topic_name, data, metadata);
+                if (!forward_instance(output->writer, frame, info, valid)) {
+                    return false;
+                }
+                if (valid) {
+                    for (auto& route : state->routes) route.second.count->fetch_add(1);
                 }
                 return true;
+            };
+            auto receive = [forward](const Data& data, const dds::sub::SampleInfo& info) {
+                return forward(data, info, true);
+            };
+            auto lifecycle = [this, state, forward](const dds::sub::SampleInfo& info) {
+                Data key(types->type(wan_mapping(state->topic_name).type));
+                state->reader.key_value(key, info.instance_handle());
+                return forward(key, info, false);
             };
             Error report = [this, state, source_epoch](const std::string& message) {
                 std::lock_guard<std::mutex> lock(state->mutex);
@@ -465,7 +514,8 @@ struct WanAdapterFactory::Impl {
             sources.emplace(binding.owner_key, state);
             attach(state->runtime_name, state->topic_name,
                 std::unique_ptr<RouteTopicRuntimeBase>(new InputRuntime(
-                    reader, subscriber, dds::core::null, receive, report, false, state->topic_name, warn)));
+                    reader, subscriber, dds::core::null, receive, report, false,
+                    state->topic_name, warn, lifecycle)));
         } catch (const std::exception&) {
             detach(state->runtime_name, state->topic_name);
             sources.erase(binding.owner_key);
@@ -500,29 +550,43 @@ struct WanAdapterFactory::Impl {
         const auto selected = effective_filter(filter, family);
         Cft cft(description, state->runtime_name + "_cft",
                 dds::topic::Filter(selected.expression, selected.parameters));
-        Reader reader(subscriber, cft, qos.reader_qos(qos_alias));
+        Reader reader(subscriber, cft, qos.lifecycle_reader_qos(qos_alias));
         state->reader = reader;
         state->cft = cft;
         if (state->observer) {
             reader.set_listener(std::make_shared<StatusDeadlineListener>(types, state),
                                 dds::core::status::StatusMask::requested_deadline_missed());
         }
-        auto receive = [this, state](const Data& frame, const dds::sub::SampleInfo& info) {
-            if (frame.value<std::string>("source_id") == node) return false;
-            const auto decoded = codec.unpack(frame);
+        auto forward = [this, state](const Data& frame, const dds::sub::SampleInfo& info, bool valid) {
+            if (frame.value<std::string>("source_id") == node) return !valid;
+            const auto decoded = valid ? codec.unpack(frame) : codec.unpack_key(frame);
             if (state->observer) {
                 std::lock_guard<std::mutex> callback_lock(state->observer->mutex);
-                if (state->observer->data) state->observer->data(frame, info);
+                if (valid) {
+                    if (state->observer->data) state->observer->data(frame, info);
+                } else if (decoded.topic == "RouterHealth") {
+                    state->observer->health_missing(frame);
+                    return true;
+                }
             }
+            if (!valid && decoded.topic == "RouterHealth") return true;
             std::lock_guard<std::mutex> lock(state->mutex);
             bool written = false;
             for (auto& item : state->targets) {
                 auto& target = item.second;
                 if (target.output->topic_name != decoded.topic) continue;
                 try {
-                    target.output->writer.write(decoded.data);
-                    written = true;
-                    for (auto& route : target.routes) route.second.count->fetch_add(1);
+                    if (forward_instance(target.output->writer, decoded.data, info, valid)) {
+                        written = true;
+                        if (valid) {
+                            for (auto& route : target.routes) route.second.count->fetch_add(1);
+                        }
+                    } else {
+                        for (const auto& route : target.routes) {
+                            warning(route.second.route, decoded.topic, route.second.generation,
+                                    "instance lifecycle skipped: output writer has no registered instance");
+                        }
+                    }
                 } catch (const std::exception& e) {
                     for (const auto& route : target.routes) {
                         error(route.second.route, decoded.topic, route.second.generation, e.what());
@@ -531,6 +595,9 @@ struct WanAdapterFactory::Impl {
             }
             return written;
         };
+        auto receive = [forward](const Data& frame, const dds::sub::SampleInfo& info) {
+            return forward(frame, info, true);
+        };
         const auto generation = epoch;
         Error report = [this, state, generation](const std::string& message) {
             error(state->runtime_name, state->family, generation, message);
@@ -538,15 +605,10 @@ struct WanAdapterFactory::Impl {
         Error warn = [this, state, generation](const std::string& message) {
             warning(state->runtime_name, state->family, generation, message);
         };
-        auto lifecycle = [this, state](const dds::sub::SampleInfo& info) {
-            if (!state->observer) return false;
-            Data key(types->type("WanStatus"));
+        auto lifecycle = [this, state, forward](const dds::sub::SampleInfo& info) {
+            Data key(types->type("Wan" + state->family));
             state->reader.key_value(key, info.instance_handle());
-            if (codec.unpack_key(key).topic != "RouterHealth") return false;
-            if (key.value<std::string>("source_id") != node) {
-                state->observer->health_missing(key);
-            }
-            return true;
+            return forward(key, info, false);
         };
         try {
             attach(state->runtime_name, state->family,

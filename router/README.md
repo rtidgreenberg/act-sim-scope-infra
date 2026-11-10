@@ -119,12 +119,22 @@ of each remote original-topic producer; LAN matches remain topic-specific.
 Health transport, presence transitions, health restart recovery, passive RTT and
 protocol counters are verified; see the
 [health checkpoint](../docs/two-topic-wan-migration-plan.md#311-health-on-status-checkpoint-2026-11-09).
-Application lifecycle/restart/load, health congestion isolation/timing alignment,
-supported clients and cutover/rollback gates remain open. Do not mix incompatible
-WAN contracts or use this as a fleet cutover.
+Application dispose/unregister now follows the same bound routes and shared
+output writers as data, using native key translation and lifecycle operations.
+Two-topic input readers compose infinite NO_WRITERS/DISPOSED instance retention
+from `ACT_QOS_LIB::router_lifecycle_reader`; other reader policies and legacy
+profiles are unchanged. Automatic instance purging is deferred. Infinite
+retention remains subject to DDS resource limits and instance replacement.
+Producer aliases that normalize to the same boat/contact ID share one contact
+lifecycle; independent alias ownership is not provided.
+See the [lifecycle implementation plan](../docs/two-topic-native-lifecycle-plan.md).
 
-Rebuild and run the isolated controller gate (eight C++ tests plus twelve DDS
-adapter/controller/legacy regressions):
+Unseen-instance/restart/load qualification, health congestion isolation/timing
+alignment, supported clients and cutover/rollback gates remain open. Do not mix
+incompatible WAN contracts or use this as a fleet cutover.
+
+Rebuild and run the isolated controller gate (C++ tests and DDS
+adapter/controller/legacy regressions; requires the owned mesh to be stopped):
 
 ```bash
 bash router/qualification/run_adapter_checks.sh
