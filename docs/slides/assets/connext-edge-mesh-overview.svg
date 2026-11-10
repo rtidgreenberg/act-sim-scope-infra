@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="440" viewBox="0 0 1160 440" role="img" aria-labelledby="title desc">
+  <title id="title">Current Connext edge mesh architecture</title>
+  <desc id="desc">The browser dashboard connects to a bridge on the control node. Control applications and each platform's applications connect through their own local DDS domain to one router per node. All routers exchange selected traffic over the shared WAN DDS domain 200, carried by EMANE in the test rig.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#004c97"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "Liberation Sans", sans-serif; fill: #333; font-size: 21px; text-anchor: middle; }
+      .heading { fill: #004c97; font-weight: bold; font-size: 24px; }
+      .white { fill: white; font-weight: bold; }
+      .small { font-size: 18px; }
+      .node { fill: #f2f4f6; stroke: #bbbcbc; stroke-width: 2; }
+      .app { fill: white; stroke: #004c97; stroke-width: 2; }
+      .router { fill: #004c97; }
+      .link { fill: none; stroke: #004c97; stroke-width: 3; marker-start: url(#arrow); marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect x="30" y="2" width="320" height="46" rx="8" class="app"/>
+  <text x="190" y="32">Browser dashboard</text>
+  <rect x="10" y="92" width="360" height="246" rx="10" class="node"/>
+  <text x="190" y="120" class="heading">C2 / control node</text>
+  <path d="M60 58 V122" class="link"/>
+  <text x="143" y="78" class="small">HTTP / WS</text>
+  <rect x="30" y="132" width="320" height="56" rx="6" class="app"/>
+  <text x="190" y="155">C2 applications</text>
+  <text x="190" y="178" class="small">+ local DDS dashboard bridge</text>
+  <path d="M190 198 V260" class="link"/>
+  <rect x="56" y="211" width="268" height="30" fill="#f2f4f6"/>
+  <text x="190" y="233" class="small">Local DDS LAN: domain 20</text>
+  <rect x="60" y="270" width="260" height="48" rx="6" class="router"/>
+  <text x="190" y="301" class="white">Connext router</text>
+
+  <rect x="400" y="92" width="360" height="246" rx="10" class="node"/>
+  <text x="580" y="120" class="heading">Platform 30</text>
+  <rect x="420" y="132" width="320" height="56" rx="6" class="app"/>
+  <text x="580" y="166">Platform applications / sim</text>
+  <path d="M580 198 V260" class="link"/>
+  <rect x="446" y="211" width="268" height="30" fill="#f2f4f6"/>
+  <text x="580" y="233" class="small">Local DDS LAN: domain 30</text>
+  <rect x="450" y="270" width="260" height="48" rx="6" class="router"/>
+  <text x="580" y="301" class="white">Connext router</text>
+
+  <rect x="790" y="92" width="360" height="246" rx="10" class="node"/>
+  <text x="970" y="120" class="heading">Platform 31 ... N</text>
+  <rect x="810" y="132" width="320" height="56" rx="6" class="app"/>
+  <text x="970" y="166">Platform applications / sim</text>
+  <path d="M970 198 V260" class="link"/>
+  <rect x="836" y="211" width="268" height="30" fill="#f2f4f6"/>
+  <text x="970" y="233" class="small">Separate DDS LAN per platform</text>
+  <rect x="840" y="270" width="260" height="48" rx="6" class="router"/>
+  <text x="970" y="301" class="white">Connext router per node</text>
+
+  <path d="M190 328 V380" class="link"/>
+  <path d="M580 328 V380" class="link"/>
+  <path d="M970 328 V380" class="link"/>
+  <rect x="30" y="390" width="1100" height="46" rx="8" fill="#fff1df" stroke="#ed8b00" stroke-width="2"/>
+  <text x="580" y="420">Shared WAN DDS: domain 200 | Constrained links (EMANE in the test rig)</text>
+</svg>

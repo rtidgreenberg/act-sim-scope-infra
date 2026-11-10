@@ -81,5 +81,25 @@ section.lead::after, section.lead footer { color: #ffffff; }
 section.compact { font-size: 23px; }
 section.compact table { font-size: 20px; }
 section.compact blockquote { font-size: 22px; }
+section.compact.isolation-matrix table {
+  font-size: 18px;
+  table-layout: fixed;
+}
+section.isolation-matrix th:nth-child(1) { width: 32%; }
+section.isolation-matrix th:nth-child(2) { width: 15%; }
+section.isolation-matrix th:nth-child(3) { width: 25%; }
+section.isolation-matrix th:nth-child(4) { width: 15%; }
+section.isolation-matrix th:nth-child(5) { width: 13%; }
+section.isolation-matrix p { font-size: 20px; }
+section.isolation-matrix th, section.isolation-matrix td {
+  padding: 5px 12px;
+}
+section.isolation-matrix th:last-child {
+  background: var(--rti-orange);
+  color: #333333;
+}
+section.isolation-matrix td:last-child {
+  background: #fff1df;
+}
 section.sources { font-size: 22px; }
 section.sources li { margin: 12px 0; }

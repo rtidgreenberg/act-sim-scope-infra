@@ -3,11 +3,14 @@
 | Deck | Main decision | Source | PDF |
 |---|---|---|---|
 | Link health | Measure presence, RTT, and delivery pressure separately | [Markdown](connext-ddil-link-health.md) | [PDF](connext-ddil-link-health.pdf) |
-| Isolation choices | Distinguish discovery visibility, data audiences, and security | [Markdown](dds-isolation-strategies.md) | [PDF](dds-isolation-strategies.pdf) |
+| Connext Edge Mesh Overview | Four slides: system diagram, isolation scope/runtime control, discovery options, and DDIL link-health measurements | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) |
 | Discovery strategies | Choose multicast, unicast, C2 directory, or CDS for operational needs | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 
-The decks remain separate. Each uses the [shared RTI theme](rti-theme.css):
-blue title pages, white content pages, a consistent footer/logo, and orange
+The discovery-strategies deck remains a separate, detailed reference.
+The Connext Edge Mesh Overview deck contains a current-system block diagram, the scope matrix, a discovery-options comparison,
+and a simple link-health summary adapted from the link-health deck.
+Each uses the [shared RTI theme](rti-theme.css):
+white content pages, blue title pages where included, a consistent footer/logo, and orange
 takeaway markers. Comparison tables distinguish the benefit from the cost;
 tested, documented, and untested capabilities are labeled separately.
 
