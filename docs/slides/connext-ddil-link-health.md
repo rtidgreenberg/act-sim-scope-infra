@@ -77,7 +77,7 @@ RTT = A's elapsed time - B's receipt-to-report wait
 Example: 725 ms - 680 ms = 45 ms
 ```
 
-- No dedicated `RouterLinkProbe` stream in the current design.
+- Reuses existing heartbeat traffic.
 - No subtraction of wall-clock timestamps across machines.
 - Dispatch, queueing, and the return path still contribute.
 
