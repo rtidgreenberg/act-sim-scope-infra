@@ -162,7 +162,7 @@
   <member name="source_node" stringMaxLength="100" type="string"/>
   <member name="audit_sequence" type="uint64"/>
   <member name="sent_at_ns" type="int64"/>
-  <member name="contact_id" stringMaxLength="32" type="string"/>
+  <member name="contact_id" stringMaxLength="32" type="string" key="true"/>
   <member name="classification" stringMaxLength="32" type="string"/>
   <member name="bearing_deg" type="float32"/>
   <member name="range_m" type="float32"/>
@@ -466,9 +466,9 @@
 </struct>
 <struct name= "WanEvent" extensibility= "mutable">
   <member name="source_id" stringMaxLength="255" type="string" key="true"/>
+  <member name="original_topic" stringMaxLength="255" type="string" key="true"/>
   <member name="instance_id" stringMaxLength="512" type="string" key="true"/>
   <member name="schema_version" type="uint32"/>
-  <member name="original_topic" stringMaxLength="255" type="string"/>
   <member name="source_role" stringMaxLength="255" type="string"/>
   <member name="run_id" stringMaxLength="255" type="string"/>
   <member name="session_id" type="uint64"/>
@@ -480,9 +480,9 @@
 </struct>
 <struct name= "WanStatus" extensibility= "mutable">
   <member name="source_id" stringMaxLength="255" type="string" key="true"/>
+  <member name="original_topic" stringMaxLength="255" type="string" key="true"/>
   <member name="instance_id" stringMaxLength="512" type="string" key="true"/>
   <member name="schema_version" type="uint32"/>
-  <member name="original_topic" stringMaxLength="255" type="string"/>
   <member name="source_role" stringMaxLength="255" type="string"/>
   <member name="run_id" stringMaxLength="255" type="string"/>
   <member name="session_id" type="uint64"/>

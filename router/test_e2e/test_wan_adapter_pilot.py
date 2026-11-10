@@ -337,8 +337,8 @@ def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     local["source_node"] = "OtherBoat"
     frame = dds.DynamicData(rig.types.type("WanStatus"))
     frame["source_id"] = "OtherBoat"
-    frame["instance_id"] = "navigation/18:PlatformInitStatus/9:OtherBoat"
-    frame["schema_version"] = 1
+    frame["instance_id"] = "OtherBoat"
+    frame["schema_version"] = 2
     frame["original_topic"] = "PlatformInitStatus"
     frame["audit_sequence"] = 50
     with frame.loan_value("payload") as payload:

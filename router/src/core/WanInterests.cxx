@@ -173,7 +173,7 @@ WanMetadata wan_source_metadata(const WanInterest& interest,
             interest.topic == "ActPlatformStatusMode" ? "platform_node" : "destination");
     }
     const auto& mapping = wan_mapping(interest.topic);
-    if (std::string(mapping.key) == "source") {
+    if (std::string(mapping.instance_field) == "source" || interest.topic == "ContactReport") {
         metadata.run_id = data.value<std::string>("run_id");
         metadata.audit_sequence = data.value<uint64_t>("audit_sequence");
         metadata.sent_at_ns = data.value<int64_t>("sent_at_ns");

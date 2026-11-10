@@ -42,7 +42,9 @@ without inspecting the current worktree, commits, and runtime ownership first.
   are linked into router_main. `router.wan_contract: two_topic_union` selects
   [WanControllerFactory](../router/src/core/WanControllerFactory.hpp); omission
   keeps the legacy factory. Original wire types must equal the XML catalog before
-  binding. Application LAN contracts are unchanged. The health transport slice
+  binding. Application LAN contracts are unchanged except ContactReport now keys
+  on `(source, contact_id)` and receive-side decode restores the authoritative
+  WAN source into the existing payload source. The health transport slice
   of Phase 6 was brought forward: presence now uses the health branch of Status,
   sharing one Status writer/reader with applications, retaining LAN summaries
   and passive RTT. The user-approved simplification uses `wan_union_status`
@@ -117,18 +119,22 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 - The user requested leaving the verified mesh running. Check current ownership
   before another run: Compose project `act-emane-container-baseline`, control
-  plus Platform_30 through Platform_34, **legacy WAN mode**, dashboard port 8080.
-  The persistent router binary was rebuilt from current source before launch.
+  plus Platform_30 through Platform_34, **schema version 2 two-topic WAN mode**,
+  dashboard port 8080. The persistent router binary was rebuilt from current
+  source before the coordinated launch; all earlier review fixes are deployed.
 - Workdir: `debug/mesh_runs/emane`. Post-test checks confirmed all five peers
   `PRESENCE_ALIVE` / `ROUTER_OK`, controller available and empty impairments.
-  Test fixtures canceled missions and restored original teams and clocks.
-- Health-on-Status changes were subsequently built/tested in an isolated
-  temporary build, not deployed to this running mesh. The persistent router
-  binary still predates that change: tear down the owned mesh, then rebuild
-  before attempting a two-topic launch. Do not overwrite a live router binary.
-- [Live mission JUnit](../debug/test_reports/phase4_live_missions.xml) and
-  [browser screenshots](../debug/test_reports/phase4_live_mission_screenshots/)
-  are local ignored evidence. Disposable host pytest dependencies are removed.
+  Test fixtures canceled missions and restored unassigned teams and 1x clocks;
+  all platforms report zero speed.
+- Latest complete gate: **9/9 C++ targets, 283 Python tests plus 169 subtests,
+  29 WAN qualification cases, and 87 spike tests plus 63 subtests passed**.
+  All **five unchanged live mission workflows passed**, zero skips, 365.59 s.
+  The user-approved simulator fix now reports zero speed immediately on COMPLETE
+  and CANCELLED, with six red/green regression checks. See migration-plan §3.18.
+- [Live mission JUnit](../debug/test_reports/contact_schema2_live_missions.xml) and
+  [browser screenshots](../debug/test_reports/contact_schema2_mission_screenshots/)
+  are local ignored evidence. Never overwrite a running router binary; use a
+  coordinated owned teardown/rebuild/relaunch for further wire-contract changes.
 - Use the owned lifecycle for teardown, not individual router restarts:
   `CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 harness_v2/scripts/run_mesh.sh down --emane --workdir /home/ssm-user/act-sim-scope-infra/debug/mesh_runs/emane`.
   Do not run DDS e2e tests against this live mesh.
@@ -142,15 +148,22 @@ without inspecting the current worktree, commits, and runtime ownership first.
   LAN topic/type. Preserve original keys, identity, timestamps, and audit fields.
   **Field mapping and operation-specific command redesign are deferred**, including
   rewriting the existing command octet payload. This is not a zero-copy promise.
-- Kind is the union discriminator, not a duplicate envelope field. Status keys are
-  `source_id + instance_id`; source ID is the configured fleet/node name, not
-  the internal router process name. Qualify the instance ID by variant
-  and preserve original topic/key identity. Do not key the whole union payload or
+- Kind is the union discriminator, not a duplicate envelope field. Schema version 2
+  Event/Status keys are `source_id + original_topic + instance_id`; source ID is
+  the configured system/node name, not the internal router process name.
+  The instance ID is the raw catalog-selected payload identity, with no encoded
+  branch/topic prefix. ContactReport uses its existing `contact_id`; its LAN DDS
+  key is `(source, contact_id)`. On WAN-to-LAN decode, copy the envelope's
+  originating `source_id` into the existing payload `source`, including key-only
+  recovery. Do not trust the producer's source or substitute the receiving node's
+  identity. Local producers may leave source empty; no payload field is added.
+  Other payload key annotations and all payload fields remain unchanged.
+  Do not key the whole union payload or
   attempt a keyed discriminator on 7.7. The user approved the same stable keys
   for Event (with required KEEP_ALL retention) and no tighter legacy name/key
-  limits. Canonical instance ID: `branch/<topic-length>:<topic>/<key-length>:<key>`.
-  Current generator bare-string limit is 255 bytes, not truly unbounded; the new
-  instance ID is 512 bytes to hold a complete original key. Preserve the full
+  limits. This supersedes the version 1 two-key/encoded-ID contract and requires
+  a coordinated participant rebuild/restart; do not mix versions on a live mesh.
+  The generic instance ID remains bounded at 512 bytes. Preserve the full
   current 16-entry team set. Endpoint queue/admission budgets remain open.
 - Reuse WAN endpoints by Event/Status class, not by legacy topic. Health shares
   the single Status writer/reader; no dedicated health endpoint class or finite

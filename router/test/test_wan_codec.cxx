@@ -93,18 +93,32 @@ int main(int argc, char** argv) {
         metadata.team_ids.push_back("TEAM_" + std::to_string(index));
     }
     CHECK(router::wan_mappings().size() == 15);
-    std::vector<std::string> ids;
     for (const auto& mapping : router::wan_mappings()) {
+        auto sample_metadata = metadata;
+        const bool contact_report = std::string(mapping.topic) == "ContactReport";
+        if (contact_report) {
+            sample_metadata.source_id = std::string(100, 'n');
+        }
+        const auto check_decoded = [&](const Data& actual, const Data& sent) {
+            auto expected = sent;
+            if (contact_report) {
+                expected.value<std::string>("source", sample_metadata.source_id);
+            }
+            CHECK(actual == expected);
+        };
         Data local(types->type(mapping.type));
         fill(local, 20);
-        local.value<std::string>(mapping.key,
-                                std::string(mapping.key == std::string("source") ? 100 : 255, 'k'));
-        const auto frame = codec.pack(mapping.topic, local, metadata);
+        const auto bound = std::string(mapping.instance_field) == "contact_id" ? 32
+                : std::string(mapping.instance_field) == "source" ? 100 : 255;
+        local.value<std::string>(mapping.instance_field, std::string(bound, 'k'));
+        const auto frame = codec.pack(mapping.topic, local, sample_metadata);
         const auto decoded = codec.unpack(frame);
         CHECK(decoded.topic == mapping.topic);
-        CHECK(decoded.data == local);
-        CHECK(frame.value<uint32_t>("schema_version") == 1);
-        CHECK(frame.value<std::string>("source_id") == metadata.source_id);
+        check_decoded(decoded.data, local);
+        CHECK(frame.value<Data>("payload").value<Data>(mapping.branch) == local);
+        CHECK(frame.value<uint32_t>("schema_version") == 2);
+        CHECK(frame.value<std::string>("original_topic") == mapping.topic);
+        CHECK(frame.value<std::string>("source_id") == sample_metadata.source_id);
         CHECK(frame.value<std::string>("source_role") == metadata.source_role);
         CHECK(frame.value<std::string>("run_id") == metadata.run_id);
         CHECK(frame.value<uint64_t>("session_id") == metadata.session_id);
@@ -119,11 +133,8 @@ int main(int argc, char** argv) {
         CHECK(teams.member_count() == 16);
         CHECK(teams.value<std::string>(16) == "TEAM_15");
         const auto id = frame.value<std::string>("instance_id");
-        for (const auto& previous : ids) {
-            CHECK(previous != id);
-        }
-        ids.push_back(id);
-        auto changed_metadata = metadata;
+        CHECK(id == local.value<std::string>(mapping.instance_field));
+        auto changed_metadata = sample_metadata;
         changed_metadata.session_id++;
         changed_metadata.audit_sequence++;
         changed_metadata.membership_revision++;
@@ -133,38 +144,42 @@ int main(int argc, char** argv) {
         changed_metadata.destination.clear();
         Data changed(types->type(mapping.type));
         fill(changed, 40);
-        changed.value<std::string>(mapping.key, local.value<std::string>(mapping.key));
+        changed.value<std::string>(mapping.instance_field,
+                                   local.value<std::string>(mapping.instance_field));
         const auto changed_frame = codec.pack(mapping.topic, changed, changed_metadata);
         CHECK(changed_frame.value<std::string>("instance_id") == id);
-        CHECK(codec.unpack(changed_frame).data == changed);
+        check_decoded(codec.unpack(changed_frame).data, changed);
         CHECK(changed_frame.value<Data>("audience").value<Data>("team_ids").member_count() == 0);
-        auto key_frame = codec.key_frame(mapping.topic, local, metadata);
+        auto key_frame = codec.key_frame(mapping.topic, local, sample_metadata);
         CHECK(key_frame.value<uint32_t>("schema_version") == 0);
-        CHECK(key_frame.value<std::string>("original_topic").empty());
+        CHECK(key_frame.value<std::string>("original_topic") == mapping.topic);
         const auto recovered = codec.unpack_key(key_frame);
         CHECK(recovered.topic == mapping.topic);
-        CHECK(recovered.data.value<std::string>(mapping.key)
-                == local.value<std::string>(mapping.key));
+        CHECK(recovered.data.value<std::string>(mapping.instance_field)
+                == local.value<std::string>(mapping.instance_field));
+        if (contact_report) {
+            CHECK(recovered.data.value<std::string>("source") == sample_metadata.source_id);
+        }
         auto corrupt = frame;
-        corrupt.value<uint32_t>("schema_version", 2);
+        corrupt.value<uint32_t>("schema_version", 1);
         rejected([&] { codec.unpack(corrupt); });
         corrupt = frame;
         corrupt.value<std::string>("original_topic", "RemoteArbitraryTopic");
         rejected([&] { codec.unpack(corrupt); });
         corrupt = frame;
-        corrupt.value<std::string>("instance_id", id + "/trailing");
-        rejected([&] { codec.unpack_key(corrupt); });
+        corrupt.value<std::string>("instance_id", "wrong-instance");
+        rejected([&] { codec.unpack(corrupt); });
         corrupt = frame;
         {
             auto payload = corrupt.loan_value("payload");
             auto branch = payload.get().loan_value(mapping.branch);
-            branch.get().value<std::string>(mapping.key, "wrong-key");
+            branch.get().value<std::string>(mapping.instance_field, "wrong-instance");
         }
         rejected([&] { codec.unpack(corrupt); });
-        local.value<std::string>(mapping.key, "");
-        CHECK(codec.unpack(codec.pack(mapping.topic, local, metadata)).data == local);
-        local.value<std::string>(mapping.key, "7:/key/:0:");
-        CHECK(codec.unpack(codec.pack(mapping.topic, local, metadata)).data == local);
+        local.value<std::string>(mapping.instance_field, "");
+        check_decoded(codec.unpack(codec.pack(mapping.topic, local, sample_metadata)).data, local);
+        local.value<std::string>(mapping.instance_field, "7:/key/:0:");
+        check_decoded(codec.unpack(codec.pack(mapping.topic, local, sample_metadata)).data, local);
     }
     Data nav(types->type("platform_init_status"));
     rejected([&] { codec.unpack_key(nav); });
@@ -177,13 +192,34 @@ int main(int argc, char** argv) {
     invalid_metadata.source_id.clear();
     rejected([&] { codec.key_frame("PlatformInitStatus", nav, invalid_metadata); });
     auto frame = codec.pack("PlatformInitStatus", nav, metadata);
-    for (const auto& id : {"", "navigation/999999999999999999999999999:",
-                          "navigation/999:short", "wrong/18:PlatformInitStatus/0:",
-                          "navigation/018:PlatformInitStatus/0:"}) {
+    for (const auto& topic : {"", "Unknown", "ControlCommand"}) {
         auto corrupt = frame;
-        corrupt.value<std::string>("instance_id", id);
+        corrupt.value<std::string>("original_topic", topic);
         rejected([&] { codec.unpack_key(corrupt); });
     }
+    Data contact(types->type("contact_report"));
+    contact.value<std::string>("source", "untrusted-producer");
+    contact.value<std::string>("contact_id", "contact-101");
+    auto contact_metadata = metadata;
+    contact_metadata.source_id = "Boat30";
+    const auto first_contact = codec.pack("ContactReport", contact, contact_metadata);
+    CHECK(first_contact.value<std::string>("instance_id") == "contact-101");
+    auto received_contact = contact;
+    received_contact.value<std::string>("source", "Boat30");
+    CHECK(codec.unpack(first_contact).data == received_contact);
+    CHECK(contact.value<std::string>("source") == "untrusted-producer");
+    auto other_origin = first_contact;
+    other_origin.value<std::string>("source_id", "Boat31");
+    CHECK(codec.unpack(other_origin).data.value<std::string>("source") == "Boat31");
+    CHECK(codec.unpack_key(other_origin).data.value<std::string>("source") == "Boat31");
+    other_origin.value<std::string>("source_id", std::string(101, 'n'));
+    rejected([&] { codec.unpack(other_origin); });
+    rejected([&] { codec.unpack_key(other_origin); });
+    contact.value<std::string>("contact_id", "contact-102");
+    const auto second_contact = codec.pack("ContactReport", contact, contact_metadata);
+    CHECK(second_contact.value<std::string>("instance_id") == "contact-102");
+    CHECK(first_contact.value<std::string>("source_id")
+            == second_contact.value<std::string>("source_id"));
     {
         auto payload = frame.loan_value("payload");
         payload.get().value<Data>("health", Data(types->type("RouterHealth")));

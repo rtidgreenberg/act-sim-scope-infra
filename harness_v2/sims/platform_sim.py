@@ -396,6 +396,8 @@ class PlatformSim:
           self.waypoints = []
           self.waypoint_index = 0
           self.mission_phase = "CANCELLED"
+          self.navigation_speed_knots = 0.0
+          self.navigation_state = self.mission_phase
           self.loop_start = None
       elif operation == "set_time_scale":
           self.advance_mission()
@@ -451,6 +453,8 @@ class PlatformSim:
                       self.mission_phase = "ORBIT"
               elif self.waypoint_index == len(self.waypoints):
                   self.mission_phase = "COMPLETE"
+                  self.navigation_speed_knots = 0.0
+                  self.navigation_state = self.mission_phase
           return
       while travel_m > 0 and self.waypoint_index < len(self.waypoints):
           waypoint_lat, waypoint_lon = self.waypoints[self.waypoint_index]
@@ -471,6 +475,8 @@ class PlatformSim:
           travel_m = 0
       if self.waypoint_index == len(self.waypoints):
           self.mission_phase = "COMPLETE"
+          self.navigation_speed_knots = 0.0
+          self.navigation_state = self.mission_phase
 
     async def read_platform_data(self):
       print("Waiting for Platform Data ")

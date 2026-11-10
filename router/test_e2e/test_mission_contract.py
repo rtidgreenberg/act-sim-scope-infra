@@ -690,6 +690,8 @@ def simulator_state(mission_modules):
     simulator.time_scale = 1.0
     simulator.mission_elapsed_s = 0.0
     simulator.loop_start = None
+    simulator.navigation_speed_knots = 0.0
+    simulator.navigation_state = "IDLE"
     simulator.mission_command_results = {}
     return simulator
 
@@ -986,8 +988,32 @@ def test_motion_clock_reset_and_reliable_redelivery_idempotent(
     now[0] += 10
     sim.advance_mission()
     assert sim.mission_phase == "COMPLETE"
+    assert sim.navigation_speed_knots == 0
+    assert sim.navigation_state == "COMPLETE"
     assert sim.handle_mission_command(payload, "test-command", "Control_20", "run")[0]
     assert sim.mission_phase == "COMPLETE"
+
+
+@pytest.mark.parametrize("with_navigator", [False, True])
+def test_terminal_speed_is_zero_on_the_completion_tick(
+        simulator_state, mission_modules, monkeypatch, with_navigator):
+    _, module = mission_modules
+    monkeypatch.setattr(module.time, "monotonic", lambda: 1000.0)
+    sim = simulator_state
+    sim.args = SimpleNamespace(source="Platform_30")
+    sim.heading_deg = 0.0
+    sim.navigation_speed_knots = 10.0
+    sim.navigation_state = "DIRECT"
+    sim.mission_phase = "RTB"
+    sim.last_motion_at = 999.0
+    sim.waypoints = [(sim.latitude + 0.000001, sim.longitude)]
+    if with_navigator:
+        sim.navigator = SimpleNamespace(step=lambda start, destination, *_args: (
+            destination, "DIRECT"))
+    sim.advance_mission()
+    assert sim.mission_phase == "COMPLETE"
+    assert sim.navigation_speed_knots == 0
+    assert sim.navigation_state == "COMPLETE"
 
 
 def test_simulator_rejected_duplicates_and_cancel_are_idempotent(simulator_state):
@@ -996,8 +1022,12 @@ def test_simulator_rejected_duplicates_and_cancel_are_idempotent(simulator_state
     assert not result[0]
     assert sim.handle_mission_command(b'{"v":1,"op":"cancel"}', "bad", "Control_20", "run") == result
     assert sim.mission_phase == "IDLE"
+    sim.navigation_speed_knots = 10.0
+    sim.navigation_state = "DIRECT"
     assert sim.handle_mission_command(b'{"v":1,"op":"cancel"}', "cancel", "Control_20", "run")[0]
     assert sim.mission_phase == "CANCELLED"
+    assert sim.navigation_speed_knots == 0
+    assert sim.navigation_state == "CANCELLED"
     for index in range(205):
         sim.handle_mission_command(b'{"v":1,"op":"cancel"}', str(index), "Control_20", "run")
     assert len(sim.mission_command_results) == 200

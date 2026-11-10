@@ -198,13 +198,12 @@ struct platform_data {
 };
 
 struct contact_report {
-    @key
-    string<100> source;
+    @key string<100> source;
     string<64> run_id;
     string<100> source_node;
     uint64 audit_sequence;
     int64 sent_at_ns;
-    string<32> contact_id;
+    @key string<32> contact_id;
     string<32> classification;
     float bearing_deg;
     float range_m;
@@ -547,14 +546,14 @@ struct WanAudience {
 };
 
 // Audience selectors are additive; navigation may address control and all boats.
-// Only source_id and instance_id are keys, including Event with KEEP_ALL retention.
-// rtiddsgen maps bare legacy strings to 255 bytes; the qualified ID needs more.
+// The WAN instance is source_id + original_topic + the payload's instance identifier.
+// ContactReport uses contact_id; LAN keys are (source, contact_id), with source restored from source_id.
 @mutable
 struct WanEvent {
     @key string source_id;
+    @key string original_topic;
     @key string<512> instance_id;
     uint32 schema_version;
-    string original_topic;
     string source_role;
     string run_id;
     uint64 session_id;
@@ -568,9 +567,9 @@ struct WanEvent {
 @mutable
 struct WanStatus {
     @key string source_id;
+    @key string original_topic;
     @key string<512> instance_id;
     uint32 schema_version;
-    string original_topic;
     string source_role;
     string run_id;
     uint64 session_id;

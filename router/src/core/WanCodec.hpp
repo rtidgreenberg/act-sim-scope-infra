@@ -14,7 +14,7 @@ struct WanMapping {
     const char* family;
     const char* branch;
     uint32_t discriminator;
-    const char* key;
+    const char* instance_field; // Payload identity need not be a LAN DDS key.
     const char* qos_profile;
 };
 

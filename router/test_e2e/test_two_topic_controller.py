@@ -1,4 +1,4 @@
-"""Opt-in controller routing over Event/Status, with unchanged application LAN types."""
+"""Opt-in controller routing over Event/Status, including router-owned contact origins."""
 
 import re
 import time
@@ -18,7 +18,7 @@ CASES = [
     ("ActTeamAssignment", "TeamAssignment", "platform_node", "control"),
     ("ActPlatformStatusMode", "PlatformStatusMode", "platform_node", "control"),
     ("PlatformCommandAck", "control_command_ack", "source", "platform"),
-    ("ContactReport", "contact_report", "source", "platform"),
+    ("ContactReport", "contact_report", "contact_id", "platform"),
     ("PlatformInitStatus", "platform_init_status", "source", "platform"),
     ("PlatformData", "platform_data", "source", "platform"),
     ("PlatformMissionStatus", "platform_mission_status", "source", "platform"),
@@ -148,10 +148,13 @@ def test_all_application_cases_and_only_two_wan_topic_names(mesh):
         source = control if role == "control" else boat
         destination = other if topic == "PlatformData" else boat if role == "control" else control
         sample = source.sample(type_name, **{key: "Boat30" if key == "platform_node" else topic})
-        if key == "source":
+        if key == "source" or topic == "ContactReport":
             sample["run_id"] = "phase4"
             sample["audit_sequence"] = 42
             sample["sent_at_ns"] = 123456789
+        if topic == "ContactReport":
+            sample["source"] = "Boat30"
+            sample["source_node"] = "Boat30"
         if topic == "ControlCommand":
             sample["destination"] = "Boat30"
             sample["payload"] = list(range(256)) * 32
@@ -175,6 +178,66 @@ def test_all_application_cases_and_only_two_wan_topic_names(mesh):
     assert {item["topic"] for item in publications} == {"Event", "Status"}, publications
     for node in nodes:
         assert "wan_route_error" not in nodes[node][0].log_path.read_text()
+
+
+def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
+    nodes, wan, provider = mesh
+    contacts = nodes["Control_20"][1].reader("ContactReport", "contact_report")
+    events = wan.reader("Event", "WanEvent", qos=reader_qos("wan_event"))
+    expected = {}
+    handles = []
+    endpoints = []
+
+    def receive_contact(writer, sent, received):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            assert alive(nodes)
+            writer.write(sent)
+            for item in contacts.take():
+                if item.info.valid and item.data["audit_sequence"] == received["audit_sequence"]:
+                    assert item.data == received
+                    return item.info.instance_handle
+            time.sleep(0.1)
+        pytest.fail(f"missing contact {received['source']}/{received['contact_id']}")
+
+    for sequence, (node, contact_id) in enumerate(
+            (("Boat30", "contact-101"), ("Boat30", "contact-102"), ("Boat31", "contact-101")), 1):
+        source = nodes[node][1]
+        fields = dict(source_node=node, contact_id=contact_id,
+            run_id="contact-instances", audit_sequence=sequence, sent_at_ns=123456789 + sequence)
+        sample = source.sample("contact_report", source="", **fields)
+        received = source.sample("contact_report", source=node, **fields)
+        writer = source.writer("ContactReport", "contact_report")
+        handle = receive_contact(writer, sample, received)
+        assert all(handle != previous for previous in handles)
+        handles.append(handle)
+        endpoints.append((writer, sample, received))
+        expected[(node, "ContactReport", contact_id)] = sample
+
+    found = {}
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and found.keys() != expected.keys():
+        assert alive(nodes)
+        for sample in events.take():
+            if not sample.info.valid or sample.data["original_topic"] != "ContactReport":
+                continue
+            frame = sample.data
+            key = (frame["source_id"], frame["original_topic"], frame["instance_id"])
+            assert key in expected, key
+            assert frame["schema_version"] == 2
+            assert frame["payload.contact_report"] == expected[key]
+            assert frame["run_id"] == expected[key]["run_id"]
+            assert frame["audit_sequence"] == expected[key]["audit_sequence"]
+            assert frame["sent_at_ns"] == expected[key]["sent_at_ns"]
+            found[key] = frame
+        time.sleep(0.1)
+    assert found.keys() == expected.keys(), found
+
+    for handle, (writer, sample, received) in zip(handles, endpoints):
+        sample["source"] = "forged-producer-origin"
+        sample["audit_sequence"] += 100
+        received["audit_sequence"] += 100
+        assert receive_contact(writer, sample, received) == handle
 
 
 def test_team_updates_exact_interests_and_source_alias_gates(mesh):
@@ -329,8 +392,9 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
                     assert frame["session_id"] == health["session_id"] != 0
                     assert frame["audit_sequence"] == health["heartbeat_seq"]
                     assert frame["sent_at_ns"] == health["send_timestamp"]
-                    assert frame["instance_id"] == (
-                        f"health/12:RouterHealth/{len(health['router'])}:{health['router']}")
+                    assert frame["original_topic"] == "RouterHealth"
+                    assert frame["schema_version"] == 2
+                    assert frame["instance_id"] == health["router"]
                     frames[health["router"]] = frame
             if predicate(frames):
                 return frames
@@ -378,7 +442,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
     ready(nodes, "Control_20", "platform_init_status")
     frame = dds.DynamicData(frames["Boat31/phase4"])
     frame["source_id"] = "ProbeNode"
-    frame["instance_id"] = "health/12:RouterHealth/16:ProbeNode/phase4"
+    frame["instance_id"] = "ProbeNode/phase4"
     frame["payload.health.router"] = "ProbeNode/phase4"
     reported_ages = {
         str(ref["router"]): int(ref["last_seen_delta_ms"])
@@ -406,8 +470,8 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
     status_writer = probe_writer
     navigation = wan.sample(
         "WanStatus", source_id="ProbeNode",
-        instance_id="navigation/18:PlatformInitStatus/9:ProbeNode",
-        schema_version=1, original_topic="PlatformInitStatus")
+        instance_id="ProbeNode",
+        schema_version=2, original_topic="PlatformInitStatus")
     navigation["payload.navigation.source"] = "ProbeNode"
     navigation["audience.global"] = True
     navigation["audience.control"] = True

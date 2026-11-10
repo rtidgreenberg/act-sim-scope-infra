@@ -59,8 +59,19 @@ Starting from the production configuration, the isolated controller tests:
 Startup validates the Status QoS alias whenever application routes or presence
 require Status, including Event-only and presence-only configurations.
 
-Envelope keys are `source_id + instance_id`; `source_id` is the configured node
-name, not the internal router process name. Session remains non-key metadata.
+Schema version 2 envelope keys are `source_id + original_topic + instance_id`.
+The router stamps `source_id` from the configured system/node name, not the
+internal router process name. `instance_id` is the raw payload identity field,
+not a branch/topic-prefixed encoding; session remains non-key metadata.
+ContactReport uses its existing `contact_id` as `instance_id`. Its LAN DDS key is
+`(source, contact_id)`. On WAN-to-LAN decode, the receiving router overwrites
+`source` with the envelope's originating `source_id`, including key-only recovery;
+it never substitutes its own node identity or trusts the producer's payload source.
+Local producers may leave `source` empty. The existing LAN source bound is 100
+bytes; longer WAN origins are explicitly rejected for ContactReport. All other
+contact fields are preserved. Other payload key annotations
+and all payload fields are unchanged. This replaces schema version 1 and
+requires a coordinated participant rebuild/restart, not a mixed-version mesh.
 Shared Status uses XML-authored best-effort, volatile, KEEP_LAST(1), a 2-second
 deadline and infinite liveliness. The direct deadline listener checks only the
 reported instance: a RouterHealth miss queues STALE for the next mesh tick

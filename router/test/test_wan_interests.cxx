@@ -147,6 +147,20 @@ int main(int argc, char** argv) {
         alias.topic = "PlatformInitStatus";
     }
     validate_wan_source_interests({full.front(), alias});
+    dds::core::xtypes::DynamicData contact(model->type("contact_report"));
+    contact.value<std::string>("source", "Boat30");
+    contact.value<std::string>("contact_id", "contact-101");
+    contact.value<std::string>("run_id", "contact-run");
+    contact.value<uint64_t>("audit_sequence", 23);
+    contact.value<int64_t>("sent_at_ns", 123456789);
+    WanInterest contact_interest;
+    contact_interest.topic = "ContactReport";
+    const auto contact_metadata = wan_source_metadata(
+            contact_interest, contact, "Boat30", "router", "platform", 7);
+    CHECK(contact_metadata.source_id == "Boat30");
+    CHECK(contact_metadata.run_id == "contact-run");
+    CHECK(contact_metadata.audit_sequence == 23);
+    CHECK(contact_metadata.sent_at_ns == 123456789);
     for (const auto& mapping : wan_mappings()) {
         if (std::string(mapping.branch) == "health") {
             continue;

@@ -2,10 +2,10 @@
 
 Date: 2026-11-08
 
-Status: Migration draft, with the first SDK qualification checks completed in
-§3.3 and the whole-structure DynamicData adapter spike completed in §3.4.
-Production IDL, QoS, routing, simulator, and live-mesh migration are not
-implemented. The isolated fixtures do not change the deployed contract.
+Status: Opt-in production implementation and schema version 2 live deployment
+validated through §3.18. The canonical configuration still defaults to legacy.
+The dated checkpoints below preserve earlier investigation states; general
+application lifecycle/restart/load qualification remains a separate open gate.
 
 Implementation investigation: 2026-11-08. Connext AI was consulted, then its
 load-bearing claims were checked against the installed 7.7.0 generator/binding.
@@ -51,8 +51,9 @@ status-mode controls, presence, passive RTT, and delivery evidence. This is not
 a simultaneous redesign of radio routing, discovery protocol, or status cadence.
 Historical spike workloads and reports retain their original contracts.
 
-For this first conversion, keep every union branch's existing IDL structure
-unchanged, including command octets and existing keys. Reading key/audience/audit
+Keep every union branch's existing IDL structure unchanged, including command
+octets, except the approved ContactReport LAN key/source rule in §3.17.
+Reading key/audience/audit
 fields to populate the envelope is necessary metadata handling, not a
 field-by-field payload transformation. Do not make a field-mapping engine or
 per-command-operation schema redesign a prerequisite.
@@ -122,19 +123,21 @@ and qualified as described in §3.6. Future schema evolution remains a separate 
 | Run/session identity, sequence, and timestamps | Prevent restart collisions and preserve delivery/freshness evidence |
 | Schema version | Define compatibility and explicit rejection of unsupported contracts |
 
-**Selected Event/Status key:** `source_id + instance_id` (§3.12 supersedes the
-earlier three-key design). `source_id` is the configured fleet/node name, such
-as `Platform_30`, not the internal router process name. Make
-`instance_id` variant-qualified: for example, `navigation/primary`,
-`environmental/sensor-7`, and `health/router`. The user selected this design
-after the 7.7 qualification. It preserves kind solely as the union discriminator.
-The variant prefix is part of the stable instance identity, not a separately
-selectable kind field. The router stamps both keys; session remains non-key metadata.
+**Selected Event/Status key (schema version 2):**
+`source_id + original_topic + instance_id` (§3.16 supersedes §3.12; §3.17 defines LAN contact keys).
+`source_id` is the configured system/node name, such as `Platform_30`, not the
+internal router process name. `original_topic` identifies the allowed mapping;
+`instance_id` is the raw catalog-selected payload identity, not an encoded
+branch/topic/key string. ContactReport uses its existing `contact_id`; its LAN
+DDS key is `(source, contact_id)`, with source filled from WAN `source_id` on
+receive rather than trusted from the application payload. Other payload
+key annotations remain unchanged. The union discriminator still selects the
+payload branch; session remains non-key metadata.
 
 Use one shared identity rule in encoders, decoders, lifecycle handling, and
-audit consumers. Reject an instance prefix that disagrees with the discriminator
-for valid data. Keep both the prefix mapping and union discriminator values
-stable across schema versions. Do not key timestamps, sequences, team identity,
+audit consumers. Reject an original topic, payload branch or payload instance
+identifier that disagrees with the catalog/envelope for valid data. Keep the
+mapping and discriminator values stable across schema versions. Do not key timestamps, sequences, team identity,
 membership version, or an ever-changing payload.
 
 Do **not** annotate the union member `@key`, or use
@@ -954,6 +957,138 @@ mesh and its persistent binary were not modified or restarted, so these review
 fixes require a later owned rebuild/restart before they affect the running mesh.
 No commits or pushes were made.
 
+### 3.16 Explicit three-key identity and initially unkeyed contacts
+
+The user selected `(source_id, original_topic, instance_id)` as the WAN instance
+identity. Both envelopes now key these three explicit fields. The router supplies
+the system-level `source_id`; the catalog supplies `original_topic`; the payload
+identity field supplies the generic `instance_id` without a branch/topic prefix.
+Session, sequence, timestamps and audience remain non-key metadata.
+
+For ContactReport, the identity field is the existing `contact_id`, not `source`.
+At this checkpoint the contact payload was unkeyed on the LAN; §3.17 supersedes
+that LAN-key decision. No new payload field is
+added or renamed. `source` remains ordinary system-origin data, so C2 applications
+can identify contacts by `(source, contact_id)`. Multiple contacts from one system
+and the same contact ID from different systems have distinct WAN identities.
+This does not create per-contact LAN DDS instances. The codec preserves complete
+payloads, and contact run/sequence/timestamp audit metadata remains populated
+independently of the chosen identity field.
+
+This is **schema version 2**. The committed XML is regenerated from the IDL.
+Key-only lifecycle handling reads the explicit original-topic key; full decode
+checks the version, family, branch and payload instance identity. Version 1
+encoded IDs are no longer the production contract. Upgrading requires rebuilding
+and restarting routers and application participants together; the retained live
+mesh has not been changed and still runs the earlier schema.
+
+Fresh isolated validation passed:
+
+- 9/9 C++ tests after rebuilding the router and regenerated types.
+- 14/14 native DDS integration tests in 215.95 seconds, including multi-contact
+  delivery, source preservation, shared Status presence and legacy forwarding.
+- 21/21 selected production qualification cases in 28.97 seconds; eight historical
+  fixture cases were deselected. Native instance handles distinguish contacts,
+  systems and original topics while remaining stable across non-key updates.
+- Generated XML confirms exactly three keys on each WAN envelope and no keys on
+  the original ContactReport type.
+
+Retained evidence: [C++ results](../debug/test_reports/wan_three_key_cpp.txt),
+[DDS results](../debug/test_reports/wan_three_key_dds.xml), and
+[qualification results](../debug/test_reports/wan_three_key_qualification.xml).
+These are source/build validation results, not a deployment or live mission rerun.
+
+### 3.17 Router-owned LAN contact origins
+
+The user selected `(source, contact_id)` as the ContactReport LAN DDS key.
+Both are existing fields; no `source_id` field is added to the application type.
+The originating router still sets the WAN envelope's system-level `source_id`;
+`instance_id` remains the raw `contact_id`.
+
+On receive, full-payload decode copies the contact structure and then overwrites
+its `source` with the envelope's `source_id` before LAN publication. Key-only
+decode reconstructs the same `(source, contact_id)` identity. The receiving
+router must not substitute its own system identity or trust the producer's
+payload source. Producers may leave source empty. All other payload and audit
+fields remain unchanged. Origins exceeding the existing 100-byte LAN source
+bound are explicitly rejected rather than truncated.
+
+This makes multiple contacts from one system and equal contact IDs from different
+systems distinct native DDS instances at C2. Producer source changes and audit
+updates do not change the C2 instance. Router stamping is application logic, not
+field-level DDS access control. At this checkpoint, this extended the undeployed
+schema version 2 change and required a coordinated participant rebuild/restart.
+The running schema version 1 mesh was unchanged until §3.18.
+
+Fresh isolated validation passed 9/9 C++ tests, 14/14 native DDS integration
+tests in 217.06 seconds, and 21/21 selected production qualification cases in
+27.59 seconds (eight historical fixture cases deselected). The native contact
+case observes three distinct C2 DDS instance handles for two contacts from one
+system and a reused contact ID from another, with producer source initially
+empty. Subsequent updates with forged producer sources retain those same C2
+handles and have the router-assigned origins. Codec coverage verifies full
+payload preservation except source, key-only source reconstruction, producer
+sample immutability, and the 100-byte boundary.
+
+Retained evidence: [C++ results](../debug/test_reports/contact_lan_source_cpp.txt),
+[DDS results](../debug/test_reports/contact_lan_source_dds.xml), and
+[qualification results](../debug/test_reports/contact_lan_source_qualification.xml).
+At this checkpoint the live five-platform mesh remained healthy and unchanged;
+this was not a deployment or live mission rerun.
+
+### 3.18 Full regression gate and schema version 2 live deployment
+
+The final review's stale IDL comment was corrected to describe the ContactReport
+LAN key and router-owned source restoration. The persistent router binary was
+rebuilt, and all six participants were restarted through the owned EMANE
+lifecycle with five platforms and `--wan-contract two_topic_union`.
+
+The final automated gate passed with zero failures, errors, or skips:
+
+- **9/9 C++ test targets**.
+- **283 Python/router/DDS/browser tests plus 169 subtests**, 509.62 s.
+- **29/29 full WAN qualification cases**, 64.64 s.
+- **87 spike tests plus 63 subtests** across bootstrap, MAC accounting, and
+  WAN data-plane tradeoffs.
+
+The first qualification attempt lacked the required isolation guard. The complete
+rerun used the existing qualification runner's isolated network namespace and
+NET_ADMIN capability, not a bypassed guard or host-network impairment.
+
+The first live mission attempt passed four workflows and exposed a pre-existing
+simulator defect: the terminal return-to-base tick reported COMPLETE with the
+last movement step's nonzero average speed. With explicit user approval, both
+completion paths and cancellation now immediately publish zero navigation speed
+and their terminal navigation state. Six regression checks failed before the
+fix and passed afterward. The full automated gate above was repeated after this
+fix; no live assertions were weakened.
+
+All **five unchanged live browser mission workflows passed**, zero skips,
+**365.59 s**: blackout/Init recovery, automatic reporting and target toggles,
+drag/team/validate/go with cross-tab DDS and return-to-base, concurrent
+multi-team missions, and live goal inheritance/reassignment. Fresh screenshots
+were visually inspected, including the rendered two-team orbit scenario.
+
+Post-test API checks confirmed five available/team-confirmed platforms, all five
+control peers ALIVE/ROUTER_OK, cancelled missions, zero speed, unassigned teams,
+1x clocks, and an available controller with no impairments. The schema version 2
+mesh remains running on port 8080 in `debug/mesh_runs/emane`. All six actual router
+executables matched the rebuilt binary during deployment verification. Native
+matched-participant-data warnings remain; this is not a claim of clean logs or
+complete application disposal/restart/load qualification.
+
+Retained local evidence: [C++](../debug/test_reports/contact_schema2_full_cpp.txt),
+[Python](../debug/test_reports/contact_schema2_full_python.xml),
+[qualification](../debug/test_reports/contact_schema2_full_qualification.xml),
+[bootstrap](../debug/test_reports/contact_schema2_spike_bootstrap.xml),
+[accounting](../debug/test_reports/contact_schema2_spike_accounting.xml),
+[tradeoffs](../debug/test_reports/contact_schema2_spike_tradeoffs.xml),
+[red regression](../debug/test_reports/contact_schema2_terminal_speed_before.xml),
+[green regression](../debug/test_reports/contact_schema2_terminal_speed_after.xml),
+[live missions](../debug/test_reports/contact_schema2_live_missions.xml),
+[screenshots](../debug/test_reports/contact_schema2_mission_screenshots/), and
+[deployed binary hashes](../debug/test_reports/contact_schema2_deployed_binaries.json).
+
 ## 4. Audience selection and runtime changes
 
 Use ContentFilteredTopics (CFTs) for sample selection. Keep the selection fields
@@ -1427,10 +1562,11 @@ agreed budgets stop rollout and trigger the tested rollback.
 
 ## 10. Remaining decisions and integration checks
 
-- Final envelope fields/bounds, union case names, schema evolution, and key layout.
-  Status uses the selected variant-qualified IDs; the draft proposes the same
-  canonical variant/topic/original-key tuple for Event, pending retention/resource
-  review. No field mapping or typed-operation redesign in the first conversion.
+- Final envelope bounds, union case names, schema evolution, and resource review.
+  Event/Status use the explicit three-key version 2 identity in §3.16.
+  ContactReport uses `(source, contact_id)` on the LAN and `contact_id` on the
+  WAN, with receive-side source restoration as described in §3.17.
+  No payload field mapping or typed-operation redesign is introduced.
 - Final audience and branch-content CFT expressions and filter-resource budget
   for each endpoint; §3.3 proves representative sender filtering, not every
   final variant or fleet-scale interest combination.

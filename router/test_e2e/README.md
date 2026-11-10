@@ -64,7 +64,7 @@ WAN publication names, addressed commands, broadcast assignments, status mode,
 team joins/leaves, exact-name isolation, route-specific interests, source-alias
 gates, rejected-command rollback, and wire-type readiness/error containment.
 Presence remains enabled: health shares the single `wan_union_status` writer
-and reader with application Status. The fifth controller test checks two-key
+and reader with application Status. The health controller test checks three-key
 envelope identity/audit fields, exact shared endpoint counts, idle health,
 LAN summaries, passive RTT and physical send/receive counters, health deadline
 STALE, ignored nonhealth deadlines, application-Status recovery, graceful
@@ -73,6 +73,13 @@ restart with a fresh session. With application traffic the WAN
 publication set is exactly Event/Status; health alone creates only Status.
 Application-only traffic keeps direct source ages fresh while cached health
 topology ages continue increasing; a new health report resets the cached age.
+The contact controller case sends multiple contacts from one system and a
+reused contact ID from another, checking `(source_id, original_topic, instance_id)`
+on the WAN and distinct DDS `(source, contact_id)` instance handles at C2.
+Contact producers leave `source` empty; the receiving router fills it from the
+WAN `source_id`. Updates with a forged producer source retain the same C2 instance.
+Other payload fields remain unchanged, and `contact_id` supplies the generic
+WAN `instance_id`.
 The WAN observer's built-in publication/subscription readers start before the routers;
 starting it after discovery loses the evidence this assertion needs.
 
@@ -87,10 +94,13 @@ python3 -m pytest -vv -p no:cacheprovider router/test_e2e/test_mission_workflow.
 The contract flag selects physical Event/Status delivery rows; command ACKs,
 LAN mission state, motion, team behavior and recovery assertions are unchanged.
 Without that flag the same tests retain legacy wire-topic expectations.
+The mission contract regressions also require zero speed and a matching navigation
+state on the first `COMPLETE` or `CANCELLED` update, without waiting for another
+simulation tick. Completion is checked with and without onboard navigation.
 
 The [adapter runner](../qualification/run_adapter_checks.sh) fresh-builds the
-router and executes nine C++ tests plus twelve DDS checks (four adapter pilots,
-five controller tests and three legacy regressions) in an owned network namespace.
+router and executes nine C++ tests plus thirteen DDS checks (four adapter pilots,
+six controller tests and three legacy regressions) in an owned network namespace.
 It retains only compact reports in `debug/test_reports`. It does not run the full
 legacy/Python/browser suite or complete lifecycle/health-congestion/load qualification.
 
