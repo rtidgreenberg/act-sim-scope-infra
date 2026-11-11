@@ -61,7 +61,8 @@ EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE transport SYSTEM "file:///usr/share/emane/dtd/transport.dtd">
 <transport name="${NODE_NAME} virtual transport" library="transvirtual">
-    <param name="bitrate" value="1M"/>
+    <!-- RF Pipe limits the radio; a TAP cap also throttles aggregate RX + TX. -->
+    <param name="bitrate" value="0"/>
     <param name="devicepath" value="/dev/net/tun"/>
     <param name="device" value="emane0"/>
     <param name="address" value="$EMANE_IP"/>
@@ -81,7 +82,7 @@ EOF
 <!DOCTYPE mac SYSTEM "file:///usr/share/emane/dtd/mac.dtd">
 <mac name="RF Pipe MAC" library="rfpipemaclayer">
     <param name="enablepromiscuousmode" value="off"/>
-    <param name="datarate" value="1M"/>
+    <param name="datarate" value="2M"/>
     <param name="jitter" value="0"/>
     <param name="delay" value="0"/>
     <param name="flowcontrolenable" value="off"/>

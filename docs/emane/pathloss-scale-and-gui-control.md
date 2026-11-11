@@ -1,6 +1,6 @@
 # EMANE Pathloss Scale and GUI Control
 
-Date: 2026-09-15
+Updated: 2026-11-11
 
 This note captures the validated behavior of the dashboard EMANE Experiment controller and the observed RF Pipe pathloss scale in the current container mesh.
 
@@ -8,7 +8,8 @@ This note captures the validated behavior of the dashboard EMANE Experiment cont
 
 The active mesh uses EMANE RF Pipe on the WAN leg:
 
-- MAC datarate: `1M` bps
+- MAC datarate: `2M` bps (user-approved increase from `1M` on 2026-11-11)
+- Virtual transport bitrate: `0` (no additional host TAP rate limit)
 - MAC delay/jitter: `0`
 - PHY tx power: `0 dBm`
 - PHY antenna gains: `0 dB`
@@ -65,7 +66,23 @@ The packaged RF Pipe PCR curve maps SINR linearly from `0 dB -> 0%` to `20 dB ->
 
 ## Message Size and Rate
 
-The current dashboard traffic is far below the configured RF Pipe datarate. A representative live sample under `90 dB` showed about `99` Domain 200 packets and `15.9 KB` aggregate over `1.13 s` across the observers. This is not saturating a `1 Mbps` RF Pipe link.
+The virtual transport's `bitrate` is a combined upstream/downstream limit, not
+the radio's transmit rate. Keep it disabled in the canonical container mesh:
+RF Pipe supplies the `2M` radio rate, and CommEffect still supplies operator
+latency/loss/bandwidth experiments. A second `1M` cap on the TAP transport can queue
+incoming fleet traffic behind outgoing traffic, even when the radio transmit
+queue looks healthy.
+
+During the six-platform mission investigation on 2026-11-10, packet timestamps
+showed navigation samples leaving the source WAN within about 1 ms but arriving
+at another platform 6.5-8.6 seconds after publication. The installed EMANE 1.5.3
+transport manifest confirms the combined-direction semantics. Do not hide delayed
+locations by increasing the navigator's 2.5-second stale-position threshold.
+
+An earlier live sample under `90 dB` showed about `99` Domain 200 packets and
+`15.9 KB` aggregate over `1.13 s` across the observers, below the configured RF Pipe
+rate. That measurement does not establish headroom for a larger fleet or a newer
+diagnostic payload; measure the current workload rather than reusing that result.
 
 Since the PCR curve uses `pktsize="0"`, message size does not change the probability-of-reception mapping for this RF Pipe configuration. Packet size/rate may still matter for queues, DDS reliability, and application behavior, but it is not why `90 dB` stayed at `100%` delivery in the observed run.
 
