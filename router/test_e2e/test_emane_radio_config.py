@@ -1,4 +1,4 @@
-"""Nominal EMANE limits: rate-limit the radio, not the host's TAP transport."""
+"""Canonical EMANE radio limits, distinct from dashboard configuration tests."""
 
 import re
 import xml.etree.ElementTree as ET
