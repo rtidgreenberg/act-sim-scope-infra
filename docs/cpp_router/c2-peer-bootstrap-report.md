@@ -222,6 +222,11 @@ See also the [Routing Service replacement investigation](routing-service-replace
 
 ## Limitations and next qualification
 
+The [RTI SPDP/SPDP2 performance guidance review](participant-discovery-performance-guidance.md)
+adds a discovery-bandwidth comparison framework and vendor questions about
+unreachable peers, locator fanout, recovery, and benchmark provenance. It does
+not turn this small functional spike into a performance qualification.
+
 The experiment establishes a functional discovery path, not production readiness:
 
 - Private loopback only; no EMANE impairment, RF loss, NAT, authentication, or WAN

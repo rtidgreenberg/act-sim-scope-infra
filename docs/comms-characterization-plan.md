@@ -6,6 +6,13 @@
 
 **Evidence:** [Customer workload characterization](comms-workload-characterization.md).
 
+**Discovery reference (2026-11-11):**
+[RTI SPDP/SPDP2 guidance, ACT applicability, and open questions](cpp_router/participant-discovery-performance-guidance.md).
+Treat its vendor benchmarks as reference workloads, not ACT results; resolve
+their percentage/metric discrepancies before citing savings. The review also
+distinguishes current single-WAN-participant/two-topic work from the historical
+topology inventory below.
+
 **Handling:** Internal, customer-derived technical information; review before external distribution.
 
 ## 1. Objective and approach

@@ -1,5 +1,15 @@
 # Tasks: SPDP2-on-WAN feasibility, then wildcard-boot-then-revert init phase
 
+> Historical task assignment, not current protocol status. Task 1 was answered
+> by D92 and its 2026-07-22 correction; D94 re-adopted SPDP2 for the WAN.
+> The claimed delayed-enable failure and intermediate cross-process failure
+> rates below were superseded. Read the
+> [corrected spike](../../spikes/spdp2_delayed_enable/README.md) and
+> [current RTI guidance and open questions](participant-discovery-performance-guidance.md)
+> before using these tasks. The current single-WAN-participant design does not
+> use participant partitions for team membership; Task 2 is not an approved
+> requirement for that design.
+
 Two sequential task assignments, each self-contained enough to hand to a fresh session with
 no prior conversation context. **Do Task 1 first — its outcome changes Task 2's timing
 assumptions.** Both are spikes: build under `spikes/<name>/` with `PLAN.md` + runner(s) +
