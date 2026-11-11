@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="340" viewBox="0 0 1160 340" role="img" aria-labelledby="title desc">
+  <title id="title">Isolate local discovery behind one router per node</title>
+  <desc id="desc">Applications on three nodes discover locally in separate DDS domains. Each local domain connects to a blue Connext router. Only these routers connect to the orange shared mesh-radio WAN discovery domain.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="#004c97"/></marker>
+    <style>
+      text { font-family: Arial, "Liberation Sans", sans-serif; fill: #333; font-size: 21px; text-anchor: middle; }
+      .heading { fill: #004c97; font-weight: bold; font-size: 24px; }
+      .white { fill: white; font-weight: bold; }
+      .small { font-size: 18px; }
+      .node { fill: #f2f4f6; stroke: #bbbcbc; stroke-width: 2; }
+      .app { fill: white; stroke: #004c97; stroke-width: 2; }
+      .router { fill: #004c97; }
+      .link { fill: none; stroke: #004c97; stroke-width: 3; marker-start: url(#arrow); marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect x="10" y="10" width="360" height="228" rx="10" class="node"/>
+  <text x="190" y="43" class="heading">C2 / control node</text>
+  <rect x="35" y="62" width="310" height="48" rx="6" class="app"/>
+  <text x="190" y="93">C2 applications</text>
+  <path d="M190 120 V170" class="link"/>
+  <rect x="55" y="132" width="270" height="26" fill="#f2f4f6"/>
+  <text x="190" y="152" class="small">Local discovery: domain A</text>
+  <rect x="60" y="182" width="260" height="44" rx="6" class="router"/>
+  <text x="190" y="211" class="white">Connext router</text>
+  <rect x="400" y="10" width="360" height="228" rx="10" class="node"/>
+  <text x="580" y="43" class="heading">Platform 1</text>
+  <rect x="425" y="62" width="310" height="48" rx="6" class="app"/>
+  <text x="580" y="93">Platform applications</text>
+  <path d="M580 120 V170" class="link"/>
+  <rect x="445" y="132" width="270" height="26" fill="#f2f4f6"/>
+  <text x="580" y="152" class="small">Local discovery: domain B</text>
+  <rect x="450" y="182" width="260" height="44" rx="6" class="router"/>
+  <text x="580" y="211" class="white">Connext router</text>
+  <rect x="790" y="10" width="360" height="228" rx="10" class="node"/>
+  <text x="970" y="43" class="heading">Platform 2 ... N</text>
+  <rect x="815" y="62" width="310" height="48" rx="6" class="app"/>
+  <text x="970" y="93">Platform applications</text>
+  <path d="M970 120 V170" class="link"/>
+  <rect x="835" y="132" width="270" height="26" fill="#f2f4f6"/>
+  <text x="970" y="152" class="small">Separate local DDS domains</text>
+  <rect x="840" y="182" width="260" height="44" rx="6" class="router"/>
+  <text x="970" y="211" class="white">Connext router per node</text>
+  <path d="M190 238 V284" class="link"/>
+  <path d="M580 238 V284" class="link"/>
+  <path d="M970 238 V284" class="link"/>
+  <rect x="30" y="296" width="1100" height="40" rx="8" fill="#fff1df" stroke="#ed8b00" stroke-width="2"/>
+  <text x="580" y="323">Mesh-radio WAN | Separate DDS domain | Only selected router endpoints</text>
+</svg>

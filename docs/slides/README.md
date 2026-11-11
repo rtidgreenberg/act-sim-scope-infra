@@ -4,9 +4,18 @@
 |---|---|---|---|
 | Link health | Measure presence, RTT, and delivery pressure separately | [Markdown](connext-ddil-link-health.md) | [PDF](connext-ddil-link-health.pdf) |
 | Connext Edge Mesh Overview | Five slides: system diagram, isolation scope/runtime control, data-filtering strategies, discovery options, and DDIL link-health measurements | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) |
-| Discovery strategies | Choose multicast, unicast, C2 directory, or CDS for operational needs | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
+| Discovery strategies | Four steps for mesh radio: router isolation, smaller discovery announcements, multicast vs. unicast, and peer setup | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 
-The discovery-strategies deck remains a separate, detailed reference.
+The discovery-strategies deck is a separate, simplified mesh-radio walkthrough.
+Its first slide uses a block diagram matching the edge-mesh overview:
+gray node groups, blue routers, and an orange shared WAN block.
+Its type-propagation reduction is explicitly scoped to Connext versions before 7.7;
+WAN consumers must already have compatible types, and dynamic type discovery still needs propagation.
+Background references: [pre-7.7 type representation (7.3)](https://community.rti.com/static/documentation/connext-dds/7.3.0/doc/manuals/connext_dds_professional/extensible_types_guide/extensible_types/Type_Representation.htm),
+[discovery peer configuration](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/ConfigPeersListUsed_inDiscov.htm),
+and [CDS introduction](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/addon_products/cloud_discovery_service/introduction.html).
+The [C2 bootstrap report](../cpp_router/c2-peer-bootstrap-report.md) retains the detailed
+application-directory evidence. The simplified deck does not claim measured radio bandwidth savings.
 The Connext Edge Mesh Overview deck contains a current-system block diagram, the scope matrix,
 a comparison of route-based exposure and reader-driven interest, a discovery-options comparison,
 and a simple link-health summary adapted from the link-health deck.

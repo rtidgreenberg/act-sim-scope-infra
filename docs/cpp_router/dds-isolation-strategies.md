@@ -5,8 +5,8 @@
 **Scope:** Connext 7.7.0 squad/team discovery and data isolation. This is a
 comparison report, not a new architecture decision or runtime qualification.
 
-**Presentation:** [PDF slide](../slides/dds-isolation-strategies.pdf) |
-[Editable Marp source](../slides/dds-isolation-strategies.md).
+**Presentation:** [Connext Edge Mesh Overview PDF](../slides/connext-edge-mesh-overview.pdf) |
+[Editable Marp source](../slides/connext-edge-mesh-overview.md).
 
 ## Executive distinction
 
