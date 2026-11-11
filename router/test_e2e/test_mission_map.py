@@ -118,6 +118,67 @@ def push_mission(page, kind, data):
       'act-dashboard-message', {detail: {type, data}}))""", [kind, data])
 
 
+def test_waypoints_stay_small_through_zoom_resize_and_drag(mission_ui):
+    ui = mission_ui
+    page = ui.page
+    push_mission(page, "mission_command",
+                 dict(ui.history["commands"][0], state="accepted", updated_at=2))
+    page.locator("#mission-create").click()
+    page.get_by_role("menuitem", name="Draw waypoints", exact=True).click()
+    point = page.locator("#mission-map svg").evaluate("""svg => {
+      const p = new DOMPoint(500, 350).matrixTransform(svg.getScreenCTM());
+      return {x: p.x, y: p.y};
+    }""")
+    page.mouse.click(point["x"], point["y"])
+    marker = page.locator('[data-waypoint="0"]')
+    circle = marker.locator("circle")
+
+    def assert_compact():
+        box = circle.bounding_box()
+        assert box["width"] == pytest.approx(7, abs=.1)
+        assert box["height"] == pytest.approx(7, abs=.1)
+        assert marker.locator("text").evaluate("""node => {
+          const matrix = node.getScreenCTM();
+          return parseFloat(getComputedStyle(node).fontSize) * Math.hypot(matrix.a, matrix.b);
+        }""") == pytest.approx(9, abs=.1)
+
+    assert_compact()
+    for _ in range(6):
+        page.locator("#mission-zoom-in").click()
+        assert_compact()
+    push_mission(page, "mission_inventory", ui.fleet)
+    assert_compact()
+    page.set_viewport_size({"width": 1000, "height": 800})
+    page.wait_for_function("""() => {
+      const node = document.querySelector('[data-waypoint="0"] circle');
+      return Math.abs(node.getBoundingClientRect().width - 6) < .1;
+    }""")
+    assert_compact()
+    box = circle.bounding_box()
+    start = {"x": box["x"] + box["width"] / 2 + 8,
+             "y": box["y"] + box["height"] / 2}
+    end = {"x": start["x"] + 30, "y": start["y"] + 15}
+    expected = page.locator("#mission-map svg").evaluate("""(svg, point) => {
+      const p = new DOMPoint(point.x, point.y).matrixTransform(svg.getScreenCTM().inverse());
+      return [p.x, p.y];
+    }""", end)
+    page.mouse.move(start["x"], start["y"])
+    page.mouse.down()
+    page.mouse.move(end["x"], end["y"], steps=5)
+    push_mission(page, "mission_inventory", ui.fleet)
+    page.mouse.up()
+    assert marker.evaluate("""node => {
+      const transform = node.transform.baseVal.getItem(0).matrix;
+      return [transform.e, transform.f];
+    }""") == pytest.approx(expected, abs=.01)
+    assert_compact()
+    page.locator("#mission-map-reset").click()
+    assert_compact()
+    marker.locator(".mission-waypoint-hit").click(button="right", position={"x": 18, "y": 10})
+    page.get_by_role("menuitem", name="Remove waypoint", exact=True).click()
+    assert page.locator("[data-waypoint]").count() == 0
+
+
 def test_missed_ack_recovers_during_healthy_inventory_pushes(mission_ui):
     ui = mission_ui
     ui.history["commands"][0].update(state="accepted", updated_at=2)

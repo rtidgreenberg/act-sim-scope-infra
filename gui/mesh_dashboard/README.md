@@ -41,6 +41,10 @@ against a real mesh" for the current mechanism.
 
 ## Traffic layers and compact router diagnostics
 
+Mission waypoint dots are 6 pixels across plus a thin outline, with 9-pixel labels,
+independent of map zoom. An invisible 20-pixel drag target keeps the smaller markers easy to
+move or right-click.
+
 ### WAN Wire Delivery
 
 Delivery measures **source WAN interface TX to destination WAN interface RX**,

@@ -158,12 +158,15 @@
       let marker = markers[index];
       if (!marker) {
         marker = element("g", { "data-waypoint": index });
-        marker.append(element("circle", { r: 7, class: "mission-waypoint" }),
-          element("text", { x: 11, y: -10, fill: "#d7efff", "font-size": 13 }, String(index + 1)));
+        marker.append(element("rect", { x: -10, y: -10, width: 20, height: 20,
+          fill: "transparent", class: "mission-waypoint-hit" }),
+          element("circle", { r: 3, class: "mission-waypoint" }),
+          element("text", { x: 6, y: -5, fill: "#d7efff", "font-size": 9 }, String(index + 1)));
         waypointLayer.appendChild(marker);
       }
       marker.setAttribute("transform", `translate(${point.x} ${point.y})`);
     });
+    layoutWaypointMarkers();
   }
 
   function render() {
@@ -583,6 +586,15 @@
     label.setAttribute("stroke", "#111820");
     label.setAttribute("stroke-width", inset ? 1.2 : .3);
   }
+  function layoutWaypointMarkers() {
+    const matrix = svg.getScreenCTM();
+    if (!matrix) return;
+    const unit = 1 / Math.hypot(matrix.a, matrix.b);
+    for (const marker of waypointLayer.children) {
+      const transform = marker.transform.baseVal.getItem(0).matrix;
+      marker.setAttribute("transform", `translate(${transform.e} ${transform.f}) scale(${unit})`);
+    }
+  }
   function layoutBoatMarkers() {
     const matrix = svg.getScreenCTM();
     if (!matrix) return;
@@ -646,6 +658,7 @@
   }
   function applyView() {
     svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.width} ${view.height}`);
+    layoutWaypointMarkers();
     for (const boat of boats.values()) positionIconLabel(boat.children[2], false);
     if (baseLabel) positionIconLabel(baseLabel, true);
     if (loaded) layoutBoatMarkers();

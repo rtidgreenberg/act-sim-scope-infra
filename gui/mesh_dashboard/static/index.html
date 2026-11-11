@@ -233,7 +233,7 @@
   .mission-row.selected { background: #173c59; border-left-color: #67b9ef; }
   .mission-row:focus-visible { outline: 1px solid #67b9ef; }
   .mission-boat.unavailable polygon { fill: #59656f; stroke: #d3b064; filter: none; }
-  .mission-waypoint { cursor: grab; }
+  .mission-waypoint, .mission-waypoint-hit { cursor: grab; }
   #mission-map { touch-action: none; user-select: none; }
   #mission-map-controls { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; gap: 5px; }
   #mission-map-controls button { color: #d7efff; background: #152633e8; border: 1px solid #3676a0;
@@ -644,6 +644,6 @@
 <script src="traffic_chart.js?v=20261107-infrastructure-toggle-v1"></script>
   <script src="operator_tabs.js?v=20261107-emane-runtime-config-v2"></script>
 <script src="mission_map.js?v=20261103-coast-v1"></script>
-<script src="mission.js?v=20261105-state-and-target-toggles-v4"></script>
+<script src="mission.js?v=20261110-compact-waypoints-v1"></script>
 </body>
 </html>
