@@ -35,7 +35,10 @@ class TrafficDashboardTests(unittest.TestCase):
                "telemetry_sample_id": "sample-0", "telemetry_age_ms": 0,
                "rtt_valid": True, "rtt_count": 1, "rtt_min_us": 45_000,
                "rtt_mean_us": 45_000, "rtt_max_us": 45_000,
-               "rtt_last_sample_age_ms": 250, "rtt_last_ack_age_us": 680_000}
+               "rtt_last_sample_age_ms": 250, "rtt_last_ack_age_us": 680_000,
+               "samples_received": 1, "pushed_samples": 1,
+               "topic_stats": [{"topic_name": f"Status_{index}", "direction": "writer",
+                                "pushed_samples": 1} for index in range(24)]}
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(args=["--no-sandbox"])
             page = browser.new_page()
@@ -65,7 +68,7 @@ class TrafficDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{graph_src}")
-            self.assertIn("?v=20261107-infrastructure-toggle-v1", graph_src)
+            self.assertIn("?v=20261111-readable-wan-filters-v4", graph_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{graph_src}"]').count())
             page.wait_for_function("window.__network.body.data.edges.length > 0 && window.meshSocket")
             page.evaluate("""() => {
@@ -93,11 +96,58 @@ class TrafficDashboardTests(unittest.TestCase):
             self.assertEqual(value("RTT last sample age"), "250 ms")
             self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
             self.assertIn("minus the remote peer's wait", inspector.inner_text())
+
+            def layout():
+                return inspector.evaluate("""el => {
+                    const rect = element => {
+                        const r = element.getBoundingClientRect();
+                        return [r.x, r.y + el.scrollTop, r.width, r.height];
+                    };
+                    return {
+                        panel: rect(el.parentElement),
+                        sections: Array.from(el.querySelectorAll('.edge-detail-section')).map(rect),
+                        rows: Array.from(el.querySelectorAll('.edge-detail-row')).map(rect),
+                        columns: Array.from(el.querySelectorAll('tbody tr:first-child td')).map(rect),
+                        scrollTop: el.scrollTop,
+                        tableScrollLeft: el.querySelector('.edge-detail-table-scroll').scrollLeft,
+                        tableFocused: el.querySelector('.edge-detail-table-scroll') === document.activeElement,
+                        overflow: el.scrollWidth > el.clientWidth,
+                    };
+                }""")
+
+            inspector.evaluate("el => el.scrollTop = 120")
+            self.assertEqual(page.locator("#edge-detail-panel").bounding_box()["width"], 340)
+            inspector.locator(".edge-detail-table-scroll").evaluate("el => el.scrollLeft = 150")
+            inspector.locator(".edge-detail-table-scroll").evaluate("el => el.focus({preventScroll: true})")
+            before = layout()
+            self.assertGreater(before["scrollTop"], 0)
+            self.assertEqual(before["tableScrollLeft"], 150)
+            self.assertTrue(before["tableFocused"])
+            self.assertFalse(before["overflow"])
+            for count in (9, 999_999_999, 0):
+                row["topic_stats"][0]["pushed_samples"] = count
+                send(pushed_samples=count, samples_received=count, nacks_received=count,
+                     rtt_mean_us=12_345_678, rtt_min_us=999, rtt_max_us=98_765_432)
+                self.assertEqual(layout(), before)
+            send(pushed_samples=1, samples_received=1, nacks_received=0,
+                 rtt_mean_us=45_000, rtt_min_us=45_000, rtt_max_us=45_000)
+            for viewport in ({"width": 320, "height": 720}, {"width": 1280, "height": 720}):
+                page.set_viewport_size(viewport)
+                self.assertLessEqual(page.locator("#edge-detail-panel").bounding_box()["width"],
+                                     viewport["width"] - 24)
+                self.assertFalse(layout()["overflow"])
+                self.assertEqual(inspector.locator(".edge-detail-row .k").filter(
+                    has_text=re.compile("^Heartbeat RTT min/max$")
+                ).get_attribute("title"), "Heartbeat RTT min/max")
+            inspector.evaluate("el => el.scrollTop = 0")
+
             send(rtt_count=0)
-            self.assertEqual(value("Heartbeat RTT"), "unavailable (no interval samples)")
-            self.assertEqual(value("Heartbeat RTT mean"), "unavailable")
+            self.assertEqual(value("Heartbeat RTT"), "-")
+            self.assertEqual(value("Heartbeat RTT mean"), "-")
+            self.assertEqual(value("Heartbeat RTT min/max"), "-")
+            self.assertEqual(value("Heartbeat RTT samples"), "0")
             send(rtt_last_sample_age_ms=6000)
-            self.assertEqual(value("Heartbeat RTT"), "unavailable (no interval samples)")
+            self.assertEqual(value("Heartbeat RTT"), "-")
             self.assertEqual(value("RTT last sample age"), "6000 ms")
             self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
             send(rtt_count=1, rtt_min_us=0, rtt_mean_us=0, rtt_max_us=0,
@@ -105,9 +155,9 @@ class TrafficDashboardTests(unittest.TestCase):
             self.assertEqual(value("Heartbeat RTT mean"), "0 us")
             self.assertEqual(value("Last heartbeat ack age"), "0 us")
             send(rtt_valid=False)
-            self.assertEqual(value("Heartbeat RTT"), "unavailable")
-            self.assertEqual(value("RTT last sample age"), "unavailable")
-            self.assertEqual(value("Last heartbeat ack age"), "unavailable")
+            self.assertEqual(value("Heartbeat RTT"), "-")
+            self.assertEqual(value("RTT last sample age"), "-")
+            self.assertEqual(value("Last heartbeat ack age"), "-")
             send(rtt_valid=True, rtt_last_sample_age_ms=None)
             self.assertEqual(value("Heartbeat RTT"), "unavailable (freshness unknown)")
             send(rtt_last_sample_age_ms=32000)
@@ -126,7 +176,7 @@ class TrafficDashboardTests(unittest.TestCase):
             })""", row)
             page.wait_for_function("document.querySelector('#edge-detail').textContent.includes('unavailable (stale)')")
             self.assertEqual(value("RTT last sample age"), "6250 ms")
-            self.assertEqual(value("Heartbeat RTT min/max"), "unavailable")
+            self.assertEqual(value("Heartbeat RTT min/max"), "-")
             self.assertEqual(value("Last heartbeat ack age"), "680.0 ms")
             send(telemetry_age_ms=6000)
             self.assertEqual(value("Heartbeat RTT"), "unavailable (stale)")
@@ -203,7 +253,7 @@ class TrafficDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{chart_src}")
             self.assertEqual(page.locator('nav[aria-label="Operator workspace"] button').all_text_contents(),
-                             ["Graph", "Mission", "Delivery", "EMANE"])
+                             ["Graph", "Mission", "Delivery", "EMANE", "Config"])
             self.assertIn("?v=", chart_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{chart_src}"]').count())
             toggle = page.locator("#toggle-infrastructure-stats")

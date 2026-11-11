@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WanCodec.hpp"
+#include "ActTypes.hpp"
 
 #include <functional>
 #include <memory>
@@ -77,6 +78,7 @@ public:
     WanReceiveFilter receive_filter(const std::string& topic) const;
     void update_receive_filter(const std::string& topic, const WanReceiveFilter& filter);
     WanBindingStatus binding_status(const std::string& route, const std::string& topic) const;
+    std::vector<RouterWriterFilterObservation> writer_filter_observations() const;
 
     uint64_t forwarded(const std::string& route, const std::string& topic) const;
     size_t wan_writers() const;

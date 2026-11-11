@@ -111,10 +111,10 @@ Data WanCodec::key_frame(const std::string& topic, const Data& local,
 
 Data WanCodec::pack(const std::string& topic, const Data& local,
                    const WanMetadata& metadata) const {
-    require(metadata.team_ids.size() <= 16, "team set exceeds existing 16-entry limit");
+    require(metadata.destination_ids.size() <= 16, "destination set exceeds 16-entry limit");
     const auto& mapping = wan_mapping(topic);
     auto frame = key_frame(topic, local, metadata);
-    frame.value<uint32_t>("schema_version", 2);
+    frame.value<uint32_t>("schema_version", 3);
     frame.value<std::string>("source_role", metadata.source_role);
     frame.value<std::string>("run_id", metadata.run_id);
     frame.value<uint64_t>("session_id", metadata.session_id);
@@ -125,11 +125,10 @@ Data WanCodec::pack(const std::string& topic, const Data& local,
         auto audience = frame.loan_value("audience");
         audience.get().value<bool>("control", metadata.control);
         audience.get().value<bool>("global", metadata.global);
-        audience.get().value<std::string>("destination", metadata.destination);
-        auto teams = audience.get().loan_value("team_ids");
-        for (size_t index = 0; index < metadata.team_ids.size(); ++index) {
-            teams.get().value<std::string>(static_cast<uint32_t>(index + 1),
-                                          metadata.team_ids[index]);
+        auto destinations = audience.get().loan_value("destination_ids");
+        for (size_t index = 0; index < metadata.destination_ids.size(); ++index) {
+            destinations.get().value<std::string>(static_cast<uint32_t>(index + 1),
+                                                 metadata.destination_ids[index]);
         }
     }
     auto payload = frame.loan_value("payload");
@@ -157,7 +156,7 @@ WanDecoded WanCodec::unpack_key(const Data& frame) const {
 WanDecoded WanCodec::unpack(const Data& frame) const {
     auto decoded = unpack_key(frame);
     const auto& mapping = wan_mapping(decoded.topic);
-    require(frame.value<uint32_t>("schema_version") == 2, "unsupported schema version");
+    require(frame.value<uint32_t>("schema_version") == 3, "unsupported schema version");
     const auto payload = frame.value<Data>("payload");
     require(payload.discriminator_value() == mapping.discriminator,
             "inactive or unknown branch for " + decoded.topic);

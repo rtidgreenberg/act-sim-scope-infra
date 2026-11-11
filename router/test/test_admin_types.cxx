@@ -102,6 +102,19 @@ int main() {
     compact.discovery_state = RouterRouteDiscoveryState::DISCOVERY_READY;
     compact.samples_forwarded = (std::uint64_t(1) << 40) + 7;
     health.routes.push_back(compact);
+    RouterWriterFilterObservation observed;
+    observed.topic_name = "Status";
+    observed.observed_at_ns = 123456789;
+    observed.poll_ok = true;
+    observed.matched_readers = 1;
+    RouterReaderFilterObservation reader_filter;
+    reader_filter.reader_id = "reader-guid";
+    reader_filter.peer_router = "Platform_31/router";
+    reader_filter.has_filter = true;
+    reader_filter.expression = "audience.destination_ids[0] = %0";
+    reader_filter.parameters.push_back("'TEAM_A'");
+    observed.reader_filters.push_back(reader_filter);
+    health.wan_writer_filters.push_back(observed);
     for (unsigned int i = 0; i < 70; ++i) {
         RouterPeerRef peer;
         peer.router = "Platform_" + std::to_string(i + 30) + "/platform-router";
@@ -117,6 +130,22 @@ int main() {
     const auto restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
     CHECK(restored.heartbeat_seq == health.heartbeat_seq);
     CHECK(restored.session_id == health.session_id);
+    CHECK(restored.wan_writer_filters.size() == 1);
+    CHECK(restored.wan_writer_filters.at(0).topic_name == "Status");
+    CHECK(restored.wan_writer_filters.at(0).observed_at_ns == observed.observed_at_ns);
+    CHECK(restored.wan_writer_filters.at(0).poll_ok);
+    CHECK(restored.wan_writer_filters.at(0).matched_readers == 1);
+    CHECK(!restored.wan_writer_filters.at(0).truncated);
+    CHECK(restored.wan_writer_filters.at(0).last_error.empty());
+    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).reader_id
+          == reader_filter.reader_id);
+    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).has_filter);
+    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).expression
+          == reader_filter.expression);
+    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).peer_router
+          == reader_filter.peer_router);
+    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).parameters.at(0)
+          == "'TEAM_A'");
     CHECK(restored.peers_seen.at(0).ack_session_id == health.session_id);
     CHECK(restored.peers_seen.at(0).ack_heartbeat_seq == health.heartbeat_seq);
     CHECK(restored.peers_seen.at(0).ack_age_at_send_us == 680000);
@@ -131,6 +160,33 @@ int main() {
     rti::topic::to_cdr_buffer(buffer, health);
     std::printf("RouterHealth 5-peer CDR size: %zu bytes\n", buffer.size());
     CHECK(buffer.size() < 1400);
+
+    auto &long_filter = health.wan_writer_filters.at(0).reader_filters.at(0);
+    long_filter.expression = reader_filter.expression + std::string(1024, ' ');
+    long_filter.parameters.at(0) = "'" + std::string(255, 'A') + "'";
+    rti::topic::to_cdr_buffer(buffer, health);
+    const auto long_restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
+    CHECK(long_restored.wan_writer_filters.at(0).reader_filters.at(0).expression
+          == long_filter.expression);
+    CHECK(long_restored.wan_writer_filters.at(0).reader_filters.at(0).parameters.at(0).size()
+          == 257);
+
+    RouterMeshStatus mesh;
+    mesh.observer_node = "Platform_30";
+    mesh.observer_router = health.router;
+    mesh.observer_health = health;
+    mesh.observer_health_age_ms = 25;
+    RouterMeshPeer mesh_peer;
+    mesh_peer.health = health;
+    mesh_peer.health_age_ms = 5000;
+    mesh.peers.push_back(mesh_peer);
+    rti::topic::to_cdr_buffer(buffer, mesh);
+    const auto restored_mesh = rti::topic::from_cdr_buffer<RouterMeshStatus>(buffer);
+    CHECK(restored_mesh.observer_health_age_ms == 25);
+    CHECK(restored_mesh.observer_health.wan_writer_filters.at(0).topic_name == "Status");
+    CHECK(restored_mesh.peers.at(0).health_age_ms == 5000);
+    CHECK(restored_mesh.peers.at(0).health.wan_writer_filters.at(0).reader_filters.at(0).expression
+          == long_filter.expression);
 
     if (g_failures == 0) {
         std::printf("test_admin_types: OK\n");

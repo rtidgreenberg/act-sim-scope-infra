@@ -24,6 +24,8 @@ from delivery_audit import DeliveryAudit
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "gui/mesh_dashboard/server"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from platform_mesh_control import local_destination_ids
 from mission_planning import MIN_BOAT_SEPARATION_M, goal_plan
 from mission_navigation import Navigator
 
@@ -164,6 +166,7 @@ class PlatformSim:
       self.navigation_state = "IDLE"
       self.navigation_speed_knots = 0.0
       self.heading_deg = 0.0
+      self.destination_ids = {args.source}
 
       # Load QoS/Types from XML files (uses NDDS_QOS_PROFILES env var)
       self.qos_provider = dds.QosProvider.default
@@ -251,6 +254,11 @@ class PlatformSim:
           self.control_cmd_topic,
           self.qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::lan_event")
       )
+      self.membership_topic = dds.DynamicData.Topic(
+          self.participant, "ActRouterStatus", self.qos_provider.type("RouterStatus"))
+      self.membership_reader = dds.DynamicData.DataReader(
+          self.membership_topic,
+          self.qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::router_admin_status"))
       self.platform_data_reader = dds.DynamicData.DataReader(
           self.platform_data_topic,
           self.qos_provider.datareader_qos_from_profile(args.qos_profile)
@@ -318,19 +326,22 @@ class PlatformSim:
     async def read_control_command(self):
       print("Waiting for Control Commands")
       async for data in self.control_cmd_reader.take_data_async():
+          self.destination_ids = local_destination_ids(
+              self.membership_reader, self.args.source, self.destination_ids)
           print(f'- Received ControlCommand from {data["source"]}')
           AUDIT.log("received", "ControlCommand", data)
           accepted = True
           message = "received"
-          if data["destination"] == self.args.source and data["command_type"] == "MISSION":
+          addressed_here = data["destination"] in self.destination_ids
+          if addressed_here and data["command_type"] == "MISSION":
               accepted, message = self.handle_mission_command(
                   data["payload"], data["command_id"], data["source"], data["run_id"])
-          elif data["destination"] == self.args.source and data["command_type"] not in ("", "STATUS_REQUEST"):
+          elif addressed_here and data["command_type"] not in ("", "STATUS_REQUEST"):
               accepted = False
               message = f'unsupported command type: {data["command_type"]}'
-          elif data["destination"] != self.args.source:
+          elif not addressed_here:
               accepted = False
-              message = "command is addressed to another platform"
+              message = "command is addressed to another platform or team"
           ack = dds.DynamicData(self.control_cmd_ack_type)
           ack["source"] = self.args.source
           ack["destination"] = data["source"]

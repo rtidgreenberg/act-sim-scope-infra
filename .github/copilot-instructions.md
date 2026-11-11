@@ -30,6 +30,24 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 ### Baseline and implementation status
 
+- **2026-11-11 destination-list migration deployed:** Source and the retained mesh use WAN schema
+  version 3 and a shared `audience.destination_ids` sequence (16 total node/team
+  IDs). The user explicitly enabled team-addressed commands and approved the
+  coordinated deployment. C++ 9/9, targeted DDS/application 125/125, native
+  qualification 29/29 and browser 5/5 passed; the persistent rebuild passed
+  C++ 9/9 again. Live checks verified all 98 observed reader filters and accepted
+  TEAM_B command ACKs from 30/31/35 only. Full regression/live mission workflows
+  were not rerun for schema 3. Never mix schema versions. See migration-plan §3.27.
+- **2026-11-11 filter update:** Two-topic WAN CFTs now select readable
+  `original_topic` names, including RouterHealth; the codec still checks topic/
+  discriminator agreement. Identical topic sets share grouped audience selectors.
+  Native qualification passed 29/29, fresh C++ 9/9, targeted controller DDS 14/14,
+  adapter pilot DDS 11/11 and browser regressions 5/5.
+  The user-approved owned teardown/rebuild/relaunch deployed this
+  to Control_20 plus Platform_30-35 on port 8080. Teams were restored (32/33/34
+  TEAM_A, 30/31/35 TEAM_B); all six peers ALIVE/ROUTER_OK, impairments empty.
+  Only fixed SHARED participant isolation remains; team changes use CFTs/metadata,
+  not DDS partition changes. See migration-plan §3.26. Full missions were not rerun.
 - Baseline tag: `pre-two-topic-refactor-2026-11-08`, pointing to `008ff4d`.
   The preceding checkpoints are `4549e87` (separate docs/slides), `86576aa`
   (plan/comparisons), and `fc44d6b` (union qualification/adapter spike).
@@ -115,18 +133,19 @@ without inspecting the current worktree, commits, and runtime ownership first.
 - The standalone internal brand-guide PDF is deliberately untracked. Preserve it
   and unrelated work; do not reset the checkout to the baseline tag.
 
-### Live mesh retained for inspection (2026-11-09)
+### Live mesh retained for inspection (2026-11-11)
 
 - The user requested leaving the verified mesh running. Check current ownership
   before another run: Compose project `act-emane-container-baseline`, control
-  plus Platform_30 through Platform_34, **schema version 2 two-topic WAN mode**,
+  plus Platform_30 through Platform_35, **schema version 3 two-topic WAN mode**,
   dashboard port 8080. The persistent router binary was rebuilt from current
   source before the coordinated launch; all earlier review fixes are deployed.
-- Workdir: `debug/mesh_runs/emane`. Post-test checks confirmed all five peers
+- Workdir: `debug/mesh_runs/emane`, run `container-20261111T152950-1705974`.
+  Post-deployment checks confirmed all six peers
   `PRESENCE_ALIVE` / `ROUTER_OK`, controller available and empty impairments.
-  Test fixtures canceled missions and restored unassigned teams and 1x clocks;
-  all platforms report zero speed.
-- Latest complete gate: **9/9 C++ targets, 283 Python tests plus 169 subtests,
+  The latest user memberships were restored: TEAM_B on 30/31/35; 32/33/34
+  unassigned. Live browser checks confirmed the readable destination-ID filters.
+- Historical complete gate (2026-11-09, schema version 2): **9/9 C++ targets, 283 Python tests plus 169 subtests,
   29 WAN qualification cases, and 87 spike tests plus 63 subtests passed**.
   All **five unchanged live mission workflows passed**, zero skips, 365.59 s.
   The user-approved simulator fix now reports zero speed immediately on COMPLETE
@@ -148,8 +167,8 @@ without inspecting the current worktree, commits, and runtime ownership first.
   LAN topic/type. Preserve original keys, identity, timestamps, and audit fields.
   **Field mapping and operation-specific command redesign are deferred**, including
   rewriting the existing command octet payload. This is not a zero-copy promise.
-- Kind is the union discriminator, not a duplicate envelope field. Schema version 2
-  Event/Status keys are `source_id + original_topic + instance_id`; source ID is
+- Kind is the union discriminator, not a duplicate envelope field. Schema version 3
+  retains the version 2 Event/Status keys, `source_id + original_topic + instance_id`; source ID is
   the configured system/node name, not the internal router process name.
   The instance ID is the raw catalog-selected payload identity, with no encoded
   branch/topic prefix. ContactReport uses its existing `contact_id`; its LAN DDS
@@ -175,12 +194,50 @@ without inspecting the current worktree, commits, and runtime ownership first.
   state and update receive CFT interests. Periodic status may converge gradually:
   old queued metadata/deliveries and brief new-team gaps are possible; no fleet-wide
   atomic barrier is required. Required events retain their separate delivery policy.
+- Event and Status share `audience.destination_ids`, capped at 16 total individual/
+  team IDs, replacing the version 2 scalar destination and team list. Commands
+  may address a platform or its current team. Global/control flags remain additive;
+  original LAN payload structures are unchanged. Consumers must recognize current
+  team destinations; the simulator and mesh-control helper use local RouterStatus.
+  The dashboard still publishes mission commands per platform for ACK tracking.
 - Preserve TeamAssignment broadcast, addressed-command rules, global navigation,
   and supported multiple audiences/teams. Membership changes do not make all traffic
   team-scoped. Do not invent receiver rejection of every already-accepted sample.
 
 ### Next work and unresolved checks
 
+- **2026-11-11 user-approved radio update:** canonical RF Pipe now uses **2 Mbps**.
+  The extra virtual transport cap remains disabled; PHY bandwidth remains 1 MHz.
+  Owned restart retained six-platform run `container-20261111T003138-4127828`
+  on port 8080 in `two_topic_union` mode. All seven native radios report
+  `datarate=2000000`, transport `bitrate=0`; all six peers ALIVE/ROUTER_OK with
+  empty impairments. Two config tests and shell syntax passed; all 36 location
+  flows stayed fresh (720 samples, maximum age 0.021 s). Read-only live browser
+  rendered six platforms without errors. See migration-plan §3.25. The five
+  passing mission workflows below were run at 1 Mbps, not repeated at 2 Mbps.
+  This supersedes the previous retained run and current radio rate.
+- **2026-11-11 mission-stale fix: live gate GREEN.** Removed only the canonical
+  EMANE virtual transport's combined RX+TX cap; RF Pipe remains 1 Mbps and
+  navigation retains its 2.5 s stale threshold and 300-foot collision buffer.
+  All 22 targeted checks and all five unchanged live mission/browser workflows
+  passed (385.37 s, zero skips or cleanup errors). Postflight measured all 36
+  location flows: 720 samples, maximum age 0.456 s. See migration-plan §3.24.
+  Retained six-platform run: `container-20261111T001725-4096008`, port 8080,
+  `two_topic_union`, all six peers ALIVE/ROUTER_OK and empty impairments.
+  The user ran a new Platform_32 mission after the passing test cleanup; preserve
+  operator activity rather than forcing the test baseline. The persistent router
+  binary/hash is unchanged. This supersedes earlier live-state/failure notes,
+  not the remaining Phase 5 fleet-load/resource-budget qualification.
+- **2026-11-10 full isolated gate and historical live failures.** Fresh isolated checks
+  passed nine C++ targets, 424 Python tests plus 242 subtests (including all
+  21 offline Chromium checks), 21 native purge cases and nine adapter PASS
+  groups, with zero skips. After a user-authorized clean six-platform restart,
+  the unchanged live suite passed three workflows but failed concurrent fleet
+  ORBIT convergence and the following reassignment check, with two cancellation
+  ACK cleanup errors. Independent inheritance passed its body but still errored
+  during cancellation cleanup. These failures were resolved by the §3.24
+  transport fix and unchanged live rerun; the isolated suite was not repeated
+  for that shell-only fix. See migration-plan §3.23 for historical evidence.
 - **2026-11-10 lifecycle-only finalization:** reviewed and freshly rebuilt the
   native dispose/unregister relay independently of uncommitted filter-observation
   and dashboard work. Nine C++ targets, 273 Python tests plus 171 subtests,
@@ -190,6 +247,40 @@ without inspecting the current worktree, commits, and runtime ownership first.
   no persistent binary rebuild, deployment, or live mission gate was performed.
   Unseen instances, resource churn, automatic purge and durable restart/replay
   remain separate gates.
+- **2026-11-10 six-platform live deployment:** the integrated persistent router
+  was rebuilt (9/9 C++ targets passed), then the owned EMANE lifecycle launched
+  Control_20 plus Platform_30 through Platform_35 in `two_topic_union` mode,
+  dashboard port 8080. All six peers are ALIVE/ROUTER_OK; Event/Status observations
+  report seven named readers each on all seven routers. Browser canvas/inspectors
+  passed with no page/console errors; controller available, impairments empty.
+  The mesh is left running in `debug/mesh_runs/emane`, Compose project
+  `act-emane-container-baseline`. All running router executable hashes match the
+  rebuilt binary. See migration-plan §3.22 for evidence and owned teardown.
+  Live missions and health congestion/load were not run for this deployment.
+  This supersedes the earlier source checkpoint's no-deployment status below.
+- **2026-11-10 writer-filter source checkpoint:** the main working tree now
+  includes per-reader Event/Status filter observations on RouterHealth and their
+  dashboard inspector, preserving native lifecycle and Config-tab work. The
+  local health snapshot retains the exact transmitted heartbeat acknowledgments.
+  Final isolated gate: nine C++ targets, 304 router/dashboard/browser tests plus
+  179 subtests (five live mission skips only), 29 WAN qualification cases, 87
+  spike tests plus 63 subtests, 21 purge cases and nine adapter PASS groups.
+  See [migration-plan §3.21](../docs/two-topic-wan-migration-plan.md#321-writer-observed-filters-integrated-into-main-2026-11-10)
+  for initial-attempt caveats and evidence. No commit, push, persistent binary
+  rebuild or deployment was performed. Rebuild consumers together before using
+  the changed IDL/XML; live missions and health congestion/load remain open.
+- **2026-11-10 lifecycle source checkpoint:** application dispose/NO_WRITERS now
+  uses the same two-topic route bindings and native output writer registry as data.
+  XML-authored infinite reader-instance retention is composed only into adapter
+  inputs; automatic purge is deferred. Producer aliases sharing boat/contact ID
+  intentionally share lifecycle (user approved), with no separate ownership ledger.
+  Nine C++ targets, 280 router/dashboard tests plus 177 subtests (25 browser/live
+  skips), 29 WAN qualification cases, and an additional dispose/unregister sequence
+  test passed. See [migration-plan §3.20](../docs/two-topic-wan-migration-plan.md)
+  and the [implementation plan](../docs/two-topic-native-lifecycle-plan.md).
+  Persistent router binaries were not overwritten or deployed. During this work
+  the six earlier mesh containers were observed stopped; inspect ownership before
+  a later launch. This supersedes historical "currently running" claims above.
 - Controller/interest checkpoint is verified (migration-plan §3.8). Next is
   Phase 5: lifecycle/restart/multiple-producer ownership, required-event retention,
   latest-state replacement, priorities/flow control and bounded load/admission.
@@ -204,9 +295,10 @@ without inspecting the current worktree, commits, and runtime ownership first.
   for receivers and merged source aliases. No wildcard patterns, apostrophes or
   NULs: the user approved explicit rejection of apostrophe names, not an encoding
   scheme. Original payload keys and legacy mode are unchanged.
-- Keep qualified CFT discriminator-first ordering: sequence-first full-slot
-  predicates leaked a nonmember on this 7.7 install. Mixed predicates, replacement
-  and sender suppression are now tested. Start the WAN observer's built-in
+- Keep qualified CFT topic-first ordering: current selectors use `original_topic`,
+  with grouped audience predicates (§3.26). Older discriminator/sequence-ordering
+  findings are historical; do not substitute an unqualified predicate shape.
+  Mixed predicates, replacement and sender suppression are tested. Start the WAN observer's built-in
   publication reader before routers; late creation loses the discovery evidence.
 - Factory bind/unbind/shutdown runs on the controller strand. Metadata providers
   run on AWS workers and must use immutable snapshots without reentering the

@@ -418,6 +418,25 @@ struct RouterDiagnostics {
     sequence<RouterRouteStatus> routes;
 };
 
+struct RouterReaderFilterObservation {
+    string reader_id;
+    string peer_router;
+    boolean has_filter;
+    string<16384> expression;
+    sequence<string<257> > parameters;
+    string last_error;
+};
+
+struct RouterWriterFilterObservation {
+    string topic_name;
+    int64 observed_at_ns;
+    boolean poll_ok;
+    uint32 matched_readers;
+    boolean truncated;
+    string last_error;
+    sequence<RouterReaderFilterObservation> reader_filters;
+};
+
 struct RouterHealth {
     @key
     string router;
@@ -434,12 +453,14 @@ struct RouterHealth {
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
     sequence<RouterCompactRouteHealth> routes;
+    sequence<RouterWriterFilterObservation, 2> wan_writer_filters;
 };
 
 struct RouterMeshPeer {
     RouterHealth health;
     RouterPresenceState presence;
     int64 last_seen_delta_ms;
+    int64 health_age_ms;
 };
 
 struct RouterMeshStatus {
@@ -449,6 +470,8 @@ struct RouterMeshStatus {
     string observer_router;
     uint64 state_revision;
     sequence<RouterMeshPeer> peers;
+    RouterHealth observer_health;
+    int64 observer_health_age_ms;
 };
 
 // ============================================================================
@@ -541,8 +564,7 @@ union WanStatusPayload switch (WanStatusKind) {
 struct WanAudience {
     boolean control;
     boolean global;
-    string destination;
-    sequence<string, 16> team_ids;
+    sequence<string, 16> destination_ids;
 };
 
 // Audience selectors are additive; navigation may address control and all boats.

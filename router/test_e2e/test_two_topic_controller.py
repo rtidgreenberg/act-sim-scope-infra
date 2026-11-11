@@ -101,14 +101,14 @@ def command(nodes, provider, node, kind, command_id, route="", participant="", p
     return ack
 
 
-def ready(nodes, node, route):
+def ready(nodes, node, route, minimum_output_matched=1):
     process, _, admin = nodes[node]
     facts = wait_for_route(
         admin.status, route, lambda value: value["state"] == "ROUTE_ENABLED"
-        and value["input_matched"] > 0 and value["output_matched"] > 0,
+        and value["input_matched"] > 0 and value["output_matched"] >= minimum_output_matched,
         timeout_s=25, check_alive=lambda: alive(nodes))
     assert facts and facts["state"] == "ROUTE_ENABLED", (facts, process.log_path)
-    assert facts["input_matched"] > 0 and facts["output_matched"] > 0, facts
+    assert facts["input_matched"] > 0 and facts["output_matched"] >= minimum_output_matched, facts
 
 
 def receive(nodes, writer, reader, sample, key="audit_sequence"):
@@ -209,6 +209,8 @@ def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
         sample = source.sample("contact_report", source="", **fields)
         received = source.sample("contact_report", source=node, **fields)
         writer = source.writer("ContactReport", "contact_report")
+        # Both the control receiver and WAN observer must match the volatile Event writer.
+        ready(nodes, node, "platform_events", minimum_output_matched=2)
         handle = receive_contact(writer, sample, received)
         assert all(handle != previous for previous in handles)
         handles.append(handle)
@@ -225,7 +227,7 @@ def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
             frame = sample.data
             key = (frame["source_id"], frame["original_topic"], frame["instance_id"])
             assert key in expected, key
-            assert frame["schema_version"] == 2
+            assert frame["schema_version"] == 3
             assert frame["payload.contact_report"] == expected[key]
             assert frame["run_id"] == expected[key]["run_id"]
             assert frame["audit_sequence"] == expected[key]["audit_sequence"]
@@ -506,6 +508,20 @@ def test_addressed_and_broadcast_control_survive_team_changes(mesh):
     sample["audit_sequence"] = 2
     receive(nodes, writer, local, sample)
     absent(nodes, writer, remote, sample)
+    sample["destination"] = "TEAM_A"
+    sample["audit_sequence"] = 3
+    receive(nodes, writer, local, sample)
+    receive(nodes, writer, remote, sample)
+    assert command(nodes, provider, "Boat31", "REMOVE_PARTICIPANT_PARTITION", "leave-command-team",
+                   participant="platform_wan", partition="TEAM_A")["accepted"]
+    time.sleep(1)
+    sample["audit_sequence"] = 4
+    receive(nodes, writer, local, sample)
+    absent(nodes, writer, remote, sample)
+    sample["destination"] = "Boat31"
+    sample["audit_sequence"] = 5
+    receive(nodes, writer, remote, sample)
+    absent(nodes, writer, local, sample)
     assignment_writer = control.writer("ActTeamAssignment", "TeamAssignment")
     assignment_local = boat.reader("ActTeamAssignment", "TeamAssignment")
     assignment_other = other.reader("ActTeamAssignment", "TeamAssignment")
@@ -518,6 +534,14 @@ def test_addressed_and_broadcast_control_survive_team_changes(mesh):
     mode = control.sample("PlatformStatusMode", platform_node="Boat30")
     receive(nodes, mode_writer, mode_local, mode, "platform_node")
     deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        mode_writer.write(mode)
+        assert not any(sample.info.valid for sample in mode_other.take())
+        assert alive(nodes)
+        time.sleep(0.1)
+    mode["platform_node"] = "TEAM_A"
+    receive(nodes, mode_writer, mode_local, mode, "platform_node")
+    deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
         mode_writer.write(mode)
         assert not any(sample.info.valid for sample in mode_other.take())
@@ -574,7 +598,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
                     assert frame["audit_sequence"] == health["heartbeat_seq"]
                     assert frame["sent_at_ns"] == health["send_timestamp"]
                     assert frame["original_topic"] == "RouterHealth"
-                    assert frame["schema_version"] == 2
+                    assert frame["schema_version"] == 3
                     assert frame["instance_id"] == health["router"]
                     frames[health["router"]] = frame
             if predicate(frames):
@@ -652,7 +676,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
     navigation = wan.sample(
         "WanStatus", source_id="ProbeNode",
         instance_id="ProbeNode",
-        schema_version=2, original_topic="PlatformInitStatus")
+        schema_version=3, original_topic="PlatformInitStatus")
     navigation["payload.navigation.source"] = "ProbeNode"
     navigation["audience.global"] = True
     navigation["audience.control"] = True

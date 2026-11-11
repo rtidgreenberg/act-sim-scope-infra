@@ -61,6 +61,7 @@
   const PLACEHOLDER_NODE_COLOR = EDGE_SOURCE_COLOR.peers_seen;
   const RECONNECT_DELAY_MS = 3000;
   const STATUS_LEVEL_FRESH_MS = 5000;
+  const WAN_FILTER_REPORT_STALE_MS = 8000;
   const LINK_MESSAGE_AGE_WARN_MS = 5000;
   const HEARTBEAT_RTT_MAX_AGE_MS = 32000;
 
@@ -638,7 +639,8 @@
 
   function edgeDetailRow(k, v, stateClass) {
     return `<div class="edge-detail-row${stateClass ? ` ${stateClass}` : ""}">` +
-           `<span class="k">${escHtml(k)}</span><span class="v">${escHtml(v)}</span></div>`;
+           `<span class="k" title="${escHtml(k)}">${escHtml(k)}</span>` +
+           `<span class="v" title="${escHtml(v)}">${escHtml(v)}</span></div>`;
   }
 
   function formatCount(value) {
@@ -647,9 +649,9 @@
   }
 
   function formatRtt(value) {
-    if (value == null) return "unavailable";
+    if (value == null) return "-";
     const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return "unavailable";
+    if (!Number.isFinite(n) || n < 0) return "-";
     if (n >= 1000) return `${(n / 1000).toFixed(1)} ms`;
     return `${Math.round(n)} us`;
   }
@@ -666,6 +668,71 @@
     return `<section class="detail-section${state}" data-section-key="${key}">` +
       `<button type="button" class="detail-section-toggle" aria-expanded="${expanded}">${title}</button>` +
       `<div class="detail-section-content">${content}</div></section>`;
+  }
+
+  function renderWanFilters(node) {
+    const observations = node.health?.wan_writer_filters;
+    if (!Array.isArray(observations) || !observations.length) {
+      return detailSection(node.id, "wan-filters", "Observed WAN filters",
+        `<div class="detail-note">No writer filter observations reported.</div>`);
+    }
+    const age = Number.isFinite(node.healthAgeMs) && node.healthAgeMs >= 0
+      ? Math.round(node.healthAgeMs + Math.max(0, performance.now() - node.meshReceivedAtMs))
+      : null;
+    let html = detailRow("report age", age == null ? "unknown" :
+      `${age} ms${age > WAN_FILTER_REPORT_STALE_MS ? " (stale)" : ""}`);
+    html += `<div class="detail-note wan-filter-scope">Remote reader interests seen by this router's WAN writers.</div>`;
+    for (const writer of observations) {
+      html += `<h4 class="wan-filter-family">${escHtml(writer.topic_name || "?")}` +
+        `<span>${formatCount(writer.matched_readers)} matched readers</span></h4>`;
+      if (!writer.poll_ok || writer.truncated) {
+        html += `<div class="detail-note">Incomplete observation${writer.truncated ? " (truncated)" : ""}` +
+          `${writer.last_error ? `: ${escHtml(writer.last_error)}` : ""}</div>`;
+      }
+      const readers = writer.reader_filters || [];
+      if (!readers.length) {
+        html += `<div class="detail-note">${writer.poll_ok ? "No matched readers." : "Reader state unknown."}</div>`;
+      }
+      for (const reader of readers) {
+        const peer = reader.peer_router || `Unidentified reader (${reader.reader_id || "?"})`;
+        const label = reader.peer_router ? nodeNameOf(reader.peer_router) : peer;
+        html += `<div class="wan-filter-reader"><strong title="${escHtml(peer)}">${escHtml(label)}</strong>`;
+        if (reader.last_error) {
+          html += `<div class="detail-note">Unknown: ${escHtml(reader.last_error)}</div>`;
+        } else if (!reader.has_filter) {
+          html += `<div class="detail-note">Unfiltered reader.</div>`;
+        } else {
+          const expression = reader.expression || "";
+          const parameters = reader.parameters || [];
+          const topics = [...new Set(Array.from(
+            expression.matchAll(/\boriginal_topic\s*=\s*'([^']*)'/g), match => match[1]
+          ))];
+          if (topics.length) {
+            html += `<div class="wan-filter-caption">Topic filters</div><div class="wan-filter-topics">` +
+              topics.map(topic => `<span>${escHtml(topic || "(none)")}</span>`).join("") + `</div>`;
+          } else {
+            html += `<div class="detail-note">SQL filter; no named topic selectors.</div>`;
+          }
+          const values = [...new Set(parameters.map(value => String(value).replace(/^'(.*)'$/, "$1")))];
+          if (values.length) {
+            html += `<div class="wan-filter-values"><span>Audience filters:</span> ${values.map(escHtml).join(", ")}</div>`;
+          }
+          const formatted = expression.split(/('[^']*')/).map((part, index) =>
+            index % 2 ? part : part.replace(/\s+(AND|OR)\s+/g, "\n$1 ")
+          ).join("");
+          let body = `<div class="detail-note">${escHtml(peer)}</div>` +
+            `<pre class="wan-filter-sql">${escHtml(formatted)}</pre>`;
+          if (parameters.length) {
+            body += `<div class="wan-filter-caption">SQL parameters</div>` +
+              parameters.map((value, index) => detailRow(`%${index}`, escHtml(String(value)))).join("");
+          }
+          const key = encodeURIComponent(`${writer.topic_name}:${reader.reader_id || peer}`);
+          html += detailSection(node.id, `wan-filter:${key}`, "View SQL filter", body);
+        }
+        html += `</div>`;
+      }
+    }
+    return detailSection(node.id, "wan-filters", "Observed WAN filters", html);
   }
 
   function badge(label, active) {
@@ -911,7 +978,8 @@
     selectedId = id;
     let body = "";
     if (n.kind === "observer") {
-      body = `<div class="detail-note">This dashboard's own vantage point.</div>`;
+      body = `<div class="detail-note">This dashboard's own vantage point.</div>` +
+        renderWanFilters(n);
     } else if (n.kind === "placeholder") {
       body = `<div class="detail-note">Known only via another router's roster` +
              (n.knownVia ? ` (${n.knownVia})` : "") + `, not heard directly — no ` +
@@ -934,10 +1002,11 @@
         detailRow("last seen", n.lastSeenMs != null ? `${n.lastSeenMs} ms ago` : "?") +
         detailRow("routes", `${h.n_routes} (${h.n_degraded} degraded, ${h.n_error} error)`) +
         detailRow("team", teams) +
-        detailRow("raw team_partition", `[${raw}]`) +
+        detailRow("reported team names", `[${raw}]`) +
         detailRow("peers_seen", peersSeen) +
         detailRow("heartbeat_seq", h.heartbeat_seq) +
         detailRow("config_hash", h.config_hash ? String(h.config_hash).slice(0, 12) + "…" : "?") +
+        renderWanFilters(n) +
         `<hr style="border:0;border-top:1px solid #3a3f4a;margin:10px 0;">` +
         renderPlatformDataSection(id);
     }
@@ -1037,10 +1106,10 @@
     const fresh = sampleAgeMs != null && Number.isFinite(sampleAgeMs) &&
       sampleAgeMs >= 0 && sampleAgeMs <= HEARTBEAT_RTT_MAX_AGE_MS;
     const telemetryFresh = ageMs != null && ageMs <= LINK_MESSAGE_AGE_WARN_MS;
-    const rttState = row.rtt_valid !== true ? "unavailable"
+    const rttState = row.rtt_valid !== true ? "-"
       : sampleAgeMs == null ? "unavailable (freshness unknown)"
       : !fresh || !telemetryFresh ? "unavailable (stale)"
-      : Number(row.rtt_count) > 0 ? "available" : "unavailable (no interval samples)";
+      : Number(row.rtt_count) > 0 ? "available" : "-";
     const intervalAvailable = rttState === "available";
     const title = `${observer} -> ${peer}`;
     const nacks = Number(row.nacks_received || 0) + Number(row.nacks_sent || 0) + Number(row.nack_frags_received || 0);
@@ -1060,20 +1129,20 @@
         edgeDetailRow("uncommitted", formatCount(row.uncommitted_samples), statsClass(row.uncommitted_samples)) +
         edgeDetailRow("heartbeats received", formatCount(row.heartbeats_received)) +
         edgeDetailRow("local rejects", formatCount(rejects), statsClass(rejects)) +
-        edgeDetailRow("Heartbeat RTT", rttState, intervalAvailable ? "" : "warn") +
+        edgeDetailRow("Heartbeat RTT", rttState, intervalAvailable || rttState === "-" ? "" : "warn") +
         edgeDetailRow("Heartbeat RTT samples", formatCount(row.rtt_count)) +
-        edgeDetailRow("Heartbeat RTT mean", intervalAvailable ? formatRtt(row.rtt_mean_us) : "unavailable") +
+        edgeDetailRow("Heartbeat RTT mean", intervalAvailable ? formatRtt(row.rtt_mean_us) : "-") +
         edgeDetailRow("Heartbeat RTT min/max", intervalAvailable
-          ? `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}` : "unavailable") +
+          ? `${formatRtt(row.rtt_min_us)} / ${formatRtt(row.rtt_max_us)}` : "-") +
         edgeDetailRow("RTT last sample age", sampleAgeMs == null || !Number.isFinite(sampleAgeMs) || sampleAgeMs < 0
-          ? "unavailable" : `${Math.round(sampleAgeMs)} ms`, fresh ? "" : "warn") +
+          ? "-" : `${Math.round(sampleAgeMs)} ms`, fresh ? "" : "warn") +
         edgeDetailRow("Last heartbeat ack age", row.rtt_valid === true
-          ? formatRtt(row.rtt_last_ack_age_us) : "unavailable") +
+          ? formatRtt(row.rtt_last_ack_age_us) : "-") +
         edgeDetailRow("rediscovery", row.rediscovery_in_interval ? "yes" : "no", row.rediscovery_in_interval ? "bad" : "") +
         edgeDetailRow("age", ageMs == null ? "-" : `${Math.round(ageMs)} ms`, ageMs != null && ageMs > LINK_MESSAGE_AGE_WARN_MS ? "warn" : "") +
       `</div>` +
       `<div class="edge-detail-subtitle" style="margin-top:6px;">Heartbeat RTT is application-observed round-trip elapsed time minus the remote peer's wait before its scheduled heartbeat. Ack age is that subtracted wait, not RTT; receive dispatch and send queueing can remain. Interval RTT is unavailable without samples, when the last measurement is over 32 s old, or when stats telemetry is over 5 s old.</div>` +
-      (nacks > 0 ? `<div class="edge-detail-subtitle" style="margin-top:6px;color:#e0b84d;">NACK/repair activity in the latest interval.</div>` : "") +
+      `<div class="edge-detail-subtitle edge-detail-repair-note">${nacks > 0 ? "NACK/repair activity in the latest interval." : ""}</div>` +
       `</section>`;
   }
 
@@ -1105,12 +1174,13 @@
     if (!topicRows.length) {
       return `<div class="edge-detail-empty">Per-topic link counters have not arrived on ActRouterLinkStats yet.</div>`;
     }
-    const body = topicRows.map((row) => `<tr><td>${escHtml(row.topic)}</td>` +
-      `<td>${formatCount(row.samples)}</td><td>${formatCount(row.nacks)}</td>` +
-      `<td>${formatCount(row.repair)}</td><td>${formatCount(row.heartbeats)}</td>` +
-      `<td>${formatCount(row.uncommitted)}</td></tr>`).join("");
-    return `<table class="edge-detail-table"><thead><tr><th>Topic</th><th>Samples</th><th>NACK</th><th>Repair</th><th>HB</th>` +
-      `<th>Uncommitted</th></tr></thead><tbody>${body}</tbody></table>`;
+    const body = topicRows.map((row) => {
+      const cells = [row.topic, ...[row.samples, row.nacks, row.repair, row.heartbeats, row.uncommitted].map(formatCount)];
+      return `<tr>${cells.map((value) => `<td title="${escHtml(value)}">${escHtml(value)}</td>`).join("")}</tr>`;
+    }).join("");
+    return `<div class="edge-detail-table-scroll" tabindex="0" role="region" aria-label="Per-topic counters; scroll horizontally for all columns">` +
+      `<table class="edge-detail-table"><thead><tr><th>Topic</th><th>Samples</th><th>NACK</th><th>Repair</th><th>HB</th>` +
+      `<th>Uncommitted</th></tr></thead><tbody>${body}</tbody></table></div>`;
   }
 
   function loadPersistedActivity() {
@@ -1293,6 +1363,11 @@
       hideEdgeDetail();
       return;
     }
+    const scrollTop = selectedLinkKey === pair.key ? edgeDetailEl.scrollTop : 0;
+    const scrollLeft = selectedLinkKey === pair.key
+      ? (edgeDetailEl.querySelector(".edge-detail-table-scroll")?.scrollLeft ?? 0) : 0;
+    const tableWasFocused = selectedLinkKey === pair.key &&
+      edgeDetailEl.querySelector(".edge-detail-table-scroll") === document.activeElement;
     selectedLinkKey = pair.key;
     selectedEdgeId = null;
     const a = String(pair.a);
@@ -1313,7 +1388,8 @@
           edgeDetailRow("topology evidence", evidenceText) +
         `</div>` +
         (directions.length
-          ? `<div class="edge-detail-subtitle" style="margin-top:6px;">${directions.map(directionSummaryHtml).join("; ")}</div>`
+          ? `<div class="edge-detail-subtitle" style="margin-top:6px;">${directions.map((direction) =>
+              `<div class="edge-detail-direction" title="${escHtml(directionSummaryText(direction))}">${directionSummaryHtml(direction)}</div>`).join("")}</div>`
           : `<div class="edge-detail-subtitle" style="margin-top:6px;">No directional receive counters observed for this pair.</div>`) +
       `</section>` +
       statsHtml +
@@ -1324,6 +1400,12 @@
     edgeDetailPanelEl.style.display = "block";
     syncLinkInspectorOptions();
     syncEdgeDetailHeight();
+    edgeDetailEl.scrollTop = scrollTop;
+    const tableScroll = edgeDetailEl.querySelector(".edge-detail-table-scroll");
+    if (tableScroll) {
+      tableScroll.scrollLeft = scrollLeft;
+      if (tableWasFocused) tableScroll.focus({ preventScroll: true });
+    }
   }
 
   function renderEdgeDetail(edgeId) {
@@ -1567,11 +1649,16 @@
 
   // data is one ActRouterMeshStatus sample: {observer_node, observer_router, state_revision,
   // peers: [{health: <full RouterHealth>, presence, last_seen_delta_ms}, ...]}.
-  function upsertMeshStatusSample(data) {
+  function upsertMeshStatusSample(data, telemetryAgeMs = 0) {
     if (!data || !data.observer_node || !data.observer_router) return;
+    const reportAge = age => Number.isFinite(age) && age >= 0 &&
+      Number.isFinite(telemetryAgeMs) && telemetryAgeMs >= 0 ? age + telemetryAgeMs : null;
     const observerId = data.observer_node; // already just the node name (RouterMeshStatus)
     nodes.update({ id: observerId, label: routerLabel(observerId), color: OBSERVER_NODE_COLOR,
              size: 22, font: { color: "transparent" }, kind: "observer",
+             health: data.observer_health,
+             healthAgeMs: reportAge(data.observer_health_age_ms),
+             meshReceivedAtMs: performance.now(),
              ...OBSERVER_PIN_FIELDS });
 
     const directPeers = new Set();
@@ -1599,6 +1686,7 @@
         kind: "peer", health: health, teamNames: teamNames,
         resolutionMode: resolutionModeFromHealth(health),
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
+        healthAgeMs: reportAge(peerEntry.health_age_ms), meshReceivedAtMs: performance.now(),
         ...PLATFORM_ROW_Y_FIELDS,
         ...(c2PinFields(health) || {}),
       });
@@ -1646,7 +1734,7 @@
     let n = 0;
     samples.forEach((s) => {
       if (s && s.data) {
-        upsertMeshStatusSample(s.data);
+        upsertMeshStatusSample(s.data, s.telemetry_age_ms);
         n++;
       }
     });

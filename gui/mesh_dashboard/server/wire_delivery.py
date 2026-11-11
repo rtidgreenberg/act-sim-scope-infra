@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class WireDelivery:
+    RELIABLE_GRACE_MS = 15_000
+    OTHER_GRACE_MS = 2_000
+
     def __init__(self):
         self.run_id = None
         self.offsets = {}
@@ -128,7 +131,7 @@ class WireDelivery:
             flows.setdefault(flow, []).append((identity, sent))
         rows = []
         for (reliability, topic, source, recipient), messages in sorted(flows.items()):
-            settle_ms = 15_000 if reliability == "reliable" else 2_000
+            settle_ms = self.RELIABLE_GRACE_MS if reliability == "reliable" else self.OTHER_GRACE_MS
             settled = [(key, event) for key, event in messages
                        if now - event["timestamp_ns"] >= settle_ms * 1_000_000]
             received = sum(key in self.received for key, _ in messages)

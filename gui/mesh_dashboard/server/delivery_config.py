@@ -30,10 +30,7 @@ def qos_settings(qos, infinite_duration):
     }
 
 
-def load_delivery_config(path, provider_factory, infinite_duration):
-    if path is None:
-        return {"available": False, "reason": "No active router configuration supplied to the dashboard.",
-                "topics": {}}
+def load_router_config(path, provider_factory):
     path = Path(path).resolve(strict=True)
     with path.open() as source:
         config = yaml.safe_load(source)
@@ -44,6 +41,14 @@ def load_delivery_config(path, provider_factory, infinite_duration):
     if not libraries:
         raise ValueError(f"{path}: no QoS libraries configured")
     provider = provider_factory(";".join(map(str, libraries)))
+    return path, config, libraries, provider
+
+
+def load_delivery_config(path, provider_factory, infinite_duration):
+    if path is None:
+        return {"available": False, "reason": "No active router configuration supplied to the dashboard.",
+                "topics": {}}
+    path, config, libraries, provider = load_router_config(path, provider_factory)
     aliases = config.get("qos_profiles", {})
     participants = config["participants"]
     topics = {}

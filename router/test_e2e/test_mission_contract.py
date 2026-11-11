@@ -696,6 +696,51 @@ def simulator_state(mission_modules):
     return simulator
 
 
+def test_command_consumer_accepts_current_individual_and_team_ids(
+        simulator_state, mission_modules, monkeypatch):
+    _, module = mission_modules
+    simulator = simulator_state
+    simulator.args = SimpleNamespace(source="Platform_30")
+    simulator.destination_ids = {"Platform_30"}
+    membership = SimpleNamespace(samples=[])
+    membership.take = lambda: membership.samples
+    simulator.membership_reader = membership
+    acknowledgments = []
+    simulator.control_cmd_ack_type = None
+    simulator.control_cmd_ack_writer = SimpleNamespace(write=acknowledgments.append)
+    monkeypatch.setattr(module.dds, "DynamicData", lambda _: {})
+    monkeypatch.setattr(module, "AUDIT", SimpleNamespace(log=lambda *_: None))
+
+    class Commands:
+        async def take_data_async(self):
+            for sequence, (destination, teams) in enumerate((
+                    ("Platform_30", ["Platform_30", "TEAM_A"]),
+                    ("TEAM_A", ["Platform_30", "TEAM_A"]),
+                    ("TEAM_A", ["Platform_30"]),
+                    ("TEAM_B", ["Platform_30", "TEAM_B"]),
+                    ("OtherPlatform", ["Platform_30", "TEAM_B"])), 1):
+                membership.samples = [SimpleNamespace(info=SimpleNamespace(valid=True), data={
+                    "target_node": "Platform_30", "participants": [{
+                        "name": "platform_wan", "team_partition": teams,
+                        "participant_partition": ["SHARED"],
+                    }],
+                })]
+                yield {
+                    "source": "Control_20", "destination": destination,
+                    "command_type": "MISSION", "command_id": f"team-command-{sequence}",
+                    "payload": list(json.dumps({"v": 1, "op": "cancel"}).encode()),
+                    "run_id": "team-test", "audit_sequence": sequence, "sent_at_ns": sequence,
+                }
+
+    simulator.control_cmd_reader = Commands()
+    asyncio.run(simulator.read_control_command())
+    assert [ack["accepted"] for ack in acknowledgments] == [True, True, False, True, False]
+    assert all(ack["source"] == "Platform_30" and ack["destination"] == "Control_20"
+               for ack in acknowledgments)
+    assert len(simulator.mission_command_results) == 3
+    assert simulator.destination_ids == {"Platform_30", "TEAM_B"}
+
+
 @pytest.mark.parametrize("scale", [1, 20])
 def test_demo_clock_payload_and_publication(backend, mission_modules, scale):
     bridge, simulator = mission_modules

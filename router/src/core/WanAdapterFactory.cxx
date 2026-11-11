@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <iterator>
 #include <map>
 #include <mutex>
@@ -302,20 +303,16 @@ WanMetadata merge(const WanMetadata& a, const WanMetadata& b) {
                 && a.sent_at_ns == b.sent_at_ns
                 && a.membership_revision == b.membership_revision,
             "source bindings disagree on immutable sample metadata");
-    require(a.destination.empty() || b.destination.empty() || a.destination == b.destination,
-            "source bindings require different addressed destinations");
     auto result = a;
     result.control = a.control || b.control;
     result.global = a.global || b.global;
-    if (result.destination.empty()) {
-        result.destination = b.destination;
-    }
-    for (const auto& team : b.team_ids) {
-        if (std::find(result.team_ids.begin(), result.team_ids.end(), team) == result.team_ids.end()) {
-            result.team_ids.push_back(team);
+    for (const auto& destination : b.destination_ids) {
+        if (std::find(result.destination_ids.begin(), result.destination_ids.end(), destination)
+                == result.destination_ids.end()) {
+            result.destination_ids.push_back(destination);
         }
     }
-    require(result.team_ids.size() <= 16, "combined team audience exceeds 16 entries");
+    require(result.destination_ids.size() <= 16, "combined destination audience exceeds 16 entries");
     return result;
 }
 
@@ -528,8 +525,8 @@ struct WanAdapterFactory::Impl {
                                       const std::string& family) const {
         auto result = filter;
         if (status_observer && family == "Status") {
-            result.expression = "(" + result.expression + ") OR (source_id <> %0 AND payload._d = "
-                    + std::to_string(wan_mapping("RouterHealth").discriminator) + ")";
+            result.expression = "(" + result.expression +
+                    ") OR (source_id <> %0 AND original_topic = 'RouterHealth')";
         }
         size_t property_size = result.expression.size();
         for (const auto& parameter : result.parameters) property_size += parameter.size() + 1;
@@ -779,6 +776,79 @@ void WanAdapterFactory::update_receive_filter(const std::string& topic_name,
     const auto selected = impl_->effective_filter(next, receiver->family);
     receiver->cft->filter(dds::topic::Filter(selected.expression, selected.parameters));
     receiver->filter = std::move(next);
+}
+
+std::vector<RouterWriterFilterObservation>
+WanAdapterFactory::writer_filter_observations() const {
+    std::vector<RouterWriterFilterObservation> observations;
+    for (const auto& entry : impl_->writers) {
+        const auto& writer = entry.second->writer;
+        RouterWriterFilterObservation observation;
+        observation.topic_name = entry.second->topic_name;
+        observation.observed_at_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        observation.poll_ok = true;
+        try {
+            auto readers = dds::pub::matched_subscriptions(writer);
+            observation.matched_readers = static_cast<uint32_t>(readers.size());
+            std::sort(readers.begin(), readers.end(), [](const dds::core::InstanceHandle& a,
+                                                        const dds::core::InstanceHandle& b) {
+                return wan_handle_key(a) < wan_handle_key(b);
+            });
+            for (const auto& handle : readers) {
+                if (observation.reader_filters.size() == observation.reader_filters.max_size()) {
+                    observation.truncated = true;
+                    observation.poll_ok = false;
+                    observation.last_error = "matched reader filter observations exceed capacity";
+                    Log::warn("wan_filter_observations_truncated",
+                              {{"topic", observation.topic_name},
+                               {"matched_readers", std::to_string(readers.size())}});
+                    break;
+                }
+                RouterReaderFilterObservation reader;
+                reader.reader_id = wan_handle_key(handle);
+                try {
+                    const auto subscription =
+                        dds::pub::matched_subscription_data(writer, handle);
+                    const auto& filter = subscription->content_filter_property();
+                    const auto expression = filter.filter_expression();
+                    reader.has_filter = bool(expression);
+                    if (expression) {
+                        require(expression->size() <= 16384,
+                                "reader filter expression exceeds observation capacity");
+                        reader.expression = *expression;
+                    }
+                    for (const auto& parameter : filter.expression_parameters()) {
+                        require(parameter.size() <= 257,
+                                "reader filter parameter exceeds observation capacity");
+                        reader.parameters.push_back(parameter);
+                    }
+                    auto participant = writer.publisher().participant();
+                    const auto name = participant.contains_entity(handle)
+                        ? participant.qos().policy<rti::core::policy::EntityName>().name()
+                        : rti::pub::matched_subscription_participant_data(writer, handle)
+                              ->participant_name().name();
+                    if (name.is_set()) {
+                        reader.peer_router = name.get();
+                    }
+                } catch (const std::exception& exception) {
+                    reader.last_error = "Reader discovery query failed; see router log.";
+                    observation.poll_ok = false;
+                    Log::warn("wan_reader_filter_poll_failed",
+                              {{"topic", observation.topic_name}, {"reader", reader.reader_id},
+                               {"error", exception.what()}});
+                }
+                observation.reader_filters.push_back(std::move(reader));
+            }
+        } catch (const std::exception& exception) {
+            observation.poll_ok = false;
+            observation.last_error = "Writer discovery query failed; see router log.";
+            Log::warn("wan_writer_filter_poll_failed",
+                      {{"topic", observation.topic_name}, {"error", exception.what()}});
+        }
+        observations.push_back(std::move(observation));
+    }
+    return observations;
 }
 
 WanBindingStatus WanAdapterFactory::binding_status(const std::string& route,

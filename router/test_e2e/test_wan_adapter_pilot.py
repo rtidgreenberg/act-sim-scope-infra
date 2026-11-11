@@ -348,7 +348,7 @@ def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     frame = dds.DynamicData(rig.types.type("WanStatus"))
     frame["source_id"] = "OtherBoat"
     frame["instance_id"] = "OtherBoat"
-    frame["schema_version"] = 2
+    frame["schema_version"] = 3
     frame["original_topic"] = "PlatformInitStatus"
     frame["audit_sequence"] = 50
     with frame.loan_value("payload") as payload:
@@ -450,7 +450,7 @@ def test_native_lifecycle_after_filter_change_and_unknown_output(pilot, rig, ope
         result["source_id"] = source
         result["instance_id"] = source
         result["audit_sequence"] = sequence
-        result["audience.destination"] = destination
+        result["audience.destination_ids"] = [destination]
         result["payload.command.source"] = source
         result["payload.command.destination"] = destination
         result["payload.command.audit_sequence"] = sequence
@@ -523,6 +523,12 @@ def test_malformed_lifecycle_does_not_stop_later_samples(pilot, rig):
     wait_until(lambda: remote.publication_matched_status.current_count >= 2)
     frame["source_id"] = "MalformedRemote"
     frame["original_topic"] = "UnsupportedTopic"
+    remote.write(frame)
+    time.sleep(0.3)
+    assert pilot.stats()["errors"] == 0, "Unsupported topic should be filtered before decoding"
+    assert not any(s.info.valid for s in rig.command_reader.take())
+    frame["original_topic"] = "ControlCommand"
+    frame["source_id"] = ""
     remote.write(frame)
     wait_until(lambda: pilot.stats()["errors"] >= 1)
     before = pilot.stats()["errors"]

@@ -194,7 +194,7 @@ def test_production_cases_round_trip_and_stable_keys(
     frame = dds.DynamicData(qualification_types.type("Wan" + family))
     frame["source_id"] = "Boat30"
     frame["instance_id"] = "Boat30"
-    frame["schema_version"] = 2
+    frame["schema_version"] = 3
     frame["original_topic"] = topic
     frame["audit_sequence"] = 1
     with frame.loan_value("payload") as payload:
@@ -205,8 +205,15 @@ def test_production_cases_round_trip_and_stable_keys(
                 active.data["command_id"] = "command-1"
     with endpoints(
         peers, qualification_types, family=family, profile=profile,
-        type_name="Wan" + family,
+        type_name="Wan" + family, expression=f"original_topic = '{topic}'",
     ) as (writer, reader, _, _, _):
+        baseline = pushed(writer)
+        frame["original_topic"] = "UnmappedTopic"
+        writer.write(frame)
+        time.sleep(0.3)
+        assert sequences(reader) == []
+        assert pushed(writer) == baseline, "Wrong-topic DATA was pushed"
+        frame["original_topic"] = topic
         handle = writer.register_instance(frame)
         writer.write(frame)
         received = []
@@ -221,7 +228,7 @@ def test_production_cases_round_trip_and_stable_keys(
         frame["session_id"] = 99
         frame["membership_revision"] = 10
         with frame.loan_value("audience") as audience:
-            audience.data["team_ids"] = ["TEAM_B"]
+            audience.data["destination_ids"] = ["TEAM_B"]
         assert writer.register_instance(frame) == handle
         recovered = writer.key_value(handle)
         assert recovered["source_id"] == "Boat30"
@@ -240,7 +247,7 @@ def test_production_three_key_contact_identity(peers, qualification_types):
             frame["source_id"] = source
             frame["original_topic"] = "ContactReport"
             frame["instance_id"] = contact_id
-            frame["schema_version"] = 2
+            frame["schema_version"] = 3
             frame["audit_sequence"] = sequence
             frame["payload.contact_report.source"] = source
             frame["payload.contact_report.contact_id"] = contact_id
@@ -268,13 +275,13 @@ def test_production_boolean_audience_filter(peers, qualification_types, selector
     frame["source_id"] = "Boat30"
     frame["instance_id"] = "Boat30"
     frame["original_topic"] = "PlatformInitStatus"
-    frame["schema_version"] = 2
+    frame["schema_version"] = 3
     frame["audit_sequence"] = 1
     with frame.loan_value("payload") as payload:
         with payload.data.loan_value("navigation") as active:
             active.data["source"] = "Boat30"
     with endpoints(peers, qualification_types, type_name="WanStatus",
-                   expression=f"audience.{selector} = TRUE AND payload._d = 1") as (
+                   expression=f"original_topic = 'PlatformInitStatus' AND audience.{selector} = TRUE") as (
             writer, reader, _, _, _):
         baseline = pushed(writer)
         writer.write(frame)
@@ -292,14 +299,14 @@ def test_production_mixed_audience_filter(peers, qualification_types):
     frame["source_id"] = "Boat30"
     frame["instance_id"] = "Boat30"
     frame["original_topic"] = "PlatformData"
-    frame["schema_version"] = 2
+    frame["schema_version"] = 3
     frame["audit_sequence"] = 1
-    frame["audience.team_ids"] = ["Boat30"]
+    frame["audience.destination_ids"] = ["Boat30"]
     with frame.loan_value("payload") as payload:
         with payload.data.loan_value("data") as active:
             active.data["source"] = "Boat30"
-    team_expression = " OR ".join(f"audience.team_ids[{index}] = %1" for index in range(16))
-    expression = f"source_id <> %0 AND (payload._d = 2 AND ({team_expression}))"
+    team_expression = " OR ".join(f"audience.destination_ids[{index}] = %1" for index in range(16))
+    expression = f"source_id <> %0 AND (original_topic = 'PlatformData' AND ({team_expression}))"
     parameters = ["'Boat31'", "'Boat31'"]
     with endpoints(peers, qualification_types, type_name="WanStatus",
                    expression=expression,
@@ -310,14 +317,14 @@ def test_production_mixed_audience_filter(peers, qualification_types):
         assert sequences(reader) == []
         assert pushed(writer) == baseline
         cft.set_filter(dds.Filter(
-            "source_id <> %0 AND (((audience.global = TRUE) AND (payload._d = 1)) OR "
-            f"(payload._d = 2 AND ({team_expression})))", parameters))
+            "source_id <> %0 AND ((original_topic = 'PlatformInitStatus' AND audience.global = TRUE) OR "
+            f"(original_topic = 'PlatformData' AND ({team_expression})))", parameters))
         frame["audit_sequence"] = 2
         writer.write(frame)
         time.sleep(0.3)
         assert sequences(reader) == []
         assert pushed(writer) == baseline
-        frame["audience.team_ids"] = ["Boat31"]
+        frame["audience.destination_ids"] = ["Boat31"]
         frame["audit_sequence"] = 3
         writer.write(frame)
         assert collect_sequences(reader, 1) == [3]
@@ -325,7 +332,7 @@ def test_production_mixed_audience_filter(peers, qualification_types):
 
 def test_full_team_set_exact_membership_sender_filter(peers, qualification_types):
     expression = " OR ".join(
-        f"audience.team_ids[{index}] = %{interest}"
+        f"audience.destination_ids[{index}] = %{interest}"
         for index in range(16) for interest in range(16)
     )
     parameters = ["'TEAM_A'"] + [f"'INTEREST_{index}'" for index in range(1, 16)]
@@ -334,11 +341,11 @@ def test_full_team_set_exact_membership_sender_filter(peers, qualification_types
         frame = dds.DynamicData(qualification_types.type("WanStatus"))
         frame["source_id"] = "Boat30"
         frame["instance_id"] = "Boat30"
-        frame["schema_version"] = 2
-        frame["original_topic"] = "PlatformData"
+        frame["schema_version"] = 3
+        frame["original_topic"] = "PlatformData" if branch == "data" else "RouterHealth"
         frame["audit_sequence"] = sequence
         with frame.loan_value("audience") as audience:
-            audience.data["team_ids"] = teams
+            audience.data["destination_ids"] = teams
         with frame.loan_value("payload") as payload:
             with payload.data.loan_value(branch) as active:
                 active.data["source" if branch == "data" else "router"] = "Boat30"
@@ -346,7 +353,7 @@ def test_full_team_set_exact_membership_sender_filter(peers, qualification_types
 
     with endpoints(
         peers, qualification_types, type_name="WanStatus",
-        expression=f"payload._d = 2 AND ({expression})", parameters=parameters,
+        expression=f"original_topic = 'PlatformData' AND ({expression})", parameters=parameters,
     ) as (writer, reader, cft, _, _):
         baseline = pushed(writer)
         for sequence, teams in enumerate(([], ["TEAM_B"], ["TEAM_A_extra"]), 1):

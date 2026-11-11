@@ -43,6 +43,18 @@ STATUS_MISSION = 1
 STATUS_DEBUG = 2
 
 
+def local_destination_ids(reader, node, current):
+    for sample in reader.take():
+        if not sample.info.valid or sample.data["target_node"] != node:
+            continue
+        current = {node}
+        for participant in sample.data["participants"]:
+            if participant["name"] == "platform_wan":
+                names = participant["team_partition"] or participant["participant_partition"]
+                current.update(name for name in names if name != "SHARED" and name != "*")
+    return current
+
+
 class MissionReporting:
     ACTIVE_PHASES = {"TRANSIT", "ORBIT", "RTB", "HOLDING"}
     TERMINAL_PHASES = {"IDLE", "COMPLETE", "CANCELLED"}
@@ -154,6 +166,13 @@ def main():
     status_reader = dds.DynamicData.DataReader(
         dds.Subscriber(participant), status_topic, reader_qos)
 
+    membership_topic = dds.DynamicData.Topic(
+        participant, "ActRouterStatus", provider.type("RouterStatus"))
+    membership_reader = dds.DynamicData.DataReader(
+        dds.Subscriber(participant), membership_topic,
+        qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::router_admin_status"))
+    destination_ids = {args.node}
+
     mission_topic = dds.DynamicData.Topic(
         participant, "PlatformMissionStatus", provider.type("platform_mission_status"))
     mission_reader = dds.DynamicData.DataReader(
@@ -250,6 +269,8 @@ def main():
     waitset = dds.WaitSet()
     waitset += team_read_condition
     waitset += status_read_condition
+    membership_read_condition = dds.ReadCondition(membership_reader, dds.DataState.any_data)
+    waitset += membership_read_condition
     mission_read_condition = dds.ReadCondition(mission_reader, dds.DataState.any_data)
     waitset += mission_read_condition
 
@@ -261,6 +282,8 @@ def main():
             waitset.dispatch(dds.Duration.from_milliseconds(500))
         except dds.TimeoutError:
             pass
+
+        destination_ids = local_destination_ids(membership_reader, args.node, destination_ids)
 
         for sample in team_reader.take():
             if not sample.info.valid:
@@ -307,7 +330,7 @@ def main():
                 continue
 
             data = sample.data
-            if data["platform_node"] != args.node:
+            if data["platform_node"] not in destination_ids:
                 continue
             mode = parse_mode(data["resolution_mode"])
             try:

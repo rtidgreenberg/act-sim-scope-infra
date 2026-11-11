@@ -88,6 +88,7 @@ class PassiveRttJsonTests(unittest.TestCase):
         bridge.cache_lock = threading.RLock()
         bridge.cache = {}
         bridge.mesh_updated_at = {}
+        bridge.mesh_received_at = {}
         bridge.link_stats_cache = {}
         bridge.link_stats_received_at = {}
         bridge._stop = threading.Event()
@@ -101,7 +102,8 @@ class PassiveRttJsonTests(unittest.TestCase):
         bridge.reconcile_team_missions = Mock()
         bridge._poll_loop()
 
-        self.assertEqual(json.loads(json.dumps(bridge.snapshot())), [{"data": mesh}])
+        self.assertEqual(json.loads(json.dumps(bridge.snapshot())),
+                         [{"data": mesh, "telemetry_age_ms": 0}])
         self.assertEqual(bridge.snapshot()[0]["data"]["peers"][0]["health"]["peers_seen"][0], ack)
         snapshot = bridge.link_stats_snapshot()
         stats["telemetry_sample_id"] = snapshot["rows"][0]["telemetry_sample_id"]
@@ -116,6 +118,7 @@ class PassiveRttJsonTests(unittest.TestCase):
             clock.time.return_value = wall_time
             aged = bridge.link_stats_snapshot()["rows"][0]
             self.assertEqual(aged["telemetry_age_ms"], 6000)
+            self.assertEqual(bridge.snapshot()[0]["telemetry_age_ms"], 6000)
             self.assertEqual(aged["telemetry_sample_id"], stats["telemetry_sample_id"])
         self.assertNotIn("telemetry_age_ms", next(iter(bridge.link_stats_cache.values())))
 

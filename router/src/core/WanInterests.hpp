@@ -10,7 +10,7 @@ struct WanInterest {
     bool control = false;
     bool global = false;
     bool addressed = false;
-    std::vector<std::string> teams;
+    std::vector<std::string> destination_ids;
 };
 
 WanInterest wan_interest(const RouterRouteSpec& route, const ParticipantState& wan,

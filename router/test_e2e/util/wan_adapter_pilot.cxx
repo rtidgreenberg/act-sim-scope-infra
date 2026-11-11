@@ -38,7 +38,7 @@ static Factory::MetadataProvider metadata(const std::string& node, bool control,
         result.control = control;
         result.global = global;
         if (node == "Control20") {
-            result.destination = data.value<std::string>("destination");
+            result.destination_ids.push_back(data.value<std::string>("destination"));
         }
         return result;
     };
@@ -116,9 +116,9 @@ int main(int argc, char** argv) {
         Factory platform(participants, qos, platform_dispatcher, types,
                          "platform_wan", "Boat30", "pilot", callbacks);
         std::map<std::string, Binding> bindings;
-        const router::WanReceiveFilter nav_filter{"payload._d <> 10", {}};
+        const router::WanReceiveFilter nav_filter{"original_topic <> 'RouterHealth'", {}};
         const router::WanReceiveFilter command_filter{
-            "payload._d = 1 AND audience.destination = %0", {"'Boat30'"}};
+            "original_topic = 'ControlCommand' AND audience.destination_ids[0] = %0", {"'Boat30'"}};
         auto bind = [&](const std::string& name, uint64_t generation) {
             if (name == "command_source") {
                 control.bind_source(name, "ControlCommand", generation, "control_lan",
@@ -211,7 +211,8 @@ int main(int argc, char** argv) {
                         throw std::runtime_error("filter_command needs Boat30 or OtherBoat");
                     }
                     platform.update_receive_filter("ControlCommand",
-                        {"payload._d = 1 AND audience.destination = %0", {"'" + name + "'"}});
+                        {"original_topic = 'ControlCommand' AND audience.destination_ids[0] = %0",
+                         {"'" + name + "'"}});
                 } else if (operation == "shutdown") {
                     platform.shutdown();
                     control.shutdown();

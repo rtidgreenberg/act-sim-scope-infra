@@ -37,10 +37,12 @@ from pathlib import Path
 from aiohttp import web
 try:
     from emane_config import EmaneConfiguration
+    from system_config import load_system_config, duration as config_duration
 except ModuleNotFoundError as exc:
-    if exc.name != "emane_config":
+    if exc.name not in ("emane_config", "system_config"):
         raise
     from gui.mesh_dashboard.server.emane_config import EmaneConfiguration
+    from gui.mesh_dashboard.server.system_config import load_system_config, duration as config_duration
 try:
     from wire_delivery import WireDelivery
     from delivery_config import load_delivery_config
@@ -222,6 +224,7 @@ class DdsBridge:
                  traffic_observers=None, router_config=None):
         self.poll_interval = poll_interval
         self.cache = {}          # observer_node -> latest sample dict
+        self.mesh_received_at = {}
         self.platform_cache = {} # platform_node -> latest per-resolution topic samples
         self.cache_lock = threading.Lock()
         self.ws_clients = set()  # set[web.WebSocketResponse]
@@ -230,6 +233,28 @@ class DdsBridge:
 
         qp = _qos_provider_for(types_xml)
         self.delivery_config = load_delivery_config(router_config, dds.QosProvider, dds.Duration.infinite)
+        self.system_config = load_system_config(router_config, dds.QosProvider, dds.Duration.infinite)
+        self.system_config["sections"].append({
+            "id": "dashboard", "title": "Dashboard and mission limits",
+            "description": "Values used by this running dashboard process, not router reachability timers.",
+            "columns": ["Setting", "Current value", "Meaning"],
+            "rows": [
+                ["Observer LAN domain", domain_id, "DDS domain used by the dashboard bridge."],
+                ["DDS polling interval", config_duration(poll_interval), "Local reader polling cadence."],
+                ["Mission position / presence freshness", config_duration(MISSION_FRESHNESS_MS / 1000),
+                 "Maximum telemetry age for mission availability; does not mark router presence STALE."],
+                ["Mission acknowledgement timeout", config_duration(MISSION_ACK_TIMEOUT_MS / 1000),
+                 "How long a pending mission command waits for an acknowledgement."],
+                ["Validated mission plan lifetime", config_duration(MISSION_PLAN_TTL_MS / 1000),
+                 "A validated plan must be dispatched before it expires."],
+                ["Maximum mission targets", MAX_MISSION_TARGETS, "Maximum boats per mission command."],
+                ["Maximum mission waypoints", MAX_MISSION_WAYPOINTS, "Maximum waypoints per route command."],
+                ["Reliable delivery observation grace", config_duration(WireDelivery.RELIABLE_GRACE_MS / 1000),
+                 "WAN wire delivery waits for repair before counting missing reliable samples."],
+                ["Other delivery observation grace", config_duration(WireDelivery.OTHER_GRACE_MS / 1000),
+                 "WAN wire delivery grace for non-reliable samples."],
+            ],
+        })
         mesh_type = qp.type(MESH_STATUS_TYPE)
         link_stats_type = qp.type(LINK_STATS_TYPE)
         diagnostics_type = qp.type("RouterDiagnostics")
@@ -347,6 +372,7 @@ class DdsBridge:
                 key = sample.get("observer_node", "?")
                 with self.cache_lock:
                     self.cache[key] = sample
+                    self.mesh_received_at[key] = time.monotonic()
                     self.mesh_updated_at[key] = int(time.time() * 1000)
 
                 self._broadcast({"type": "mesh_status", "data": sample})
@@ -445,7 +471,10 @@ class DdsBridge:
 
     def snapshot(self):
         with self.cache_lock:
-            return [{"data": v} for v in self.cache.values()]
+            now = time.monotonic()
+            return [{"data": sample, "telemetry_age_ms": max(
+                0, (now - self.mesh_received_at[key]) * 1000)}
+                for key, sample in self.cache.items()]
 
     def traffic_snapshot(self):
         with self.cache_lock:
@@ -1925,6 +1954,9 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     async def get_delivery_config(_request):
         return web.json_response(bridge.delivery_config)
 
+    async def get_system_config(_request):
+        return web.json_response(bridge.system_config)
+
     async def post_traffic_stats(request):
         """Ingest per-node capture summaries and broadcast network-wide aggregates."""
         try:
@@ -1983,6 +2015,7 @@ def build_app(bridge: DdsBridge, static_dir: Path) -> web.Application:
     app.router.add_post("/api/emane_controller", post_emane_controller)
     app.router.add_get("/api/delivery_stats", get_delivery_stats)
     app.router.add_get("/api/delivery_config", get_delivery_config)
+    app.router.add_get("/api/system_config", get_system_config)
     app.router.add_post("/api/traffic_stats", post_traffic_stats)
     app.router.add_post("/api/emane_stats", post_emane_stats)
     app.router.add_post("/api/team_assignment", team_assignment)
@@ -2008,7 +2041,7 @@ def main():
     parser.add_argument("--traffic-observers", default="",
                         help="comma-separated monitors required for an aggregate sample")
     parser.add_argument("--router-config", type=Path,
-                        help="active router YAML used for the configured WAN QoS sidebar")
+                        help="active router YAML used for the read-only Config tab and WAN QoS sidebar")
     args = parser.parse_args()
 
     os.environ.setdefault("NDDSHOME", "/home/rti/rti_connext_dds-7.7.0")

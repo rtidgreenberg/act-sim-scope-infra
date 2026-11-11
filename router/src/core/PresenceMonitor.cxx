@@ -293,6 +293,12 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     }
     bool success = false;
     try {
+        out.wan_writer_filters.clear();
+        if (shared_status_) {
+            for (auto& observation : shared_status_->writer_filter_observations()) {
+                out.wan_writer_filters.push_back(std::move(observation));
+            }
+        }
         const auto local = rti::core::xtypes::convert(out);
         WanMetadata metadata;
         if (status_codec_) {
@@ -313,11 +319,15 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             std::lock_guard<std::mutex> lk(roster_mutex_);
             const auto boundary = monotonic_us(std::chrono::steady_clock::now());
             for (size_t index = 0; index < out.peers_seen.size(); ++index) {
-                const auto ack = rtt_.acknowledgment(out.peers_seen[index].router, boundary);
+                auto &peer = out.peers_seen[index];
+                const auto ack = rtt_.acknowledgment(peer.router, boundary);
+                peer.ack_session_id = ack.session;
+                peer.ack_heartbeat_seq = ack.sequence;
+                peer.ack_age_at_send_us = ack.age_us;
                 auto ref = peers.get().loan_value(static_cast<uint32_t>(index + 1));
-                ref.get().value<uint64_t>("ack_session_id", ack.session);
-                ref.get().value<uint64_t>("ack_heartbeat_seq", ack.sequence);
-                ref.get().value<uint64_t>("ack_age_at_send_us", ack.age_us);
+                ref.get().value<uint64_t>("ack_session_id", peer.ack_session_id);
+                ref.get().value<uint64_t>("ack_heartbeat_seq", peer.ack_heartbeat_seq);
+                ref.get().value<uint64_t>("ack_age_at_send_us", peer.ack_age_at_send_us);
             }
             rtt_.reserve(out.heartbeat_seq, boundary);
         };
@@ -341,6 +351,10 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
     {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         rtt_.finalize(out.heartbeat_seq, success);
+        if (success) {
+            last_published_health_ = out;
+            last_health_published_at_ = std::chrono::steady_clock::now();
+        }
     }
 }
 
@@ -791,6 +805,10 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
     // roster changed, so it can no longer be the one bumping the counter.
     mesh.state_revision = mesh_revision_;
     const auto now = std::chrono::steady_clock::now();
+    mesh.observer_health = last_published_health_;
+    mesh.observer_health_age_ms = last_health_published_at_ == std::chrono::steady_clock::time_point()
+            ? -1 : std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_health_published_at_).count();
     for (const auto &entry : roster_) {
         // Same bounded_sequence cap as peers_seen (unbounded IDL -> 100): overflowing
         // it throws on the AWS worker; truncate (name-order-lowest kept) and say so once.
@@ -808,6 +826,8 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
         peer.presence = entry.second.presence;
         peer.last_seen_delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - entry.second.last_status_received).count();
+        peer.health_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - entry.second.last_health_received).count();
         // D102: bound + refresh the transitive (second-hand) edges re-embedded from this
         // peer's own cached peers_seen (D97 stopped stripping it). Two problems fixed at
         // once, both from the same root cause -- these nested refs are frozen at whatever

@@ -263,6 +263,8 @@ private:
     std::string audit_run_id_;
 
     mutable std::mutex roster_mutex_;
+    RouterHealth last_published_health_;
+    std::chrono::steady_clock::time_point last_health_published_at_;
     std::map<std::string, PeerEntry> roster_; // keyed by the peer's router name (D79)
     std::map<std::string, std::string> handle_to_name_; // health instance handle -> name
     std::uint64_t mesh_revision_ = 0;

@@ -106,29 +106,40 @@ int main(int argc, char** argv) {
     RouterRouteSpec route;
     route.output.publisher_partition = "PLATFORM";
     auto control = wan_interest(route, wan, "Boat30", true, "PlatformInitStatus");
-    CHECK(control.control && !control.global && control.teams.empty());
+    CHECK(control.control && !control.global && control.destination_ids.empty());
     route.output.publisher_partition = "NAVIGATION";
     auto global = wan_interest(route, wan, "Boat30", true, "PlatformInitStatus");
     CHECK(global.global && !global.control);
     route.output.publisher_partition.clear();
     auto team = wan_interest(route, wan, "Boat30", true, "PlatformData");
-    CHECK(team.teams.size() == 2);
-    auto command = wan_interest(route, wan, "Boat30", true, "ControlCommand");
+    CHECK(team.destination_ids.size() == 2);
+    auto command = wan_interest(route, wan, "Boat30", false, "ControlCommand");
     CHECK(command.addressed && !command.global);
+    CHECK(command.destination_ids == team.destination_ids);
     auto assignment = wan_interest(route, wan, "Boat30", true, "ActTeamAssignment");
     CHECK(assignment.global && !assignment.addressed);
 
     auto filter = wan_receive_filter("Status", "Boat30", {control, global, team});
     CHECK(filter.expression.find("audience.control = TRUE") != std::string::npos);
     CHECK(filter.expression.find("audience.global = TRUE") != std::string::npos);
-    CHECK(filter.expression.find("payload._d = 10") == std::string::npos);
-    CHECK(filter.parameters.size() == 3);
+    CHECK(filter.expression.find("original_topic = 'PlatformInitStatus'") != std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'PlatformData'") != std::string::npos);
+    CHECK(filter.expression.find("RouterHealth") == std::string::npos);
+    CHECK(filter.expression.find("payload._d") == std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'PlatformData'") ==
+          filter.expression.rfind("original_topic = 'PlatformData'"));
+    CHECK(filter.parameters.size() == 2);
     CHECK(wan_receive_filter("Event", "Boat30", {}).expression ==
-          "source_id <> %0 AND (payload._d = 0)");
+          "source_id <> %0 AND (original_topic = '')");
+    filter = wan_receive_filter("Event", "Boat30", {command, assignment});
+    CHECK(filter.expression.find("original_topic = 'ControlCommand'") != std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'ActTeamAssignment'") != std::string::npos);
+    CHECK(filter.expression.find("audience.destination_ids[15] = %0") != std::string::npos);
+    CHECK(filter.parameters == std::vector<std::string>({"'Boat30'", "'TEAM_A'"}));
     for (const auto& invalid : std::vector<std::string>{
             "O'BRIEN", std::string(256, 'x'), std::string("TEAM\0A", 6)}) {
         try {
-            team.teams = {invalid};
+            team.destination_ids = {invalid};
             wan_receive_filter("Status", "Boat30", {team});
             CHECK(false);
         } catch (const std::runtime_error&) {}
@@ -147,16 +158,16 @@ int main(int argc, char** argv) {
         selected.topic = mapping.topic;
         selected.control = selected.global = selected.addressed = true;
         for (size_t index = 0; index < 16; ++index) {
-            selected.teams.push_back(std::to_string(index) + std::string(250, 'x'));
+            selected.destination_ids.push_back(std::to_string(index) + std::string(250, 'x'));
         }
         full.push_back(selected);
     }
     filter = wan_receive_filter("Status", std::string(255, 'n'), full);
     CHECK(filter.parameters.size() == 17);
-    CHECK(filter.expression.find("audience.team_ids[15]") != std::string::npos);
+    CHECK(filter.expression.find("audience.destination_ids[15]") != std::string::npos);
     auto alias = full.front();
     validate_wan_source_interests({full.front(), alias});
-    alias.teams = {"EXTRA"};
+    alias.destination_ids = {"EXTRA"};
     try {
         validate_wan_source_interests({full.front(), alias});
         CHECK(false);
@@ -191,7 +202,7 @@ int main(int argc, char** argv) {
         CHECK(metadata.source_id == "Boat30" && metadata.membership_revision == 7);
     }
     try {
-        team.teams = {"TEAM_*"};
+        team.destination_ids = {"TEAM_*"};
         wan_receive_filter("Status", "Boat30", {team});
         CHECK(false);
     } catch (const std::runtime_error&) {}

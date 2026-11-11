@@ -59,6 +59,44 @@ Starting from the production configuration, the isolated controller tests:
 Startup validates the Status QoS alias whenever application routes or presence
 require Status, including Event-only and presence-only configurations.
 
+Receive filters use readable `original_topic = 'PlatformData'` predicates,
+combined with the existing control/global/destination/team audiences and source
+suppression. The codec keeps original topic and union discriminator consistent
+and rejects mismatched received frames. Identical topic sets share an OR of
+audience selectors to avoid repeating long topic names within the filter budget.
+Health is selected by `original_topic = 'RouterHealth'` on the shared Status reader.
+The fixed `SHARED` participant partition remains; legacy partition-named route
+fields become audience selectors in two-topic mode, and team changes update CFTs
+and source metadata rather than DDS participant/endpoint partition QoS.
+
+WAN schema version 3 replaces separate audience destination/team fields with
+`audience.destination_ids`: at most 16 exact IDs, each naming a node or team.
+ControlCommand destinations and PlatformStatusMode targets may now name a team;
+each member receives the unchanged original payload. A node always retains its
+own ID interest. Global/control flags remain additive and TeamAssignment remains
+broadcast. The simulator and mesh-control helper use local RouterStatus membership
+to recognize team-addressed commands; external consumers must do likewise.
+The dashboard still publishes mission commands per platform for its existing
+per-platform validation and ACK tracking. This does not redesign command octets.
+Version 2 and 3 require a coordinated rebuild/restart, not a rolling mixed-schema
+deployment; the codec explicitly rejects version 2 data frames.
+
+`RouterHealth.wan_writer_filters` reports each shared WAN writer's observed
+content-filter expression and parameters per matched reader, identified by its
+`<node>/<router>` participant name. It is sampled on the controller strand before
+each health heartbeat; team changes therefore become visible from the remote
+writer's perspective without creating endpoints or changing forwarding/lifecycle
+behavior. These are discovery observations, not an acknowledgment that writer-side
+evaluation is active. Poll errors and capacity truncation are explicit; departed
+readers disappear from the next successful snapshot.
+
+The same health branch carries these observations over Status, with no third WAN
+topic. Full expressions/parameters repeat each heartbeat, increasing WAN traffic.
+Rebuild/redeploy all affected type consumers after regenerating the IDL/XML.
+The LAN mesh aggregate also includes the observer's own last published health and
+local-monotonic health ages so a dashboard can inspect its own WAN writers and
+does not mistake unrelated Status traffic for fresh filter observations.
+
 Schema version 2 envelope keys are `source_id + original_topic + instance_id`.
 The router stamps `source_id` from the configured system/node name, not the
 internal router process name. `instance_id` is the raw payload identity field,

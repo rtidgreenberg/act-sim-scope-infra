@@ -138,15 +138,15 @@ void WanControllerFactory::refresh_interests() {
     for (auto& entry : live_) {
         entry.second.interest = std::move(selected.at(entry.first));
         std::string teams;
-        for (const auto& team : entry.second.interest.teams) {
-            teams += (teams.empty() ? "" : ",") + team;
+        for (const auto& destination : entry.second.interest.destination_ids) {
+            teams += (teams.empty() ? "" : ",") + destination;
         }
         Log::info("wan_interest_applied", {{"node", identity_.node_name},
                   {"route", entry.first.first}, {"topic", entry.first.second},
                   {"source", entry.second.source ? "true" : "false"},
                   {"control", entry.second.interest.control ? "true" : "false"},
                   {"global", entry.second.interest.global ? "true" : "false"},
-                  {"teams", teams}, {"revision", std::to_string(membership_revision_)}});
+                  {"destination_ids", teams}, {"revision", std::to_string(membership_revision_)}});
     }
 }
 

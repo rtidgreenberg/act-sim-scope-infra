@@ -134,6 +134,26 @@ locators, while the probe's QosProvider is cached on first use.
 The WAN observer's built-in publication/subscription readers start before the routers;
 starting it after discovery loses the evidence this assertion needs.
 
+The [writer-filter observation test](test_wan_filter_observations.py) reads actual
+RouterHealth samples from Status and checks Event/Status reader attribution,
+TEAM_A-to-TEAM_B filter propagation without reader recreation, stable reporting
+router revision, reader departure/restart, and the local observer's LAN mesh
+snapshot. A matching-session/heartbeat comparison also requires the local health
+snapshot to equal the transmitted health, including nonzero heartbeat
+acknowledgments and their receive ages. The dashboard's browser contract test is
+[`test_wan_filters.py`](../../gui/mesh_dashboard/tests/test_wan_filters.py); it uses
+the real assets with fixture telemetry, not a live mesh.
+
+WAN schema version 3 replaces the separate addressed destination and team list
+with `audience.destination_ids` (maximum 16 node/team IDs). The controller gate
+checks individual commands before/after team assignment, team-addressed commands,
+leave-team exclusion, continued individual delivery and team-targeted status
+modes, with TeamAssignment still broadcast. The codec rejects version 2 frames;
+do not mix these participants with the version 2 live mesh.
+The mission contract gate exercises the simulator's actual command-read/ACK loop
+against node/team destinations and authoritative local RouterStatus membership
+updates, including team removal and reassignment.
+
 For all five live mission workflows on an owned five-platform two-topic mesh:
 
 ```bash

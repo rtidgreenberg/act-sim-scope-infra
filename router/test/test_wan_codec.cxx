@@ -88,9 +88,8 @@ int main(int argc, char** argv) {
     metadata.membership_revision = 17;
     metadata.control = true;
     metadata.global = true;
-    metadata.destination = "Boat31";
     for (uint32_t index = 0; index < 16; ++index) {
-        metadata.team_ids.push_back("TEAM_" + std::to_string(index));
+        metadata.destination_ids.push_back(index == 0 ? "Boat31" : "TEAM_" + std::to_string(index));
     }
     CHECK(router::wan_mappings().size() == 15);
     for (const auto& mapping : router::wan_mappings()) {
@@ -116,7 +115,7 @@ int main(int argc, char** argv) {
         CHECK(decoded.topic == mapping.topic);
         check_decoded(decoded.data, local);
         CHECK(frame.value<Data>("payload").value<Data>(mapping.branch) == local);
-        CHECK(frame.value<uint32_t>("schema_version") == 2);
+        CHECK(frame.value<uint32_t>("schema_version") == 3);
         CHECK(frame.value<std::string>("original_topic") == mapping.topic);
         CHECK(frame.value<std::string>("source_id") == sample_metadata.source_id);
         CHECK(frame.value<std::string>("source_role") == metadata.source_role);
@@ -128,20 +127,19 @@ int main(int argc, char** argv) {
         const auto audience = frame.value<Data>("audience");
         CHECK(audience.value<bool>("control"));
         CHECK(audience.value<bool>("global"));
-        CHECK(audience.value<std::string>("destination") == metadata.destination);
-        const auto teams = audience.value<Data>("team_ids");
-        CHECK(teams.member_count() == 16);
-        CHECK(teams.value<std::string>(16) == "TEAM_15");
+        const auto destinations = audience.value<Data>("destination_ids");
+        CHECK(destinations.member_count() == 16);
+        CHECK(destinations.value<std::string>(1) == "Boat31");
+        CHECK(destinations.value<std::string>(16) == "TEAM_15");
         const auto id = frame.value<std::string>("instance_id");
         CHECK(id == local.value<std::string>(mapping.instance_field));
         auto changed_metadata = sample_metadata;
         changed_metadata.session_id++;
         changed_metadata.audit_sequence++;
         changed_metadata.membership_revision++;
-        changed_metadata.team_ids.clear();
+        changed_metadata.destination_ids.clear();
         changed_metadata.control = false;
         changed_metadata.global = false;
-        changed_metadata.destination.clear();
         Data changed(types->type(mapping.type));
         fill(changed, 40);
         changed.value<std::string>(mapping.instance_field,
@@ -149,7 +147,7 @@ int main(int argc, char** argv) {
         const auto changed_frame = codec.pack(mapping.topic, changed, changed_metadata);
         CHECK(changed_frame.value<std::string>("instance_id") == id);
         check_decoded(codec.unpack(changed_frame).data, changed);
-        CHECK(changed_frame.value<Data>("audience").value<Data>("team_ids").member_count() == 0);
+        CHECK(changed_frame.value<Data>("audience").value<Data>("destination_ids").member_count() == 0);
         auto key_frame = codec.key_frame(mapping.topic, local, sample_metadata);
         CHECK(key_frame.value<uint32_t>("schema_version") == 0);
         CHECK(key_frame.value<std::string>("original_topic") == mapping.topic);
@@ -162,6 +160,8 @@ int main(int argc, char** argv) {
         }
         auto corrupt = frame;
         corrupt.value<uint32_t>("schema_version", 1);
+        rejected([&] { codec.unpack(corrupt); });
+        corrupt.value<uint32_t>("schema_version", 2);
         rejected([&] { codec.unpack(corrupt); });
         corrupt = frame;
         corrupt.value<std::string>("original_topic", "RemoteArbitraryTopic");
@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
     rejected([&] { codec.pack("Unknown", nav, metadata); });
     rejected([&] { codec.pack("PlatformPowerStatus", nav, metadata); });
     auto invalid_metadata = metadata;
-    invalid_metadata.team_ids.push_back("TEAM_17");
+    invalid_metadata.destination_ids.push_back("TEAM_17");
     rejected([&] { codec.pack("PlatformInitStatus", nav, invalid_metadata); });
     invalid_metadata = metadata;
     invalid_metadata.source_id.clear();

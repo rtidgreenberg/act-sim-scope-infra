@@ -31,8 +31,7 @@ struct WanMetadata {
     uint64_t membership_revision = 0;
     bool control = false;
     bool global = false;
-    std::string destination;
-    std::vector<std::string> team_ids;
+    std::vector<std::string> destination_ids;
 };
 
 struct WanDecoded {

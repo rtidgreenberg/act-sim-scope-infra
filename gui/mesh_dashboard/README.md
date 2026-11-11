@@ -1,5 +1,36 @@
 # gui/mesh_dashboard — Phase 16 v1: mesh node graph
 
+### Observed WAN filters
+
+Select a router (including the local observer) and expand **Observed WAN filters**.
+Entries are grouped by Event/Status and short remote reader system name. Cards show
+named `original_topic` selectors labeled **Topic filters** and distinct parameter
+values labeled **Audience filters**;
+expand **View SQL filter** for the full router identity, line-broken SQL
+and indexed parameters.
+Topic chips identify equality selectors, not a separate authorization/delivery
+summary; the SQL remains authoritative. Full names are also available on hover.
+Reader expansion is retained across telemetry refreshes. Team reassignment updates these after
+discovery propagation, not merely when the local assignment command is accepted.
+Unfiltered readers, unidentified readers, polling failures, truncation, and missing
+telemetry are distinguished. Report age is based on the receiving router's
+monotonic health age, bridge-cache age and browser elapsed time; after eight seconds it is labeled
+stale. This does not prove that the writer is actively executing the filter.
+
+Two-topic WAN filters select the original LAN topic name rather than numeric union
+discriminators. The codec sets both from the same catalog and rejects inconsistent
+received frames. Team membership changes update receive filters and outgoing
+audience metadata, not WAN participant/endpoint partitions. The **reported team
+names** row is telemetry, not proof of live DDS partition QoS; legacy mode still
+uses its existing partition routing.
+
+WAN schema version 3 uses a shared `audience.destination_ids` list for individual
+and team targets on Event and Status, capped at 16 exact IDs. Topic and audience
+filters remain separately labeled; expanded SQL shows the actual indexed-list
+predicates. Team-addressed ControlCommand and PlatformStatusMode delivery is
+supported; the dashboard's mission workflow retains its per-platform command/ACK
+tracking. Global/control broadcasts remain separate, additive audience flags.
+
 Live browser dashboard: one node per router (`"<node>/<router>"`), edges colored by presence
 (green=ALIVE, amber=STALE, red=DEAD). Design:
 [docs/cpp_router/gui-visualization.md](../../docs/cpp_router/gui-visualization.md). Plan:
@@ -44,6 +75,25 @@ against a real mesh" for the current mechanism.
 Mission waypoint dots are 6 pixels across plus a thin outline, with 9-pixel labels,
 independent of map zoom. An invisible 20-pixel drag target keeps the smaller markers easy to
 move or right-click.
+
+### Read-only Config tab
+
+**Config** provides human-readable tables for the supplied router configuration:
+WAN contract, configuration fingerprint, presence deadlines and STALE-to-DEAD
+policy, resolved Event/Status writer and reader QoS, participant domains,
+transports and discovery leases, and initial per-side route enablement. Mission
+freshness, acknowledgement timeout, plan lifetime, delivery grace periods and
+dashboard polling are listed separately to avoid confusing them with presence.
+
+`GET /api/system_config` returns an allowlisted snapshot loaded from
+`--router-config` and its inherited QoS profiles at dashboard startup. Refresh
+view re-fetches that snapshot; it neither reloads nor changes router settings.
+There is no write API. The page labels launch-time templates and configured
+values rather than claiming fleet-wide runtime introspection. Compiled router
+timers absent from the configuration/telemetry (heartbeat publication cadence
+and dead-peer roster retention) explicitly show **Not reported**, not guessed
+defaults. Missing configuration and request errors are visible in the tab.
+Existing EMANE runtime parameters remain available in the EMANE tab.
 
 ### WAN Wire Delivery
 
@@ -174,16 +224,23 @@ cross-host timestamp subtraction or clock synchronization is needed. Receive
 dispatch and send queueing can remain, so this is application-observed RTT, not
 pure wire latency.
 
+The link inspector uses a 340 px, viewport-limited panel with single-column stats,
+fixed table columns and tabular digits. The per-topic table scrolls horizontally
+to keep all counters accessible. Refreshes preserve both scroll positions, and
+changing counters or repair warnings do not move the rows. Hover over clipped labels,
+values or direction summaries to see their full text; numeric precision is unchanged.
+
 Interval min/mean/max require `rtt_valid=true`, `rtt_count>0`, and fresh telemetry.
-A zero count means unavailable, not zero latency; an accepted zero RTT is displayed
-as `0 us`. The inspector shows the last sample age (router-reported age plus
+A zero count means no interval measurement, shown as `-`, not zero latency; an
+accepted zero RTT is displayed as `0 us`. Missing RTT measurements and heartbeat
+acknowledgment ages also show `-`. The inspector shows the last sample age (router-reported age plus
 monotonic bridge-cache age and browser `performance.now()` elapsed time since
 receipt) and last heartbeat acknowledgment age (the immutable
 subtracted peer wait). Core measurement freshness lasts 32 s, including intervals
 with no new samples; interval RTT still requires a positive count. Measurements
 older than 32 s or stats telemetry older than 5 s are presented as stale/unavailable
-even while the inspector remains open. Missing validity/freshness fields are
-unavailable, not interpreted as legacy probe RTT. The bridge forwards the generated
+even while the inspector remains open. Missing validity shows `-`; unknown freshness
+remains explicit, not interpreted as legacy probe RTT. The bridge forwards the generated
 type's JSON fields unchanged, including health session IDs, nested peer
 acknowledgment metadata, and link-stat validity/ages. Python preserves uint64
 integers; JavaScript must not use those identity tokens for RTT correlation.
