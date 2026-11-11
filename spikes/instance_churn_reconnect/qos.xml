@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="ChurnSpike">
+    <!-- Match production adapter instance retention, without changing sample retention. -->
+    <qos_profile name="event_reader" base_name="ACT_QOS_LIB::wan_event">
+      <datareader_qos>
+        <reader_data_lifecycle>
+          <autopurge_nowriter_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_nowriter_instances_delay>
+          <autopurge_disposed_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_disposed_instances_delay>
+        </reader_data_lifecycle>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="event_transient_local" base_name="ChurnSpike::event_reader">
+      <datawriter_qos>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
+      </datawriter_qos>
+      <datareader_qos>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="status_reader" base_name="ACT_QOS_LIB::wan_union_status">
+      <datareader_qos>
+        <reader_data_lifecycle>
+          <autopurge_nowriter_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_nowriter_instances_delay>
+          <autopurge_disposed_instances_delay>
+            <sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec>
+          </autopurge_disposed_instances_delay>
+        </reader_data_lifecycle>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>
