@@ -118,6 +118,52 @@ def push_mission(page, kind, data):
       'act-dashboard-message', {detail: {type, data}}))""", [kind, data])
 
 
+def test_boat_selection_ring_preserves_team_and_offline_colors(mission_ui):
+    ui = mission_ui
+    page = ui.page
+    boat = page.locator('.mission-boat[data-platform="Platform_30"]')
+    ring = boat.locator(".mission-boat-selection")
+    hull = boat.locator("polygon")
+    row = page.locator('.mission-row[data-platform="Platform_30"]')
+
+    def style(locator, property_name):
+        return locator.evaluate("(node, key) => getComputedStyle(node)[key]", property_name)
+
+    assert style(ring, "display") == "inline"
+    assert style(hull, "fill") == "rgb(58, 161, 230)"
+    assert style(hull, "strokeWidth") == "3.5px"
+    assert ring.locator("circle").nth(1).get_attribute("stroke-width") == "3"
+    row.click()
+    assert style(ring, "display") == "none"
+    assert style(hull, "strokeWidth") == "2px"
+    row.click()
+    push_mission(page, "mission_inventory", ui.fleet)
+    assert style(ring, "display") == "inline"
+    ui.fleet["platforms"][0]["available"] = False
+    push_mission(page, "mission_inventory", ui.fleet)
+    assert style(ring, "display") == "inline"
+    assert style(hull, "fill") == "rgb(89, 101, 111)"
+    row.click()
+    assert style(ring, "display") == "none"
+
+
+def test_boat_selection_ring_follows_map_multiselect(mission_ui):
+    ui = mission_ui
+    second = copy.deepcopy(ui.fleet["platforms"][0])
+    second.update(platform="Platform_31", display_name="Platform 31")
+    second["position"].update(latitude=32.74, longitude=-117.38)
+    ui.fleet["platforms"].append(second)
+    push_mission(ui.page, "mission_inventory", ui.fleet)
+    first_icon = ui.page.locator('.mission-boat[data-platform="Platform_30"] polygon')
+    second_icon = ui.page.locator('.mission-boat[data-platform="Platform_31"] polygon')
+    first_icon.click()
+    second_icon.click(modifiers=["Shift"])
+    assert ui.page.locator(".mission-boat.selected .mission-boat-selection:visible").count() == 2
+    second_icon.click(modifiers=["Shift"])
+    assert ui.page.locator(".mission-boat.selected .mission-boat-selection:visible").count() == 1
+    assert ui.page.evaluate("ActMissionState.selected") == ["Platform_30"]
+
+
 def test_waypoints_stay_small_through_zoom_resize_and_drag(mission_ui):
     ui = mission_ui
     page = ui.page

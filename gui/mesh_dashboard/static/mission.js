@@ -249,6 +249,11 @@
           element("polygon", { points: "0,-16 12,13 0,9 -12,13" }),
           element("text", { x: 17, y: 5, fill: "#f0faff", "font-size": 11, "font-weight": 700 },
             boat.platform.replace("Platform_", "P")));
+        const selection = element("g", { class: "mission-boat-selection", "pointer-events": "none" });
+        selection.append(
+          element("circle", { r: 23, fill: "none", stroke: "#101c26", "stroke-width": 7 }),
+          element("circle", { r: 23, fill: "none", stroke: "#fff", "stroke-width": 3 }));
+        group.appendChild(selection);
         boatLayer.appendChild(group); boats.set(boat.platform, group);
       }
       group.setAttribute("class", `mission-boat${selected.has(boat.platform) ? " selected" : ""}${boat.available ? "" : " unavailable"}`);

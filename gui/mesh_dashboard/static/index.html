@@ -302,7 +302,9 @@
   #mission-map svg { width: 100%; height: 100%; display: block; }
   .mission-boat { cursor: context-menu; pointer-events: bounding-box; }
   .mission-boat polygon { fill: #1fb7c8; stroke: #d7fff8; stroke-width: 2; filter: drop-shadow(0 0 3px #1fb7c8); }
-  .mission-boat.selected polygon { fill: #4fd7e8; stroke: #fff; stroke-width: 2.5; }
+  .mission-boat.selected polygon { stroke: #fff; stroke-width: 3.5; }
+  .mission-boat-selection { display: none; }
+  .mission-boat.selected .mission-boat-selection { display: inline; }
   .mission-route { fill: none; stroke: #34c5d5; stroke-width: 3; stroke-dasharray: 1 7; stroke-linecap: round; vector-effect: non-scaling-stroke; }
   #mission-map svg > g:first-child path { vector-effect: non-scaling-stroke; }
   .mission-waypoint { fill: #67b9ef; stroke: #d7efff; stroke-width: 1; }
@@ -721,6 +723,6 @@
   <script src="operator_tabs.js?v=20261110-config-tab-v1"></script>
 <script src="config_tab.js?v=20261110-config-tab-v1"></script>
 <script src="mission_map.js?v=20261103-coast-v1"></script>
-<script src="mission.js?v=20261110-compact-waypoints-v1"></script>
+<script src="mission.js?v=20261112-boat-selection-v1"></script>
 </body>
 </html>

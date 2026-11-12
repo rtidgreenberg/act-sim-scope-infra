@@ -76,6 +76,10 @@ Mission waypoint dots are 6 pixels across plus a thin outline, with 9-pixel labe
 independent of map zoom. An invisible 20-pixel drag target keeps the smaller markers easy to
 move or right-click.
 
+Selected mission boats have a white outer ring with a dark outline and a heavier
+white hull outline. Team colors and stale/offline colors remain unchanged; the
+selection ring follows both map and fleet-list selection, including multi-select.
+
 ### Read-only Config tab
 
 **Config** provides human-readable tables for the supplied router configuration:
