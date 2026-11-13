@@ -30,6 +30,231 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 ### Baseline and implementation status
 
+- **2026-11-13 exhaustive-review follow-up resolved:** cross-writer spike controls
+  now use DDS reception timestamps and explicitly reject ambiguous ties; both
+  churn entry points accept overrides for all supported priority-band variants.
+  Fresh gate: 38/38 SDK/offline tests, 9/9 isolated native controls and two actual
+  overridden-priority healthy workloads passed. Current cache-deployment guidance
+  is corrected; telemetry slide PDF/PPTX are regenerated and footer clearance
+  verified. Historical recovery results are unchanged. No production router,
+  IDL/QoS, running binary or live mesh changes/restart. See migration-plan §3.43.
+
+- **2026-11-13 review fixes deployed:** destination binds now stage resources
+  and route bookkeeping before committing shared receive interests; failed
+  State binds preserve the prior filter and release partial resources.
+  Native regression covers both missing aliases and invalid filters, then
+  successful retry and ContactReport delivery. The configuration summary now
+  includes `Last Telemetry to DEAD`, with browser coverage and a new cache token.
+  Qualification: 9/9 C++, 30/30 isolated DDS (337.71 s), 33 host display/parser/
+  policy checks plus two SDK-only checks passed separately. Owned all-node
+  down/build/up passed 9/9 C++ again; deployed binary matches the qualified build.
+  The user approved interrupting three active ORBIT missions for deployment.
+  Native discovery and live browser checks passed; the targeted live contact/
+  target workflow passed 1/1 (25.97 s), not a new five-workflow gate.
+  Final state: six peers ALIVE/ROUTER_OK, original teams/20x clocks restored,
+  all missions CANCELLED at zero speed, no impairments. Mesh remains on 8080.
+  See migration-plan §3.42 and `debug/test_reports/wan_review_fixes_*`.
+
+- **2026-11-13 semantic WAN names deployed and live-verified:**
+  `three_topic_union` now uses **Event / State / Telemetry**, replacing physical
+  Contacts with State and Status with Telemetry. Event is unchanged. Legacy and
+  two-topic Event/Status names are unchanged. This is a naming-only change:
+  payloads/schema 3, LAN topics, keys, audience rules, QoS, priorities, pacing
+  and health timing are preserved. Internal `WanEvent`/`WanStatus` types and
+  `wan_contacts`/`wan_status` aliases are intentionally retained. No transient
+  local or catalog-driven telemetry model was introduced.
+  Fresh source gate: 9/9 C++, 16/16 native three-topic DDS (256.40 s), three
+  targeted two-topic regressions (166.09 s), 56 launcher/display/wire checks
+  plus 163 subtests; four image-only browser skips then passed on host (3.59 s).
+  Owned all-node stop/build/up rebuilt the persistent router (9/9 C++ again).
+  Native discovery verifies exactly one Event/State/Telemetry pair per router
+  on Control_20 and Platform_30-35; all seven configuration caches and the
+  live Observed WAN filters panel show the new names. Config labels/health
+  recovery wording and the chart cache revision are updated.
+  Final **5/5 live browser mission workflows passed, zero skips, 377.12 s**.
+  Six peers ALIVE/ROUTER_OK, missions CANCELLED at zero speed, original
+  TEAM_A/TEAM_B assignments and 20x clocks restored; impairments empty.
+  Mesh remains on 8080 in `debug/mesh_runs/emane`; use the owned lifecycle,
+  never overwrite the live binary or edit generated configs. Mixed old/new
+  three-topic participants do not exchange the renamed topics.
+  See migration-plan §3.41 and `debug/test_reports/semantic_wan_*`.
+  Historical SEDP/log caveats and open recovery/health-priority/load gates remain.
+
+- **2026-11-13 earlier three-topic baseline, names superseded by §3.41:**
+  the user selected default heartbeat suppression and authorized main C++ router
+  integration plus an owned coordinated live restart after qualification.
+  `three_topic_union` separates Event KEEP_ALL, Contacts writer KEEP_LAST(1) /
+  reader KEEP_ALL, and unchanged shared Status. Event/Contacts retain tested
+  priority bands, shared nominal 250,000 B/s XML pacing and 512 KiB repair cap.
+  Health-priority tuning remains separate. The user also approved raising the
+  administrative writer-filter sequence bound from two to three; IDL/XML are
+  regenerated, requiring coordinated restart. Fresh gate: 9/9 C++, 16/16 native
+  three-topic DDS tests (257.85 s, zero skips), 54 launcher/display tests plus
+  159 subtests; all four image-only browser skips subsequently passed on host.
+  Two-topic regressions: 18 passed plus a separately passing opt-in loss case;
+  three legacy regressions passed. The owned lifecycle stopped all seven
+  containers, rebuilt the persistent router (9/9 C++), and relaunched Control_20
+  plus Platform_30-35 in **three_topic_union**, dashboard port 8080.
+  Native discovery verifies exactly three writer/reader pairs per router;
+  live configuration snapshots report all three families.
+  Initial live failures exposed missing DATA_SESSION wire decoding and a fixture
+  assuming unassigned teams. Both are fixed without weakening routing/loss
+  assertions; the monitor was reloaded by another owned down/up, retaining the
+  qualified router binary. Wire regressions: 42 passed plus 107 subtests, 16
+  SDK/binding-dependent host skips; actual capture: 100/100 DATA_SESSION decoded.
+  Final **5/5 live browser mission workflows passed, zero skips, 355.79 s**.
+  All six peers ALIVE/ROUTER_OK, missions CANCELLED at zero speed, original
+  TEAM_A/TEAM_B assignments and 20x clocks restored; impairments empty.
+  Workdir remains `debug/mesh_runs/emane`. Never overwrite the running binary
+  or edit generated configs; use the owned lifecycle.
+  Logs are not clean: startup status writes are diagnosed/skipped before enable,
+  SEDP TX attribution remains incomplete, and historical native participant
+  warnings are not qualified as resolved.
+  See migration-plan §3.40 and the durable WAN tradeoff report. Do not claim the
+  selected 19.1-20.3 s spike recovery meets the ten-second target.
+
+- **2026-11-12 RouterConfig cache review fixes, source only:** both reported
+  issues are resolved in source. Session eviction preserves the current health
+  session's replay watermark; at capacity, oldest config-only identities absent
+  from the roster are evicted explicitly. Bounds remain 256 identities and two
+  sessions per identity; roster peers are protected. Permanent real-DDS tests
+  reproduce both failures against the deployed binary, then pass against the
+  private rebuilt router. Fresh gate: 9/9 C++ and 7/7 config DDS tests, zero
+  skips, including 32-second packet-loss repair. Shared health/restart and legacy
+  presence regressions also passed. A related test now waits for complete WAN
+  matches and a current config revision before asserting revision stability;
+  its startup race was reproduced against the old binary too. The persistent
+  binary and seven-node live mesh remain untouched. Rebuild/restart through the
+  owned lifecycle before deploying these fixes. See migration-plan §3.39 and
+  local `debug/test_reports/router_config_cache_*`.
+- **2026-11-12 reliable RouterConfig deployed:** user requested reliable
+  filter changes, superseding optional best-effort snapshots (§3.36).
+  `RouterConfig` is Event branch 6 on the existing RELIABLE/KEEP_ALL pair;
+  every WAN health heartbeat omits details. First/change/30-second full config
+  snapshots preserve late-reader recovery under existing VOLATILE durability.
+  Session/sequence validation, early config caching, empty clears and explicit
+  malformed-input warnings preserve the LAN dashboard cache/freshness shape.
+  Internal Event interest survives route changes; deferred two-sided self-ignore
+  covers both Event and Status. No additional topic/endpoint or QoS retuning.
+  Fresh source passed 9 C++ targets, 8 isolated DDS cases (plus the final
+  malformed-config/cache rerun), and 5 browser checks. Actual 100% packet loss
+  for 32 seconds repairs a config published during loss after restoration.
+  User-authorized owned teardown, serial persistent rebuild (9/9 C++), and
+  coordinated seven-node restart are complete. All six platforms are ALIVE /
+  ROUTER_OK; teams and 20x clocks restored, zero speed, impairments empty.
+  Complete native wire decoding verifies every captured health omits filters:
+  platform health is 1,648 CDR bytes, config 16,772 bytes. Chromium verifies
+  cached Event/Status details and SQL expansion. A 40-second observation reports
+  1.219 Mbps fleet data TX, including config refreshes (not RF airtime).
+  Deployment also activates the previously tested 300-second timeout policy
+  and two-sided native self-ignore. Mesh remains running on port 8080.
+  Mixed-type, fleet/load and full live mission gates remain unqualified.
+  See migration-plan §§3.37-3.38 and local `debug/test_reports/router_config_*`.
+- **2026-11-12 recovery timing investigation, not deployed:** twelve private
+  two-minute outage trials show repair-request stalls dominate the old
+  12.929 -> 19.110 s timing difference: 5.891 s of the 6.181 s delta is additional
+  time in long request gaps. Identical three-topic/no-MultiChannel repeats give
+  13.869/19.331 s; keep MultiChannel available as the `bands_all` comparison,
+  not assumed responsible for the slowdown. All ten three-topic trials preserve
+  180 command/ACK pairs, but fail 10 s contact recovery. One unchanged paired
+  control reaches 28.210 s and 2.254 s fresh RTT. Zero Contacts heartbeat
+  suppression gives 12.227/11.781 s but does not remove all stalls or prove a
+  complete fix. Twenty-two host tests and nine native controls pass. No default
+  retuning or live-mesh changes by this investigation. See §3.35.1 and the
+  [spike's controlled results](../spikes/three_topic_wan/README.md#why-129-s-became-191-s-controlled-investigation).
+- **2026-11-12 three-topic spike, not deployed:** user-authorized
+  [Status/Contacts/Event prototype](../spikes/three_topic_wan/README.md) separates
+  reliable latest-state Contacts from reliable KEEP_ALL required Events; Status
+  is unchanged. Independent writers share the nominal 2 Mbps HPF controller,
+  priorities 100/10, without MultiChannel. Both nodes have one writer/reader per
+  topic and remote-only matches. Twenty host, nine new native and 32 existing
+  native controls pass, including negative Event-loss oracles. The two-minute
+  outage preserves all 180 commands/ACKs (14.124 ms worst fresh RTT), correct
+  final contacts and zero pending samples. State catch-up takes **19.110 s**:
+  the 10 s gate still fails in JUnit/exit status. This reuses schema-3 WanEvent
+  on Contacts only in an isolated private-network spike; production schema,
+  routing and the live mesh are unchanged. Restart, late joining, tombstone
+  retention, ownership and fleet/load qualification remain open. See §3.35.
+- **2026-11-12 KEEP_LAST(1) experiment, not deployed:** an isolated profile
+  changes only writer history on the 512 KiB repair candidate. Receipt-triggered
+  current-state recovery is 12.929 s, fresh RTT 13.726 ms, with correct final
+  contacts/zero pending samples. However, 120/180 command ACKs and 10,072/14,561
+  valid contact writes are missing. Required-event and 10 s recovery gates fail.
+  An earlier 180 s observation confirms losses; the refined 10 s terminal run
+  corrects periodic convergence sampling near producer ticks by checking at
+  receipt processing too. Preserve method/run distinctions. Eighteen host and
+  32 native controls pass, including queued update/dispose/revive replacement.
+  Do not deploy KEEP_LAST on the shared command writer. See migration-plan §3.34.
+- **2026-11-12 larger repair-response experiment, not deployed:** an isolated
+  XML profile raises only Event `max_bytes_per_nack_response` from 128 to
+  512 KiB. Complete valid-write/ACK coverage remains, but contact convergence
+  is 61.580 s versus 60.342 s corrected baseline, and worst fresh RTT is
+  2.315 s versus 13.645 ms. Original contact/command gates fail; do not adopt
+  the increase. One comparison does not prove the RTT difference causal.
+  Captured request bitmaps remain mostly 256 bits; investigate request-window/
+  cadence and pacing next. Seventeen host and 24 native controls pass.
+  Event remains KEEP_ALL; flow control and priorities already operate together.
+  No production QoS/live deployment changes. See migration-plan §3.33.
+- **2026-11-12 native self-ignore correction, deployed in §3.38:** production already
+  ignores its own WAN writers; WAN readers now also use subscription ignore,
+  including deferred Status startup. The spike previously omitted native ignore;
+  it now applies both and verifies one remote reader per writer. Writer ignore
+  alone suppresses local delivery, not writer destinations. Two-sided ignore
+  halves healthy source Event DATA UDP bytes and fixes that extra local copy.
+  Corrected two-minute results: all 14,561 valid writes/all 180 ACKs, worst fresh
+  RTT 13.645 ms, contact convergence 60.342 s. The 10 s contact gate still fails.
+  Corrected batching still fails history/latency. Sixteen host, nineteen native,
+  nine C++ and twelve targeted production DDS checks pass. Earlier pacing
+  numbers below predate this correction; see migration-plan §3.32.
+- **2026-11-12 recovery/packing measurements, not deployed:** equal nominal
+  2 Mbps coarse/fine pacing recovers contacts in 72.664/71.828 s, observing all
+  14,561 valid writes, but still fails latency budgets. Native batching reaches
+  final state in 64.627 s yet has 15.846 s fresh command RTT and 12,400 valid
+  writes not observed; reject it. A stronger Event-history oracle now detects
+  missing intermediate writes, independently reproduced over a 12 s outage.
+  Sixteen host and sixteen native scheduling/lifecycle checks pass; all long
+  outage performance gates fail. Captures show mostly individual disposals
+  and extra local ACK-reader contact traffic with both MultiChannel variants.
+  Qualify sender-side filtering/fan-out and usable recovery capacity next.
+  No logical disposal aggregation/history dropping is implemented. Raw captures
+  are under `debug/pcap`, reports under `debug/test_reports`; see migration-plan
+  §3.31 and the spike README. Status/live mesh remain unchanged.
+- **2026-11-12 generic priority-band follow-up, not deployed:** the churn
+  spike adds `priority_bands`, with static `DDSPRIFLTR` XML channels for
+  `@priority >= 100` and `< 100`. Topic-to-priority map/CLI stamps writes
+  and disposals; DDS selects the band. Twelve host and twelve native
+  ordering/lifecycle checks pass, including priority 0 and same-band FIFO;
+  configuration-only inverted priorities pass the revival control.
+  The two-minute outage still fails: all command ACKs recover, fresh RTT
+  2.17 s, but 7,296 samples remain pending and contact state is unconverged.
+  Status is unchanged/outside this Event controller, not implicitly lower
+  than Event. See migration-plan §3.30 and the spike's band results.
+  The MCP's wrong `PRIFILTER` literal is recorded locally in the shared
+  correction-log submodule; its publication/re-pin is not performed here.
+- **2026-11-12 native priority experiment, not deployed:** the churn spike
+  uses XML HPF/asynchronous publishing and configurable per-original-topic
+  sample priorities (commands/ACKs 100, ContactReport writes/disposes 10).
+  Four deterministic checks prove per-topic channels inside one Event writer
+  let a command overtake 400 contacts; sample priority alone does not.
+  Eleven host tests and same-key dispose/revival pass. Four serial two-minute
+  outage runs pass healthy controls but all fail outage acceptance. Channels
+  acknowledge every command and improve worst fresh RTT from 9.16 to 2.39 s,
+  still over 2 s; the nominal 2 Mbps token budget leaves contact recovery
+  undrained (7,296 pending). No thresholds relaxed or live settings changed.
+  The three-topic experimental channel catalog is not production-ready;
+  capacity, complete branch/filter/lifecycle coverage and actual-router/fleet
+  qualification remain open. See migration-plan §3.29 and the spike README.
+- **2026-11-11 system-timeout update, deployed in §3.38:** `WAN_TIMEOUT_SEC`
+  defaults to 300 seconds and drives WAN discovery plus final two-topic death
+  since last Status. `WAN_HB_PERIOD_SEC=3` derives 100 retries in C++/Python
+  startup before static XML loading. Actual-router 120-second outage tests
+  pass (2/2); all native contact state/ACKs recover without reader inactivity.
+  The native performance gate still fails: serial command RTT 8.49 s and
+  scheduling lag 75.34 ms (convergence 9.98 s); no assertions were relaxed.
+  A shortened-policy real health/restart regression and configuration checks
+  passed. See migration-plan §3.28 and the churn spike's policy retest.
+  The coordinated 2026-11-12 rebuild/restart activates this policy. Recovery flow control,
+  prioritization, resource budgets and full current live missions remain open.
 - **2026-11-11 destination-list migration deployed:** Source and the retained mesh use WAN schema
   version 3 and a shared `audience.destination_ids` sequence (16 total node/team
   IDs). The user explicitly enabled team-addressed commands and approved the
@@ -162,6 +387,8 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 - Exactly two shared WAN topic names: **Event** and **Status**. Existing LAN topics
   remain behind adapters; RouterHealth and WAN diagnostics become Status cases.
+  Reliable RouterConfig filter snapshots are Event cases; health stays compact
+  on Status. The LAN mesh cache may embed those details without repeating them on WAN.
 - Select a predefined branch from a validated topic/type mapping and copy the
   **whole original DynamicData structure**; decode it back to the allowed original
   LAN topic/type. Preserve original keys, identity, timestamps, and audit fields.

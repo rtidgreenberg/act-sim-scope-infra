@@ -2,10 +2,24 @@
 
 | Deck | Main decision | Source | PDF |
 |---|---|---|---|
+| Event / State / Telemetry | Three-topic WAN names and delivery contracts: required occurrences, current instance state and fresh observations | [Markdown](event-state-telemetry.md) | [PDF](event-state-telemetry.pdf) |
+| Telemetry: typed or catalog-driven | One-slide payload comparison; State catalog drives application-managed Telemetry filters | [Markdown](telemetry-typed-or-catalog.md) | [PDF](telemetry-typed-or-catalog.pdf) |
 | Link health | Measure presence, RTT, and delivery pressure separately | [Markdown](connext-ddil-link-health.md) | [PDF](connext-ddil-link-health.pdf) |
 | Connext Edge Mesh Overview | Five slides: system diagram, isolation scope/runtime control, data-filtering strategies, discovery options, and DDIL link-health measurements | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) |
 | Discovery strategies | Four steps for mesh radio: router isolation, smaller discovery announcements, multicast vs. unicast, and peer setup | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 | System presence and liveliness | Compare writer liveliness, participant discovery, and periodic application health in Connext 7.7 | [Markdown](system-presence-liveliness.md) | [PDF](system-presence-liveliness.pdf) |
+
+The telemetry comparison also has a [PowerPoint export](telemetry-typed-or-catalog.pptx).
+Both options retain best-effort, freshness-first delivery. The catalog option
+uses State for definitions/inventory and application-managed filters on Telemetry
+identifiers, not an automatic cross-topic join. Neither option is selected or
+implemented by the slide.
+
+The Event / State / Telemetry slide also has a [PowerPoint export](event-state-telemetry.pptx).
+Its names match the main router's three-topic WAN contract. The rename preserves
+existing payloads and policies; transient local remains a candidate for State
+bootstrap, not a finalized QoS policy. Speaker notes retain
+the lifecycle, restart and classification qualifications.
 
 The system-presence deck also has a [PowerPoint export](system-presence-liveliness.pptx).
 Its six plain-language slides focus on platform-level presence: SPDP2 maintains
