@@ -6,7 +6,7 @@
 #   ./run_mesh.sh up --platforms <N> [--workdir <dir>] [--verbosity <0-3>] \
 #                    [--with-dashboard] [--dashboard-port <port>]
 #   ./run_mesh.sh {up|render|smoke|audit|isolation|down} --emane [--platforms <N>] \
-#                    [--wan-contract legacy|two_topic_union] \
+#                    [--wan-contract legacy|two_topic_union|three_topic_union] \
 #                    [--workdir <dir>] [--verbosity <0-3>] [--test-id <id>]
 #   ./run_mesh.sh down [--workdir <dir>]
 #
@@ -146,8 +146,9 @@ do_up() {
     # 1@ per distinct node host to avoid probing this larger unused port range.
     export CONTROL_LAN_PEER1=127.0.0.1 CONTROL_LAN_PEER2=127.0.0.1 CONTROL_LAN_PEER3=127.0.0.1 WAN_PEER=10@127.0.0.1
     export PLATFORM_LAN_PEER1=127.0.0.1 PLATFORM_LAN_PEER2=127.0.0.1 PLATFORM_LAN_PEER3=127.0.0.1
-    export WAN_HB_PERIOD_SEC=1 WAN_HB_RETRIES=10 WAN_MAX_BLOCKING_SEC=1
-    export WAN_TIMEOUT_SEC=100 WAN_TTL=1 WAN_RECEIVE_MULTICAST=0
+    export WAN_MAX_BLOCKING_SEC=1 WAN_TTL=1 WAN_RECEIVE_MULTICAST=0
+    policy_environment="$(python3 "$REPO_ROOT/harness_v2/qos/wan_policy.py")"
+    source /dev/stdin <<< "$policy_environment"
 
     echo "[run_mesh up] workdir: $WORKDIR"
     echo "[run_mesh up] launching control node..."

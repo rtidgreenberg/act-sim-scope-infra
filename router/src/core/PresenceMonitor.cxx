@@ -2,6 +2,7 @@
 
 #include "PresenceMonitor.hpp"
 #include "Log.hpp"
+#include "WanPolicy.hpp"
 
 #include <dds/sub/ddssub.hpp>
 #include <rti/sub/discoveryImpl.hpp>
@@ -19,6 +20,14 @@ namespace {
 std::int64_t monotonic_us(std::chrono::steady_clock::time_point time) {
     return std::chrono::duration_cast<std::chrono::microseconds>(
             time.time_since_epoch()).count();
+}
+
+bool same_config_contents(RouterConfig a, RouterConfig b) {
+    a.snapshot_seq = b.snapshot_seq = 0;
+    a.send_timestamp = b.send_timestamp = 0;
+    for (auto& writer : a.wan_writer_filters) writer.observed_at_ns = 0;
+    for (auto& writer : b.wan_writer_filters) writer.observed_at_ns = 0;
+    return a == b;
 }
 
 std::uint64_t new_health_session() {
@@ -148,13 +157,13 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
     if (shared_status_) {
         if (!status_codec_) throw std::runtime_error("shared Status requires the WAN type catalog");
         const auto text = health_reader_qos.policy<rti::core::policy::Property>().get(
-                "act.presence.dead_after_stale_ms");
-        size_t used = 0;
-        const auto milliseconds = std::stoll(text, &used);
-        if (used != text.size() || milliseconds <= 0) {
-            throw std::runtime_error("act.presence.dead_after_stale_ms must be a positive integer");
+                "act.presence.dead_timeout_sec");
+        dead_timeout_ = std::chrono::seconds(
+                WanPolicy::positive_integer(text, "act.presence.dead_timeout_sec"));
+        if (health_reader_qos.policy<dds::core::policy::Deadline>().period()
+                >= dds::core::Duration(dead_timeout_.count())) {
+            throw std::runtime_error("Presence timeout must exceed the health reader deadline");
         }
-        dead_after_stale_ = std::chrono::milliseconds(milliseconds);
         status_callbacks_ = std::make_shared<WanStatusCallbacks>();
         status_callbacks_->data = [this](const dds::core::xtypes::DynamicData& frame,
                                          const dds::sub::SampleInfo& info) {
@@ -170,10 +179,16 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
             }
         };
         shared_status_->bind_status(status_callbacks_);
+        config_callbacks_ = std::make_shared<WanConfigCallbacks>();
+        config_callbacks_->data = [this](const dds::core::xtypes::DynamicData& frame,
+                                         const dds::sub::SampleInfo& info) {
+            on_router_config_data(frame, info);
+        };
+        shared_status_->bind_config(config_callbacks_);
         health_writer_ = shared_status_->status_writer();
         health_reader_ = shared_status_->status_reader();
-        Log::info("presence_monitor_ready", {{"health_topic", "Status"},
-                  {"identity", identity_}, {"dead_after_stale_ms", text}});
+        Log::info("presence_monitor_ready", {{"health_topic", health_writer_.topic().name()},
+                  {"identity", identity_}, {"dead_timeout_sec", text}});
         return;
     }
     // Heartbeat data (valid + instance-state transitions -> ALIVE/DEAD).
@@ -205,6 +220,10 @@ void PresenceMonitor::shutdown() {
     if (status_callbacks_) {
         std::lock_guard<std::mutex> lock(status_callbacks_->mutex);
         status_callbacks_->data = {};
+    }
+    if (config_callbacks_) {
+        std::lock_guard<std::mutex> lock(config_callbacks_->mutex);
+        config_callbacks_->data = {};
     }
     for (const auto &cond : conditions_) {
         try {
@@ -291,14 +310,10 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
             heartbeat_peers_truncated_ = false; // roster shrank back under the cap
         }
     }
+    if (shared_status_) publish_router_config(out);
     bool success = false;
     try {
-        out.wan_writer_filters.clear();
-        if (shared_status_) {
-            for (auto& observation : shared_status_->writer_filter_observations()) {
-                out.wan_writer_filters.push_back(std::move(observation));
-            }
-        }
+        out.wan_writer_filters.reset();
         const auto local = rti::core::xtypes::convert(out);
         WanMetadata metadata;
         if (status_codec_) {
@@ -352,10 +367,133 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         std::lock_guard<std::mutex> lk(roster_mutex_);
         rtt_.finalize(out.heartbeat_seq, success);
         if (success) {
+            const auto cached_filters = last_published_health_.wan_writer_filters;
             last_published_health_ = out;
             last_health_published_at_ = std::chrono::steady_clock::now();
+            last_published_health_.wan_writer_filters = cached_filters;
         }
     }
+}
+
+void PresenceMonitor::publish_router_config(const RouterHealth& hb) {
+    try {
+        RouterConfig snapshot;
+        snapshot.router = identity_;
+        snapshot.config_hash = hb.config_hash;
+        snapshot.session_id = health_session_;
+        snapshot.snapshot_seq = last_published_config_.snapshot_seq + 1;
+        snapshot.send_timestamp = hb.send_timestamp;
+        snapshot.state_revision = hb.state_revision;
+        for (auto& observation : shared_status_->writer_filter_observations()) {
+            snapshot.wan_writer_filters.push_back(std::move(observation));
+        }
+        {
+            std::lock_guard<std::mutex> lock(roster_mutex_);
+            if (last_filters_published_at_ != std::chrono::steady_clock::time_point()
+                && std::chrono::steady_clock::now() - last_filters_published_at_
+                        < std::chrono::milliseconds(kRouterConfigSnapshotPeriodMs)
+                && same_config_contents(snapshot, last_published_config_)) return;
+        }
+        WanMetadata metadata;
+        metadata.source_id = node_name_;
+        metadata.source_role = hb.role;
+        metadata.run_id = audit_run_id_;
+        metadata.session_id = snapshot.session_id;
+        metadata.audit_sequence = snapshot.snapshot_seq;
+        metadata.sent_at_ns = snapshot.send_timestamp;
+        metadata.membership_revision = snapshot.state_revision;
+        metadata.global = true;
+        shared_status_->write_config(status_codec_->pack(
+                "RouterConfig", rti::core::xtypes::convert(snapshot), metadata));
+        std::lock_guard<std::mutex> lock(roster_mutex_);
+        last_published_config_ = snapshot;
+        last_filters_published_at_ = std::chrono::steady_clock::now();
+        last_published_health_.wan_writer_filters.set(snapshot.wan_writer_filters);
+    } catch (const std::exception& error) {
+        Log::warn("router_config_publish_failed", {{"error", error.what()}});
+    }
+}
+
+void PresenceMonitor::apply_router_config_locked(PeerEntry& peer) {
+    const auto router = configurations_.find(peer.last_summary.router);
+    if (router == configurations_.end()) return;
+    const auto config = router->second.find(peer.last_summary.session_id);
+    if (config == router->second.end()) return;
+    peer.last_summary.wan_writer_filters.set(config->second.snapshot.wan_writer_filters);
+    peer.last_filters_received = config->second.received;
+}
+
+void PresenceMonitor::on_router_config_data(const dds::core::xtypes::DynamicData& frame,
+                                           const dds::sub::SampleInfo& info) {
+    if (!info.valid()) return;
+    RouterConfig snapshot;
+    try {
+        const auto local = status_codec_->unpack(frame).data;
+        if (!rti::core::xtypes::can_convert<RouterConfig>(local)) {
+            throw std::runtime_error("RouterConfig event has the wrong payload type");
+        }
+        snapshot = rti::core::xtypes::convert<RouterConfig>(local);
+        if (snapshot.router.empty() || !snapshot.session_id || !snapshot.snapshot_seq
+            || frame.value<std::string>("source_id") != node_from_router(snapshot.router)
+            || frame.value<uint64_t>("session_id") != snapshot.session_id
+            || frame.value<uint64_t>("audit_sequence") != snapshot.snapshot_seq
+            || frame.value<int64_t>("sent_at_ns") != snapshot.send_timestamp
+            || frame.value<uint64_t>("membership_revision") != snapshot.state_revision) {
+            throw std::runtime_error("RouterConfig envelope does not match identity/audit");
+        }
+    } catch (const std::exception& error) {
+        Log::warn("router_config_invalid_sample", {{"error", error.what()}});
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(roster_mutex_);
+        const auto peer = roster_.find(snapshot.router);
+        if (!configurations_.count(snapshot.router)
+            && configurations_.size() >= HeartbeatRtt::peer_cap) {
+            auto oldest = configurations_.end();
+            std::chrono::steady_clock::time_point oldest_received;
+            for (auto entry = configurations_.begin(); entry != configurations_.end(); ++entry) {
+                if (roster_.count(entry->first)) continue;
+                std::chrono::steady_clock::time_point received;
+                for (const auto& session : entry->second) {
+                    received = std::max(received, session.second.received);
+                }
+                if (oldest == configurations_.end() || received < oldest_received) {
+                    oldest = entry;
+                    oldest_received = received;
+                }
+            }
+            if (oldest == configurations_.end()) {
+                Log::warn("router_config_cache_full", {{"router", snapshot.router}});
+                return;
+            }
+            Log::warn("router_config_cache_evicted",
+                      {{"router", oldest->first}, {"reason", "unseen peer at capacity"}});
+            configurations_.erase(oldest);
+        }
+        auto& sessions = configurations_[snapshot.router];
+        auto found = sessions.find(snapshot.session_id);
+        if (found != sessions.end() && snapshot.snapshot_seq <= found->second.snapshot.snapshot_seq) {
+            Log::debug("router_config_old_snapshot", {{"router", snapshot.router}});
+            return;
+        }
+        // Event and Status have independent ordering: retain an early new-session config.
+        if (found == sessions.end() && sessions.size() == 2) {
+            const auto active_session = peer == roster_.end() ? 0 : peer->second.last_summary.session_id;
+            using Session = std::map<std::uint64_t, ConfigEntry>::value_type;
+            auto oldest = std::min_element(sessions.begin(), sessions.end(),
+                    [active_session](const Session& a, const Session& b) {
+                        if (a.first == active_session) return false;
+                        if (b.first == active_session) return true;
+                        return a.second.received < b.second.received;
+                    });
+            sessions.erase(oldest);
+        }
+        sessions[snapshot.session_id] = {snapshot, std::chrono::steady_clock::now()};
+        if (peer != roster_.end()) apply_router_config_locked(peer->second);
+        ++mesh_revision_;
+    }
+    publish_mesh();
 }
 
 // D98: the full-rate mesh publish for GUI consumers (mesh dashboard) used to happen
@@ -471,6 +609,7 @@ void PresenceMonitor::on_status_data(const dds::core::xtypes::DynamicData& frame
         peer.presence = RouterPresenceState::PRESENCE_ALIVE;
         peer.last_status_received = status_deadlines_->received(source);
         peer.stale_since = {};
+        peer.dead_since = {};
         if (changed) ++mesh_revision_;
     }
     if (changed) publish_mesh();
@@ -491,12 +630,14 @@ void PresenceMonitor::apply_status_deadlines() {
             Log::info("presence_peer_stale", {{"router", item.first}});
         }
         if (peer.presence == RouterPresenceState::PRESENCE_STALE &&
-            std::chrono::steady_clock::now() - peer.stale_since >= dead_after_stale_) {
+            status_timeout_expired(peer.last_status_received,
+                                   std::chrono::steady_clock::now(), dead_timeout_)) {
             peer.presence = RouterPresenceState::PRESENCE_DEAD;
+            peer.dead_since = std::chrono::steady_clock::now();
             rtt_.disconnect(item.first);
             changed = true;
             Log::info("presence_peer_dead", {{"router", item.first},
-                      {"reason", "no Status after STALE countdown"}});
+                      {"reason", "system timeout since last received Status"}});
         }
     }
     if (changed) ++mesh_revision_;
@@ -639,7 +780,25 @@ void PresenceMonitor::on_health_samples(const dds::core::xtypes::DynamicData* fr
                 }
                 e.presence = RouterPresenceState::PRESENCE_ALIVE;
                 e.stale_since = {};
+                e.dead_since = {};
+                const bool same_session = e.last_summary.session_id == ev.hb.session_id;
+                const auto cached_filters = e.last_summary.wan_writer_filters;
                 e.last_summary = ev.hb;
+                if (shared_status_) {
+                    e.last_summary.wan_writer_filters.reset();
+                    if (same_session) {
+                        e.last_summary.wan_writer_filters = cached_filters;
+                    } else {
+                        e.last_filters_received = {};
+                    }
+                    apply_router_config_locked(e);
+                } else if (ev.hb.wan_writer_filters.is_set()) {
+                    e.last_filters_received = ev.received;
+                } else if (same_session) {
+                    e.last_summary.wan_writer_filters = cached_filters;
+                } else {
+                    e.last_filters_received = {};
+                }
                 // D97: last_summary.peers_seen is kept (not stripped) so
                 // build_mesh_locked() can re-embed it into RouterMeshPeer.health —
                 // the mesh-dashboard's transitive/second-hand edges (mesh_graph.js)
@@ -772,7 +931,8 @@ bool PresenceMonitor::prune_dead_locked() {
     bool pruned = false;
     for (auto it = roster_.begin(); it != roster_.end();) {
         if (it->second.presence != RouterPresenceState::PRESENCE_DEAD
-            || now - it->second.last_status_received < retention) {
+            || now - (shared_status_ ? it->second.dead_since
+                                     : it->second.last_status_received) < retention) {
             ++it;
             continue;
         }
@@ -789,6 +949,7 @@ bool PresenceMonitor::prune_dead_locked() {
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                                 now - it->second.last_status_received).count())}});
         rtt_.forget(it->first);
+        configurations_.erase(it->first);
         it = roster_.erase(it);
         pruned = true;
     }
@@ -809,6 +970,10 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
     mesh.observer_health_age_ms = last_health_published_at_ == std::chrono::steady_clock::time_point()
             ? -1 : std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - last_health_published_at_).count();
+    mesh.observer_wan_writer_filters_age_ms =
+            last_filters_published_at_ == std::chrono::steady_clock::time_point()
+            ? -1 : std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_filters_published_at_).count();
     for (const auto &entry : roster_) {
         // Same bounded_sequence cap as peers_seen (unbounded IDL -> 100): overflowing
         // it throws on the AWS worker; truncate (name-order-lowest kept) and say so once.
@@ -828,6 +993,10 @@ RouterMeshStatus PresenceMonitor::build_mesh_locked() {
                 now - entry.second.last_status_received).count();
         peer.health_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - entry.second.last_health_received).count();
+        peer.wan_writer_filters_age_ms =
+                entry.second.last_filters_received == std::chrono::steady_clock::time_point()
+                ? -1 : std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - entry.second.last_filters_received).count();
         // D102: bound + refresh the transitive (second-hand) edges re-embedded from this
         // peer's own cached peers_seen (D97 stopped stripping it). Two problems fixed at
         // once, both from the same root cause -- these nested refs are frozen at whatever

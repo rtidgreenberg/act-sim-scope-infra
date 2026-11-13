@@ -23,13 +23,15 @@ class Mask(IntFlag):
     UDPv6 = 8
 
 
-def fake_provider(deadline=2, countdown="30000"):
+def fake_provider(deadline=2, countdown="300"):
     def endpoint(depth):
         return SimpleNamespace(
             reliability=SimpleNamespace(kind="ReliabilityKind.BEST_EFFORT"),
             history=SimpleNamespace(kind="HistoryKind.KEEP_LAST", depth=depth),
             durability=SimpleNamespace(kind="DurabilityKind.VOLATILE"),
             deadline=SimpleNamespace(period=deadline),
+            protocol=SimpleNamespace(rtps_reliable_writer=SimpleNamespace(
+                heartbeat_period=3, max_heartbeat_retries=100)),
             liveliness=SimpleNamespace(kind="LivelinessKind.AUTOMATIC", lease_duration=float("inf")),
             property=SimpleNamespace(get=lambda _: countdown))
 
@@ -64,13 +66,14 @@ class SystemConfigurationTests(unittest.TestCase):
             return load_system_config(path, lambda _: provider or fake_provider(), float("inf"))
 
     def test_presence_uses_resolved_status_reader_and_distinguishes_timers(self):
-        provider = fake_provider(deadline=4.5, countdown="42000")
+        provider = fake_provider(deadline=4.5, countdown="42")
         result = self.load(provider=provider)
         presence = next(s for s in result["sections"] if s["id"] == "presence")
         values = {row[0]: row[1] for row in presence["rows"]}
         self.assertEqual(values["ALIVE to STALE"], "4.5 s")
-        self.assertEqual(values["STALE to DEAD"], "42 s")
+        self.assertEqual(values["Last Status to DEAD"], "42 s")
         self.assertEqual(values["DDS endpoint liveliness lease"], "Infinite (no expiry)")
+        self.assertEqual(values["Reliable-reader heartbeat retries"], "100")
         self.assertEqual(values["Recovery to ALIVE"], "Any valid received Status")
         self.assertEqual(values["Heartbeat publication period"], "Not reported")
         self.assertIn("Test::Status", [call.args[0] for call in provider.datareader_qos_from_profile.call_args_list])
@@ -91,6 +94,22 @@ class SystemConfigurationTests(unittest.TestCase):
         self.assertEqual(rows["routes"][0][4], "Yes")
         self.assertGreater(result["loaded_at_ms"], 0)
 
+    def test_three_topic_reports_contacts_separately(self):
+        config = configuration()
+        config["router"]["wan_contract"] = "three_topic_union"
+        config["qos_profiles"]["wan_contacts"] = "Test::Contacts"
+        result = self.load(config)
+        sections = {section["id"]: section for section in result["sections"]}
+        rows = sections["wan-qos"]["rows"]
+        self.assertEqual({row[0] for row in rows}, {"Event", "State", "Telemetry"})
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(sections["system"]["rows"][0][1], "Three-topic union")
+        self.assertIn("State and Telemetry", sections["system"]["rows"][0][2])
+        presence = {row[0]: row[1] for row in sections["presence"]["rows"]}
+        self.assertEqual(presence["Recovery to ALIVE"], "Any valid received Telemetry")
+        self.assertIn("Last Telemetry to DEAD", presence)
+        self.assertNotIn("Last Status to DEAD", presence)
+
     def test_legacy_presence_and_disabled_presence_do_not_claim_shared_countdown(self):
         config = configuration()
         config["router"]["wan_contract"] = "legacy"
@@ -99,7 +118,7 @@ class SystemConfigurationTests(unittest.TestCase):
         self.assertIn(["Writer liveliness loss to DEAD", "Infinite (no expiry)",
                        "ACT_QOS_LIB::router_health: reader liveliness lease; legacy presence behavior."],
                       presence["rows"])
-        self.assertNotIn("STALE to DEAD", [row[0] for row in presence["rows"]])
+        self.assertNotIn("Last Status to DEAD", [row[0] for row in presence["rows"]])
         config["router"]["presence_participant"] = {}
         result = self.load(config)
         presence = next(s for s in result["sections"] if s["id"] == "presence")
@@ -164,7 +183,7 @@ class NativeSystemConfigurationTests(unittest.TestCase):
         presence = next(s for s in result["sections"] if s["id"] == "presence")
         values = {r[0]: r[1] for r in presence["rows"]}
         self.assertEqual(values["ALIVE to STALE"], "2 s")
-        self.assertEqual(values["STALE to DEAD"], "30 s")
+        self.assertEqual(values["Last Status to DEAD"], "5 min (300 s)")
         self.assertEqual(values["DDS endpoint liveliness lease"], "Infinite (no expiry)")
         legacy = load_system_config(ROOT / "router/config/control-platform.yaml",
                                     dds.QosProvider, dds.Duration.infinite)
@@ -246,12 +265,29 @@ class SystemConfigurationBrowserTests(unittest.TestCase):
             self.assertTrue(page.locator("#config-panel").is_visible())
             self.assertFalse(page.locator("#graph").is_visible())
             self.assertEqual(page.locator('[data-tab="config"]').get_attribute("aria-selected"), "true")
-            self.assertIn("30 s", page.locator("#config-summary").inner_text())
+            self.assertIn("5 min (300 s)", page.locator("#config-summary").inner_text())
             self.assertIn("not per-node runtime introspection", page.locator("#config-status").inner_text())
             self.assertIn("Unsafe text", page.locator("#config-sections").inner_text())
             self.assertEqual(page.locator("#config-panel img").count(), 0)
             self.assertEqual(page.locator("#config-panel input, #config-panel select, #config-panel textarea").count(), 0)
             self.assertEqual(page.locator("#config-sections table").count(), 5)
+            presence = next(s for s in snapshot["sections"] if s["id"] == "presence")
+            timeout_row = next(row for row in presence["rows"] if row[0] == "Last Status to DEAD")
+            timeout_row[:2] = ["STALE to DEAD", "30 s"]
+            page.locator("#config-refresh").click()
+            page.wait_for_function(
+                "document.querySelector('#config-summary').textContent.includes('30 s')")
+            self.assertNotIn("Last Status to DEAD", page.locator("#config-summary").inner_text())
+            timeout_row[:2] = ["Last Telemetry to DEAD", "5 min (300 s)"]
+            page.locator("#config-refresh").click()
+            page.wait_for_function(
+                "document.querySelector('#config-summary').textContent.includes('Last Telemetry to DEAD')")
+            self.assertIn("5 min (300 s)", page.locator("#config-summary").inner_text())
+            self.assertEqual(page.locator("#config-summary article").count(), 3)
+            timeout_row[:2] = ["Last Status to DEAD", "5 min (300 s)"]
+            page.locator("#config-refresh").click()
+            page.wait_for_function(
+                "document.querySelector('#config-summary').textContent.includes('5 min (300 s)')")
             for width in (1440, 720):
                 page.set_viewport_size({"width": width, "height": 1000})
                 self.assertLessEqual(page.locator("#config-panel").evaluate(

@@ -9,7 +9,8 @@ class WanControllerFactory : public IEntityFactory {
 public:
     WanControllerFactory(ParticipantRegistry& registry, TypeResolver& types, QosResolver& qos,
                          AsyncWaitSetDispatcher& dispatcher, dds::core::QosProvider model,
-                         const std::string& wan, const RouterIdentityInfo& identity);
+                         const std::string& wan, const RouterIdentityInfo& identity,
+                         bool separate_contacts = false);
     void set_controller(RouterController* controller);
     bool uses_wan_audiences() const override { return true; }
     bool validate_route_update(const RouterRouteSpec&, std::string&) const override;
@@ -46,6 +47,7 @@ private:
     dds::core::QosProvider model_;
     RouterIdentityInfo identity_;
     std::string wan_;
+    bool separate_contacts_;
     DynamicRouteFactory legacy_;
     std::unique_ptr<WanAdapterFactory> adapters_;
     RouterController* controller_ = nullptr;

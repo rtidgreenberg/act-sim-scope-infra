@@ -453,7 +453,19 @@ struct RouterHealth {
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
     sequence<RouterCompactRouteHealth> routes;
-    sequence<RouterWriterFilterObservation, 2> wan_writer_filters;
+    // LAN mesh cache only; WAN filter snapshots travel in reliable RouterConfig events.
+    @optional sequence<RouterWriterFilterObservation, 3> wan_writer_filters;
+};
+
+struct RouterConfig {
+    @key
+    string router;
+    string config_hash;
+    uint64 session_id;
+    uint64 snapshot_seq;
+    int64 send_timestamp;
+    uint64 state_revision;
+    sequence<RouterWriterFilterObservation, 3> wan_writer_filters;
 };
 
 struct RouterMeshPeer {
@@ -461,6 +473,7 @@ struct RouterMeshPeer {
     RouterPresenceState presence;
     int64 last_seen_delta_ms;
     int64 health_age_ms;
+    int64 wan_writer_filters_age_ms;
 };
 
 struct RouterMeshStatus {
@@ -472,6 +485,7 @@ struct RouterMeshStatus {
     sequence<RouterMeshPeer> peers;
     RouterHealth observer_health;
     int64 observer_health_age_ms;
+    int64 observer_wan_writer_filters_age_ms;
 };
 
 // ============================================================================
@@ -506,7 +520,8 @@ enum WanEventKind {
     WAN_TEAM_ASSIGNMENT = 2,
     WAN_STATUS_MODE = 3,
     WAN_COMMAND_ACK = 4,
-    WAN_CONTACT_REPORT = 5
+    WAN_CONTACT_REPORT = 5,
+    WAN_ROUTER_CONFIG = 6
 };
 
 @mutable
@@ -521,6 +536,8 @@ union WanEventPayload switch (WanEventKind) {
         @id(40) control_command_ack command_ack;
     case WAN_CONTACT_REPORT:
         @id(50) contact_report contact_report;
+    case WAN_ROUTER_CONFIG:
+        @id(60) RouterConfig router_config;
 };
 
 enum WanStatusKind {

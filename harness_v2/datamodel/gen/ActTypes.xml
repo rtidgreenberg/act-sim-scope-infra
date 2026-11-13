@@ -364,13 +364,23 @@
   <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
   <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterCompactRouteHealth"/>
-  <member name="wan_writer_filters" sequenceMaxLength="2" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation"/>
+  <member name="wan_writer_filters" sequenceMaxLength="3" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation" optional="true"/>
+</struct>
+<struct name= "RouterConfig">
+  <member name="router" stringMaxLength="255" type="string" key="true"/>
+  <member name="config_hash" stringMaxLength="255" type="string"/>
+  <member name="session_id" type="uint64"/>
+  <member name="snapshot_seq" type="uint64"/>
+  <member name="send_timestamp" type="int64"/>
+  <member name="state_revision" type="uint64"/>
+  <member name="wan_writer_filters" sequenceMaxLength="3" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation"/>
 </struct>
 <struct name= "RouterMeshPeer">
   <member name="health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>
   <member name="presence" type="nonBasic"  nonBasicTypeName= "RouterPresenceState"/>
   <member name="last_seen_delta_ms" type="int64"/>
   <member name="health_age_ms" type="int64"/>
+  <member name="wan_writer_filters_age_ms" type="int64"/>
 </struct>
 <struct name= "RouterMeshStatus">
   <member name="observer_node" stringMaxLength="255" type="string" key="true"/>
@@ -379,6 +389,7 @@
   <member name="peers" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterMeshPeer"/>
   <member name="observer_health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>
   <member name="observer_health_age_ms" type="int64"/>
+  <member name="observer_wan_writer_filters_age_ms" type="int64"/>
 </struct>
 <struct name= "TeamAssignment">
   <member name="platform_node" stringMaxLength="255" type="string" key="true"/>
@@ -400,6 +411,7 @@
   <enumerator name="WAN_STATUS_MODE" value="3"/>
   <enumerator name="WAN_COMMAND_ACK" value="4"/>
   <enumerator name="WAN_CONTACT_REPORT" value="5"/>
+  <enumerator name="WAN_ROUTER_CONFIG" value="6"/>
 </enum> 
 <union name="WanEventPayload" extensibility= "mutable">
   <discriminator type="nonBasic" nonBasicTypeName="WanEventKind"/>
@@ -422,6 +434,10 @@
   <case>
     <caseDiscriminator value="(WAN_CONTACT_REPORT)"/>
       <member name="contact_report" id="50" type="nonBasic"  nonBasicTypeName= "contact_report"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_ROUTER_CONFIG)"/>
+      <member name="router_config" id="60" type="nonBasic"  nonBasicTypeName= "RouterConfig"/>
   </case>
 </union>
 <enum name="WanStatusKind">

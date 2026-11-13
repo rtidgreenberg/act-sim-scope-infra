@@ -49,7 +49,7 @@ class Pilot:
 
 
 @pytest.fixture
-def pilot(unique_domains, admin_types_xml, tmp_path):
+def pilot(unique_domains, admin_types_xml, tmp_path, request):
     set_wan_qos_env()
     binary = Path(os.environ.get("WAN_ADAPTER_PILOT", REPO_ROOT / "router/build/wan_adapter_pilot"))
     assert binary.is_file(), "Build wan_adapter_pilot before running these tests"
@@ -59,7 +59,8 @@ def pilot(unique_domains, admin_types_xml, tmp_path):
             [str(binary), str(admin_types_xml),
              str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"),
              str(unique_domains["control_lan"]), str(unique_domains["wan"]),
-             str(unique_domains["platform_lan"])],
+             str(unique_domains["platform_lan"])]
+            + (["--three-topic"] if getattr(request, "param", False) else []),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
             text=True, bufsize=1,
         )
@@ -243,6 +244,45 @@ def test_production_codec_wire_codec_and_single_publication(pilot, rig):
     assert stats["errors"] == 0
     assert take_valid(rig.nav_reader) == []
     assert take_valid(rig.command_reader) == []
+
+
+@pytest.mark.parametrize("pilot", [True], indirect=True)
+def test_retained_state_filter_survives_failed_binds_and_retry(pilot, unique_domains):
+    from util.dds_probe import Probe
+
+    initial = pilot.stats()
+    for command in ("bad_contact_destination", "bad_contact_filter"):
+        pilot.command(command, ok=False)
+        pilot.command("check_contact_filter")
+        after = pilot.stats()
+        for name in ("control", "platform", "stats_sources", "counts"):
+            assert after[name] == initial[name]
+
+    source = Probe(unique_domains["platform_lan"], participant_profile="lan_transport_loopback")
+    try:
+        destination = Probe(unique_domains["control_lan"], participant_profile="lan_transport_loopback")
+        try:
+            writer = source.writer("ContactReport", "contact_report")
+            reader = destination.reader("ContactReport", "contact_report")
+            pilot.command("bind contact_source 101")
+            pilot.command("bind contact_destination 102")
+            wait_until(lambda: writer.publication_matched_status.current_count == 1)
+            wait_until(lambda: reader.subscription_matched_status.current_count == 1)
+            sample = source.sample("contact_report", source="", contact_id="bind-retry",
+                                   run_id="bind-retry", audit_sequence=7)
+            writer.write(sample)
+            expected = destination.sample("contact_report", source="Boat30", contact_id="bind-retry",
+                                          run_id="bind-retry", audit_sequence=7)
+            assert receive(reader, 7) == expected
+            pilot.command("unbind contact_destination 102")
+            pilot.command("unbind contact_source 101")
+            after = pilot.stats()
+            for name in ("control", "platform", "stats_sources", "counts"):
+                assert after[name] == initial[name]
+        finally:
+            destination.close()
+    finally:
+        source.close()
 
 
 def test_shared_references_failures_and_reenable(pilot, rig):

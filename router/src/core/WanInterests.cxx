@@ -86,7 +86,8 @@ WanInterest wan_interest(const RouterRouteSpec& route, const ParticipantState& w
 }
 
 WanReceiveFilter wan_receive_filter(const std::string& family, const std::string& node,
-                                   const std::vector<WanInterest>& interests) {
+                                   const std::vector<WanInterest>& interests,
+                                   bool separate_contacts) {
     WanReceiveFilter filter;
     filter.parameters.push_back(sql_string(node));
     std::vector<std::string> destinations;
@@ -100,7 +101,9 @@ WanReceiveFilter wan_receive_filter(const std::string& family, const std::string
     const auto cases_for = [&](size_t kind, const std::string& destination) {
         std::string cases;
         for (const auto& mapping : wan_mappings()) {
-            if (family != mapping.family || std::string(mapping.branch) == "health") {
+            if (family != wan_transport_mapping(mapping.topic, separate_contacts).family
+                    || std::string(mapping.branch) == "health"
+                    || std::string(mapping.branch) == "router_config") {
                 continue;
             }
             bool enabled = false;

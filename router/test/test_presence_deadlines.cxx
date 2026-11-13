@@ -1,4 +1,5 @@
 #include "core/StatusDeadlineQueue.hpp"
+#include "core/WanPolicy.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -13,6 +14,41 @@ static int failures = 0;
 } while (0)
 
 int main() {
+    unsetenv("WAN_TIMEOUT_SEC");
+    unsetenv("WAN_HB_PERIOD_SEC");
+    unsetenv("WAN_HB_RETRIES");
+    auto policy = router::WanPolicy::from_environment();
+    CHECK(policy.timeout_seconds == 300);
+    CHECK(policy.heartbeat_seconds == 3);
+    CHECK(policy.heartbeat_retries == 100);
+    policy.export_environment();
+    CHECK(std::string(std::getenv("WAN_HB_RETRIES")) == "100");
+    unsetenv("WAN_HB_RETRIES");
+    setenv("WAN_TIMEOUT_SEC", "301", 1);
+    CHECK(router::WanPolicy::from_environment().heartbeat_retries == 101);
+    setenv("WAN_HB_PERIOD_SEC", "7", 1);
+    CHECK(router::WanPolicy::from_environment().heartbeat_retries == 43);
+    setenv("WAN_HB_RETRIES", "10", 1);
+    bool conflict_rejected = false;
+    try { router::WanPolicy::from_environment(); }
+    catch (const std::invalid_argument&) { conflict_rejected = true; }
+    CHECK(conflict_rejected);
+    for (const auto* invalid : {"", "0", "-1", "nan", "3.5", " 3", "2147483648"}) {
+        bool rejected = false;
+        try { router::WanPolicy::positive_integer(invalid, "test"); }
+        catch (const std::exception&) { rejected = true; }
+        CHECK(rejected);
+    }
+
+    const auto received = std::chrono::steady_clock::now();
+    CHECK(!router::status_timeout_expired(received, received + std::chrono::seconds(299),
+                                         std::chrono::seconds(300)));
+    CHECK(router::status_timeout_expired(received, received + std::chrono::seconds(300),
+                                        std::chrono::seconds(300)));
+    const auto recovered_status = received + std::chrono::seconds(120);
+    CHECK(!router::status_timeout_expired(recovered_status, received + std::chrono::seconds(300),
+                                         std::chrono::seconds(300)));
+
     using Queue = router::StatusDeadlineQueue;
     Queue queue(2);
     CHECK(queue.missed("Boat30"));

@@ -3,7 +3,8 @@
 ### Observed WAN filters
 
 Select a router (including the local observer) and expand **Observed WAN filters**.
-Entries are grouped by Event/Status and short remote reader system name. Cards show
+Entries are grouped by physical WAN topic (Event/Status, or Event/State/Telemetry
+in three-topic mode) and short remote reader system name. Cards show
 named `original_topic` selectors labeled **Topic filters** and distinct parameter
 values labeled **Audience filters**;
 expand **View SQL filter** for the full router identity, line-broken SQL
@@ -13,9 +14,18 @@ summary; the SQL remains authoritative. Full names are also available on hover.
 Reader expansion is retained across telemetry refreshes. Team reassignment updates these after
 discovery propagation, not merely when the local assignment command is accepted.
 Unfiltered readers, unidentified readers, polling failures, truncation, and missing
-telemetry are distinguished. Report age is based on the receiving router's
-monotonic health age, bridge-cache age and browser elapsed time; after eight seconds it is labeled
-stale. This does not prove that the writer is actively executing the filter.
+telemetry are distinguished. Filter details arrive reliably in the `RouterConfig`
+branch of the existing Event topic on changes and a 30-second full refresh.
+WAN health never carries them; the receiving router embeds the last matching-session
+config in its LAN mesh view. An empty config list clears it, and a new session cannot inherit
+the old snapshot. Report age uses the receiving router's monotonic snapshot age,
+bridge-cache age and browser elapsed time, not the latest heartbeat age. After
+35 seconds it is labeled stale. Older routers without snapshot ages retain their
+eight-second health-age fallback. This does not prove that the writer is actively
+executing the filter. Deploy the changed IDL/XML and router together before
+expecting the bandwidth reduction; a browser refresh alone is insufficient.
+Event durability remains VOLATILE: new/returning readers recover from a subsequent
+full snapshot, not historical replay. Reliability does not imply operator acceptance.
 
 Two-topic WAN filters select the original LAN topic name rather than numeric union
 discriminators. The codec sets both from the same catalog and rejects inconsistent
@@ -24,8 +34,14 @@ audience metadata, not WAN participant/endpoint partitions. The **reported team
 names** row is telemetry, not proof of live DDS partition QoS; legacy mode still
 uses its existing partition routing.
 
+Three-topic mode retains those logical audience rules but puts ContactReport on
+State. The Config tab resolves all three profiles separately, and Delivery
+shows the actual contact writer KEEP_LAST(1)/reader KEEP_ALL policy. RouterHealth
+shares Telemetry; infrastructure bandwidth includes all shared WAN topics and
+is not a separate health measurement or RF-airtime estimate.
+
 WAN schema version 3 uses a shared `audience.destination_ids` list for individual
-and team targets on Event and Status, capped at 16 exact IDs. Topic and audience
+and team targets across the shared topics, capped at 16 exact IDs. Topic and audience
 filters remain separately labeled; expanded SQL shows the actual indexed-list
 predicates. Team-addressed ControlCommand and PlatformStatusMode delivery is
 supported; the dashboard's mission workflow retains its per-platform command/ACK
@@ -83,11 +99,16 @@ selection ring follows both map and fleet-list selection, including multi-select
 ### Read-only Config tab
 
 **Config** provides human-readable tables for the supplied router configuration:
-WAN contract, configuration fingerprint, presence deadlines and STALE-to-DEAD
-policy, resolved Event/Status writer and reader QoS, participant domains,
+WAN contract, configuration fingerprint, presence deadlines and the final
+last-Status/Telemetry-to-DEAD policy, resolved shared-topic writer and reader QoS, participant domains,
 transports and discovery leases, and initial per-side route enablement. Mission
 freshness, acknowledgement timeout, plan lifetime, delivery grace periods and
 dashboard polling are listed separately to avoid confusing them with presence.
+The system timeout defaults to 300 seconds from the last received Status.
+Reliable heartbeat period and derived retry count are also shown. Changing
+`WAN_TIMEOUT_SEC` or `WAN_HB_PERIOD_SEC` requires a coordinated restart, not a
+Config-tab refresh. The new policy is not automatically deployed to an already
+running mesh.
 
 `GET /api/system_config` returns an allowlisted snapshot loaded from
 `--router-config` and its inherited QoS profiles at dashboard startup. Refresh
@@ -108,7 +129,9 @@ The EMANE launcher supplies `WAN_DELIVERY_NODES` with the actual node/IP map;
 host-only captures without a distinct per-node WAN mapping cannot provide this metric.
 
 Samples match on domain, physical writer GUID, RTPS sequence, source IP and
-destination IP. IP and RTPS fragmentation are reconstructed; repair traffic and
+destination IP. The decoder accepts DATA, DATA_FRAG and RTI DATA_SESSION; the
+latter uses its wire/session sequence, not its additional virtual sequence.
+IP and RTPS fragmentation are reconstructed; repair traffic and
 duplicate copies to the same destination node count once. Unicast fanout counts
 once per destination node, not per reader or UDP port. Multicast and unmapped
 destinations are explicitly unsupported, not assigned inferred recipients.
@@ -212,14 +235,23 @@ The workspace tabs are **Graph**, **Mission**, **Delivery**, and **EMANE**.
 
 The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
 every fresh page. It controls both the entire WAN traffic panel (including WAN
-application TX) and node DDS TX/RX overlays. Enabling it shows application,
-router heartbeat, discovery, reliability/control, and mixed/unknown chart series;
+data TX) and node DDS TX/RX overlays. Enabling it shows data,
+discovery, reliability/control, and mixed/unknown chart series;
 disabling it hides the panel and node rate overlays and returns that space to the
 mesh graph. Traffic history continues updating while hidden. Mesh presentation is DDS-only: MAC
 values are retained in diagnostic collection/API responses, not drawn as a
 competing traffic rate or used to scale the chart.
 It changes presentation only. RouterLinkStats, link activity, health, connected
 peers, route badges, and mission/delivery operations remain available when unchecked.
+
+**WAN data TX (includes health)** uses the monitor's measured `data_tx` counters:
+identified application and infrastructure data frames, counted once. Router health
+shares Status with application data in two-topic mode, so a separate RouterHealth
+topic-based bandwidth series would misleadingly stay at zero. Legacy separate health
+traffic is included in the same total. This is not a per-union-branch measurement.
+Discovery can legitimately be zero between discovery updates; zero mixed/unknown
+means no such frames were observed. Missing or stale measurements remain unavailable,
+not zero. The chart retains its capture-time, duration-weighted three-second average.
 
 The link inspector reports **Heartbeat RTT**, measured from direct RouterHealth
 acknowledgments rather than an active probe. It subtracts the remote peer's wait

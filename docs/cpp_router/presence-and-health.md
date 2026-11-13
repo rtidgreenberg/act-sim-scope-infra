@@ -1,6 +1,67 @@
 # Presence & Health (System-Level, Not Per-Topic)
 
+Three-topic mode (`three_topic_union`) uses **Event / State / Telemetry**:
+RouterHealth shares Telemetry with periodic observations, and RouterConfig
+remains on Event. Two-topic mode retains Event / Status. The semantic rename
+does not change payload schemas, QoS, presence deadlines or recovery rules;
+references to shared Status below describe the two-topic naming. See the
+[rename checkpoint](../two-topic-wan-migration-plan.md#341-semantic-wan-topic-names-2026-11-13).
+
 ## Paradigm
+
+### Reliable router configuration events (deployed 2026-11-12)
+
+In two-topic mode, health uses the existing Status health branch, not a third
+WAN topic. Filter snapshots instead use `RouterConfig`, the `router_config`
+branch (6) of the existing Event topic. It shares the application Event
+writer/reader and their external `wan_event` RELIABLE/KEEP_ALL profile.
+There is no extra WAN endpoint pair or separate reliable health topic.
+The sender polls discovery each heartbeat and publishes a complete config on
+content changes or after a 30-second refresh; poll timestamps alone are not
+changes. Only successful writes commit the send baseline; failures are logged
+and retried at the next heartbeat. Every WAN heartbeat omits filter details.
+
+The config contains router identity, config hash, session, snapshot sequence,
+timestamp, state revision and writer-observed reader filters. Receivers validate
+the envelope against it, reject duplicate/older sequences within a session,
+and apply it only to matching-session health. A config arriving before its
+heartbeat is cached (bounded to two sessions per router); it does not assert
+ALIVE. An empty filter list clears details. A health session change cannot
+inherit the previous session's config. LAN mesh reports retain the
+last snapshot and carry its independent monotonic age (`-1` when unavailable);
+fresh ordinary health never makes old filter details fresh. The dashboard
+marks snapshot ages over 35 seconds stale. A late reader may wait up to the
+refresh interval plus discovery/repair delay: existing Event durability remains
+VOLATILE, so reliability is not historical replay or persistence. Currently
+matched active reliable readers get normal DDS repair within the existing
+retention/inactive-reader/resource policy. A successful write means queued,
+not an operator acknowledgment or unlimited outage guarantee.
+See the [Connext reliable delivery model](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/Reliable_Delivery_Model.htm)
+and [late-joining application guidance](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/users_manual/users_manual/Ensuring_Information_is_Available_to_Lat.htm).
+
+`RouterHealth.wan_writer_filters` remains optional only for the LAN mesh's cached
+view, preserving the existing dashboard shape. It is never populated on WAN.
+
+IDL/XML and consumers need a coordinated rebuild/restart. The retained seven-node
+mesh was rebuilt and restarted together on 2026-11-12; native wire decoding
+confirms compact health and full config events. See the
+[deployment checkpoint](../two-topic-wan-migration-plan.md#338-reliable-routerconfig-deployment-2026-11-12).
+The historical dedicated-health
+discussion below does not describe the current opt-in shared-Status transport.
+
+#### Cache review corrections (deployed)
+
+The receiver keeps the current health session's config and replay watermark
+when admitting another session. Bounds remain 256 router identities and two
+sessions per identity. At capacity, the oldest accepted config for an identity
+absent from the roster is evicted with `router_config_cache_evicted`; roster
+peers are protected until normal peer pruning. If no unseen identity can be
+evicted, admission still rejects explicitly with `router_config_cache_full`.
+This preserves config-before-health recovery without allowing orphan entries
+to permanently block newcomers. These corrections passed isolated tests and were
+included in the later coordinated three-topic deployments. See the
+[cache review checkpoint](../two-topic-wan-migration-plan.md#339-routerconfig-cache-review-corrections-2026-11-12)
+and [current deployment checkpoint](../two-topic-wan-migration-plan.md#342-review-fixes-failed-binds-and-timeout-summary-2026-11-13).
 
 Failure detection in the router mesh is **system-level presence awareness** — "is this
 *router* alive?" — not per-topic liveliness. WAN **data** topics carry no liveliness-driven

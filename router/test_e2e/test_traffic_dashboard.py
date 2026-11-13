@@ -68,7 +68,7 @@ class TrafficDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{graph_src}")
-            self.assertIn("?v=20261111-readable-wan-filters-v4", graph_src)
+            self.assertIn("?v=20261112-optional-filter-snapshots-v1", graph_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{graph_src}"]').count())
             page.wait_for_function("window.__network.body.data.edges.length > 0 && window.meshSocket")
             page.evaluate("""() => {
@@ -280,6 +280,7 @@ class TrafficDashboardTests(unittest.TestCase):
                 "capture_complete": True, "classification_complete": True,
                 "application_tx_bytes_per_second": 100,
                 "infrastructure_tx_bytes_per_second": 100000,
+                "data_tx_bytes_per_second": 100100,
                 "discovery_tx_bytes_per_second": 10, "reliability_tx_bytes_per_second": 20,
                 "mixed_tx_bytes_per_second": 0, "unknown_tx_bytes_per_second": 0,
             }
@@ -313,18 +314,21 @@ class TrafficDashboardTests(unittest.TestCase):
             sample["capture_timestamp"] += 1000
             send(sample)
             assert_panel_hidden()
-            self.assertFalse(page.locator('[data-series="application_tx"]').is_visible())
-            self.assertFalse(page.locator('[data-series="infrastructure_tx"]').is_visible())
+            self.assertFalse(page.locator('[data-series="data_tx"]').is_visible())
+            self.assertEqual(page.locator('[data-series="infrastructure_tx"]').count(), 0)
             assert_stacked_stats(0)
             self.assertEqual(page.locator("#rf-summary").count(), 0)
             self.assertEqual(page.locator('[data-series="mac"]').count(), 0)
-            self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
+            self.assertIn("shared scale 1600.0 kb/s", page.evaluate("window.drawn"))
             page.evaluate("window.drawn = []")
             toggle.check()
             self.assertTrue(panel.is_visible())
-            self.assertTrue(page.locator('[data-series="application_tx"]').is_visible())
-            self.assertTrue(page.locator('[data-series="infrastructure_tx"]').is_visible())
-            assert_stacked_stats(6)
+            self.assertTrue(page.locator('[data-series="data_tx"]').is_visible())
+            self.assertIn("includes health", page.locator('[data-series="data_tx"]').inner_text())
+            self.assertIn("3s avg 800.8 kb/s", page.locator('[data-series="data_tx"]').inner_text())
+            self.assertIn("shared Event/Status", panel.inner_text())
+            self.assertIn("Discovery may be zero", panel.inner_text())
+            assert_stacked_stats(5)
             page.set_viewport_size({"width": 1280, "height": 600})
             page.wait_for_timeout(100)
             self.assertLessEqual(abs(page.locator("#graph").bounding_box()["height"] +
@@ -333,40 +337,42 @@ class TrafficDashboardTests(unittest.TestCase):
             self.assertGreater(page.locator("#graph").bounding_box()["height"], 0)
             page.set_viewport_size({"width": 640, "height": 900})
             page.wait_for_timeout(100)
-            assert_stacked_stats(6)
+            assert_stacked_stats(5)
             self.assertLessEqual(abs(page.locator("#graph").bounding_box()["height"] +
                                      page.locator("#graph").bounding_box()["y"] -
                                      page.locator("#traffic-panel").bounding_box()["y"]), 1)
             page.set_viewport_size({"width": 1280, "height": 900})
             page.wait_for_timeout(100)
-            self.assertIn("shared scale 800.0 kb/s", page.evaluate("window.drawn"))
-            self.assertTrue(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
+            self.assertIn("shared scale 1600.0 kb/s", page.evaluate("window.drawn"))
+            self.assertTrue(any("WAN data TX (includes health) peak" in text for text in page.evaluate("window.drawn")))
+            self.assertFalse(any("heartbeat TX" in text for text in page.evaluate("window.drawn")))
             page.evaluate("window.drawn = []")
             toggle.uncheck()
             assert_panel_hidden()
-            self.assertIn("shared scale 0.8 kb/s", page.evaluate("window.drawn"))
+            self.assertIn("shared scale 1600.0 kb/s", page.evaluate("window.drawn"))
             self.assertFalse(any("heartbeat TX peak" in text for text in page.evaluate("window.drawn")))
             self.assertTrue(page.locator("#toggle-direct-links").is_checked())
             self.assertTrue(page.locator("#toggle-relayed-links").is_checked())
             sample["aggregated_at_ms"] = sample["capture_timestamp"] + 1
             sample["application_tx_bytes_per_second"] = 10000
+            sample["data_tx_bytes_per_second"] = 110000
             page.evaluate("window.drawn = []")
             send(sample)
-            application_label = page.locator('[data-series="application_tx"] .tp-subplot-average')
-            self.assertEqual(application_label.inner_text(), "3s avg 27.2 kb/s")
+            data_label = page.locator('[data-series="data_tx"] .tp-subplot-average')
+            self.assertEqual(data_label.inner_text(), "3s avg 827.2 kb/s")
             assert_panel_hidden()
-            self.assertIn("shared scale 80.0 kb/s", page.evaluate("window.drawn"))
+            self.assertIn("shared scale 1600.0 kb/s", page.evaluate("window.drawn"))
             send(dict(sample, aggregated_at_ms=sample["aggregated_at_ms"] - 1,
-                      application_tx_bytes_per_second=1))
-            self.assertEqual(application_label.inner_text(), "3s avg 27.2 kb/s")
+                      data_tx_bytes_per_second=1))
+            self.assertEqual(data_label.inner_text(), "3s avg 827.2 kb/s")
             for _ in range(10):
                 sample["aggregated_at_ms"] += 1
                 send(sample)
-            self.assertEqual(application_label.inner_text(), "3s avg 27.2 kb/s")
+            self.assertEqual(data_label.inner_text(), "3s avg 827.2 kb/s")
             sample["capture_timestamp"] += 1000
             sample["aggregated_at_ms"] = sample["capture_timestamp"] + 1
             send(sample)
-            self.assertEqual(application_label.inner_text(), "3s avg 53.6 kb/s")
+            self.assertEqual(data_label.inner_text(), "3s avg 853.6 kb/s")
             mac = dict(sample, mac_tx_bytes_per_second=1000, mac_rx_bytes_per_second=0,
                        mac_tx_packets_per_second=10, mac_tx_drops_per_second=0,
                        mac_rx_drops_per_second=0)
@@ -374,11 +380,11 @@ class TrafficDashboardTests(unittest.TestCase):
             self.assertEqual(page.locator("#rf-summary").count(), 0)
             send(dict(mac, aggregated_at_ms=mac["aggregated_at_ms"] - 1,
                       mac_tx_bytes_per_second=10000), "emane_stats")
-            self.assertEqual(application_label.inner_text(), "3s avg 53.6 kb/s")
+            self.assertEqual(data_label.inner_text(), "3s avg 853.6 kb/s")
             sample["capture_timestamp"] += 2000
             sample["aggregated_at_ms"] += 1
             send(sample)
-            self.assertEqual(application_label.inner_text(), "unavailable")
+            self.assertEqual(data_label.inner_text(), "unavailable")
             self.assertEqual(page.evaluate("window.applicationPaths.map(path => path.length)"), [4, 1])
             sample["aggregated_at_ms"] += 1
             send(sample)
@@ -389,7 +395,7 @@ class TrafficDashboardTests(unittest.TestCase):
                 send(sample)
                 self.assertEqual(page.evaluate("window.applicationPaths.map(path => path.length)"),
                                  [4, length])
-            self.assertEqual(application_label.inner_text(), "3s avg 80.0 kb/s")
+            self.assertEqual(data_label.inner_text(), "3s avg 880.0 kb/s")
             paths = page.evaluate("window.applicationPaths")
             step = paths[0][1][0] - paths[0][0][0]
             self.assertAlmostEqual(paths[1][0][0] - paths[0][-1][0], 2 * step)
@@ -412,7 +418,21 @@ class TrafficDashboardTests(unittest.TestCase):
             sample["aggregated_at_ms"] += 1
             sample["stale"] = True
             send(sample)
-            self.assertIn("unavailable", page.locator('[data-series="application_tx"]').inner_text())
+            self.assertIn("unavailable", page.locator('[data-series="data_tx"]').inner_text())
+            sample.pop("data_tx_bytes_per_second")
+            sample["stale"] = False
+            sample["aggregated_at_ms"] += 1
+            send(sample)
+            self.assertIn("DDS counters unavailable", panel.inner_text())
+            self.assertEqual(data_label.inner_text(), "unavailable")
+            sample.update(data_tx_bytes_per_second=10000,
+                          infrastructure_tx_bytes_per_second=0)
+            for _ in range(3):
+                sample["capture_timestamp"] += 1000
+                sample["aggregated_at_ms"] = sample["capture_timestamp"] + 1
+                send(sample)
+            self.assertEqual(data_label.inner_text(), "3s avg 80.0 kb/s")
+            self.assertIn("3s avg 0.0 kb/s", page.locator('[data-series="unknown_tx"]').inner_text())
             self.assertEqual(errors, [])
             browser.close()
 

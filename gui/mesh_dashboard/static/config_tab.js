@@ -36,7 +36,8 @@
     sections.replaceChildren();
     summary.replaceChildren();
     const presence = snapshot.sections.find(section => section.id === "presence");
-    for (const label of ["ALIVE to STALE", "STALE to DEAD", "DDS endpoint liveliness lease"]) {
+    for (const label of ["ALIVE to STALE", "Last Status to DEAD", "Last Telemetry to DEAD", "STALE to DEAD",
+                         "DDS endpoint liveliness lease"]) {
       const row = presence?.rows.find(value => value[0] === label);
       if (!row) continue;
       const card = element("article");

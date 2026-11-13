@@ -9,8 +9,7 @@
 
   const MAX_POINTS = 300;  // rolling visual history
   const SERIES = [
-    {key: "application_tx", label: "WAN application TX", color: "#3a7bd9"},
-    {key: "infrastructure_tx", label: "Router heartbeat TX", color: "#b88ce0"},
+    {key: "data_tx", label: "WAN data TX (includes health)", color: "#3a7bd9"},
     {key: "discovery_tx", label: "Discovery TX", color: "#3aa655"},
     {key: "reliability_tx", label: "Reliability/control TX", color: "#e0944c"},
     {key: "mixed_tx", label: "Mixed TX", color: "#e0ce64"},
@@ -235,23 +234,26 @@
   const WS_URL = `${WS_ORIGIN}/ws`;
   const REST_URL = `${location.protocol}//${location.host}/api/traffic_stats`;
   function redraw(entry) {
-    const visible = SERIES.filter(s => showInfrastructure || s.key === "application_tx");
+    const visible = SERIES.filter(s => showInfrastructure || s.key === "data_tx");
     for (const spec of SERIES) {
       entry.series[spec.key].label.style.display =
-        showInfrastructure || spec.key === "application_tx" ? "" : "none";
+        showInfrastructure || spec.key === "data_tx" ? "" : "none";
     }
     drawCombinedSparkline(entry.chartCanvas, visible.map(spec => ({
       label: spec.label, color: spec.color, points: entry.series[spec.key].points,
       peakRate: Math.max(0, ...entry.series[spec.key].points.filter(Number.isFinite)),
-    })), getVisibleEvents(entry.series.application_tx.points.length));
+    })), getVisibleEvents(entry.series.data_tx.points.length));
     const s = entry.lastSample;
     if (!s) return;
     const warnings = [];
     const problem = window.ACTTrafficRates.issue(s, true) || entry.rates.problem;
     if (problem) warnings.push(problem);
-    if (!s.classification_complete) warnings.push("Application rate is known traffic only; mixed/unknown excluded");
+    if (!s.classification_complete) warnings.push("Data rate is classified traffic only; mixed/unknown excluded");
     entry.accountingEl.textContent = warnings.join(" | ") +
-      (showInfrastructure ? `${warnings.length ? " | " : ""}DDS/RTPS Ethernet frame bytes, not RF airtime` : "");
+      (showInfrastructure ? `${warnings.length ? " | " : ""}` +
+        "DDS/RTPS Ethernet frame bytes, not RF airtime. Data includes application and router health " +
+        "(shared Event/Status or Event/State/Telemetry on union WAN); no separate health bandwidth measurement. " +
+        "Discovery may be zero between updates; zero mixed/unknown means none observed." : "");
     entry.accountingEl.style.display = entry.accountingEl.textContent ? "" : "none";
     for (const spec of SERIES) {
       entry.series[spec.key].label.querySelector(".tp-subplot-average").textContent = problem

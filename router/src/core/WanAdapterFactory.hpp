@@ -47,6 +47,12 @@ struct WanStatusCallbacks {
     std::function<void(const dds::core::xtypes::DynamicData&)> health_missing;
 };
 
+struct WanConfigCallbacks {
+    std::mutex mutex;
+    std::function<void(const dds::core::xtypes::DynamicData&,
+                       const dds::sub::SampleInfo&)> data;
+};
+
 // Bind/unbind/shutdown run on the controller strand. Metadata providers run on
 // AWS workers: read an immutable snapshot and never call back into this factory.
 // Shared readers have one class-wide filter. Application lifecycle uses the same
@@ -59,13 +65,20 @@ public:
     WanAdapterFactory(ParticipantRegistry& participants, QosResolver& qos,
                       AsyncWaitSetDispatcher& dispatcher, dds::core::QosProvider types,
                       const std::string& wan_participant, const std::string& node,
-                      const std::string& router, WanAdapterCallbacks callbacks = {});
+                      const std::string& router, WanAdapterCallbacks callbacks = {},
+                      bool separate_contacts = false);
     ~WanAdapterFactory();
 
     void bind_status(std::shared_ptr<WanStatusCallbacks> callbacks);
     bool status_bound() const;
     dds::pub::DataWriter<dds::core::xtypes::DynamicData> status_writer() const;
     dds::sub::DataReader<dds::core::xtypes::DynamicData> status_reader() const;
+    void bind_config(std::shared_ptr<WanConfigCallbacks> callbacks);
+    bool config_bound() const;
+    dds::pub::DataWriter<dds::core::xtypes::DynamicData> config_writer() const;
+    void write_config(const dds::core::xtypes::DynamicData& frame);
+    void ignore_local_endpoints();
+    dds::sub::DataReader<dds::core::xtypes::DynamicData> config_reader() const;
     void bind_source(const std::string& route, const std::string& topic, uint64_t generation,
                      const std::string& lan_participant, const std::string& reader_qos,
                      MetadataProvider metadata);

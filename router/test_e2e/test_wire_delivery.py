@@ -34,20 +34,23 @@ READER = bytes.fromhex("00001007")
 
 
 def message(sequence=1, payload=b"hello", prefix=PREFIX, writer=WRITER, fragment=None,
-            little=True, reader=b"\x00" * 4, destination=None):
+            little=True, reader=b"\x00" * 4, destination=None, virtual_sequence=None):
     endian = "<" if little else ">"
     flags = 1 if little else 0
     header = b"RTPS\x02\x03\x01\x01" + prefix
     if destination:
         header += bytes([0x0e, flags]) + struct.pack(endian + "H", 12) + destination
-    fixed = b"\x00\x00" + struct.pack(endian + "H", 28 if fragment else 16)
+    fixed = b"\x00\x00" + struct.pack(
+        endian + "H", 28 if fragment else 24 if virtual_sequence is not None else 16)
     fixed += reader + writer + struct.pack(endian + "iI", sequence >> 32, sequence & 0xffffffff)
+    if virtual_sequence is not None:
+        fixed += struct.pack(endian + "iI", virtual_sequence >> 32, virtual_sequence & 0xffffffff)
     if fragment:
         fixed += struct.pack(endian + "IHHI", *fragment)
         kind = 0x16
     else:
         flags |= 4
-        kind = 0x15
+        kind = 0x14 if virtual_sequence is not None else 0x15
     return header + bytes([kind, flags]) + struct.pack(endian + "H", len(fixed) + len(payload)) + fixed + payload
 
 
@@ -100,6 +103,41 @@ def observation(kind="sent", sequence=1, timestamp=NOW - 20_000_000_000, **chang
 
 
 class WireParserTests(unittest.TestCase):
+    def test_session_data_uses_wire_sequence_and_skips_virtual_sequence(self):
+        for little in (True, False):
+            endian = "<" if little else ">"
+            packet = message(2**32 + 7, little=little, virtual_sequence=2**33 + 99)
+            for inline in (False, True):
+                with self.subTest(little=little, inline=inline):
+                    if inline:
+                        body = packet[24:52] + struct.pack(endian + "HH", 1, 0) + packet[52:]
+                        packet = (packet[:21] + bytes([packet[21] | 2])
+                                  + struct.pack(endian + "H", len(body)) + body)
+                    item, = submessages(packet)
+                    self.assertEqual((item["writer_guid"], item["sequence"], item["payload"]),
+                                     (GUID, 2**32 + 7, b"hello"))
+                    self.assertEqual(list(submessages(
+                        packet[:21] + bytes([packet[21] & ~4]) + packet[22:])), [])
+            truncated = packet[:22] + struct.pack(endian + "H", 24) + packet[24:48]
+            with self.assertRaises(ValueError):
+                list(submessages(truncated))
+
+    def test_session_data_capture_preserves_requested_repair_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            nodes = {"10.0.0.1": "Control_20", "10.0.0.2": "Platform_30"}
+            capture = WireCapture(Path(temporary) / "wire.jsonl", "Control_20", "test",
+                                  nodes, {"10.0.0.1"})
+            packet = message(7, virtual_sequence=99)
+            capture.process(row(packet, 90), 200)
+            capture.process(dict(row(repair_request(7), 91),
+                                 **{"ip.src": "10.0.0.2", "ip.dst": "10.0.0.1"}), 200)
+            capture.process(row(packet, 92), 200)
+            capture.process(row(packet, 93), 200)
+            capture.close()
+            events = [json.loads(line) for line in capture.path.read_text().splitlines()]
+            self.assertEqual([(event["event"], event["sequence"]) for event in events],
+                             [("sent", 7), ("retransmitted", 7)])
+
     def test_repair_request_bitmaps_and_identity(self):
         for little in (True, False):
             items = list(submessages(repair_request(2**32 + 7, (0, 2, 33), little=little)))
@@ -701,8 +739,12 @@ class ContainerDiscoveryTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             shutil.copyfile(ROOT / "harness_v2/scripts/run_container_baseline.sh", script)
             shutil.copyfile(ROOT / "router/config/control-platform.yaml", config)
+            policy = root / "harness_v2/qos/wan_policy.py"
+            policy.parent.mkdir(parents=True)
+            shutil.copyfile(ROOT / "harness_v2/qos/wan_policy.py", policy)
             for emane, contract in ((False, "legacy"), (True, "legacy"),
-                                    (False, "two_topic_union"), (True, "two_topic_union")):
+                                    (False, "two_topic_union"), (True, "two_topic_union"),
+                                    (False, "three_topic_union"), (True, "three_topic_union")):
                 with self.subTest(emane=emane, contract=contract):
                     output = root / "debug/mesh_runs" / ("emane" if emane else "container")
                     with patch.dict("os.environ", {"CONNEXT_SHARED_DIR": str(root)}):
@@ -723,10 +765,15 @@ class ContainerDiscoveryTests(unittest.TestCase):
                         rendered = (output / f"control-platform-{node}.yaml").read_text()
                         self.assertEqual("  wan_contract: two_topic_union\n" in rendered,
                                          contract == "two_topic_union")
-                        self.assertIn("ACT_QOS_LIB::wan_union_status" if contract == "two_topic_union"
+                        self.assertIn("ACT_QOS_LIB::wan_union_status" if contract != "legacy"
                                       else "ACT_QOS_LIB::wan_status", rendered)
-                        self.assertIn("ACT_QOS_LIB::wan_two_topic_participant" if contract == "two_topic_union"
+                        self.assertIn("ACT_QOS_LIB::wan_three_topic_participant" if contract == "three_topic_union"
+                                      else "ACT_QOS_LIB::wan_two_topic_participant" if contract == "two_topic_union"
                                       else "ACT_QOS_LIB::wan_router_participant", rendered)
+                        if contract == "three_topic_union":
+                            self.assertIn("wan_contract: three_topic_union", rendered)
+                            self.assertIn("wan_contacts: ACT_QOS_LIB::wan_union_contacts", rendered)
+                            self.assertIn("wan_event: ACT_QOS_LIB::wan_three_topic_event", rendered)
             invalid = subprocess.run(
                 ["bash", str(script), "render", "--wan-contract", "invalid"],
                 capture_output=True, text=True, timeout=15)

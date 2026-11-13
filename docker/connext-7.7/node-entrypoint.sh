@@ -107,6 +107,9 @@ fi
 
 cd "$WORKSPACE"
 
+policy_environment="$(python3 harness_v2/qos/wan_policy.py)"
+source /dev/stdin <<< "$policy_environment"
+
 if [[ "${EMANE_ENABLED:-0}" == "1" ]]; then
     start_emane
 fi

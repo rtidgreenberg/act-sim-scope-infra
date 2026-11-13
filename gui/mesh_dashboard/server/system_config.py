@@ -26,9 +26,11 @@ def load_system_config(path, provider_factory, infinite_duration):
     path, config, libraries, provider = load_router_config(path, provider_factory)
     router = config["router"]
     contract = router.get("wan_contract", "legacy")
-    if contract not in ("legacy", "two_topic_union"):
+    if contract not in ("legacy", "two_topic_union", "three_topic_union"):
         raise ValueError(f"Unknown WAN contract: {contract}")
-    shared = contract == "two_topic_union"
+    shared = contract != "legacy"
+    separate_contacts = contract == "three_topic_union"
+    health_family = "Telemetry" if separate_contacts else "Status"
     aliases = config.get("qos_profiles", {})
     sections = []
 
@@ -43,7 +45,8 @@ def load_system_config(path, provider_factory, infinite_duration):
                        "Node identity and admin participant may be overridden by launcher arguments.",
                        ["Setting", "Configured value", "Meaning"])
     overview.extend([
-        ["WAN contract", "Two-topic union" if shared else "Legacy per-topic",
+        ["WAN contract", "Three-topic union" if separate_contacts else "Two-topic union" if shared else "Legacy per-topic",
+         "Shared Event, State and Telemetry topics." if separate_contacts else
          "Shared Event and Status topics." if shared else "Application topics have separate WAN endpoints."],
         ["Configuration set", router.get("config_set", "Not specified"), "Deployment configuration family."],
         ["Forwarding mode", router.get("default_forwarding_mode", "Not specified"),
@@ -69,12 +72,15 @@ def load_system_config(path, provider_factory, infinite_duration):
         ["Heartbeat publication period", "Not reported",
          "Compiled router policy; not supplied by YAML or runtime telemetry."],
         ["Dead-peer roster retention", "Not reported",
-         "Compiled router policy; distinct from the STALE-to-DEAD timeout."],
+         "Compiled router policy; distinct from the final system timeout."],
     ])
     profiles = []
     if shared:
+        families = [("Event", "wan_event"), (health_family, "wan_status")]
+        if separate_contacts:
+            families.insert(1, ("State", "wan_contacts"))
         profiles = [(topic, aliases[alias], endpoint)
-                    for topic, alias in (("Event", "wan_event"), ("Status", "wan_status"))
+                    for topic, alias in families
                     if alias in aliases for endpoint in ("writer", "reader")]
     else:
         if presence_names:
@@ -115,28 +121,37 @@ def load_system_config(path, provider_factory, infinite_duration):
             duration(settings["deadline_seconds"]),
             settings["liveliness"].replace("_", " ").title(), duration(settings["lease_seconds"]),
         ])
-        if endpoint != "reader" or topic != ("Status" if shared else "RouterHealth") or not presence_names:
+        if topic == "Event" and endpoint == "writer":
+            protocol = qos.protocol.rtps_reliable_writer
+            presence.extend([
+                ["Reliable heartbeat period", duration(float(protocol.heartbeat_period)),
+                 "WAN_HB_PERIOD_SEC; separate from application health publication."],
+                ["Reliable-reader heartbeat retries", str(protocol.max_heartbeat_retries),
+                 "Derived as ceil(WAN_TIMEOUT_SEC / WAN_HB_PERIOD_SEC). "
+                 "A nominal inactivity budget, not an exact delivery or wall-clock guarantee."],
+            ])
+        if endpoint != "reader" or topic != (health_family if shared else "RouterHealth") or not presence_names:
             continue
         presence.append(["ALIVE to STALE", duration(settings["deadline_seconds"]),
                          f"{profile}: reader deadline. Only RouterHealth deadline misses trigger STALE."])
         if shared:
-            value = qos.property.get("act.presence.dead_after_stale_ms")
-            if not value or not value.isascii() or not value.isdigit() or int(value) <= 0:
-                raise ValueError("act.presence.dead_after_stale_ms must be a positive integer")
+            value = qos.property.get("act.presence.dead_timeout_sec")
+            if not value or not value.isascii() or not value.isdigit() or not 0 < int(value) <= 2_147_483_647:
+                raise ValueError("act.presence.dead_timeout_sec must be a positive integer <= 2147483647")
             presence.extend([
-                ["STALE to DEAD", duration(int(value) / 1000),
-                 f"{profile}: act.presence.dead_after_stale_ms. Starts at the first missing-health "
-                 "event; repeated misses do not restart it. This is not time since the last sample."],
-                ["Recovery to ALIVE", "Any valid received Status",
+                [f"Last {health_family} to DEAD", duration(int(value)),
+                 f"{profile}: act.presence.dead_timeout_sec from WAN_TIMEOUT_SEC. Measured from the "
+                 f"last received {health_family}, not from STALE; repeated misses do not restart it."],
+                ["Recovery to ALIVE", f"Any valid received {health_family}",
                  "Restores ALIVE and cancels the pending countdown; Event traffic does not."],
-                ["Health writer loss / dispose", "STALE, then the same DEAD countdown",
+                ["Health writer loss / dispose", "STALE, then the same final system timeout",
                  "A missing RouterHealth writer/instance uses the same non-restarting timer."],
             ])
         else:
             presence.append(["Writer liveliness loss to DEAD", duration(settings["lease_seconds"]),
                              f"{profile}: reader liveliness lease; legacy presence behavior."])
         presence.append(["DDS endpoint liveliness lease", duration(settings["lease_seconds"]),
-                         "Not the STALE-to-DEAD timer. " + settings["liveliness"].replace("_", " ").title()])
+                         "Not the final system timeout. " + settings["liveliness"].replace("_", " ").title()])
 
     participants = section("participants", "DDS participants and discovery",
                            "Configured roles/domains; this is not a fleet-wide inventory of running processes. "

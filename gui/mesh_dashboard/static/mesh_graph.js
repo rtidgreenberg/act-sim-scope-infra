@@ -62,6 +62,7 @@
   const RECONNECT_DELAY_MS = 3000;
   const STATUS_LEVEL_FRESH_MS = 5000;
   const WAN_FILTER_REPORT_STALE_MS = 8000;
+  const WAN_FILTER_SNAPSHOT_STALE_MS = 35000;
   const LINK_MESSAGE_AGE_WARN_MS = 5000;
   const HEARTBEAT_RTT_MAX_AGE_MS = 32000;
 
@@ -676,11 +677,14 @@
       return detailSection(node.id, "wan-filters", "Observed WAN filters",
         `<div class="detail-note">No writer filter observations reported.</div>`);
     }
-    const age = Number.isFinite(node.healthAgeMs) && node.healthAgeMs >= 0
-      ? Math.round(node.healthAgeMs + Math.max(0, performance.now() - node.meshReceivedAtMs))
+    const snapshotAge = node.wanFilterAgeMs === undefined ? node.healthAgeMs : node.wanFilterAgeMs;
+    const staleAfter = node.wanFilterAgeMs === undefined
+      ? WAN_FILTER_REPORT_STALE_MS : WAN_FILTER_SNAPSHOT_STALE_MS;
+    const age = Number.isFinite(snapshotAge) && snapshotAge >= 0
+      ? Math.round(snapshotAge + Math.max(0, performance.now() - node.meshReceivedAtMs))
       : null;
     let html = detailRow("report age", age == null ? "unknown" :
-      `${age} ms${age > WAN_FILTER_REPORT_STALE_MS ? " (stale)" : ""}`);
+      `${age} ms${age > staleAfter ? " (stale)" : ""}`);
     html += `<div class="detail-note wan-filter-scope">Remote reader interests seen by this router's WAN writers.</div>`;
     for (const writer of observations) {
       html += `<h4 class="wan-filter-family">${escHtml(writer.topic_name || "?")}` +
@@ -1658,6 +1662,8 @@
              size: 22, font: { color: "transparent" }, kind: "observer",
              health: data.observer_health,
              healthAgeMs: reportAge(data.observer_health_age_ms),
+             wanFilterAgeMs: data.observer_wan_writer_filters_age_ms === undefined
+               ? undefined : reportAge(data.observer_wan_writer_filters_age_ms),
              meshReceivedAtMs: performance.now(),
              ...OBSERVER_PIN_FIELDS });
 
@@ -1687,6 +1693,8 @@
         resolutionMode: resolutionModeFromHealth(health),
         presence: peerEntry.presence, lastSeenMs: peerEntry.last_seen_delta_ms,
         healthAgeMs: reportAge(peerEntry.health_age_ms), meshReceivedAtMs: performance.now(),
+        wanFilterAgeMs: peerEntry.wan_writer_filters_age_ms === undefined
+          ? undefined : reportAge(peerEntry.wan_writer_filters_age_ms),
         ...PLATFORM_ROW_Y_FIELDS,
         ...(c2PinFields(health) || {}),
       });

@@ -32,14 +32,14 @@ while [[ $# -gt 0 ]]; do
         --with-dashboard) WITH_DASHBOARD=1; shift ;;
         --dashboard-port) DASHBOARD_PORT="$2"; shift 2 ;;
         --wan-contract) WAN_CONTRACT="$2"; shift 2 ;;
-        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
+        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union|three_topic_union] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 case "$WAN_CONTRACT" in
-    legacy|two_topic_union) ;;
-    *) echo "--wan-contract must be legacy or two_topic_union" >&2; exit 1 ;;
+    legacy|two_topic_union|three_topic_union) ;;
+    *) echo "--wan-contract must be legacy, two_topic_union or three_topic_union" >&2; exit 1 ;;
 esac
 
 load_topology() {
@@ -128,11 +128,28 @@ clear_debug_dir() {
 }
 
 apply_wan_contract() {
-    [[ "$WAN_CONTRACT" == two_topic_union ]] || return 0
+    [[ "$WAN_CONTRACT" != legacy ]] || return 0
     sed -i -e '/^router:$/a\  wan_contract: two_topic_union' \
         -e 's/ACT_QOS_LIB::wan_router_participant_emane\b/ACT_QOS_LIB::wan_two_topic_participant_emane/g' \
         -e 's/ACT_QOS_LIB::wan_router_participant\b/ACT_QOS_LIB::wan_two_topic_participant/g' \
         -e 's/ACT_QOS_LIB::wan_status\b/ACT_QOS_LIB::wan_union_status/g' "$1"
+    [[ "$WAN_CONTRACT" == three_topic_union ]] || return 0
+    python3 - "$1" <<'PY'
+import sys
+import yaml
+
+path = sys.argv[1]
+with open(path) as source:
+    config = yaml.safe_load(source)
+config["router"]["wan_contract"] = "three_topic_union"
+aliases = config["qos_profiles"]
+for alias, profile in aliases.items():
+    aliases[alias] = profile.replace("wan_two_topic_participant", "wan_three_topic_participant")
+aliases["wan_event"] = "ACT_QOS_LIB::wan_three_topic_event"
+aliases["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts"
+with open(path, "w") as destination:
+    yaml.safe_dump(config, destination, sort_keys=False)
+PY
 }
 
 render_config() {
@@ -223,7 +240,9 @@ dashboard_port_yaml() {
 }
 
 write_compose() {
-    local compose_file="$WORKDIR/compose.yaml" id
+    local compose_file="$WORKDIR/compose.yaml" id policy_environment
+    policy_environment="$(python3 "$REPO_ROOT/harness_v2/qos/wan_policy.py")"
+    source /dev/stdin <<< "$policy_environment"
     WAN_PEERS=()
     if [[ "$EMANE_ENABLED" == 1 ]]; then
         WAN_PEERS+=("1@builtin.udpv4://${EMANE_IP[control_20]}")
@@ -263,6 +282,8 @@ $(container_user_yaml)
       PLATFORM_LAN_PEER3: 127.0.0.1
 $(wan_peer_yaml)
       WAN_RECEIVE_MULTICAST: "0"
+      WAN_TIMEOUT_SEC: "${WAN_TIMEOUT_SEC:-300}"
+      WAN_HB_PERIOD_SEC: "${WAN_HB_PERIOD_SEC:-3}"
 $(emane_environment_yaml "${EMANE_NEM_ID[control_20]}" "${EMANE_IP[control_20]}")
 $(dashboard_environment_yaml)
 $(traffic_monitor_environment_yaml)
@@ -303,6 +324,8 @@ $(platform_router_name_yaml "$id")
       PLATFORM_LAN_PEER3: 127.0.0.1
 $(wan_peer_yaml)
       WAN_RECEIVE_MULTICAST: "0"
+      WAN_TIMEOUT_SEC: "${WAN_TIMEOUT_SEC:-300}"
+      WAN_HB_PERIOD_SEC: "${WAN_HB_PERIOD_SEC:-3}"
 $(emane_environment_yaml "${EMANE_NEM_ID[platform_${id}]}" "${EMANE_IP[platform_${id}]}")
 $(traffic_monitor_environment_yaml)
     volumes:
@@ -358,7 +381,7 @@ wait_for_emane_interfaces() {
 release_audit_start() {
     local deadline=$((SECONDS + 45)) id ready=true
     local ready_event=route_entities_created
-    [[ "$WAN_CONTRACT" == two_topic_union ]] && ready_event=wan_interest_applied
+    [[ "$WAN_CONTRACT" != legacy ]] && ready_event=wan_interest_applied
     while (( SECONDS < deadline )); do
         ready=true
         [[ -f "$REPO_ROOT/debug/control_20_debug/simulator_ready" ]] || ready=false

@@ -73,7 +73,7 @@ class WanFilterDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://filters.test/{revision}")
-            self.assertIn("20261111-readable-wan-filters-v4", revision)
+            self.assertIn("20261112-optional-filter-snapshots-v1", revision)
             page.wait_for_function("window.__network.body.data.nodes.get('Platform_30') && window.meshSocket")
 
             def select(node):
@@ -122,6 +122,20 @@ class WanFilterDashboardTests(unittest.TestCase):
             self.assertEqual(section.locator(".wan-filter-reader").count(), 2)
             self.assertTrue(sql.is_visible(), "Reader expansion must survive health refreshes")
             self.assertFalse(section.locator(".wan-filter-sql").nth(1).is_visible())
+
+            mesh["peers"][0]["wan_writer_filters_age_ms"] = 20000
+            send()
+            page.wait_for_function("document.querySelector('#detail').textContent.includes('20000 ms')")
+            self.assertNotIn("(stale)", section.inner_text())
+            health["heartbeat_seq"] = 3
+            mesh["peers"][0]["wan_writer_filters_age_ms"] = 35001
+            send()
+            page.wait_for_function("document.querySelector('#detail').textContent.includes('35001 ms (stale)')")
+            self.assertIn("TEAM_B", section.inner_text())
+            mesh["peers"][0]["wan_writer_filters_age_ms"] = -1
+            send()
+            page.wait_for_function("document.querySelector('#detail').textContent.includes('unknown')")
+            del mesh["peers"][0]["wan_writer_filters_age_ms"]
 
             mesh["peers"][0]["health_age_ms"] = 9000
             send()

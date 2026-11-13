@@ -7,6 +7,9 @@
 #include "WanInterests.hpp"
 #include "WanStatsPoll.hpp"
 
+#include <dds/sub/discovery.hpp>
+#include <rti/pub/WriteParams.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -158,9 +161,12 @@ struct Output {
 };
 
 bool forward_instance(Writer& writer, const Data& data, const dds::sub::SampleInfo& info,
-                      bool valid) {
+                      bool valid, int32_t priority = 0) {
+    rti::pub::WriteParams params;
+    params.priority(priority);
     if (valid) {
-        writer.write(data);
+        if (priority) writer.extensions().write(data, params);
+        else writer.write(data);
         return true;
     }
     const auto state = info.state().instance_state();
@@ -172,9 +178,19 @@ bool forward_instance(Writer& writer, const Data& data, const dds::sub::SampleIn
         return false;
     }
     if (state == State::not_alive_disposed()) {
-        writer.dispose_instance(handle);
+        if (priority) {
+            params.handle(handle);
+            writer.extensions().dispose_instance(params);
+        } else {
+            writer.dispose_instance(handle);
+        }
     } else {
-        writer.unregister_instance(handle);
+        if (priority) {
+            params.handle(handle);
+            writer.extensions().unregister_instance(params);
+        } else {
+            writer.unregister_instance(handle);
+        }
     }
     return true;
 }
@@ -257,6 +273,7 @@ struct Receiver {
     Reader reader{dds::core::null};
     Cft cft{dds::core::null};
     std::shared_ptr<WanStatusCallbacks> observer;
+    std::shared_ptr<WanConfigCallbacks> config_observer;
 };
 
 class StatusDeadlineListener : public dds::sub::NoOpDataReaderListener<Data> {
@@ -327,6 +344,7 @@ struct WanAdapterFactory::Impl {
     std::string wan;
     std::string node;
     std::string router;
+    bool separate_contacts;
     WanAdapterCallbacks callbacks;
     uint64_t epoch = 0;
     std::map<std::string, Binding> bindings;
@@ -336,12 +354,13 @@ struct WanAdapterFactory::Impl {
     std::map<std::string, std::shared_ptr<Output>> local_outputs;
     std::map<std::string, std::string> owned_runtimes;
     std::shared_ptr<WanStatusCallbacks> status_observer;
+    std::shared_ptr<WanConfigCallbacks> config_observer;
 
     Impl(ParticipantRegistry& p, QosResolver& q, AsyncWaitSetDispatcher& d,
          dds::core::QosProvider t, const std::string& w, const std::string& n,
-         const std::string& r, WanAdapterCallbacks c)
+         const std::string& r, WanAdapterCallbacks c, bool split)
         : participants(p), qos(q), dispatcher(d), types(t), codec(t),
-          wan(w), node(n), router(r), callbacks(std::move(c)) {
+          wan(w), node(n), router(r), separate_contacts(split), callbacks(std::move(c)) {
         require(participants.on_wan(wan), "selected participant is not WAN");
         require(!node.empty() && !router.empty(), "empty router identity");
     }
@@ -437,7 +456,7 @@ struct WanAdapterFactory::Impl {
                 binding.generation, binding.route, provider, binding.count});
             return;
         }
-        const auto& mapping = wan_mapping(binding.topic_name);
+        const auto mapping = wan_transport_mapping(binding.topic_name, separate_contacts);
         auto reader_qos = qos.lifecycle_reader_qos(alias);
         auto state = std::make_shared<Source>();
         state->qos_alias = alias;
@@ -450,7 +469,8 @@ struct WanAdapterFactory::Impl {
         auto found_writer = writers.find(binding.class_key);
         if (found_writer == writers.end()) {
             found_writer = writers.emplace(binding.class_key, make_output(
-                wan, mapping.family, std::string("Wan") + mapping.family, mapping.qos_profile, true)).first;
+                wan, mapping.family, wan_transport_type(mapping.family),
+                mapping.qos_profile, true)).first;
         }
         const auto output = found_writer->second;
         ++output->users;
@@ -479,7 +499,10 @@ struct WanAdapterFactory::Impl {
                         "metadata origin differs from router identity");
                 const auto frame = valid ? codec.pack(state->topic_name, data, metadata)
                                          : codec.key_frame(state->topic_name, data, metadata);
-                if (!forward_instance(output->writer, frame, info, valid)) {
+                const auto priority = separate_contacts &&
+                        std::string(wan_mapping(state->topic_name).family) == "Event"
+                        ? (state->topic_name == "ContactReport" ? 10 : 100) : 0;
+                if (!forward_instance(output->writer, frame, info, valid, priority)) {
                     return false;
                 }
                 if (valid) {
@@ -524,9 +547,13 @@ struct WanAdapterFactory::Impl {
     WanReceiveFilter effective_filter(const WanReceiveFilter& filter,
                                       const std::string& family) const {
         auto result = filter;
-        if (status_observer && family == "Status") {
+        if (status_observer && family == wan_transport_mapping("RouterHealth", separate_contacts).family) {
             result.expression = "(" + result.expression +
                     ") OR (source_id <> %0 AND original_topic = 'RouterHealth')";
+        }
+        if (config_observer && family == "Event") {
+            result.expression = "(" + result.expression +
+                    ") OR (source_id <> %0 AND original_topic = 'RouterConfig')";
         }
         size_t property_size = result.expression.size();
         for (const auto& parameter : result.parameters) property_size += parameter.size() + 1;
@@ -539,15 +566,22 @@ struct WanAdapterFactory::Impl {
         auto state = std::make_shared<Receiver>();
         state->filter = filter;
         state->family = family;
-        state->observer = family == "Status" ? status_observer : nullptr;
+        state->observer = family == wan_transport_mapping("RouterHealth", separate_contacts).family
+                ? status_observer : nullptr;
+        state->config_observer = family == "Event" ? config_observer : nullptr;
         state->runtime_name = "@wan/reader/" + std::to_string(++epoch);
         auto dp = participants.get(wan);
-        auto description = topic(dp, family, types->type("Wan" + family));
+        const auto frame_type = wan_transport_type(family);
+        auto description = topic(dp, family, types->type(frame_type));
         dds::sub::Subscriber subscriber(dp);
         const auto selected = effective_filter(filter, family);
         Cft cft(description, state->runtime_name + "_cft",
                 dds::topic::Filter(selected.expression, selected.parameters));
         Reader reader(subscriber, cft, qos.lifecycle_reader_qos(qos_alias));
+        if (dp->enabled()) {
+            // Publication ignore suppresses receive delivery, not writer destinations.
+            dds::sub::ignore(dp, reader.instance_handle());
+        }
         state->reader = reader;
         state->cft = cft;
         if (state->observer) {
@@ -557,6 +591,15 @@ struct WanAdapterFactory::Impl {
         auto forward = [this, state](const Data& frame, const dds::sub::SampleInfo& info, bool valid) {
             if (frame.value<std::string>("source_id") == node) return !valid;
             const auto decoded = valid ? codec.unpack(frame) : codec.unpack_key(frame);
+            require(state->family == wan_transport_mapping(decoded.topic, separate_contacts).family,
+                    "payload arrived on the wrong physical WAN topic");
+            if (state->config_observer && decoded.topic == "RouterConfig") {
+                if (valid) {
+                    std::lock_guard<std::mutex> callback_lock(state->config_observer->mutex);
+                    if (state->config_observer->data) state->config_observer->data(frame, info);
+                }
+                return true;
+            }
             if (state->observer) {
                 std::lock_guard<std::mutex> callback_lock(state->observer->mutex);
                 if (valid) {
@@ -603,7 +646,7 @@ struct WanAdapterFactory::Impl {
             warning(state->runtime_name, state->family, generation, message);
         };
         auto lifecycle = [this, state, forward](const dds::sub::SampleInfo& info) {
-            Data key(types->type("Wan" + state->family));
+            Data key(types->type(wan_transport_type(state->family)));
             state->reader.key_value(key, info.instance_handle());
             return forward(key, info, false);
         };
@@ -622,19 +665,20 @@ struct WanAdapterFactory::Impl {
                           const std::string& alias, const WanReceiveFilter& filter) {
         require(!participants.on_wan(participant), "destination output must be LAN");
         require(!filter.expression.empty(), "class-wide receive CFT is required");
+        const auto mapping = wan_transport_mapping(binding.topic_name, separate_contacts);
         auto existing = receivers.find(binding.class_key);
-        if (existing != receivers.end()) {
-            if (existing->second->observer && existing->second->targets.empty()) {
-                const auto selected = effective_filter(filter, wan_mapping(binding.topic_name).family);
-                existing->second->cft->filter(dds::topic::Filter(
-                        selected.expression, selected.parameters));
-                existing->second->filter = filter;
-            }
+        const bool replace_filter = existing != receivers.end()
+                && (existing->second->observer || existing->second->config_observer
+                    || (separate_contacts && existing->second->family == "State"))
+                && existing->second->targets.empty();
+        auto next_filter = filter;
+        const auto selected = replace_filter ? effective_filter(filter, mapping.family)
+                                             : WanReceiveFilter{};
+        if (existing != receivers.end() && !replace_filter) {
             require(existing->second->filter.expression == filter.expression
                         && existing->second->filter.parameters == filter.parameters,
                     "shared receive filter conflict");
         }
-        const auto& mapping = wan_mapping(binding.topic_name);
         auto output_it = local_outputs.find(binding.output_key);
         if (output_it != local_outputs.end()) {
             require(output_it->second->qos_alias == alias, "shared LAN writer QoS conflict");
@@ -653,10 +697,24 @@ struct WanAdapterFactory::Impl {
             }
             auto state = existing->second;
             std::lock_guard<std::mutex> lock(state->mutex);
-            auto& target = state->targets[binding.output_key];
-            target.output = output;
-            target.routes.emplace(pair_key(binding.route, binding.topic_name),
-                Contribution{binding.generation, binding.route, {}, binding.count});
+            const auto id = pair_key(binding.route, binding.topic_name);
+            auto target = state->targets.emplace(binding.output_key, Target{output, {}});
+            bool contributed = false;
+            try {
+                contributed = target.first->second.routes.emplace(id,
+                    Contribution{binding.generation, binding.route, {}, binding.count}).second;
+                require(contributed, "destination contribution already exists");
+                // Commit interests last, with the target ready before receive workers resume.
+                if (replace_filter) {
+                    state->cft->filter(dds::topic::Filter(selected.expression, selected.parameters));
+                    state->filter.expression.swap(next_filter.expression);
+                    state->filter.parameters.swap(next_filter.parameters);
+                }
+            } catch (const std::exception&) {
+                if (contributed) target.first->second.routes.erase(id);
+                if (target.second) state->targets.erase(target.first);
+                throw;
+            }
         } catch (const std::exception&) {
             if (created) {
                 detach(created->runtime_name, created->family);
@@ -695,7 +753,8 @@ struct WanAdapterFactory::Impl {
                 if (target.routes.empty()) {
                     receiver->targets.erase(binding.output_key);
                 }
-                empty = receiver->targets.empty() && !receiver->observer;
+                empty = receiver->targets.empty() && !receiver->observer && !receiver->config_observer
+                        && !(separate_contacts && receiver->family == "State");
             }
             if (empty) {
                 detach(receiver->runtime_name, receiver->family);
@@ -710,24 +769,51 @@ struct WanAdapterFactory::Impl {
 WanAdapterFactory::WanAdapterFactory(ParticipantRegistry& participants, QosResolver& qos,
         AsyncWaitSetDispatcher& dispatcher, dds::core::QosProvider types,
         const std::string& wan, const std::string& node, const std::string& router,
-        WanAdapterCallbacks callbacks)
-    : impl_(new Impl(participants, qos, dispatcher, types, wan, node, router, std::move(callbacks))) {}
+        WanAdapterCallbacks callbacks, bool separate_contacts)
+    : impl_(new Impl(participants, qos, dispatcher, types, wan, node, router,
+                     std::move(callbacks), separate_contacts)) {
+    if (!separate_contacts) return;
+    const auto mapping = wan_transport_mapping("ContactReport", true);
+    const auto key = pair_key(mapping.family, mapping.qos_profile);
+    try {
+        auto output = impl_->make_output(wan, mapping.family, wan_transport_type(mapping.family),
+                                         mapping.qos_profile, true);
+        output->users = 1;
+        impl_->writers.emplace(key, std::move(output));
+        impl_->receivers.emplace(key, impl_->make_receiver(mapping.family, mapping.qos_profile,
+                wan_receive_filter(mapping.family, node, {}, true)));
+    } catch (const std::exception&) {
+        shutdown();
+        throw;
+    }
+}
 
 WanAdapterFactory::~WanAdapterFactory() { shutdown(); }
+
+void WanAdapterFactory::ignore_local_endpoints() {
+    auto participant = impl_->participants.get(impl_->wan);
+    for (const auto& entry : impl_->writers) {
+        dds::pub::ignore(participant, entry.second->writer.instance_handle());
+    }
+    for (const auto& entry : impl_->receivers) {
+        dds::sub::ignore(participant, entry.second->reader.instance_handle());
+    }
+}
 
 void WanAdapterFactory::bind_status(std::shared_ptr<WanStatusCallbacks> callbacks) {
     require(callbacks && callbacks->data && callbacks->health_missing, "Status callbacks are required");
     require(!impl_->status_observer && impl_->bindings.empty(),
             "Status observer must be bound before application routes");
     impl_->status_observer = std::move(callbacks);
-    const auto& mapping = wan_mapping("RouterHealth");
+    const auto mapping = wan_transport_mapping("RouterHealth", impl_->separate_contacts);
     const auto key = pair_key(mapping.family, mapping.qos_profile);
     try {
-        auto output = impl_->make_output(impl_->wan, "Status", "WanStatus", mapping.qos_profile, true);
+        auto output = impl_->make_output(impl_->wan, mapping.family, wan_transport_type(mapping.family),
+                                         mapping.qos_profile, true);
         output->users = 1;
         impl_->writers.emplace(key, std::move(output));
-        impl_->receivers.emplace(key, impl_->make_receiver("Status", mapping.qos_profile,
-                wan_receive_filter("Status", impl_->node, {})));
+        impl_->receivers.emplace(key, impl_->make_receiver(mapping.family, mapping.qos_profile,
+                wan_receive_filter(mapping.family, impl_->node, {}, impl_->separate_contacts)));
     } catch (const std::exception&) {
         shutdown();
         throw;
@@ -736,13 +822,55 @@ void WanAdapterFactory::bind_status(std::shared_ptr<WanStatusCallbacks> callback
 
 bool WanAdapterFactory::status_bound() const { return bool(impl_->status_observer); }
 
+void WanAdapterFactory::bind_config(std::shared_ptr<WanConfigCallbacks> callbacks) {
+    require(callbacks && callbacks->data, "RouterConfig callback is required");
+    require(!impl_->config_observer && impl_->bindings.empty(),
+            "RouterConfig observer must be bound before application routes");
+    impl_->config_observer = std::move(callbacks);
+    const auto& mapping = wan_mapping("RouterConfig");
+    const auto key = pair_key(mapping.family, mapping.qos_profile);
+    try {
+        auto output = impl_->make_output(impl_->wan, "Event", "WanEvent", mapping.qos_profile, true);
+        output->users = 1;
+        impl_->writers.emplace(key, std::move(output));
+        impl_->receivers.emplace(key, impl_->make_receiver("Event", mapping.qos_profile,
+                wan_receive_filter("Event", impl_->node, {})));
+    } catch (const std::exception&) {
+        shutdown();
+        throw;
+    }
+}
+
+bool WanAdapterFactory::config_bound() const { return bool(impl_->config_observer); }
+
+Writer WanAdapterFactory::config_writer() const {
+    const auto& mapping = wan_mapping("RouterConfig");
+    return impl_->writers.at(pair_key(mapping.family, mapping.qos_profile))->writer;
+}
+
+void WanAdapterFactory::write_config(const Data& frame) {
+    auto writer = config_writer();
+    if (impl_->separate_contacts) {
+        rti::pub::WriteParams params;
+        params.priority(100);
+        writer.extensions().write(frame, params);
+    } else {
+        writer.write(frame);
+    }
+}
+
+Reader WanAdapterFactory::config_reader() const {
+    const auto& mapping = wan_mapping("RouterConfig");
+    return impl_->receivers.at(pair_key(mapping.family, mapping.qos_profile))->reader;
+}
+
 Writer WanAdapterFactory::status_writer() const {
-    const auto& mapping = wan_mapping("RouterHealth");
+    const auto mapping = wan_transport_mapping("RouterHealth", impl_->separate_contacts);
     return impl_->writers.at(pair_key(mapping.family, mapping.qos_profile))->writer;
 }
 
 Reader WanAdapterFactory::status_reader() const {
-    const auto& mapping = wan_mapping("RouterHealth");
+    const auto mapping = wan_transport_mapping("RouterHealth", impl_->separate_contacts);
     return impl_->receivers.at(pair_key(mapping.family, mapping.qos_profile))->reader;
 }
 
@@ -764,13 +892,13 @@ void WanAdapterFactory::update_source_metadata(std::vector<WanSourceMetadataUpda
 }
 
 WanReceiveFilter WanAdapterFactory::receive_filter(const std::string& topic_name) const {
-    const auto& mapping = wan_mapping(topic_name);
+    const auto mapping = wan_transport_mapping(topic_name, impl_->separate_contacts);
     return impl_->receivers.at(pair_key(mapping.family, mapping.qos_profile))->filter;
 }
 
 void WanAdapterFactory::update_receive_filter(const std::string& topic_name,
                                             const WanReceiveFilter& filter) {
-    const auto& mapping = wan_mapping(topic_name);
+    const auto mapping = wan_transport_mapping(topic_name, impl_->separate_contacts);
     auto receiver = impl_->receivers.at(pair_key(mapping.family, mapping.qos_profile));
     auto next = filter;
     const auto selected = impl_->effective_filter(next, receiver->family);
@@ -879,7 +1007,7 @@ void WanAdapterFactory::bind_source(const std::string& route, const std::string&
     const auto id = pair_key(route, topic_name);
     require(generation && !route.empty(), "binding requires route and nonzero generation");
     require(!impl_->bindings.count(id), "binding already exists");
-    const auto& mapping = wan_mapping(topic_name);
+    const auto mapping = wan_transport_mapping(topic_name, impl_->separate_contacts);
     Binding binding{generation, true, pair_key(lan, topic_name), {},
                     pair_key(mapping.family, mapping.qos_profile), topic_name, route,
                     std::make_shared<std::atomic<uint64_t>>(0)};
@@ -898,14 +1026,15 @@ void WanAdapterFactory::bind_destination(const std::string& route, const std::st
     const auto id = pair_key(route, topic_name);
     require(generation && !route.empty(), "binding requires route and nonzero generation");
     require(!impl_->bindings.count(id), "binding already exists");
-    const auto& mapping = wan_mapping(topic_name);
+    const auto mapping = wan_transport_mapping(topic_name, impl_->separate_contacts);
     Binding binding{generation, false, {}, pair_key(lan, topic_name),
                     pair_key(mapping.family, mapping.qos_profile), topic_name, route,
                     std::make_shared<std::atomic<uint64_t>>(0)};
+    impl_->bindings.emplace(id, binding);
     try {
         impl_->bind_destination(binding, lan, alias, filter);
-        impl_->bindings.emplace(id, binding);
     } catch (const std::exception& e) {
+        impl_->bindings.erase(id);
         impl_->error(route, topic_name, generation, e.what());
         throw;
     }
@@ -940,6 +1069,7 @@ void WanAdapterFactory::shutdown() {
     impl_->writers.clear();
     impl_->local_outputs.clear();
     impl_->status_observer.reset();
+    impl_->config_observer.reset();
 }
 
 uint64_t WanAdapterFactory::forwarded(const std::string& route, const std::string& topic_name) const {

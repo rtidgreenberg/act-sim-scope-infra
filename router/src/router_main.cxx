@@ -38,6 +38,7 @@
 #include "core/RouterController.hpp"
 #include "core/TypeResolver.hpp"
 #include "core/WanControllerFactory.hpp"
+#include "core/WanPolicy.hpp"
 
 #include "ActTypes.hpp"
 
@@ -46,6 +47,7 @@
 #include <rti/core/QosProviderParams.hpp>
 #include <dds/core/QosProvider.hpp>
 #include <dds/dds.hpp>
+#include <dds/sub/discovery.hpp>
 
 #include <csignal>
 #include <chrono>
@@ -134,6 +136,12 @@ int main(int argc, char **argv) {
     }
 
     try {
+        const auto wan_policy = WanPolicy::from_environment();
+        wan_policy.export_environment();
+        Log::info("router.config.wan_policy",
+                  {{"timeout_seconds", std::to_string(wan_policy.timeout_seconds)},
+                   {"heartbeat_seconds", std::to_string(wan_policy.heartbeat_seconds)},
+                   {"heartbeat_retries", std::to_string(wan_policy.heartbeat_retries)}});
         RouteConfig cfg;
         std::string error;
         if (!parse_route_config(config_path, cfg, error, role_override, node_name_override)) {
@@ -414,7 +422,7 @@ int main(int argc, char **argv) {
             command_reader_qos = qos_provider->datareader_qos(kAdminCommandProfile);
             journal_writer_qos = qos_provider->datawriter_qos(kControllerJournalProfile);
             health_reader_qos = qos_provider->datareader_qos(
-                    cfg.wan_contract == "two_topic_union"
+                    cfg.wan_contract != "legacy"
                         ? "ACT_QOS_LIB::wan_union_status" : kRouterHealthProfile);
             health_writer_qos = qos_provider->datawriter_qos(kRouterHealthProfile);
             mesh_writer_qos = qos_provider->datawriter_qos(kRouterMeshStatusProfile);
@@ -442,7 +450,7 @@ int main(int argc, char **argv) {
         identity.node_role = cfg.node_role;
         std::unique_ptr<WanControllerFactory> two_topic_factory;
         IEntityFactory* active_factory = &factory;
-        if (cfg.wan_contract == "two_topic_union") {
+        if (cfg.wan_contract != "legacy") {
             std::string wan;
             for (const auto& participant : filtered_participants) {
                 if (participant.on_wan) {
@@ -450,7 +458,8 @@ int main(int argc, char **argv) {
                 }
             }
             two_topic_factory.reset(new WanControllerFactory(
-                registry, types, qos, route_disp, types.model_provider(), wan, identity));
+                registry, types, qos, route_disp, types.model_provider(), wan, identity,
+                cfg.wan_contract == "three_topic_union"));
             active_factory = two_topic_factory.get();
         }
 
@@ -494,7 +503,7 @@ int main(int argc, char **argv) {
                     cfg.node_name, cfg.router_name, health_reader_qos, health_writer_qos,
                     mesh_writer_qos, status_writer_qos, team_scoped_participant,
                     "RouterHealth", "ActRouterMeshStatus",
-                    cfg.wan_contract == "two_topic_union"
+                    cfg.wan_contract != "legacy"
                         ? types.model_provider() : dds::core::QosProvider(dds::core::null),
                     two_topic_factory ? &two_topic_factory->adapters() : nullptr));
             link_stats->register_source(presence.get());
@@ -531,10 +540,8 @@ int main(int argc, char **argv) {
         // AsyncWaitSet dispatching, enable the participants. Discovery samples from here
         // on arrive as genuine post-start condition transitions and are never stranded.
         registry.enable_all();
-        if (presence && two_topic_factory) {
-            auto wan = registry.get(cfg.presence_participant);
-            dds::pub::ignore(wan,
-                            two_topic_factory->adapters().status_writer().instance_handle());
+        if (two_topic_factory) {
+            two_topic_factory->adapters().ignore_local_endpoints();
         }
 
         // The controller's constructor-time startup snapshot was written while the admin

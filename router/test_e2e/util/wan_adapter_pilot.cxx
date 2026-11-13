@@ -52,16 +52,19 @@ static void print_factory(const Factory& factory) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 6) {
-        std::cerr << "Usage: wan_adapter_pilot types.xml qos.xml control_domain wan_domain platform_domain\n";
+    if (argc != 6 && (argc != 7 || std::string(argv[6]) != "--three-topic")) {
+        std::cerr << "Usage: wan_adapter_pilot types.xml qos.xml control_domain wan_domain platform_domain [--three-topic]\n";
         return 2;
     }
     try {
+        const bool separate_contacts = argc == 7;
         rti::config::Logger::instance().output_file(stderr);
         auto qos_provider = std::make_shared<dds::core::QosProvider>(argv[2]);
         dds::core::QosProvider types(argv[1]);
         router::QosResolver qos(qos_provider, {
-            {"wan_event", "ACT_QOS_LIB::wan_event"},
+            {"wan_event", separate_contacts ? "ACT_QOS_LIB::wan_three_topic_event"
+                                           : "ACT_QOS_LIB::wan_event"},
+            {"wan_contacts", "ACT_QOS_LIB::wan_union_contacts"},
             {"wan_status", "ACT_QOS_LIB::wan_union_status"},
             {"router_health", "ACT_QOS_LIB::router_health"},
             {"lan_event", "ACT_QOS_LIB::lan_event"},
@@ -86,7 +89,9 @@ int main(int argc, char** argv) {
         control_wan.name = "control_wan";
         control_wan.domain = wan_domain;
         control_wan.on_wan = true;
-        control_wan.qos_provider_profile = "ACT_QOS_LIB::wan_two_topic_participant";
+        control_wan.qos_provider_profile = separate_contacts
+                ? "ACT_QOS_LIB::wan_three_topic_participant"
+                : "ACT_QOS_LIB::wan_two_topic_participant";
         platform_lan = control_lan;
         platform_lan.name = "platform_lan";
         platform_lan.domain = platform_domain;
@@ -112,9 +117,11 @@ int main(int argc, char** argv) {
             warnings.fetch_add(1);
         };
         Factory control(participants, qos, control_dispatcher, types,
-                        "control_wan", "Control20", "pilot", callbacks);
+                        "control_wan", "Control20", "pilot", callbacks, separate_contacts);
         Factory platform(participants, qos, platform_dispatcher, types,
-                         "platform_wan", "Boat30", "pilot", callbacks);
+                         "platform_wan", "Boat30", "pilot", callbacks, separate_contacts);
+        const auto initial_contact_filter = separate_contacts
+                ? control.receive_filter("ContactReport") : router::WanReceiveFilter{};
         std::map<std::string, Binding> bindings;
         const router::WanReceiveFilter nav_filter{"original_topic <> 'RouterHealth'", {}};
         const router::WanReceiveFilter command_filter{
@@ -149,6 +156,16 @@ int main(int argc, char** argv) {
                 platform.bind_destination(name, "PlatformInitStatus", generation, "platform_lan",
                                           "lan_status", nav_filter);
                 bindings.emplace(name, Binding{&platform, "PlatformInitStatus", generation});
+            } else if (name == "contact_source") {
+                platform.bind_source(name, "ContactReport", generation, "platform_lan",
+                                     "lan_event", metadata("Boat30", true, false));
+                bindings.emplace(name, Binding{&platform, "ContactReport", generation});
+            } else if (name == "contact_destination") {
+                control.bind_destination(name, "ContactReport", generation, "control_lan",
+                                         "lan_event",
+                                         {"source_id <> %0 AND original_topic = 'ContactReport'",
+                                          {"'Control20'"}});
+                bindings.emplace(name, Binding{&control, "ContactReport", generation});
             } else {
                 throw std::runtime_error("unknown pilot binding");
             }
@@ -206,6 +223,19 @@ int main(int argc, char** argv) {
                     control.bind_destination("bad_filter", "ControlCommand", 100,
                                              "control_lan", "lan_event",
                                              {"INVALID_FIELD = 1", {}});
+                } else if (operation == "bad_contact_destination") {
+                    control.bind_destination("failed_contact", "ContactReport", 100,
+                                             "control_lan", "missing_alias",
+                                             {"original_topic = 'ContactReport'", {}});
+                } else if (operation == "bad_contact_filter") {
+                    control.bind_destination("failed_contact", "ContactReport", 100,
+                                             "control_lan", "lan_event", {"INVALID_FIELD = 1", {}});
+                } else if (operation == "check_contact_filter") {
+                    const auto current = control.receive_filter("ContactReport");
+                    if (current.expression != initial_contact_filter.expression
+                        || current.parameters != initial_contact_filter.parameters) {
+                        throw std::runtime_error("failed bind changed the retained State filter");
+                    }
                 } else if (operation == "filter_command") {
                     if (!(input >> name) || (name != "Boat30" && name != "OtherBoat")) {
                         throw std::runtime_error("filter_command needs Boat30 or OtherBoat");

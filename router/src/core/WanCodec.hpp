@@ -20,6 +20,9 @@ struct WanMapping {
 
 const std::vector<WanMapping>& wan_mappings();
 const WanMapping& wan_mapping(const std::string& topic);
+// Physical transport selection does not change the codec's union catalog.
+WanMapping wan_transport_mapping(const std::string& topic, bool separate_contacts);
+std::string wan_transport_type(const std::string& family);
 
 struct WanMetadata {
     std::string source_id;

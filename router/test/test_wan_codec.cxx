@@ -91,8 +91,23 @@ int main(int argc, char** argv) {
     for (uint32_t index = 0; index < 16; ++index) {
         metadata.destination_ids.push_back(index == 0 ? "Boat31" : "TEAM_" + std::to_string(index));
     }
-    CHECK(router::wan_mappings().size() == 15);
+    CHECK(router::wan_mappings().size() == 16);
+    CHECK(std::string(router::wan_transport_mapping("ContactReport", false).family) == "Event");
+    CHECK(std::string(router::wan_transport_mapping("ContactReport", true).family) == "State");
+    CHECK(std::string(router::wan_transport_mapping("ContactReport", true).qos_profile) == "wan_contacts");
+    CHECK(std::string(router::wan_mapping("ContactReport").family) == "Event");
+    for (const auto& topic : {"ControlCommand", "PlatformCommandAck", "RouterConfig"}) {
+        CHECK(std::string(router::wan_transport_mapping(topic, true).family)
+              == router::wan_mapping(topic).family);
+    }
     for (const auto& mapping : router::wan_mappings()) {
+        for (const bool three : {false, true}) {
+            const auto transport = router::wan_transport_mapping(mapping.topic, three);
+            CHECK(router::wan_transport_type(transport.family) == std::string("Wan") + mapping.family);
+            if (std::string(mapping.family) == "Status") {
+                CHECK(std::string(transport.family) == (three ? "Telemetry" : "Status"));
+            }
+        }
         auto sample_metadata = metadata;
         const bool contact_report = std::string(mapping.topic) == "ContactReport";
         if (contact_report) {

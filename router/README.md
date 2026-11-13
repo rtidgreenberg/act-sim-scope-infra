@@ -51,7 +51,37 @@ The default remains `router.wan_contract: legacy`. The experimental
 WAN topics with whole-structure adapters; application LAN topics/types remain
 unchanged. See the [migration checkpoint](../docs/two-topic-wan-migration-plan.md#38-controller-and-interest-checkpoint-2026-11-09).
 
-Starting from the production configuration, the isolated controller tests:
+Both shared WAN contracts are opt-in:
+
+The additional opt-in `router.wan_contract: three_topic_union` selects
+**Event, State and Telemetry**. It uses the same schema-3 envelopes: State
+transports the existing ContactReport branch of WanEvent, not a new LAN type.
+Use `ACT_QOS_LIB::wan_three_topic_participant` (or `_emane`), map `wan_event`
+to `ACT_QOS_LIB::wan_three_topic_event`, `wan_contacts` to
+`ACT_QOS_LIB::wan_union_contacts`, and keep the shared `wan_status` profile below
+for Telemetry. These internal QoS aliases and `WanEvent`/`WanStatus` type names
+are retained for compatibility; they do not determine the physical topic names.
+The canonical EMANE launcher accepts `--wan-contract three_topic_union`.
+
+Event retains KEEP_ALL; State uses writer KEEP_LAST(1), reader KEEP_ALL,
+and default 62.5 ms reader heartbeat suppression. The two reliable writers
+share an XML highest-priority-first controller with a nominal 250,000 B/s
+budget and priority-band MultiChannel. Required Events, including RouterConfig,
+carry priority 100; contact writes and lifecycle notifications carry 10.
+Telemetry remains outside that controller; health-priority tuning is not included.
+State has a retained physical pair, including when a node has no contact
+receive interest. Filters and endpoint statistics remain physical-topic-specific.
+Mixed legacy Event routes may keep their `wan_event` hint: the validated
+catalog selects State independently, without splitting logical routes.
+This is a wire-topic rename from the earlier Event/Contacts/Status baseline,
+requiring coordinated restart of all three-topic participants. It does not
+change retention, durability, payload branches, keys or application LAN topics.
+
+The [measured tradeoffs](../docs/wan-topic-tradeoffs-2026-11-12.md) selected this
+baseline for correctness and its tighter observed recovery range, not because
+it meets the still-open ten-second recovery target.
+
+For the two-topic option:
 
 - Add `wan_contract: two_topic_union` under `router`.
 - Point the WAN participant QoS alias at
@@ -69,7 +99,8 @@ combined with the existing control/global/destination/team audiences and source
 suppression. The codec keeps original topic and union discriminator consistent
 and rejects mismatched received frames. Identical topic sets share an OR of
 audience selectors to avoid repeating long topic names within the filter budget.
-Health is selected by `original_topic = 'RouterHealth'` on the shared Status reader.
+Health is selected by `original_topic = 'RouterHealth'` on the shared Status
+reader in two-topic mode, or Telemetry reader in three-topic mode.
 The fixed `SHARED` participant partition remains; legacy partition-named route
 fields become audience selectors in two-topic mode, and team changes update CFTs
 and source metadata rather than DDS participant/endpoint partition QoS.
@@ -86,7 +117,7 @@ per-platform validation and ACK tracking. This does not redesign command octets.
 Version 2 and 3 require a coordinated rebuild/restart, not a rolling mixed-schema
 deployment; the codec explicitly rejects version 2 data frames.
 
-`RouterHealth.wan_writer_filters` reports each shared WAN writer's observed
+`RouterConfig.wan_writer_filters` reports each shared WAN writer's observed
 content-filter expression and parameters per matched reader, identified by its
 `<node>/<router>` participant name. It is sampled on the controller strand before
 each health heartbeat; team changes therefore become visible from the remote
@@ -95,12 +126,36 @@ behavior. These are discovery observations, not an acknowledgment that writer-si
 evaluation is active. Poll errors and capacity truncation are explicit; departed
 readers disappear from the next successful snapshot.
 
-The same health branch carries these observations over Status, with no third WAN
-topic. Full expressions/parameters repeat each heartbeat, increasing WAN traffic.
+These observations use the `router_config` union branch (6) of Event and its
+existing RELIABLE/KEEP_ALL writer/reader. Health stays on Status and never carries
+the details. Config snapshots include router/config identity, health session,
+independent snapshot sequence, timestamp and state revision. Full snapshots are
+sent on first publication, content changes (excluding poll timestamps), and every
+30 seconds for late readers/rejoin recovery under the existing VOLATILE durability.
+There is no extra WAN topic or endpoint. Failed writes are logged and do not
+advance the baseline. Receivers cache early configs until matching-session health,
+reject old/duplicate sequences, and treat an empty list as an authoritative clear.
+A new health session cannot inherit old details. Normal DDS reliability repairs
+loss for matched active readers; it does not guarantee persistence, historical
+replay, operator acceptance or delivery after the existing inactivity limits.
 Rebuild/redeploy all affected type consumers after regenerating the IDL/XML.
+The retained seven-node mesh received the coordinated rebuild/restart on
+2026-11-12; see the [deployment checkpoint](../docs/two-topic-wan-migration-plan.md#338-reliable-routerconfig-deployment-2026-11-12).
 The LAN mesh aggregate also includes the observer's own last published health and
-local-monotonic health ages so a dashboard can inspect its own WAN writers and
-does not mistake unrelated Status traffic for fresh filter observations.
+local-monotonic health ages so a dashboard can inspect its own WAN writers.
+Its optional `RouterHealth.wan_writer_filters` contains the last cached reliable
+config, preserving the dashboard's LAN shape without repeating it over WAN.
+Separate `wan_writer_filters_age_ms` (peer) and
+`observer_wan_writer_filters_age_ms` (observer) measure snapshot age; `-1` means
+no snapshot. Compact heartbeats and unrelated Status traffic do not refresh it.
+
+The [cache review fixes](../docs/two-topic-wan-migration-plan.md#339-routerconfig-cache-review-corrections-2026-11-12)
+protect the current health session's replay watermark during session eviction.
+At the unchanged 256-identity limit, the oldest config-only identity absent from
+the roster is evicted, with a warning, rather than permanently blocking new peers.
+Roster entries remain protected, and each identity still holds at most two sessions.
+These corrections were included in the later coordinated three-topic deployments;
+see the [current deployment checkpoint](../docs/two-topic-wan-migration-plan.md#342-review-fixes-failed-binds-and-timeout-summary-2026-11-13).
 
 Schema version 2 envelope keys are `source_id + original_topic + instance_id`.
 The router stamps `source_id` from the configured system/node name, not the
@@ -115,6 +170,41 @@ bytes; longer WAN origins are explicitly rejected for ContactReport. All other
 contact fields are preserved. Other payload key annotations
 and all payload fields are unchanged. This replaces schema version 1 and
 requires a coordinated participant rebuild/restart, not a mixed-version mesh.
+
+### System timeout and static WAN QoS
+
+Set these policy inputs before launching the mesh or `router_main`:
+
+| Environment variable | Default | Meaning |
+|---|---:|---|
+| `WAN_TIMEOUT_SEC` | 300 | Final two-topic presence timeout since the last received Status; also the WAN participant discovery lease |
+| `WAN_HB_PERIOD_SEC` | 3 | Reliable DDS heartbeat period, not the RouterHealth publication period |
+| `WAN_HB_RETRIES` | 100, derived | `ceil(WAN_TIMEOUT_SEC / WAN_HB_PERIOD_SEC)`; not an independent policy input |
+
+For example, `WAN_TIMEOUT_SEC=600 WAN_HB_PERIOD_SEC=3` derives 200 retries.
+The canonical Compose launcher carries the two inputs to every node; the node
+entrypoint, host launcher, Python configuration reader, and direct C++ router
+startup resolve the same policy before loading QoS. Inputs must be positive
+32-bit integers. A conflicting explicitly supplied retry count fails startup
+rather than silently creating a shorter repair window.
+
+The XML remains a static template. Its configuration variables feed the actual
+DDS profiles, including `act.presence.dead_timeout_sec` on the shared Status
+reader. The two-topic health deadline remains 2 seconds and data-writer
+liveliness remains infinite. STALE is an early warning; DEAD is measured from
+the last Status, not from the warning. Any valid received Status restores ALIVE.
+DEAD peers remain visible for another 60 seconds before roster removal.
+Legacy RouterHealth retains its existing finite-liveliness presence behavior.
+
+Retry count times heartbeat period is a nominal inactivity budget, not an exact
+DDS wall-clock timer or an unlimited delivery guarantee. Queue limits, retained
+history, disconnection/restart behavior, and congestion still require qualification.
+Event remains reliable/volatile; this change does not enable transient-local
+durability or alter resource budgets.
+
+Changes apply at process startup. Use a coordinated owned-lifecycle restart;
+the read-only Config tab neither edits nor applies settings. Its timeout and
+retry rows describe configured values, not live verification of every node.
 Shared Status uses XML-authored best-effort, volatile, KEEP_LAST(1), a 2-second
 deadline and infinite liveliness. The direct deadline listener checks only the
 reported instance: a RouterHealth miss queues STALE for the next mesh tick

@@ -8,6 +8,7 @@ from contextlib import ExitStack
 
 import pytest
 import rti.connextdds as dds
+import yaml
 
 from conftest import render_config, set_wan_qos_env, start_router, wait_for_mutual_discovery
 from util.dds_probe import (
@@ -33,7 +34,16 @@ CASES = [
 
 
 @pytest.fixture
-def mesh(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains, extra_domains, monkeypatch):
+def wan_contract(request):
+    return getattr(request.module, "WAN_CONTRACT", "two_topic_union")
+
+
+@pytest.fixture
+def mesh(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains, extra_domains, monkeypatch, request):
+    wan_contract = getattr(request.module, "WAN_CONTRACT", "two_topic_union")
+    if hasattr(request, "param"):
+        monkeypatch.setenv("WAN_TIMEOUT_SEC", str(request.param))
+        monkeypatch.delenv("WAN_HB_RETRIES", raising=False)
     set_wan_qos_env()
     for index in range(1, 12):
         monkeypatch.setenv("WAN_PEER" + (str(index) if index > 1 else ""),
@@ -43,7 +53,8 @@ def mesh(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains, extra_doma
     provider = dds.QosProvider(str(admin_types_xml))
     nodes = {}
     try:
-        wan = Probe(unique_domains["wan"], participant_profile="wan_two_topic_participant",
+        wan = Probe(unique_domains["wan"], participant_profile="wan_three_topic_participant"
+                    if wan_contract == "three_topic_union" else "wan_two_topic_participant",
                     participant_partition=["SHARED"])
         cleanup.callback(wan.close)
         publication_reader = wan.participant.publication_reader
@@ -62,6 +73,15 @@ def mesh(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains, extra_doma
                                 "ACT_QOS_LIB::wan_two_topic_participant\n")
             text = text.replace("ACT_QOS_LIB::wan_status\n",
                                 "ACT_QOS_LIB::wan_union_status\n")
+            if wan_contract == "three_topic_union":
+                config = yaml.safe_load(text)
+                config["router"]["wan_contract"] = wan_contract
+                for alias, profile in config["qos_profiles"].items():
+                    config["qos_profiles"][alias] = profile.replace(
+                        "wan_two_topic_participant", "wan_three_topic_participant")
+                config["qos_profiles"]["wan_event"] = "ACT_QOS_LIB::wan_three_topic_event"
+                config["qos_profiles"]["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts"
+                text = yaml.safe_dump(config, sort_keys=False)
             path.write_text(text)
             process = start_router(router_binary, path, role, work, node_name=node, name="phase4",
                                    admin_participant=admin_participant)
@@ -139,7 +159,7 @@ def absent(nodes, writer, reader, sample, window=2.0):
         time.sleep(0.1)
 
 
-def test_all_application_cases_and_only_two_wan_topic_names(mesh):
+def test_all_application_cases_and_only_two_wan_topic_names(mesh, wan_contract):
     nodes, wan, provider = mesh
     control = nodes["Control_20"][1]
     boat = nodes["Boat30"][1]
@@ -173,18 +193,28 @@ def test_all_application_cases_and_only_two_wan_topic_names(mesh):
     publications = []
     while time.monotonic() < deadline:
         publications = wan.discovered_publications()
-        if {item["topic"] for item in publications} == {"Event", "Status"}:
+        if {item["topic"] for item in publications} == (
+                {"Event", "State", "Telemetry"} if wan_contract == "three_topic_union" else {"Event", "Status"}):
             break
         time.sleep(0.1)
-    assert {item["topic"] for item in publications} == {"Event", "Status"}, publications
+    assert {item["topic"] for item in publications} == (
+        {"Event", "State", "Telemetry"} if wan_contract == "three_topic_union" else {"Event", "Status"}), publications
+    for family in ("Event", "State", "Telemetry") if wan_contract == "three_topic_union" else ("Event", "Status"):
+        counts = Counter(item["participant_key"] for item in publications if item["topic"] == family)
+        assert len(counts) == 3 and set(counts.values()) == {1}, (family, counts)
+        subscriptions = Counter(
+            str(data.participant_key.value) for data, info in wan.participant.subscription_reader.read()
+            if info.valid and data.topic_name == family and str(data.participant_key.value) in counts)
+        assert subscriptions == counts, (family, subscriptions, counts)
     for node in nodes:
         assert "wan_route_error" not in nodes[node][0].log_path.read_text()
 
 
-def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
+def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh, wan_contract):
     nodes, wan, provider = mesh
     contacts = nodes["Control_20"][1].reader("ContactReport", "contact_report")
-    events = wan.reader("Event", "WanEvent", qos=reader_qos("wan_event"))
+    events = wan.reader("State" if wan_contract == "three_topic_union" else "Event",
+                        "WanEvent", qos=reader_qos("wan_event"))
     expected = {}
     handles = []
     endpoints = []
@@ -249,11 +279,17 @@ def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh):
 ])
 @pytest.mark.parametrize("input_leg", ["lan", "wan"])
 def test_application_instance_lifecycle_through_route(
-        mesh, e2e_tmp_dir, topic, type_name, instance_field, family, input_leg):
+        mesh, e2e_tmp_dir, topic, type_name, instance_field, family, input_leg, wan_contract):
     nodes, wan, _ = mesh
     source = nodes["Boat30"][1]
     control = nodes["Control_20"][1]
     qos_profile = "wan_event" if family == "Event" else "wan_union_status"
+    frame_type = "Wan" + family
+    if family == "Status" and wan_contract == "three_topic_union":
+        family = "Telemetry"
+    if topic == "ContactReport" and wan_contract == "three_topic_union":
+        family = "State"
+        qos_profile = "wan_union_contacts"
     instance_id = "lifecycle-contact" if topic == "ContactReport" else "Boat30"
     sample = source.sample(type_name, **{
         instance_field: instance_id, "audit_sequence": 100, "run_id": "instance-lifecycle",
@@ -262,7 +298,7 @@ def test_application_instance_lifecycle_through_route(
         sample["source"] = ""
     lan_writer = source.writer(topic, type_name)
     lan_observer = source.reader(topic, type_name)
-    wan_observer = wan.reader(family, "Wan" + family, qos=reader_qos(qos_profile))
+    wan_observer = wan.reader(family, frame_type, qos=reader_qos(qos_profile))
     destination = control.reader(topic, type_name)
 
     routed_frame = None
@@ -290,7 +326,7 @@ def test_application_instance_lifecycle_through_route(
             instance_id = origin
             outgoing["instance_id"] = instance_id
             outgoing["payload.navigation.source"] = origin
-        writer = wan.writer(family, "Wan" + family, qos=writer_qos(qos_profile))
+        writer = wan.writer(family, frame_type, qos=writer_qos(qos_profile))
     assert not writer.qos.writer_data_lifecycle.autodispose_unregistered_instances
 
     observers = {"wan": wan_observer, "destination_lan": destination}
@@ -331,7 +367,7 @@ def test_application_instance_lifecycle_through_route(
     def wait_valid(stage, sequence):
         outgoing["audit_sequence"] = sequence
         if input_leg == "wan":
-            branch = "contact_report" if family == "Event" else "navigation"
+            branch = "contact_report" if topic == "ContactReport" else "navigation"
             outgoing[f"payload.{branch}.audit_sequence"] = sequence
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -570,7 +606,8 @@ def test_wire_readiness_and_wrong_original_type_are_explicit(mesh):
                                              audit_sequence=99))
 
 
-def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
+@pytest.mark.parametrize("mesh", [32], indirect=True)
+def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary, wan_contract):
     from test_presence_roster import mesh_reader, wait_mesh, ALIVE, STALE, DEAD
     from test_link_stats import link_stats_reader
     from util.dds_probe import writer_qos
@@ -579,7 +616,8 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
     control = nodes["Control_20"][1]
     mesh_view = mesh_reader(control, provider)
     stats_view = link_stats_reader(control, provider)
-    health_view = wan.reader("Status", "WanStatus", qos=reader_qos("wan_union_status"))
+    health_family = "Telemetry" if wan_contract == "three_topic_union" else "Status"
+    health_view = wan.reader(health_family, "WanStatus", qos=reader_qos("wan_union_status"))
     identities = {node + "/phase4" for node in nodes}
 
     def wait_health(predicate, timeout=20):
@@ -614,14 +652,15 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
         peers.get(node + "/phase4", {}).get("presence") == ALIVE
         for node in ("Boat30", "Boat31")), 20, alive=lambda: alive(nodes))
     assert all(peers[node + "/phase4"]["presence"] == ALIVE for node in ("Boat30", "Boat31"))
-    publications = [p for p in wan.discovered_publications() if p["topic"] == "Status"]
-    counts = Counter(p["participant_key"] for p in publications)
-    assert len(counts) == 3 and set(counts.values()) == {1}, publications
-    subscriptions = Counter(
-        str(data.participant_key.value) for data, info in wan.participant.subscription_reader.read()
-        if info.valid and data.topic_name == "Status"
-        and str(data.participant_key.value) in counts)
-    assert subscriptions == counts, (subscriptions, counts)
+    for family in ("Event", "State", "Telemetry") if wan_contract == "three_topic_union" else ("Event", "Status"):
+        publications = [p for p in wan.discovered_publications() if p["topic"] == family]
+        counts = Counter(p["participant_key"] for p in publications)
+        assert len(counts) == 3 and set(counts.values()) == {1}, publications
+        subscriptions = Counter(
+            str(data.participant_key.value) for data, info in wan.participant.subscription_reader.read()
+            if info.valid and data.topic_name == family
+            and str(data.participant_key.value) in counts)
+        assert subscriptions == counts, (subscriptions, counts)
 
     measured, received, pushed = set(), set(), set()
     expected = {"Boat30/phase4", "Boat31/phase4"}
@@ -641,7 +680,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
         time.sleep(0.1)
     assert measured == received == pushed == expected, (measured, received, pushed)
 
-    probe_writer = wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_status"))
+    probe_writer = wan.writer(health_family, "WanStatus", qos=writer_qos("wan_union_status"))
     navigation_reader = control.reader("PlatformInitStatus", "platform_init_status")
     navigation_discovery = control.writer("PlatformInitStatus", "platform_init_status")
     ready(nodes, "Control_20", "platform_init_status")
@@ -740,7 +779,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
                       8, alive=lambda: alive(nodes))
     assert peers["ProbeNode/phase4"]["presence"] == STALE
     stale_at = time.monotonic()
-    # Repeated deadline callbacks must not restart the 30-second countdown.
+    # This fixture uses a 32-second final timeout, about 30 seconds after STALE.
     time.sleep(27)
     peers = wait_mesh(mesh_view, lambda p: p.get("ProbeNode/phase4", {}).get("presence") == STALE,
                       1, alive=lambda: alive(nodes))
@@ -788,7 +827,8 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary):
         frames = wait_health(lambda f: "Boat31/phase4" in f
                              and f["Boat31/phase4"]["session_id"] != old_session)
         assert frames["Boat31/phase4"]["session_id"] != old_session
-        # With no active application sources, health alone creates only Status.
-        assert {item["topic"] for item in wan.discovered_publications()} == {"Status"}
+        # Presence owns compact Status health and reliable Event configuration.
+        assert {item["topic"] for item in wan.discovered_publications()} == (
+            {"Event", "State", "Telemetry"} if wan_contract == "three_topic_union" else {"Event", "Status"})
     finally:
         restarted.stop()

@@ -1,6 +1,7 @@
 """Configured WAN QoS for display only, independent of wire-flow classification."""
 
 import time
+import sys
 from pathlib import Path
 
 import yaml
@@ -8,6 +9,10 @@ import yaml
 
 INTERNAL_WAN_PROFILES = {
     "RouterHealth": "ACT_QOS_LIB::router_health",
+}
+WAN_EVENT_TOPICS = {
+    "ControlCommand", "ActTeamAssignment", "ActPlatformStatusMode",
+    "PlatformCommandAck", "ContactReport", "RouterConfig",
 }
 
 
@@ -37,6 +42,11 @@ def load_router_config(path, provider_factory):
     if not isinstance(config, dict):
         raise ValueError(f"{path}: router configuration must be a mapping")
     root = Path(__file__).resolve().parents[3]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from harness_v2.qos.wan_policy import configure_wan_policy
+
+    configure_wan_policy()
     libraries = [(root / library).resolve(strict=True) for library in config["qos_libraries"]]
     if not libraries:
         raise ValueError(f"{path}: no QoS libraries configured")
@@ -52,11 +62,18 @@ def load_delivery_config(path, provider_factory, infinite_duration):
     aliases = config.get("qos_profiles", {})
     participants = config["participants"]
     topics = {}
+    contract = config["router"].get("wan_contract", "legacy")
+    if contract not in ("legacy", "two_topic_union", "three_topic_union"):
+        raise ValueError(f"Unknown WAN contract: {contract}")
 
     def add(topic, route, participant, endpoint, profile, enabled=True):
         participant_config = participants[participant]
         if not participant_config.get("on_wan", False):
             return
+        if contract != "legacy":
+            alias = "wan_contacts" if contract == "three_topic_union" and topic == "ContactReport" else (
+                "wan_event" if topic in WAN_EVENT_TOPICS else "wan_status")
+            profile = aliases[alias]
         settings = None
         if profile is not None:
             qos = (provider.datawriter_qos_from_profile(profile) if endpoint == "writer"

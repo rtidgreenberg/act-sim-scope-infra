@@ -41,6 +41,7 @@ const std::vector<WanMapping>& wan_mappings() {
         {"PlatformCommandAck", "control_command_ack", "Event", "command_ack", 4,
          "source", "wan_event"},
         {"ContactReport", "contact_report", "Event", "contact_report", 5, "contact_id", "wan_event"},
+        {"RouterConfig", "RouterConfig", "Event", "router_config", 6, "router", "wan_event"},
         {"PlatformInitStatus", "platform_init_status", "Status", "navigation", 1,
          "source", "wan_status"},
         {"PlatformData", "platform_data", "Status", "data", 2, "source", "wan_status"},
@@ -61,6 +62,23 @@ const std::vector<WanMapping>& wan_mappings() {
         {"RouterHealth", "RouterHealth", "Status", "health", 10, "router", "wan_status"}
     };
     return mappings;
+}
+
+WanMapping wan_transport_mapping(const std::string& topic, bool separate_contacts) {
+    auto mapping = wan_mapping(topic);
+    if (separate_contacts && topic == "ContactReport") {
+        mapping.family = "State";
+        mapping.qos_profile = "wan_contacts";
+    } else if (separate_contacts && std::string(mapping.family) == "Status") {
+        mapping.family = "Telemetry";
+    }
+    return mapping;
+}
+
+std::string wan_transport_type(const std::string& family) {
+    if (family == "Event" || family == "State") return "WanEvent";
+    if (family == "Status" || family == "Telemetry") return "WanStatus";
+    throw std::runtime_error("WAN codec: unknown transport family " + family);
 }
 
 const WanMapping& wan_mapping(const std::string& topic) {

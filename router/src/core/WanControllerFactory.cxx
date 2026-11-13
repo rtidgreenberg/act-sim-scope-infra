@@ -8,9 +8,10 @@ namespace router {
 WanControllerFactory::WanControllerFactory(ParticipantRegistry& registry, TypeResolver& types,
         QosResolver& qos, AsyncWaitSetDispatcher& dispatcher, dds::core::QosProvider model,
         const std::string& wan,
-        const RouterIdentityInfo& identity)
+        const RouterIdentityInfo& identity, bool separate_contacts)
     : registry_(registry), types_(types), qos_(qos), model_(model),
-      identity_(identity), wan_(wan), legacy_(registry, types, qos, dispatcher) {
+      identity_(identity), wan_(wan), separate_contacts_(separate_contacts),
+      legacy_(registry, types, qos, dispatcher) {
     WanAdapterCallbacks callbacks;
     callbacks.error = [this](const std::string& route, const std::string& topic,
                             uint64_t generation, const std::string& message) {
@@ -22,7 +23,8 @@ WanControllerFactory::WanControllerFactory(ParticipantRegistry& registry, TypeRe
     };
     callbacks.warning = [](const std::string&, const std::string&, uint64_t, const std::string&) {};
     adapters_.reset(new WanAdapterFactory(registry, qos, dispatcher, model, wan,
-                                          identity.node_name, identity.router_name, callbacks));
+                                          identity.node_name, identity.router_name, callbacks,
+                                          separate_contacts_));
 }
 
 void WanControllerFactory::set_controller(RouterController* controller) {
@@ -76,8 +78,14 @@ void WanControllerFactory::refresh_interests() {
     std::map<Key, WanInterest> selected;
     std::map<std::string, std::vector<WanInterest>> families;
     std::vector<WanInterest> sources;
+    if (separate_contacts_) {
+        families["State"];
+    }
     if (adapters_->status_bound()) {
-        families["Status"];
+        families[wan_transport_mapping("RouterHealth", separate_contacts_).family];
+    }
+    if (adapters_->config_bound()) {
+        families["Event"];
     }
     for (const auto& entry : live_) {
         const auto& route = controller_->state().routes.at(entry.first.first).desired;
@@ -86,14 +94,15 @@ void WanControllerFactory::refresh_interests() {
         if (entry.second.source) {
             sources.push_back(current);
         } else {
-            families[wan_mapping(entry.first.second).family].push_back(current);
+            families[wan_transport_mapping(entry.first.second, separate_contacts_).family].push_back(current);
         }
         validate_wan_source_interests(sources);
     }
     std::map<std::string, WanReceiveFilter> filters;
     for (const auto& family : families) {
         filters.emplace(family.first,
-                        wan_receive_filter(family.first, identity_.node_name, family.second));
+                        wan_receive_filter(family.first, identity_.node_name, family.second,
+                                           separate_contacts_));
     }
     std::vector<WanSourceMetadataUpdate> metadata;
     const auto revision = membership_revision_ + 1;
@@ -107,7 +116,10 @@ void WanControllerFactory::refresh_interests() {
     try {
         for (const auto& family : filters) {
             const auto& interests = families.at(family.first);
-            const std::string topic = interests.empty() ? "RouterHealth" : interests.front().topic;
+            const std::string topic = interests.empty()
+                    ? (family.first == "Event" ? "RouterConfig"
+                       : family.first == "State" ? "ContactReport" : "RouterHealth")
+                    : interests.front().topic;
             auto previous = adapters_->receive_filter(topic);
             if (previous.expression == family.second.expression &&
                 previous.parameters == family.second.parameters) {
@@ -167,7 +179,7 @@ void WanControllerFactory::create_topic_entities(const RouteView& view,
         if (live_.count(key)) {
             remove(key);
         }
-        const auto& mapping = wan_mapping(topic);
+        const auto mapping = wan_transport_mapping(topic, separate_contacts_);
         if (types_.topic_type(topic) != model_->type(mapping.type)) {
             throw std::runtime_error("wire-learned original type differs from the WAN catalog: " + topic);
         }
@@ -187,13 +199,14 @@ void WanControllerFactory::create_topic_entities(const RouteView& view,
             std::vector<WanInterest> interests{selected};
             bool existing = false;
             for (const auto& entry : live_) {
-                if (!entry.second.source && std::string(wan_mapping(entry.first.second).family) == mapping.family) {
+                if (!entry.second.source && std::string(wan_transport_mapping(
+                        entry.first.second, separate_contacts_).family) == mapping.family) {
                     existing = true;
                     interests.push_back(entry.second.interest);
                 }
             }
             const auto filter = existing ? adapters_->receive_filter(topic) :
-                wan_receive_filter(mapping.family, identity_.node_name, interests);
+                wan_receive_filter(mapping.family, identity_.node_name, interests, separate_contacts_);
             adapters_->bind_destination(key.first, topic, generation, view.spec.output.participant,
                                         view.spec.output.writer_qos, filter);
         }

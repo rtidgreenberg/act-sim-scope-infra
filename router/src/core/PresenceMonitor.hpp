@@ -3,6 +3,7 @@
 //
 // Publishes this router's compact RouterHealth heartbeat on the WAN participant
 // (legacy RouterHealth, or the shared Status class), subscribes to peers',
+// sends reliable RouterConfig snapshots on the shared Event pair in two-topic mode,
 // maintains the ALIVE/STALE/DEAD
 // roster, and republishes the aggregated connected-router list on the LAN participant as
 // ActRouterMeshStatus. Mesh publish happens twice over: unconditionally on every MeshTick
@@ -63,7 +64,7 @@
 // the roster is purely the presence authority.
 //
 // Shared Status: a direct health-instance deadline callback queues STALE on MeshTick;
-// 30s after STALE becomes DEAD. Any valid received Status resets ALIVE/countdown.
+// The configured timeout since last Status becomes DEAD. Any valid Status resets ALIVE.
 // Only the supplied deadline handle is inspected; no coalesced-instance sweep.
 // Health NO_WRITERS/dispose starts the same countdown without a finite liveliness lease.
 //
@@ -74,7 +75,7 @@
 //     ALIVE peer's health age against the deadline — coalesced misses (several peers
 //     silent in one dispatch window) all surface in the same pass.
 //   instance NOT_ALIVE_NO_WRITERS           -> DEAD  (liveliness lost / participant purge)
-//   DEAD for longer than kDeadPeerRetentionMs -> forgotten (erased from the roster;
+//   DEAD with no Status for kDeadPeerRetentionMs -> forgotten (legacy behavior;
 //     review 2026-08-11 H4 — before this, nothing ever removed a roster entry)
 // A real crash cascades STALE -> DEAD (the 8s deadline fires before the 12s liveliness
 // lease) — normal, not an anomaly (D75).
@@ -124,7 +125,9 @@ const int kHealthLivelinessLeaseMs = 12000; // 12x heartbeat period (AUTOMATIC)
 // D98: the LAN mesh-dashboard republish cadence — independent of the WAN heartbeat
 // numbers above (see MeshTick in RouterEvents.hpp / DrainThread.hpp).
 const int kMeshPublishPeriodMs = 500;
+const int kRouterConfigSnapshotPeriodMs = 30000;
 
+// Shared Status retains a peer this long after DEAD; legacy measures from last Status.
 // How long a DEAD peer is retained in the roster before it is forgotten entirely
 // (review 2026-08-11, H4). Before this, nothing ever erased a roster entry: a
 // decommissioned or renamed router stayed DEAD in every mesh sample and every
@@ -204,9 +207,20 @@ private:
         RouterPresenceState presence = RouterPresenceState::PRESENCE_ALIVE;
         std::chrono::steady_clock::time_point last_status_received;
         std::chrono::steady_clock::time_point last_health_received;
+        std::chrono::steady_clock::time_point last_filters_received;
         std::chrono::steady_clock::time_point stale_since;
+        std::chrono::steady_clock::time_point dead_since;
     };
 
+    struct ConfigEntry {
+        RouterConfig snapshot;
+        std::chrono::steady_clock::time_point received;
+    };
+
+    void publish_router_config(const RouterHealth& hb);
+    void on_router_config_data(const dds::core::xtypes::DynamicData& frame,
+                               const dds::sub::SampleInfo& info);
+    void apply_router_config_locked(PeerEntry& peer);
     void on_health_data();
     void on_health_samples(const dds::core::xtypes::DynamicData* frame,
                            const dds::sub::SampleInfo* info);
@@ -242,9 +256,10 @@ private:
     dds::domain::DomainParticipant team_scoped_participant_;
     WanAdapterFactory* shared_status_;
     std::shared_ptr<WanStatusCallbacks> status_callbacks_;
+    std::shared_ptr<WanConfigCallbacks> config_callbacks_;
     std::shared_ptr<StatusDeadlineQueue> status_deadlines_ =
             std::make_shared<StatusDeadlineQueue>(std::size_t{HeartbeatRtt::peer_cap});
-    std::chrono::milliseconds dead_after_stale_{0};
+    std::chrono::seconds dead_timeout_{0};
 
     dds::pub::Publisher wan_publisher_;
     dds::sub::Subscriber wan_subscriber_;
@@ -265,6 +280,9 @@ private:
     mutable std::mutex roster_mutex_;
     RouterHealth last_published_health_;
     std::chrono::steady_clock::time_point last_health_published_at_;
+    std::chrono::steady_clock::time_point last_filters_published_at_;
+    RouterConfig last_published_config_;
+    std::map<std::string, std::map<std::uint64_t, ConfigEntry>> configurations_;
     std::map<std::string, PeerEntry> roster_; // keyed by the peer's router name (D79)
     std::map<std::string, std::string> handle_to_name_; // health instance handle -> name
     std::uint64_t mesh_revision_ = 0;

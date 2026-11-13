@@ -42,6 +42,15 @@ def live_mission_dashboard():
         assert reset.ok, reset.text()
         assert not get(page, "/api/emane_controller")["impairments"]
         try:
+            for platform, squad in original.items():
+                if squad:
+                    response = page.request.post("/api/team_assignment", data={
+                        "platform_node": platform, "team_name": "",
+                    })
+                    assert response.ok, response.text()
+            wait_for(page, lambda: all(
+                boat["team_confirmed"] and not boat["squad"]
+                for boat in get(page, "/api/mission_inventory")["platforms"]))
             yield page, errors, external
         finally:
             try:
@@ -80,10 +89,10 @@ def wan_topic(original):
     contract = os.environ.get("MISSION_WAN_CONTRACT", "legacy")
     if contract == "legacy":
         return original
-    if contract != "two_topic_union":
+    if contract not in ("two_topic_union", "three_topic_union"):
         raise ValueError(f"Unknown MISSION_WAN_CONTRACT: {contract}")
     return {"ControlCommand": "Event", "PlatformCommandAck": "Event",
-            "PlatformInitStatus": "Status"}[original]
+            "PlatformInitStatus": "Telemetry" if contract == "three_topic_union" else "Status"}[original]
 
 
 def wait_for(page, predicate, timeout=30):

@@ -79,10 +79,10 @@ def submessages(payload):
                         "kind": "repair_request", "writer_guid": destination + body[4:8].hex(),
                         "reader_guid": prefix.hex() + body[:4].hex(), "sequence": number,
                     }
-        elif kind in (0x15, 0x16):
-            minimum = 32 if kind == 0x16 else 20
+        elif kind in (0x14, 0x15, 0x16):
+            minimum = {0x14: 28, 0x15: 20, 0x16: 32}[kind]
             if len(body) < minimum:
-                raise ValueError("truncated DATA/DATA_FRAG")
+                raise ValueError("truncated DATA_SESSION/DATA/DATA_FRAG")
             inline_offset = 4 + struct.unpack_from(endian + "H", body, 2)[0]
             if not minimum <= inline_offset <= len(body):
                 raise ValueError("invalid inline QoS offset")
@@ -101,6 +101,7 @@ def submessages(payload):
             # DATA's D flag and DATA_FRAG's K flag have different meanings.
             has_data = not flags & 4 if kind == 0x16 else bool(flags & 4)
             if has_data:
+                # DATA_SESSION adds a virtual sequence at offset 20; ACKNACK uses the wire sequence.
                 high, low = struct.unpack_from(endian + "iI", body, 12)
                 sequence = (high << 32) + low
                 if sequence <= 0:

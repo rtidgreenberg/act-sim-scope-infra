@@ -167,8 +167,9 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         // system-wide config; absent => default "router" (D79 addendum).
         out.router_name = get_str(router, "name", "router");
         out.wan_contract = get_str(router, "wan_contract", "legacy");
-        if (out.wan_contract != "legacy" && out.wan_contract != "two_topic_union") {
-            error = "router.wan_contract must be legacy or two_topic_union";
+        if (out.wan_contract != "legacy" && out.wan_contract != "two_topic_union"
+                && out.wan_contract != "three_topic_union") {
+            error = "router.wan_contract must be legacy, two_topic_union or three_topic_union";
             return false;
         }
         // router.type_name retired (7c, D70): topic types are wire-learned. A leftover
@@ -412,22 +413,30 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
         return true;
     }
     try {
-        if (cfg.wan_contract != "two_topic_union") {
+        const bool separate_contacts = cfg.wan_contract == "three_topic_union";
+        if (cfg.wan_contract != "two_topic_union" && !separate_contacts) {
             throw std::runtime_error("unknown WAN contract");
         }
         if (cfg.types_xml_path.empty() || cfg.qos_library_paths.empty()) {
-            throw std::runtime_error("two_topic_union requires types.xml and qos_libraries");
+            throw std::runtime_error(cfg.wan_contract + " requires types.xml and qos_libraries");
         }
         const auto validate_qos_class = [&](const WanMapping& mapping) {
             const auto alias = std::string(mapping.qos_profile);
-            const auto profile = std::string(mapping.family) == "Status"
-                    ? "ACT_QOS_LIB::wan_union_status" : "ACT_QOS_LIB::wan_event";
+            const auto profile = alias == "wan_status"
+                    ? "ACT_QOS_LIB::wan_union_status"
+                    : alias == "wan_contacts"
+                        ? "ACT_QOS_LIB::wan_union_contacts"
+                        : separate_contacts ? "ACT_QOS_LIB::wan_three_topic_event"
+                                            : "ACT_QOS_LIB::wan_event";
             const auto configured = cfg.qos_profiles.find(alias);
             if (configured == cfg.qos_profiles.end() || configured->second != profile) {
-                throw std::runtime_error("two_topic_union requires QoS alias '" + alias
+                throw std::runtime_error(cfg.wan_contract + " requires QoS alias '" + alias
                                          + "' to use " + profile);
             }
         };
+        if (separate_contacts) {
+            validate_qos_class(wan_transport_mapping("ContactReport", true));
+        }
         size_t count = 0;
         std::map<std::string, ParticipantState> participants;
         for (const auto& participant : cfg.participants) {
@@ -436,25 +445,27 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
                 (participant.role.empty() || participant.role == cfg.node_role)) {
                 ++count;
                 const auto profile = cfg.qos_profiles.at(participant.qos_profile_alias);
-                if (profile != "ACT_QOS_LIB::wan_two_topic_participant" &&
-                    profile != "ACT_QOS_LIB::wan_two_topic_participant_emane") {
-                    throw std::runtime_error("two_topic_union requires its opt-in WAN participant profile");
+                const std::string required = separate_contacts ? "ACT_QOS_LIB::wan_three_topic_participant"
+                                                              : "ACT_QOS_LIB::wan_two_topic_participant";
+                if (profile != required && profile != required + "_emane") {
+                    throw std::runtime_error(cfg.wan_contract + " requires its opt-in WAN participant profile");
                 }
                 if (participant.team_scoped && !participant.team_partitions_on_endpoints) {
-                    throw std::runtime_error("two_topic_union requires discovery-independent team state");
+                    throw std::runtime_error(cfg.wan_contract + " requires discovery-independent team state");
                 }
             }
         }
         if (count != 1) {
-            throw std::runtime_error("two_topic_union requires exactly one local WAN participant");
+            throw std::runtime_error(cfg.wan_contract + " requires exactly one local WAN participant");
         }
         if (!cfg.presence_participant.empty()) {
             const auto presence = participants.find(cfg.presence_participant);
             if (presence == participants.end() || !presence->second.on_wan ||
                 (!presence->second.role.empty() && presence->second.role != cfg.node_role)) {
-                throw std::runtime_error("two_topic_union presence must use the local WAN participant");
+                throw std::runtime_error(cfg.wan_contract + " presence must use the local WAN participant");
             }
             validate_qos_class(wan_mapping("RouterHealth"));
+            validate_qos_class(wan_mapping("RouterConfig"));
         }
         for (const auto& route : cfg.routes) {
             const auto& input = participants.at(route.input.participant);
@@ -463,7 +474,7 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
                 continue;
             }
             if (input.on_wan == output.on_wan || route.forwarding_mode != "dynamic_data") {
-                throw std::runtime_error("two_topic_union routes require one LAN/WAN hop in dynamic_data mode");
+                throw std::runtime_error(cfg.wan_contract + " routes require one LAN/WAN hop in dynamic_data mode");
             }
             const bool source = output.on_wan;
             const auto& lan = source ? route.input : route.output;
@@ -471,17 +482,23 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
             if (lan.participant != cfg.admin_participant ||
                 !lan.subscriber_partition.empty() || !lan.publisher_partition.empty() ||
                 (source && !lan.filter_expression.empty())) {
-                throw std::runtime_error("two_topic_union requires unpartitioned local admin-LAN endpoints");
+                throw std::runtime_error(cfg.wan_contract + " requires unpartitioned local admin-LAN endpoints");
             }
             for (const auto& topic : route.topics) {
-                const auto& mapping = wan_mapping(topic.name);
-                if (std::string(mapping.branch) == "health") {
-                    throw std::runtime_error("RouterHealth is owned by presence_participant, not application routes");
+                const auto mapping = wan_transport_mapping(topic.name, separate_contacts);
+                if (std::string(mapping.branch) == "health"
+                    || std::string(mapping.branch) == "router_config") {
+                    throw std::runtime_error(topic.name
+                            + " is owned by presence_participant, not application routes");
                 }
                 const auto alias = std::string(mapping.qos_profile);
                 validate_qos_class(mapping);
                 const auto& configured = source ? wan.writer_qos : wan.reader_qos;
-                if (!configured.empty() && configured != "default" && configured != alias) {
+                // Mixed Event routes retain their legacy hint; the validated catalog
+                // selects the independent State profile in three-topic mode.
+                const bool event_hint = separate_contacts && topic.name == "ContactReport"
+                                        && configured == "wan_event";
+                if (!configured.empty() && configured != "default" && configured != alias && !event_hint) {
                     throw std::runtime_error("unsupported WAN QoS class for " + topic.name);
                 }
                 const bool command = topic.name == "ControlCommand";

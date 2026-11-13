@@ -50,6 +50,29 @@ int main(int argc, char** argv) {
     CHECK(validate_wan_contract(cfg, error));
     cfg.presence_participant = "platform_wan";
     CHECK(validate_wan_contract(cfg, error));
+    auto three = cfg;
+    three.wan_contract = "three_topic_union";
+    three.qos_profiles["wan_participant"] = "ACT_QOS_LIB::wan_three_topic_participant";
+    three.qos_profiles["wan_event"] = "ACT_QOS_LIB::wan_three_topic_event";
+    three.qos_profiles["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts";
+    CHECK(validate_wan_contract(three, error));
+    three.qos_profiles["wan_contacts"] = "ACT_QOS_LIB::wan_event";
+    CHECK(!validate_wan_contract(three, error));
+    CHECK(error.find("wan_contacts") != std::string::npos);
+    three.qos_profiles.erase("wan_contacts");
+    three.presence_participant.clear();
+    three.routes.clear();
+    CHECK(!validate_wan_contract(three, error));
+    CHECK(error.find("wan_contacts") != std::string::npos);
+    profiles.participant_qos("ACT_QOS_LIB::wan_three_topic_participant");
+    profiles.participant_qos("ACT_QOS_LIB::wan_three_topic_participant_emane");
+    auto contacts_writer = profiles.datawriter_qos("ACT_QOS_LIB::wan_union_contacts");
+    auto contacts_reader = profiles.datareader_qos("ACT_QOS_LIB::wan_union_contacts");
+    CHECK(contacts_writer.policy<dds::core::policy::History>().kind()
+          == dds::core::policy::HistoryKind::KEEP_LAST);
+    CHECK(contacts_writer.policy<dds::core::policy::History>().depth() == 1);
+    CHECK(contacts_reader.policy<dds::core::policy::History>().kind()
+          == dds::core::policy::HistoryKind::KEEP_ALL);
     RouteConfig events_only = cfg;
     for (auto& configured_route : events_only.routes) {
         auto& topics = configured_route.topics;
@@ -96,6 +119,8 @@ int main(int argc, char** argv) {
     cfg.presence_participant.clear();
     cfg.routes.front().topics.front().name = "RouterHealth";
     CHECK(!validate_wan_contract(cfg, error));
+    cfg.routes.front().topics.front().name = "RouterConfig";
+    CHECK(!validate_wan_contract(cfg, error));
     cfg.routes.front().topics.front().name = "Unmapped";
     CHECK(!validate_wan_contract(cfg, error));
 
@@ -129,6 +154,11 @@ int main(int argc, char** argv) {
     CHECK(filter.expression.find("original_topic = 'PlatformData'") ==
           filter.expression.rfind("original_topic = 'PlatformData'"));
     CHECK(filter.parameters.size() == 2);
+    auto telemetry_filter = wan_receive_filter("Telemetry", "Boat30", {control, global, team}, true);
+    CHECK(telemetry_filter.expression == filter.expression);
+    CHECK(telemetry_filter.parameters == filter.parameters);
+    CHECK(wan_receive_filter("Status", "Boat30", {control, global, team}, true).expression ==
+          "source_id <> %0 AND (original_topic = '')");
     CHECK(wan_receive_filter("Event", "Boat30", {}).expression ==
           "source_id <> %0 AND (original_topic = '')");
     filter = wan_receive_filter("Event", "Boat30", {command, assignment});
@@ -136,6 +166,17 @@ int main(int argc, char** argv) {
     CHECK(filter.expression.find("original_topic = 'ActTeamAssignment'") != std::string::npos);
     CHECK(filter.expression.find("audience.destination_ids[15] = %0") != std::string::npos);
     CHECK(filter.parameters == std::vector<std::string>({"'Boat30'", "'TEAM_A'"}));
+    WanInterest contacts_interest;
+    contacts_interest.topic = "ContactReport";
+    contacts_interest.control = true;
+    auto events_filter = wan_receive_filter("Event", "Boat30", {command, contacts_interest}, true);
+    auto contacts_filter = wan_receive_filter("State", "Boat30", {command, contacts_interest}, true);
+    CHECK(events_filter.expression.find("ContactReport") == std::string::npos);
+    CHECK(events_filter.expression.find("ControlCommand") != std::string::npos);
+    CHECK(contacts_filter.expression.find("ContactReport") != std::string::npos);
+    CHECK(contacts_filter.expression.find("ControlCommand") == std::string::npos);
+    CHECK(wan_receive_filter("Event", "Boat30", {contacts_interest}).expression.find("ContactReport")
+          != std::string::npos);
     for (const auto& invalid : std::vector<std::string>{
             "O'BRIEN", std::string(256, 'x'), std::string("TEAM\0A", 6)}) {
         try {
@@ -192,7 +233,7 @@ int main(int argc, char** argv) {
     CHECK(contact_metadata.audit_sequence == 23);
     CHECK(contact_metadata.sent_at_ns == 123456789);
     for (const auto& mapping : wan_mappings()) {
-        if (std::string(mapping.branch) == "health") {
+        if (std::string(mapping.branch) == "health" || std::string(mapping.branch) == "router_config") {
             continue;
         }
         dds::core::xtypes::DynamicData data(model->type(mapping.type));

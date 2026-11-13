@@ -7,6 +7,7 @@
 // vector-like bounded_sequence fields, so access is by field, not fluent accessors.
 
 #include "ActTypes.hpp"
+#include <dds/dds.hpp>
 #include <rti/topic/cdr.hpp>
 
 #include <cstdio>
@@ -114,7 +115,9 @@ int main() {
     reader_filter.expression = "audience.destination_ids[0] = %0";
     reader_filter.parameters.push_back("'TEAM_A'");
     observed.reader_filters.push_back(reader_filter);
-    health.wan_writer_filters.push_back(observed);
+    CHECK(!health.wan_writer_filters.is_set());
+    health.wan_writer_filters.set({});
+    health.wan_writer_filters.get().push_back(observed);
     for (unsigned int i = 0; i < 70; ++i) {
         RouterPeerRef peer;
         peer.router = "Platform_" + std::to_string(i + 30) + "/platform-router";
@@ -130,21 +133,22 @@ int main() {
     const auto restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
     CHECK(restored.heartbeat_seq == health.heartbeat_seq);
     CHECK(restored.session_id == health.session_id);
-    CHECK(restored.wan_writer_filters.size() == 1);
-    CHECK(restored.wan_writer_filters.at(0).topic_name == "Status");
-    CHECK(restored.wan_writer_filters.at(0).observed_at_ns == observed.observed_at_ns);
-    CHECK(restored.wan_writer_filters.at(0).poll_ok);
-    CHECK(restored.wan_writer_filters.at(0).matched_readers == 1);
-    CHECK(!restored.wan_writer_filters.at(0).truncated);
-    CHECK(restored.wan_writer_filters.at(0).last_error.empty());
-    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).reader_id
+    CHECK(restored.wan_writer_filters.is_set());
+    CHECK(restored.wan_writer_filters.get().size() == 1);
+    CHECK(restored.wan_writer_filters.get().at(0).topic_name == "Status");
+    CHECK(restored.wan_writer_filters.get().at(0).observed_at_ns == observed.observed_at_ns);
+    CHECK(restored.wan_writer_filters.get().at(0).poll_ok);
+    CHECK(restored.wan_writer_filters.get().at(0).matched_readers == 1);
+    CHECK(!restored.wan_writer_filters.get().at(0).truncated);
+    CHECK(restored.wan_writer_filters.get().at(0).last_error.empty());
+    CHECK(restored.wan_writer_filters.get().at(0).reader_filters.at(0).reader_id
           == reader_filter.reader_id);
-    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).has_filter);
-    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).expression
+    CHECK(restored.wan_writer_filters.get().at(0).reader_filters.at(0).has_filter);
+    CHECK(restored.wan_writer_filters.get().at(0).reader_filters.at(0).expression
           == reader_filter.expression);
-    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).peer_router
+    CHECK(restored.wan_writer_filters.get().at(0).reader_filters.at(0).peer_router
           == reader_filter.peer_router);
-    CHECK(restored.wan_writer_filters.at(0).reader_filters.at(0).parameters.at(0)
+    CHECK(restored.wan_writer_filters.get().at(0).reader_filters.at(0).parameters.at(0)
           == "'TEAM_A'");
     CHECK(restored.peers_seen.at(0).ack_session_id == health.session_id);
     CHECK(restored.peers_seen.at(0).ack_heartbeat_seq == health.heartbeat_seq);
@@ -161,15 +165,43 @@ int main() {
     std::printf("RouterHealth 5-peer CDR size: %zu bytes\n", buffer.size());
     CHECK(buffer.size() < 1400);
 
-    auto &long_filter = health.wan_writer_filters.at(0).reader_filters.at(0);
+    auto &long_filter = health.wan_writer_filters.get().at(0).reader_filters.at(0);
     long_filter.expression = reader_filter.expression + std::string(1024, ' ');
     long_filter.parameters.at(0) = "'" + std::string(255, 'A') + "'";
     rti::topic::to_cdr_buffer(buffer, health);
     const auto long_restored = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
-    CHECK(long_restored.wan_writer_filters.at(0).reader_filters.at(0).expression
+    CHECK(long_restored.wan_writer_filters.get().at(0).reader_filters.at(0).expression
           == long_filter.expression);
-    CHECK(long_restored.wan_writer_filters.at(0).reader_filters.at(0).parameters.at(0).size()
+    CHECK(long_restored.wan_writer_filters.get().at(0).reader_filters.at(0).parameters.at(0).size()
           == 257);
+    const auto long_expression = long_filter.expression;
+    const auto full_size = buffer.size();
+    const auto filters = health.wan_writer_filters;
+    health.wan_writer_filters.reset();
+    rti::topic::to_cdr_buffer(buffer, health);
+    CHECK(buffer.size() + 1000 < full_size);
+    const auto omitted = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
+    CHECK(!omitted.wan_writer_filters.is_set());
+    const auto dynamic = rti::core::xtypes::convert(health);
+    CHECK(!dynamic.member_exists("wan_writer_filters"));
+    CHECK(!rti::core::xtypes::convert<RouterHealth>(dynamic).wan_writer_filters.is_set());
+    health.wan_writer_filters.set({});
+    rti::topic::to_cdr_buffer(buffer, health);
+    const auto empty = rti::topic::from_cdr_buffer<RouterHealth>(buffer);
+    CHECK(empty.wan_writer_filters.is_set());
+    CHECK(empty.wan_writer_filters.get().empty());
+    health.wan_writer_filters = filters;
+    auto& readers = health.wan_writer_filters.get().at(0).reader_filters;
+    while (readers.size() < 14) readers.push_back(readers.at(0));
+    rti::topic::to_cdr_buffer(buffer, health);
+    const auto detailed_size = buffer.size();
+    const auto detailed_filters = health.wan_writer_filters;
+    health.wan_writer_filters.reset();
+    rti::topic::to_cdr_buffer(buffer, health);
+    std::printf("RouterHealth 14-reader CDR bytes: detailed=%zu compact=%zu\n",
+                detailed_size, buffer.size());
+    CHECK(buffer.size() + 14000 < detailed_size);
+    health.wan_writer_filters = detailed_filters;
 
     RouterMeshStatus mesh;
     mesh.observer_node = "Platform_30";
@@ -183,10 +215,26 @@ int main() {
     rti::topic::to_cdr_buffer(buffer, mesh);
     const auto restored_mesh = rti::topic::from_cdr_buffer<RouterMeshStatus>(buffer);
     CHECK(restored_mesh.observer_health_age_ms == 25);
-    CHECK(restored_mesh.observer_health.wan_writer_filters.at(0).topic_name == "Status");
+    CHECK(restored_mesh.observer_health.wan_writer_filters.get().at(0).topic_name == "Status");
     CHECK(restored_mesh.peers.at(0).health_age_ms == 5000);
-    CHECK(restored_mesh.peers.at(0).health.wan_writer_filters.at(0).reader_filters.at(0).expression
-          == long_filter.expression);
+    CHECK(restored_mesh.peers.at(0).health.wan_writer_filters.get().at(0).reader_filters.at(0).expression
+          == long_expression);
+
+    RouterConfig three_topic;
+    for (const auto& name : {"Event", "State", "Telemetry"}) {
+        RouterWriterFilterObservation entry;
+        entry.topic_name = name;
+        three_topic.wan_writer_filters.push_back(entry);
+    }
+    const auto config_roundtrip = rti::core::xtypes::convert<RouterConfig>(
+        rti::core::xtypes::convert(three_topic));
+    CHECK(config_roundtrip.wan_writer_filters.size() == 3);
+    CHECK(config_roundtrip.wan_writer_filters.at(1).topic_name == "State");
+    RouterHealth three_topic_health;
+    three_topic_health.wan_writer_filters.set(three_topic.wan_writer_filters);
+    const auto health_roundtrip = rti::core::xtypes::convert<RouterHealth>(
+        rti::core::xtypes::convert(three_topic_health));
+    CHECK(health_roundtrip.wan_writer_filters.get().size() == 3);
 
     if (g_failures == 0) {
         std::printf("test_admin_types: OK\n");
