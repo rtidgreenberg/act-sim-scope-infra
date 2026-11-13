@@ -85,6 +85,15 @@ target_include_directories(router_main PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(router_main RTIConnextDDS::cpp2_api yaml-cpp::yaml-cpp)
 
+option(BUILD_ROUTING_SERVICE_VARIANT "Build the parallel ACT Routing Service processor" OFF)
+if(BUILD_ROUTING_SERVICE_VARIANT)
+    add_library(act_rs_types STATIC ${RouterAdminTypes_CXX11_GENERATED_SOURCES})
+    set_target_properties(act_rs_types PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(act_rs_types PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(act_rs_types PUBLIC RTIConnextDDS::cpp2_api)
+    add_subdirectory(routing_service)
+endif()
+
 # --- Tests ---
 enable_testing()
 

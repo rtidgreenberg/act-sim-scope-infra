@@ -41,6 +41,11 @@ wired to run them for real (D46):
 
 ### Opt-in two-topic WAN migration
 
+An independent [Routing Service processor variant](routing_service/README.md) is
+being developed in parallel. Its single-route data plane has a native acceptance
+gate; full health/control/telemetry and existing-suite parity are not complete.
+It does not replace this executable or modify the retained live deployment.
+
 The default remains `router.wan_contract: legacy`. The experimental
 `router.wan_contract: two_topic_union` selects shared **Event** and **Status**
 WAN topics with whole-structure adapters; application LAN topics/types remain

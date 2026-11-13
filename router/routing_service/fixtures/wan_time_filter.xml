@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="ACT_RS_TBF_TEST">
+    <qos_profile name="unfiltered" base_name="ACT_QOS_LIB::wan_union_status"/>
+    <qos_profile name="one_second" base_name="ACT_RS_TBF_TEST::unfiltered">
+      <datareader_qos>
+        <time_based_filter>
+          <minimum_separation><sec>1</sec><nanosec>0</nanosec></minimum_separation>
+        </time_based_filter>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="two_seconds" base_name="ACT_RS_TBF_TEST::unfiltered">
+      <datareader_qos>
+        <time_based_filter>
+          <minimum_separation><sec>2</sec><nanosec>0</nanosec></minimum_separation>
+        </time_based_filter>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

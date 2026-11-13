@@ -104,6 +104,10 @@
       <name>WAN_MAX_BLOCKING_SEC</name>
       <value>15</value>
     </element>
+    <element>
+      <name>RS_FLOW_BYTES_PER_PERIOD</name>
+      <value>2500</value>
+    </element>
   </configuration_variables>
 
   <qos_library name="ACT_QOS_LIB">
@@ -820,6 +824,94 @@
           <depth>1</depth>
         </history>
       </datareader_qos>
+    </qos_profile>
+
+    <!-- Opt-in Routing Service scheduling; existing router aliases are unchanged. -->
+    <qos_profile name="rs_priority_participant">
+      <domain_participant_qos>
+        <property>
+          <value>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.scheduling_policy</name>
+              <value>DDS_HPF_FLOW_CONTROLLER_SCHED_POLICY</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.max_tokens</name>
+              <value>1</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.tokens_added_per_period</name>
+              <value>1</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.tokens_leaked_per_period</name>
+              <value>0</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.bytes_per_token</name>
+              <value>$(RS_FLOW_BYTES_PER_PERIOD)</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.period.sec</name>
+              <value>0</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.act_rs.token_bucket.period.nanosec</name>
+              <value>10000000</value>
+            </element>
+          </value>
+        </property>
+      </domain_participant_qos>
+    </qos_profile>
+
+    <qos_profile name="rs_wan_event" base_name="ACT_QOS_LIB::wan_event">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+          <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
+          <priority>-1</priority>
+        </publish_mode>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element>
+              <filter_expression>@priority &gt;= 300</filter_expression>
+              <priority>-1</priority>
+              <multicast_settings/>
+            </element>
+            <element>
+              <filter_expression>@priority &lt; 300</filter_expression>
+              <priority>-1</priority>
+              <multicast_settings/>
+            </element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="rs_wan_status" base_name="ACT_QOS_LIB::wan_union_status">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+          <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
+          <priority>-1</priority>
+        </publish_mode>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element>
+              <filter_expression>@priority &gt;= 200</filter_expression>
+              <priority>-1</priority>
+              <multicast_settings/>
+            </element>
+            <element>
+              <filter_expression>@priority &lt; 200</filter_expression>
+              <priority>-1</priority>
+              <multicast_settings/>
+            </element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
     </qos_profile>
 
     <!-- Composed only into two-topic adapter input readers; legacy profiles are unchanged. -->
