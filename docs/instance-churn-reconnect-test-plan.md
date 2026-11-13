@@ -38,6 +38,14 @@ contact remains ALIVE and application health recovers separately. No production
 timeouts were changed. See the
 [two-minute measurements and timeout distinctions](../spikes/instance_churn_reconnect/README.md#two-minute-outage-with-unchanged-production-qos-2026-11-11).
 
+A subsequent source-policy update derives 100 retries at 3-second intervals
+from the 300-second system timeout. Actual-router healthy/outage tests pass,
+and native final state and ACKs recover without reader inactivity. Native
+performance gates still fail: fresh-command RTT is 8.49 seconds and workload
+scheduling lag is 75.34 ms in the serial repeat. Neither thresholds nor assertions
+were relaxed. The running EMANE mesh was not updated. See the
+[policy retest and remaining performance limits](../spikes/instance_churn_reconnect/README.md#two-minute-outage-with-the-300-second-policy-2026-11-11).
+
 Related context: [LP-8](product-gaps.md#-lp-8--finite-liveliness-isc-recovery-conflicts-with-full-writer-side-content-filtering),
 [lifecycle implementation](two-topic-native-lifecycle-plan.md), and
 [migration evidence](two-topic-wan-migration-plan.md).

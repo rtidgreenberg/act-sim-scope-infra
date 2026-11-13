@@ -15,8 +15,12 @@ import xml.etree.ElementTree as ET
 
 import rti.connextdds as dds
 
+from harness_v2.qos.wan_policy import configure_wan_policy
+from priorities import DEFAULT_PRIORITIES, PRIORITY_MODES, TOPIC_PRIORITY_MODES, topic_priorities
+from wire import WireCapture
+
 from workload import (
-    STATIONARY_CONTACT_ID, converged, discrepancies, initial_identities, operations,
+    STATIONARY_CONTACT_ID, converged, discrepancies, initial_identities, missing_write_sequences, operations,
     positive_seconds, tick_seconds,
 )
 
@@ -68,10 +72,12 @@ class Blackout:
             self.created = False
 
 
-def providers():
+def providers(extra_qos_files=()):
+    configure_wan_policy()
     params = dds.QosProviderParams()
     params.url_profile = [
-        str(ROOT / "harness_v2/qos/act_qos_profiles.xml"), str(HERE / "qos.xml")]
+        str(ROOT / "harness_v2/qos/act_qos_profiles.xml"), str(HERE / "qos.xml"),
+        *(str(path) for path in extra_qos_files)]
     params.ignore_environment_profile = True
     params.ignore_user_profile = True
     qos = dds.QosProvider(params)
@@ -136,15 +142,41 @@ def memory_kib():
 
 
 class NativeEndpoints:
-    def __init__(self, family, filtered, event_durability="production"):
+    contact_topic = "Event"
+    requires_complete_history = True
+    extra_qos_files = ()
+    contract = "two_topic"
+
+    def endpoint_profiles(self):
+        return {
+            "Event": ("WanEvent", self.event_writer_profile, self.event_reader_profile),
+            "Status": ("WanStatus", PROFILE + "wan_union_status", "ChurnSpike::status_reader"),
+        }
+
+    def __init__(self, family, filtered, event_durability="production",
+                 priority_mode="production", priorities=None, flow_profile="coarse"):
         self.cleanup = ExitStack()
         self.family = family
         self.event_durability = event_durability
+        self.priority_mode = priority_mode
+        self.priorities = dict(DEFAULT_PRIORITIES if priorities is None else priorities)
+        self.priority_counts = Counter()
+        self.controllers = []
+        self.participant_profile = (PROFILE + "wan_two_topic_participant"
+                                    if priority_mode == "production" else "ChurnSpike::priority_participant")
+        if flow_profile != "coarse":
+            self.participant_profile += "_" + flow_profile
         self.event_writer_profile = (PROFILE + "wan_event" if event_durability == "production"
                                      else "ChurnSpike::event_transient_local")
         self.event_reader_profile = ("ChurnSpike::event_reader" if event_durability == "production"
                                      else "ChurnSpike::event_transient_local")
-        self.qos, self.types = providers()
+        if priority_mode != "production":
+            self.event_writer_profile = ("ChurnSpike::" + priority_mode
+                                         if priority_mode in (
+                                             "priority_channels", "priority_bands", "priority_bands_batch",
+                                             "priority_bands_repair", "priority_bands_last1")
+                                         else "ChurnSpike::priority_event")
+        self.qos, self.types = providers(self.extra_qos_files)
         self.domain = 201
         self.readers = {}
         self.writers = {}
@@ -152,20 +184,28 @@ class NativeEndpoints:
         try:
             participants = []
             for name in ("Source", "Receiver"):
-                qos = self.qos.participant_qos_from_profile(PROFILE + "wan_two_topic_participant")
+                qos = self.qos.participant_qos_from_profile(self.participant_profile)
                 qos.participant_name.name = name
                 participant = dds.DomainParticipant(self.domain, qos)
                 self.cleanup.callback(participant.close)
                 participants.append(participant)
-            for endpoint_family in ("Event", "Status"):
-                topics = [dds.DynamicData.Topic(p, endpoint_family, self.types.type("Wan" + endpoint_family))
+                if priority_mode != "production":
+                    controller = participant.find_flow_controller("dds.flow_controller.token_bucket.churn")
+                    if controller is None or controller.property.scheduling_policy != (
+                            dds.FlowControllerSchedulingPolicy.HIGHEST_PRIORITY_FIRST):
+                        raise RuntimeError("XML-configured HPF controller was not created")
+                    self.cleanup.callback(controller.close)
+                    self.controllers.append(controller)
+            profiles = self.endpoint_profiles()
+            for endpoint_family, (type_name, writer_profile, reader_profile) in profiles.items():
+                topics = [dds.DynamicData.Topic(p, endpoint_family, self.types.type(type_name))
                           for p in participants]
                 self.topics[endpoint_family] = topics
-                profile = (self.event_writer_profile if endpoint_family == "Event"
-                           else PROFILE + "wan_union_status")
                 writer = dds.DynamicData.DataWriter(
                     dds.Publisher(participants[0]), topics[0],
-                    self.qos.datawriter_qos_from_profile(profile))
+                    self.qos.datawriter_qos_from_profile(writer_profile))
+                self.cleanup.callback(writer.close)
+                participants[0].ignore_datawriter(writer.instance_handle)
                 description = topics[1]
                 if filtered:
                     description = dds.DynamicData.ContentFilteredTopic(
@@ -173,32 +213,35 @@ class NativeEndpoints:
                         dds.Filter("source_id <> 'Receiver' AND audience.control = TRUE"))
                 reader = dds.DynamicData.DataReader(
                     dds.Subscriber(participants[1]), description,
-                    self.qos.datareader_qos_from_profile(
-                        self.event_reader_profile if endpoint_family == "Event"
-                        else "ChurnSpike::status_reader"))
+                    self.qos.datareader_qos_from_profile(reader_profile))
+                participants[1].ignore_datareader(reader.instance_handle)
                 self.writers[endpoint_family] = writer
                 self.readers[endpoint_family] = reader
-            self.writer = self.writers[family]
-            self.reader = self.readers[family]
+            self.data_topic = self.contact_topic if family == "Event" else family
+            self.writer = self.writers[self.data_topic]
+            self.reader = self.readers[self.data_topic]
             self.command_writer = self.writers["Event"]
             source_topic, ack_topic = self.topics["Event"]
             self.ack_writer = dds.DynamicData.DataWriter(
                 dds.Publisher(participants[1]), ack_topic,
-                self.qos.datawriter_qos_from_profile(self.event_writer_profile))
+                self.qos.datawriter_qos_from_profile(profiles["Event"][1]))
+            self.cleanup.callback(self.ack_writer.close)
+            participants[1].ignore_datawriter(self.ack_writer.instance_handle)
             ack_cft = dds.DynamicData.ContentFilteredTopic(
                 source_topic, "AckFiltered",
                 dds.Filter("original_topic = 'PlatformCommandAck'"))
             self.ack_reader = dds.DynamicData.DataReader(
                 dds.Subscriber(participants[0]), ack_cft,
-                self.qos.datareader_qos_from_profile(self.event_reader_profile))
+                self.qos.datareader_qos_from_profile(profiles["Event"][2]))
+            participants[0].ignore_datareader(self.ack_reader.instance_handle)
             if event_durability == "transient_local":
                 for entity in (self.writers["Event"], self.readers["Event"],
                                self.ack_writer, self.ack_reader):
                     if entity.qos.durability.kind != dds.DurabilityKind.TRANSIENT_LOCAL:
                         raise RuntimeError("Event experiment endpoint is not transient local")
-            wait_for(lambda: all(writer.publication_matched_status.current_count >= 1
+            wait_for(lambda: all(writer.publication_matched_status.current_count == 1
                                  for writer in self.writers.values())
-                     and self.ack_writer.publication_matched_status.current_count >= 1)
+                     and self.ack_writer.publication_matched_status.current_count == 1)
             self.participants = participants
         except Exception:
             self.cleanup.close()
@@ -207,15 +250,34 @@ class NativeEndpoints:
     def close(self):
         self.cleanup.close()
 
+    def write(self, writer, data, operation="write", handle=None):
+        if self.priority_mode == "production":
+            if operation == "dispose":
+                writer.dispose_instance(handle)
+            else:
+                writer.write(data)
+            return
+        topic = str(data["original_topic"])
+        priority = 10 if self.priority_mode == "paced_fifo" else self.priorities[topic]
+        params = dds.WriteParams()
+        params.priority = priority
+        if handle is not None:
+            params.handle = handle
+        if operation == "dispose":
+            writer.dispose_instance(params)
+        else:
+            writer.write(data, params)
+        self.priority_counts[f"{topic}:{operation}:{priority}"] += 1
+
     def send(self, operation, sequence, run_id):
         data = frame(self.types, self.family, operation.identity, sequence, run_id)
         if operation.kind == "dispose":
             handle = self.writer.lookup_instance(data)
             if handle == dds.InstanceHandle.nil:
                 raise RuntimeError(f"No registered source instance to dispose: {key(data)}")
-            self.writer.dispose_instance(handle)
+            self.write(self.writer, data, "dispose", handle)
         else:
-            self.writer.write(data)
+            self.write(self.writer, data)
         return key(data)
 
     def acknowledge(self, command):
@@ -234,7 +296,7 @@ class NativeEndpoints:
                 value.data["destination"] = "ChurnSource"
                 value.data["command_id"] = f"probe_{command['audit_sequence']}"
                 value.data["accepted"] = True
-        self.ack_writer.write(ack)
+        self.write(self.ack_writer, ack)
 
     def heartbeat(self, sequence, run_id):
         health = dds.DynamicData(self.types.type("WanStatus"))
@@ -276,19 +338,47 @@ class NativeEndpoints:
 
     def effective_qos(self):
         qos = self.writer.qos
-        return {
+        result = {
             "reliability": str(qos.reliability.kind),
             "history": str(qos.history.kind),
+            "history_depth": qos.history.depth,
+            "ack_writer_history": str(self.ack_writer.qos.history.kind),
+            "ack_writer_history_depth": self.ack_writer.qos.history.depth,
             "durability": str(qos.durability.kind),
             "durability_writer_depth": qos.durability.writer_depth,
             "liveliness_lease": str(qos.liveliness.lease_duration),
             "publish_mode": str(qos.publish_mode.kind),
+            "batch_enabled": qos.batch.enable,
+            "writer_guid": str(self.writer.instance_handle),
+            "ack_writer_guid": str(self.ack_writer.instance_handle),
+            "status_writer_guid": str(self.writers["Status"].instance_handle),
+            "max_bytes_per_nack_response": qos.protocol.rtps_reliable_writer.max_bytes_per_nack_response,
+            "send_window_min": qos.protocol.rtps_reliable_writer.min_send_window_size,
+            "send_window_max": qos.protocol.rtps_reliable_writer.max_send_window_size,
             "resource_limits": str(qos.resource_limits),
             "heartbeat_retries": qos.protocol.rtps_reliable_writer.max_heartbeat_retries,
             "heartbeat_period": str(qos.protocol.rtps_reliable_writer.heartbeat_period),
             "participant_discovery_lease": str(
                 self.participants[0].qos.discovery_config.participant_liveliness_lease_duration),
+            "priority_mode": self.priority_mode, "topic_priorities": self.priorities,
+            "priority_counts": dict(self.priority_counts),
+            "writer_priority": qos.publish_mode.priority,
+            "flow_controller": qos.publish_mode.flow_controller_name,
+            "channel_count": len(qos.multi_channel.channels),
+            "channel_filter": qos.multi_channel.filter_name,
+            "channel_expressions": [channel.filter_expression for channel in qos.multi_channel.channels],
+            "reader_destination_scope": str(self.reader.qos.destination_order.scope),
         }
+        if self.priority_mode != "production":
+            controller = self.controllers[0]
+            bucket = controller.property.token_bucket
+            result["token_bucket"] = {
+                "max_tokens": bucket.max_tokens,
+                "tokens_added_per_period": bucket.tokens_added_per_period,
+                "bytes_per_token": bucket.bytes_per_token, "period_s": float(bucket.period),
+                "scheduling_policy": str(controller.property.scheduling_policy),
+            }
+        return result
 
     def late_join(self, truth):
         qos = self.qos.participant_qos_from_profile(PROFILE + "wan_two_topic_participant")
@@ -339,18 +429,23 @@ class NativeEndpoints:
 
 
 def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtered=True,
-             outage_seconds=2):
+             outage_seconds=2, drain_seconds=10):
     run_id = f"churn-{endpoints.family}-{pattern}-{int(time.time() * 1000)}"
     truth, actual = {}, {}
     observations = []
+    expected_writes = set()
+    observed_writes = set()
     samples = []
     counts = Counter()
     blackout_counts = Counter()
     errors = []
     sequence = 0
     command_sends, acknowledgments = {}, []
+    command_receives, ack_receives = Counter(), Counter()
     command_events = []
     health_sends, health_events = {}, []
+    operation_events = []
+    cpu_started = time.process_time()
     maximum_lag = 0.0
     maximum_api = 0.0
     received_during_blackout = 0
@@ -358,7 +453,8 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
     drop = Blackout(endpoints.domain)
 
     def drain():
-        nonlocal received_during_blackout
+        nonlocal received_during_blackout, first_recovery_convergence
+        previous_observations = len(observations)
         for family, reader in endpoints.readers.items():
             for item in reader.take():
                 now = time.monotonic()
@@ -368,17 +464,20 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                     data = item.data
                     topic = str(data["original_topic"])
                     if topic == "ControlCommand":
+                        command_receives[int(data["audit_sequence"])] += 1
                         endpoints.acknowledge(data)
                         continue
                     if topic == "RouterHealth":
                         sent = health_sends.get(int(data["audit_sequence"]))
                         if sent is not None:
-                            health_events.append({"at": now, "age_s": now - sent})
+                            health_events.append({"at": now, "age_s": now - sent,
+                                                  "sent": sent, "sequence": int(data["audit_sequence"])})
                         continue
                     if topic not in ("ContactReport", "PlatformInitStatus"):
                         continue
                     instance = key(data)
                     value_sequence = int(data["audit_sequence"])
+                    observed_writes.add(value_sequence)
                 else:
                     data = reader.key_value(item.info.instance_handle)
                     if str(data["original_topic"]) not in ("ContactReport", "PlatformInitStatus"):
@@ -390,24 +489,33 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                               "disposed" if state == dds.InstanceState.NOT_ALIVE_DISPOSED else "no_writers")
                 actual[instance] = {"state": state_name, "sequence": value_sequence}
                 observations.append({"at": now, "key": instance, "valid": item.info.valid,
-                                     "state": state_name, "sequence": value_sequence})
+                                     "state": state_name, "sequence": value_sequence,
+                                     "transport_topic": family})
         for item in endpoints.ack_reader.take():
             if item.info.valid:
                 number = int(item.data["audit_sequence"])
+                ack_receives[number] += 1
                 if number in command_sends and number not in acknowledgments:
                     now = time.monotonic()
                     acknowledgments.append(number)
                     command_events.append({"sent": command_sends[number], "received": now,
                                            "rtt_s": now - command_sends[number]})
+        if (drop.finished is not None and first_recovery_convergence is None
+                and len(observations) != previous_observations and converged(truth, actual)):
+            first_recovery_convergence = time.monotonic()
 
     def send(operation, measured=False):
         nonlocal sequence, maximum_api
         sequence += 1
         before = time.monotonic()
         instance = endpoints.send(operation, sequence, run_id)
+        if operation.kind != "dispose":
+            expected_writes.add(sequence)
         maximum_api = max(maximum_api, time.monotonic() - before)
         truth[instance] = {"state": "disposed" if operation.kind == "dispose" else "alive",
                            "sequence": sequence}
+        operation_events.append({"at": before, "key": instance, "sequence": sequence,
+                                 "operation": operation.kind})
         if measured:
             counts[operation.kind] += 1
             if drop.active:
@@ -444,7 +552,7 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
             if now >= next_probe:
                 probe_sequence = int(next_probe - start) + 1
                 command_sends[probe_sequence] = time.monotonic()
-                endpoints.command_writer.write(frame(
+                endpoints.write(endpoints.command_writer, frame(
                     endpoints.types, "Event", 0, probe_sequence, run_id, "ControlCommand"))
                 health_sends[probe_sequence] = time.monotonic()
                 endpoints.heartbeat(probe_sequence, run_id)
@@ -462,7 +570,7 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
         drop.stop()
         stopped_producing = time.monotonic()
         terminal_converged = None
-        until = stopped_producing + 10
+        until = stopped_producing + drain_seconds
         while time.monotonic() < until:
             drain()
             now = time.monotonic()
@@ -473,17 +581,36 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                     and converged(truth, actual)):
                 first_recovery_convergence = now
             if (converged(truth, actual) and len(acknowledgments) == len(command_sends)
-                    and (not reliable or current_metrics["unacked"] == 0)):
+                    and (not reliable or (current_metrics["unacked"] == 0
+                                          and (not endpoints.requires_complete_history
+                                               or expected_writes <= observed_writes)))):
                 terminal_converged = now
                 break
             time.sleep(0.05)
         final = discrepancies(truth, actual)
+        missing_writes = missing_write_sequences(expected_writes, observations)
+        if endpoints.family == "Event" and endpoints.requires_complete_history and missing_writes:
+            errors.append(f"Required Event writes not observed: {len(missing_writes)}")
         if any(final.values()):
             errors.append("Destination state did not converge: " + json.dumps(
                 {name: len(values) for name, values in final.items()}))
         missing_acks = sorted(set(command_sends) - set(acknowledgments))
         if missing_acks:
             errors.append(f"Missing command ACKs: {missing_acks}")
+        event_delivery = {
+            "commands_sent": len(command_sends),
+            "commands_received": sum(command_receives.values()),
+            "acks_received": sum(ack_receives.values()),
+            "missing_commands": sorted(set(command_sends) - command_receives.keys()),
+            "duplicate_commands": sorted(n for n, count in command_receives.items() if count > 1),
+            "duplicate_acks": sorted(n for n, count in ack_receives.items() if count > 1),
+            "unexpected_commands": sorted(command_receives.keys() - set(command_sends)),
+            "unexpected_acks": sorted(ack_receives.keys() - set(command_sends)),
+        }
+        for name in ("missing_commands", "duplicate_commands", "duplicate_acks",
+                     "unexpected_commands", "unexpected_acks"):
+            if event_delivery[name]:
+                errors.append(f"Required Event {name}: {event_delivery[name]}")
         if endpoints.family == "Event" and samples[-1]["unacked"] != 0:
             errors.append(f"Reliable queue did not drain: {samples[-1]['unacked']} unacknowledged")
         if maximum_lag > 0.05:
@@ -515,14 +642,19 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                 errors.append("Transient-local late joiner did not converge")
         return {
             "run_id": run_id, "family": endpoints.family, "pattern": pattern,
+            "contract": endpoints.contract, "data_topic": endpoints.data_topic,
             "outage": outage, "filtered": filtered, "passed": not errors, "errors": errors,
             "started": start, "stopped_producing": stopped_producing,
+            "wall_clock_offset_s": time.time() - time.monotonic(),
+            "drain_allowance_s": drain_seconds,
             "outage_started": drop.started, "outage_finished": drop.finished,
             "requested_outage_s": outage_seconds,
             "drop_counters": drop.counters, "received_during_blackout": received_during_blackout,
             "operations": dict(counts), "blackout_operations": dict(blackout_counts),
             "scheduler_lag_max_s": maximum_lag, "operation_api_max_s": maximum_api,
+            "cpu_seconds": time.process_time() - cpu_started,
             "terminal_converged_at": terminal_converged, "final_discrepancies": final,
+            "convergence_probe": "receipt_with_periodic_fallback",
             "first_recovery_convergence_s": (first_recovery_convergence - restored
                                               if first_recovery_convergence is not None else None),
             "effective_qos": endpoints.effective_qos(), "metrics": samples,
@@ -532,8 +664,17 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                 "final": actual.get(stationary_key),
             },
             "commands": command_events, "missing_command_acks": missing_acks,
-            "health": health_events, "observations": observations,
+            "event_delivery": event_delivery,
+            "health": health_events,
+            "health_sends": [{"sequence": number, "at": at} for number, at in health_sends.items()],
+            "observations": observations, "operation_events": operation_events,
             "source_truth": truth, "destination_state": actual,
+            "write_history": {
+                "required": endpoints.family == "Event" and endpoints.requires_complete_history,
+                "expected": len(expected_writes),
+                "observed": len(expected_writes) - len(missing_writes),
+                "missing_sequences": missing_writes,
+            },
             "scope": "native DDS endpoints; not production-router or radio qualification",
         }
     finally:
@@ -551,39 +692,78 @@ def write_junit(results, path):
     ET.ElementTree(suite).write(path, encoding="unicode", xml_declaration=True)
 
 
-def main():
+def main(endpoint_class=NativeEndpoints, default_priority_mode="production",
+         default_family="both", priority_modes=PRIORITY_MODES):
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", type=float, default=20)
     parser.add_argument("--recovery", type=float, default=20)
     parser.add_argument("--outage-seconds", type=positive_seconds, default=2)
-    parser.add_argument("--family", choices=["Event", "Status", "both"], default="both")
+    parser.add_argument("--drain-seconds", type=positive_seconds, default=10)
+    parser.add_argument("--flow-profile", choices=("coarse", "fine", "burst"), default="coarse")
+    parser.add_argument("--capture-wire", action="store_true")
+    parser.add_argument("--capture-dir", type=Path)
+    parser.add_argument("--family", choices=["Event", "Status", "both"], default=default_family)
     parser.add_argument("--event-durability", choices=["production", "transient_local"],
                         default="production")
+    parser.add_argument("--priority-mode", choices=priority_modes, default=default_priority_mode)
+    parser.add_argument("--topic-priority", action="append", default=[])
     parser.add_argument("--pattern", choices=["steady", "short", "revival"], default="steady")
-    parser.add_argument("--control-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--control-only", action="store_true")
+    mode.add_argument("--outage-only", action="store_true")
     parser.add_argument("--unfiltered", action="store_true")
     parser.add_argument("--offset", type=float, default=0)
     args = parser.parse_args()
+    try:
+        priorities = topic_priorities(args.topic_priority)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.topic_priority and args.priority_mode not in TOPIC_PRIORITY_MODES:
+        parser.error("--topic-priority requires a sample-priority or channel mode")
+    if args.priority_mode != "production" and (
+            args.family != "Event" or args.event_durability != "production"):
+        parser.error("priority experiments require Event with production durability")
+    if args.flow_profile != "coarse" and args.priority_mode == "production":
+        parser.error("--flow-profile requires an experimental priority mode")
+    if args.capture_wire and args.capture_dir is None:
+        parser.error("--capture-wire requires an owned --capture-dir")
+    if args.priority_mode == "priority_bands_batch" and (
+            args.flow_profile != "coarse" or args.capture_wire):
+        parser.error("batch experiment requires coarse tokens and separately qualified wire decoding")
     if min(args.baseline, args.recovery) < 2 or not 0 <= args.offset < 2:
         parser.error("baseline/recovery must be >=2s and offset must be in [0,2)")
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
     for family in (("Event", "Status") if args.family == "both" else (args.family,)):
-        modes = (False,) if args.control_only else (False, True)
+        modes = (True,) if args.outage_only else (False,) if args.control_only else (False, True)
         for outage in modes:
             endpoints = None
+            capture = None
             try:
-                endpoints = NativeEndpoints(family, not args.unfiltered, args.event_durability)
+                if args.capture_wire:
+                    capture = WireCapture(
+                        args.capture_dir / f"{family}-outage-{outage}.pcapng", 201,
+                        args.baseline + args.recovery + args.outage_seconds + args.drain_seconds + 60)
+                endpoints = endpoint_class(family, not args.unfiltered, args.event_durability,
+                                           args.priority_mode, priorities, args.flow_profile)
                 result = run_case(endpoints, args.pattern, outage, args.baseline,
                                   args.recovery, args.offset, not args.unfiltered,
-                                  args.outage_seconds)
+                                  args.outage_seconds, args.drain_seconds)
             except Exception:
                 result = {"run_id": f"{family}-{args.pattern}-outage-{outage}",
                           "passed": False, "errors": [traceback.format_exc()]}
             finally:
                 if endpoints is not None:
                     endpoints.close()
+                if capture is not None:
+                    capture.close()
+            if capture is not None and "started" in result:
+                try:
+                    result["wire"] = capture.summarize(result)
+                except Exception:
+                    result["passed"] = False
+                    result["errors"].append(traceback.format_exc())
             results.append(result)
             (args.output / "results.json").write_text(json.dumps(results, indent=2) + "\n")
             write_junit(results, args.output / "junit.xml")

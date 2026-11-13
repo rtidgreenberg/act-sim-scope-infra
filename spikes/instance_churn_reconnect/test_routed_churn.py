@@ -10,12 +10,13 @@ import pytest
 import rti.connextdds as dds
 
 from test_two_topic_controller import alive, mesh, ready
-from test_presence_roster import ALIVE, DEAD, latest_mesh, mesh_reader, wait_mesh
+from test_presence_roster import ALIVE, DEAD, STALE, latest_mesh, mesh_reader, wait_mesh
 from util.dds_probe import writer_qos
 from spike import Blackout, frame, providers
 from workload import (
     STATIONARY_CONTACT_ID, Operation, converged, discrepancies, initial_identities, operations,
     positive_seconds,
+    routed_presence_errors,
 )
 
 
@@ -30,7 +31,9 @@ def test_routed_churn(mesh, family, outage, e2e_tmp_dir):
     writer = (source.writer(topic, type_name) if family == "Event"
               else wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_status")))
     reader = receiver.reader(topic, type_name)
-    _, types = providers()
+    qos, types = providers()
+    dead_timeout = int(qos.datareader_qos_from_profile(
+        "ACT_QOS_LIB::wan_union_status").property.get("act.presence.dead_timeout_sec"))
     run_id = f"routed-churn-{family}-{time.time_ns()}"
     truth, actual, observations = {}, {}, []
     counts, outage_counts = Counter(), Counter()
@@ -192,16 +195,16 @@ def test_routed_churn(mesh, family, outage, e2e_tmp_dir):
             if (drop.finished is None or drop.started is None
                     or not outage_seconds - 0.01 <= drop.finished - drop.started <= outage_seconds + 0.05):
                 errors.append("Outage duration outside requested tolerance")
-        if outage and outage_seconds >= 40:
-            if not any(item["peers"].get("Boat30/phase4") == DEAD for item in presence_trace):
-                errors.append("Two-topic health did not report DEAD during long outage")
-            if not presence_trace or presence_trace[-1]["peers"].get("Boat30/phase4") != ALIVE:
-                errors.append("Two-topic health did not recover to ALIVE")
+        if outage and outage_seconds >= 4:
+            errors.extend(routed_presence_errors(
+                presence_trace, drop.started, drop.finished, dead_timeout,
+                "Boat30/phase4", STALE, ALIVE))
         report = {
             "family": family, "outage": outage, "operations": dict(counts),
             "blackout_operations": dict(outage_counts), "scheduler_lag_max_s": lag_max,
             "outage_started": drop.started, "outage_finished": drop.finished,
             "requested_outage_s": outage_seconds, "presence_trace": presence_trace,
+            "system_dead_timeout_s": dead_timeout,
             "stationary_contact": {
                 "key": stationary_key, "observations": stationary_observations,
                 "final": actual.get(stationary_key),

@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="ThreeTopic">
+    <qos_profile name="events" base_name="ChurnSpike::priority_event">
+      <datawriter_qos>
+        <history><kind>KEEP_ALL_HISTORY_QOS</kind></history>
+        <protocol>
+          <rtps_reliable_writer>
+            <max_bytes_per_nack_response>524288</max_bytes_per_nack_response>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="contacts" base_name="ThreeTopic::events">
+      <datawriter_qos>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="contact_reader" base_name="ChurnSpike::event_reader">
+      <datareader_qos>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="contact_reader_no_suppression" base_name="ChurnSpike::event_reader">
+      <datareader_qos>
+        <protocol>
+          <rtps_reliable_reader>
+            <heartbeat_suppression_duration><sec>0</sec><nanosec>0</nanosec></heartbeat_suppression_duration>
+          </rtps_reliable_reader>
+        </protocol>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

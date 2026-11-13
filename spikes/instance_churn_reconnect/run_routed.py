@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -16,6 +17,8 @@ from workload import positive_seconds
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from harness_v2.qos.wan_policy import resolve_wan_policy
 
 
 def main():
@@ -30,6 +33,7 @@ def main():
     parser.add_argument("--license-dir", type=Path,
                         default=Path("/home/dgreenberg/rti_connext_dds-7.7.0"))
     args = parser.parse_args()
+    policy = resolve_wan_policy(os.environ)
     if min(args.baseline, args.recovery) < 2:
         parser.error("baseline/recovery must be >=2s")
     if not (args.license_dir / "rti_license.dat").is_file():
@@ -72,6 +76,7 @@ def main():
             "family": args.family, "event_durability_experiment": args.event_durability,
             "effective_private_qos_sha256": effective_qos_hash,
             "runtime_network": "none", "production_binary_overwritten": False,
+            "wan_policy_environment": policy,
         }, indent=2) + "\n")
         user = f"{os.getuid()}:{os.getgid()}"
         build_name, test_name = f"act-churn-build-{run_id}", f"act-churn-routed-{run_id}"
@@ -102,7 +107,7 @@ def main():
             "-e", "RTI_LICENSE_FILE=/shared/rti_license.dat",
             "-e", "NDDSHOME=/opt/rti.com/rti_connext_dds-7.7.0",
             "-e", "PYTHONPYCACHEPREFIX=/tmp/pycache",
-            "-e", "PYTHONPATH=/workspace/.test-deps:/workspace/router/test_e2e:/workspace/spikes/instance_churn_reconnect",
+            "-e", "PYTHONPATH=/workspace:/workspace/.test-deps:/workspace/router/test_e2e:/workspace/spikes/instance_churn_reconnect",
             "-e", "ACT_INSTANCE_CHURN_ISOLATED=1", "-e", "CHURN_RESULTS=/results",
             "-e", f"CHURN_BASELINE={args.baseline}", "-e", f"CHURN_RECOVERY={args.recovery}",
             "-e", f"CHURN_OUTAGE_SECONDS={args.outage_seconds}",
@@ -112,6 +117,9 @@ def main():
             "--junitxml=/results/junit.xml",
             "/workspace/spikes/instance_churn_reconnect/test_routed_churn.py",
         ]
+        for key, value in policy.items():
+            index = test.index("--entrypoint")
+            test[index:index] = ["-e", f"{key}={value}"]
         if args.family != "both":
             test.extend(["-k", args.family])
         print(f"Frozen private build; retained report {report}", flush=True)

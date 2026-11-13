@@ -1,6 +1,167 @@
 <?xml version="1.0"?>
 <dds>
   <qos_library name="ChurnSpike">
+    <!-- A nominal 2 Mbps DDS-data budget per participant, not a radio emulator. -->
+    <qos_profile name="priority_participant" base_name="ACT_QOS_LIB::wan_two_topic_participant">
+      <domain_participant_qos>
+        <property>
+          <value>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.scheduling_policy</name>
+              <value>DDS_HPF_FLOW_CONTROLLER_SCHED_POLICY</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.max_tokens</name>
+              <value>1</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.tokens_added_per_period</name>
+              <value>1</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.tokens_leaked_per_period</name>
+              <value>0</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.bytes_per_token</name>
+              <value>2500</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.period.sec</name>
+              <value>0</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.period.nanosec</name>
+              <value>10000000</value>
+            </element>
+          </value>
+        </property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="priority_event" base_name="ACT_QOS_LIB::wan_event">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+          <flow_controller_name>dds.flow_controller.token_bucket.churn</flow_controller_name>
+          <priority>-1</priority>
+        </publish_mode>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="priority_participant_fine" base_name="ChurnSpike::priority_participant">
+      <domain_participant_qos>
+        <property>
+          <value>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.max_tokens</name>
+              <value>5</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.tokens_added_per_period</name>
+              <value>5</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.bytes_per_token</name>
+              <value>1024</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.period.nanosec</name>
+              <value>20480000</value>
+            </element>
+          </value>
+        </property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="priority_participant_burst" base_name="ChurnSpike::priority_participant_fine">
+      <domain_participant_qos>
+        <property>
+          <value>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.max_tokens</name>
+              <value>50</value>
+            </element>
+          </value>
+        </property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="priority_on_demand" base_name="ChurnSpike::priority_participant">
+      <domain_participant_qos>
+        <property>
+          <value>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.period.sec</name>
+              <value>2147483647</value>
+            </element>
+            <element>
+              <name>dds.flow_controller.token_bucket.churn.token_bucket.period.nanosec</name>
+              <value>4294967295</value>
+            </element>
+          </value>
+        </property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="priority_channels" base_name="ChurnSpike::priority_event">
+      <datawriter_qos>
+        <multi_channel>
+          <filter_name>DDSSQL</filter_name>
+          <channels>
+            <element>
+              <filter_expression>original_topic = 'ControlCommand'</filter_expression>
+              <priority>-1</priority>
+            </element>
+            <element>
+              <filter_expression>original_topic = 'PlatformCommandAck'</filter_expression>
+              <priority>-1</priority>
+            </element>
+            <element>
+              <filter_expression>original_topic = 'ContactReport'</filter_expression>
+              <priority>-1</priority>
+            </element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="priority_bands" base_name="ChurnSpike::priority_event">
+      <datawriter_qos>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element>
+              <filter_expression>@priority &gt;= 100</filter_expression>
+              <priority>-1</priority>
+            </element>
+            <element>
+              <filter_expression>@priority &lt; 100</filter_expression>
+              <priority>-1</priority>
+            </element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="priority_bands_repair" base_name="ChurnSpike::priority_bands">
+      <datawriter_qos>
+        <protocol>
+          <rtps_reliable_writer>
+            <max_bytes_per_nack_response>524288</max_bytes_per_nack_response>
+          </rtps_reliable_writer>
+        </protocol>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="priority_bands_last1" base_name="ChurnSpike::priority_bands_repair">
+      <datawriter_qos>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="priority_bands_batch" base_name="ChurnSpike::priority_bands">
+      <datawriter_qos>
+        <batch>
+          <enable>true</enable>
+          <max_data_bytes>2048</max_data_bytes>
+          <max_samples>4</max_samples>
+          <max_flush_delay><sec>0</sec><nanosec>10000000</nanosec></max_flush_delay>
+          <source_timestamp_resolution><sec>0</sec><nanosec>0</nanosec></source_timestamp_resolution>
+        </batch>
+      </datawriter_qos>
+    </qos_profile>
     <!-- Match production adapter instance retention, without changing sample retention. -->
     <qos_profile name="event_reader" base_name="ACT_QOS_LIB::wan_event">
       <datareader_qos>
