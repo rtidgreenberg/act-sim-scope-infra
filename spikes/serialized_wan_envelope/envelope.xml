@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="SerializedWanEnvelope">
+      <member name="source" type="string" stringMaxLength="64" key="true"/>
+      <member name="original_topic" type="string" stringMaxLength="128" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="256" key="true"/>
+      <member name="destination" type="string" stringMaxLength="64"/>
+      <member name="schema_name" type="string" stringMaxLength="128"/>
+      <member name="schema_identity" type="string" stringMaxLength="64"/>
+      <member name="encoding" type="string" stringMaxLength="32"/>
+      <member name="operation" type="string" stringMaxLength="16"/>
+      <member name="payload" type="octet" sequenceMaxLength="65536"/>
+    </struct>
+  </types>
+</dds>

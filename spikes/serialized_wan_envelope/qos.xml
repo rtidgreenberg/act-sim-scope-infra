@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="SerializedSpike">
+    <qos_profile name="udp">
+      <participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <discovery>
+          <initial_peers><element>127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+        </discovery>
+        <discovery_config><request_types_filter>*</request_types_filter></discovery_config>
+      </participant_qos>
+    </qos_profile>
+    <qos_profile name="sample">
+      <datawriter_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_ALL_HISTORY_QOS</kind></history>
+        <representation><value><element>XCDR_DATA_REPRESENTATION</element></value></representation>
+        <writer_data_lifecycle><autodispose_unregistered_instances>false</autodispose_unregistered_instances></writer_data_lifecycle>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_ALL_HISTORY_QOS</kind></history>
+        <representation><value><element>XCDR_DATA_REPRESENTATION</element></value></representation>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="Position">
+      <member name="north" type="double"/>
+      <member name="east" type="double"/>
+    </struct>
+    <struct name="MoveCommand">
+      <member name="id" type="string" stringMaxLength="64" key="true"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="timestamp" type="longLong"/>
+      <member name="waypoints" type="nonBasic" nonBasicTypeName="Position" sequenceMaxLength="8"/>
+      <member name="limits" type="double" arrayDimensions="3"/>
+    </struct>
+    <struct name="NestedStatus">
+      <member name="id" type="string" stringMaxLength="64" key="true"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="timestamp" type="longLong"/>
+      <member name="position" type="nonBasic" nonBasicTypeName="Position"/>
+      <member name="notes" type="string" stringMaxLength="128"/>
+      <member name="enabled" type="boolean"/>
+      <member name="readings" type="long" sequenceMaxLength="16"/>
+    </struct>
+    <struct name="AddedPayload">
+      <member name="id" type="string" stringMaxLength="64" key="true"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="timestamp" type="longLong"/>
+      <member name="blob" type="octet" sequenceMaxLength="256"/>
+    </struct>
+    <struct name="WrongCommand">
+      <member name="id" type="string" stringMaxLength="64" key="true"/>
+      <member name="unexpected" type="long"/>
+    </struct>
+  </types>
+</dds>
