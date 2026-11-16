@@ -223,14 +223,36 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     for (const auto& group : groups) {
         const auto& binding = group.second;
         const auto topic = required(binding, "topic_name");
-        const auto& mapping = router::wan_mapping(topic);
         if (!topics.insert(topic).second) throw std::runtime_error("duplicate binding topic: " + topic);
+        binding_ids_[topic] = group.first;
+        const auto channel = required(binding, "channel");
+        const auto& catalog = router::wan_mappings();
+        const auto builtin = std::find_if(catalog.begin(), catalog.end(),
+                [&](const router::WanMapping& mapping) { return mapping.topic == topic; });
+        if (builtin == catalog.end()) {
+            if (receive_policy_ != "static" || monitoring != "false") {
+                throw std::runtime_error("custom bindings require static receive policy and monitoring=false");
+            }
+            const auto separator = channel.find('_');
+            const auto channel_family = channel.substr(0, separator);
+            const std::string family = channel_family == "event" ? "Event" :
+                channel_family == "state" ? "State" :
+                channel_family == "periodic" ? (three_topic() ? "Periodic" : "Status") : "";
+            if (family.empty() || (family == "State" && !three_topic())) {
+                throw std::runtime_error("unsupported channel for " + topic);
+            }
+            custom_mappings_[topic] = router::wan_full_type_mapping(
+                dds::core::QosProvider(config.types_xml_path), topic, required(binding, "type"),
+                family == "Event" || family == "State" ? "Event" : "Status",
+                required(binding, "branch"), required(binding, "instance_id"));
+            custom_families_[topic] = family;
+        }
+        const auto mapping = builtin == catalog.end() ? custom_mappings_.at(topic) : *builtin;
         if (required(binding, "type") != mapping.type ||
             required(binding, "branch") != mapping.branch ||
             required(binding, "instance_id") != mapping.instance_field) {
             throw std::runtime_error("binding " + group.first + " disagrees with fixed ACT codec catalog for " + topic);
         }
-        const auto channel = required(binding, "channel");
         const auto family = std::string(transport_mapping(topic).family);
         const auto prefix = family == "Event" ? "event_" : family == "State" ? "state_" : "periodic_";
         if (channel != std::string(prefix) + "high" && channel != std::string(prefix) + "normal") {
@@ -285,8 +307,7 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     validate_receive_policy();
     update_teams(teams == properties.end() ? std::vector<std::string>{} : split(teams->second));
     validate_receive_policy();
-    // The deployed codec is deliberately the fixed ACT catalog, not a generic registry.
-    router::WanCodec codec{dds::core::QosProvider(config.types_xml_path)};
+    router::WanCodec codec{dds::core::QosProvider(config.types_xml_path), codec_mappings()};
 }
 
 GatewayModel::GatewayModel(const std::string& path, const std::string& role,
@@ -546,7 +567,7 @@ int GatewayModel::publication_priority(const std::string& topic) const {
         if (family == "State") return high ? 400 : 200;
         return high ? 500 : 100;
     }
-    return std::string(router::wan_mapping(topic).family) == "Event"
+    return transport_mapping(topic).family == "Event"
         ? (high ? 400 : 200) : (high ? 300 : 100);
 }
 
@@ -560,9 +581,29 @@ std::vector<std::string> GatewayModel::families() const {
 }
 
 router::WanMapping GatewayModel::transport_mapping(const std::string& topic) const {
+    const auto custom = custom_mappings_.find(topic);
+    if (custom != custom_mappings_.end()) {
+        auto mapping = custom->second;
+        mapping.family = custom_families_.at(topic);
+        if (mapping.family == "State") mapping.qos_profile = "wan_contacts";
+        return mapping;
+    }
     auto mapping = router::wan_transport_mapping(topic, three_topic());
     if (std::string(mapping.family) == "Telemetry") mapping.family = "Periodic";
     return mapping;
+}
+
+std::vector<router::WanMapping> GatewayModel::codec_mappings() const {
+    if (custom_mappings_.empty()) return router::wan_mappings();
+    std::set<std::string> topics;
+    for (const auto& source : sources) topics.insert(source.first);
+    for (const auto& destination : destinations) topics.insert(destination.first);
+    std::vector<router::WanMapping> result;
+    for (const auto& topic : topics) {
+        const auto custom = custom_mappings_.find(topic);
+        result.push_back(custom == custom_mappings_.end() ? router::wan_mapping(topic) : custom->second);
+    }
+    return result;
 }
 
 std::string GatewayModel::transport_type(const std::string& family) const {
@@ -675,7 +716,8 @@ std::map<std::string, std::string> GatewayModel::properties() const {
     for (const auto& topic : destinations) topics.insert(topic.first);
     for (const auto& topic : topics) {
         const auto mapping = transport_mapping(topic);
-        const auto prefix = "act.binding." + topic + ".";
+        const auto id = binding_ids_.find(topic);
+        const auto prefix = "act.binding." + (id == binding_ids_.end() ? topic : id->second) + ".";
         result[prefix + "topic_name"] = topic;
         result[prefix + "type"] = mapping.type;
         result[prefix + "branch"] = mapping.branch;
@@ -734,8 +776,16 @@ router::WanReceiveFilter GatewayModel::receive_filter(const std::string& family)
         }
     }
     transport_type(family);
+    std::vector<router::WanMapping> mappings;
+    if (!custom_mappings_.empty()) {
+        for (auto mapping : codec_mappings()) {
+            mapping = transport_mapping(mapping.topic);
+            if (mapping.family == "Periodic") mapping.family = "Telemetry";
+            mappings.push_back(std::move(mapping));
+        }
+    }
     auto filter = router::wan_receive_filter(family == "Periodic" ? "Telemetry" : family,
-                                            config.node_name, interests, three_topic());
+                                            config.node_name, interests, three_topic(), mappings);
     if (mission_policy()) {
         // Preserve the qualified discriminator-first audience clauses. An outer
         // role/topic disjunction changes Connext's sequence-filter evaluation.
@@ -772,8 +822,17 @@ router::WanMetadata GatewayModel::metadata(
     bool initialized = false;
     for (const auto& binding : sources.at(topic)) {
         if (!binding.enabled) continue;
-        auto current = router::wan_source_metadata(binding.interest, data,
-                config.node_name, config.router_name, config.node_role, 0);
+        router::WanMetadata current;
+        if (custom_mappings_.count(topic)) {
+            current.source_id = config.node_name;
+            current.source_role = config.node_role;
+            current.control = binding.interest.control;
+            current.global = binding.interest.global;
+            current.destination_ids = binding.interest.destination_ids;
+        } else {
+            current = router::wan_source_metadata(binding.interest, data,
+                    config.node_name, config.router_name, config.node_role, 0);
+        }
         if (!initialized) {
             result = std::move(current);
             initialized = true;

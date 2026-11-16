@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="DeviceCommand" extensibility="mutable">
+      <member name="request_id" type="string" stringMaxLength="128" key="true"/>
+      <member name="opcode" type="int32"/>
+      <member name="bytes" type="octet" sequenceMaxLength="64"/>
+    </struct>
+    <struct name="WrongCommand" extensibility="mutable">
+      <member name="request_id" type="string" stringMaxLength="128" key="true"/>
+      <member name="opcode" type="int32"/>
+      <member name="bytes" type="octet" sequenceMaxLength="64"/>
+    </struct>
+    <struct name="SensorReading">
+      <member name="label" type="string" stringMaxLength="64"/>
+      <member name="values" type="float64" sequenceMaxLength="8"/>
+    </struct>
+    <struct name="DeviceStatus" extensibility="mutable">
+      <member name="device_id" type="string" stringMaxLength="128" key="true"/>
+      <member name="readings" type="nonBasic" nonBasicTypeName="SensorReading" sequenceMaxLength="4"/>
+      <member name="serial" type="uint64"/>
+    </struct>
+    <union name="DeviceEvents" extensibility="mutable">
+      <discriminator type="int32"/>
+      <case>
+        <caseDiscriminator value="41"/>
+        <member name="device_command" id="17" type="nonBasic" nonBasicTypeName="DeviceCommand"/>
+      </case>
+    </union>
+    <union name="DeviceUpdates" extensibility="mutable">
+      <discriminator type="int32"/>
+      <case>
+        <caseDiscriminator value="73"/>
+        <member name="device_status" id="29" type="nonBasic" nonBasicTypeName="DeviceStatus"/>
+      </case>
+    </union>
+    <struct name="WanAudience" extensibility="mutable">
+      <member name="control" type="boolean"/>
+      <member name="global" type="boolean"/>
+      <member name="destination_ids" type="string" stringMaxLength="255" sequenceMaxLength="16"/>
+    </struct>
+    <struct name="WanEvent" extensibility="mutable">
+      <member name="source_id" type="string" stringMaxLength="255" key="true"/>
+      <member name="original_topic" type="string" stringMaxLength="255" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="512" key="true"/>
+      <member name="schema_version" type="uint32"/>
+      <member name="source_role" type="string" stringMaxLength="255"/>
+      <member name="run_id" type="string" stringMaxLength="255"/>
+      <member name="session_id" type="uint64"/>
+      <member name="audit_sequence" type="uint64"/>
+      <member name="sent_at_ns" type="int64"/>
+      <member name="membership_revision" type="uint64"/>
+      <member name="audience" type="nonBasic" nonBasicTypeName="WanAudience"/>
+      <member name="payload" type="nonBasic" nonBasicTypeName="DeviceEvents"/>
+    </struct>
+    <struct name="WanStatus" extensibility="mutable">
+      <member name="source_id" type="string" stringMaxLength="255" key="true"/>
+      <member name="original_topic" type="string" stringMaxLength="255" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="512" key="true"/>
+      <member name="schema_version" type="uint32"/>
+      <member name="source_role" type="string" stringMaxLength="255"/>
+      <member name="run_id" type="string" stringMaxLength="255"/>
+      <member name="session_id" type="uint64"/>
+      <member name="audit_sequence" type="uint64"/>
+      <member name="sent_at_ns" type="int64"/>
+      <member name="membership_revision" type="uint64"/>
+      <member name="audience" type="nonBasic" nonBasicTypeName="WanAudience"/>
+      <member name="payload" type="nonBasic" nonBasicTypeName="DeviceUpdates"/>
+    </struct>
+  </types>
+</dds>

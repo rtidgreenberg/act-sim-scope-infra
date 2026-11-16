@@ -28,3 +28,9 @@ endif()
 
 add_executable(act_rs_config ConfigMain.cxx)
 target_link_libraries(act_rs_config PRIVATE act_rs_model)
+
+enable_testing()
+add_executable(test_full_type_bindings test_full_type_bindings.cxx)
+target_link_libraries(test_full_type_bindings PRIVATE act_rs_model)
+add_test(NAME full_type_bindings COMMAND test_full_type_bindings
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/full_type_bindings.xml")

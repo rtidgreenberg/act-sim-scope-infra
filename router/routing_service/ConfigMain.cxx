@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
                 YAML::Node entry;
                 entry["name"] = source ? model.input_port(topic.first) : model.output_port(topic.first);
                 entry["topic"] = topic.first;
-                entry["type"] = router::wan_mapping(topic.first).type;
+                entry["type"] = model.transport_mapping(topic.first).type;
                 entry["participant"] = binding.participant;
                 const auto filtered = model.periodic_input_profiles.find(topic.first);
                 auto profile = model.profile(binding.qos, source);

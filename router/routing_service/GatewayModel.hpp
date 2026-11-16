@@ -33,6 +33,7 @@ public:
     std::vector<std::string> families() const;
     router::WanMapping transport_mapping(const std::string& topic) const;
     std::string transport_type(const std::string& family) const;
+    std::vector<router::WanMapping> codec_mappings() const;
     std::string input_port(const std::string& topic) const;
     std::string output_port(const std::string& topic) const;
     void update_teams(const std::vector<std::string>& teams);
@@ -59,7 +60,10 @@ private:
     void validate_receive_policy() const;
     void peer_interests();
     std::map<std::string, std::string> input_ports_, output_ports_;
+    std::map<std::string, std::string> binding_ids_;
     std::map<std::string, std::string> source_recipients_, destination_recipients_;
+    std::map<std::string, router::WanMapping> custom_mappings_;
+    std::map<std::string, std::string> custom_families_;
     void validate_interests() const;
 };
 

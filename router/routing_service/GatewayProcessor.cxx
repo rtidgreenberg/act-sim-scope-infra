@@ -69,7 +69,7 @@ bool lifecycle(Writer writer, const Data& key, const dds::sub::SampleInfo& info,
 class GatewayProcessor : public rti::routing::processor::NoOpProcessor {
 public:
     explicit GatewayProcessor(const Properties& properties)
-        : model_(properties), types_(model_.config.types_xml_path), codec_(types_) {}
+        : model_(properties), types_(model_.config.types_xml_path), codec_(types_, model_.codec_mappings()) {}
 
     void on_start(Route& route) override {
         for (const auto& family : model_.families()) {
@@ -83,7 +83,7 @@ public:
             auto output = route.output<Data>(model_.output_port(destination.first));
             auto writer = output.dds_data_writer();
             validate_lan_participant(writer.publisher().participant(), model_, output.name());
-            if (output.create_data().type() != types_->type(router::wan_mapping(destination.first).type)) {
+            if (output.create_data().type() != types_->type(codec_.mapping(destination.first).type)) {
                 throw std::runtime_error("LAN output type mismatch: " + destination.first);
             }
             auto participant = writer.publisher().participant();
@@ -92,7 +92,7 @@ public:
         for (const auto& source : model_.sources) {
             auto input = route.input<Data>(model_.input_port(source.first));
             validate_lan_participant(input.dds_data_reader().subscriber().participant(), model_, input.name());
-            if (input.create_data().type() != types_->type(router::wan_mapping(source.first).type)) {
+            if (input.create_data().type() != types_->type(codec_.mapping(source.first).type)) {
                 throw std::runtime_error("LAN input type mismatch: " + source.first);
             }
         }

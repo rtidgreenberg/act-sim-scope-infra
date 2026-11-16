@@ -648,14 +648,14 @@ class NativeConfigurationTests(unittest.TestCase):
                                    if participant["name"] == "platform_wan")
                         self.assertEqual(wan["team_partition"], expected)
 
-    def test_explicit_rejects_missing_unknown_custom_catalog_and_wrong_family(self):
+    def test_explicit_rejects_missing_conflicting_catalog_keys_and_wrong_family(self):
         cases = [
             ("act.types_uri", None, "missing"),
             ("act.version", "2", "version"),
             ("act.binding.contact.type", "OtherType", "catalog"),
             ("act.binding.contact.branch", "other_branch", "catalog"),
             ("act.binding.contact.instance_id", "source", "catalog"),
-            ("act.binding.contact.topic_name", "CustomReport", "unmapped"),
+            ("act.binding.contact.topic_name", "CustomReport", "unexpected DDS keys"),
             ("act.binding.contact.channel", "event_normal", "channel"),
             ("act.binding.contact.tx.copy", "source", "unknown"),
             ("act.monitoring", "yes", "true or false"),

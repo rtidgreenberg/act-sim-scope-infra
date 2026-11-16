@@ -27,8 +27,10 @@ QoS and bindings, shipping them with environment files, start/stop scripts and
 a guide. Discovery/capture, automatic bundle generation and the setup/test app
 are deferred to later work over the same contract, not v1 prerequisites.
 Runtime consumes prepared native XML without YAML or the development helper.
-Bindings are explicit but limited to the current fixed ACT codec catalog:
-this is not an arbitrary application-type registry.
+Bindings are explicit. Existing ACT deployments retain their fixed catalog and
+application policy. Prepared non-ACT full-type branches are also supported with
+`act.receive_policy=static` and `act.monitoring=false`; this bounded data-plane
+path does not yet include generic monitoring or LAN auto-QoS.
 See the [release split](../../docs/routing-service-c2-platform-setup.md#agreed-release-split).
 The selected mapping implementation extends this processor, not a separate
 Transformation plugin; see the
@@ -360,8 +362,8 @@ per original topic; multiple legacy YAML aliases are merged during translation.
 | --- | --- |
 | `topic_name` | Exact original LAN/catalog topic, unchanged on receive |
 | `type` | Exact catalog payload type; must match native port type |
-| `branch` | Exact catalog full-type union branch |
-| `instance_id` | Exact existing catalog string-identity field, not a literal instance value |
+| `branch` | Exact prepared full-type union branch (fixed for built-in ACT topics) |
+| `instance_id` | Existing string-identity field, not a literal instance value; custom types require this as their sole DDS key |
 | `channel` | One supported family/priority channel, consistent with the catalog |
 | `tx.port` | Native LAN **input** port for LAN-to-WAN forwarding |
 | `rx.port` | Native LAN **output** port for WAN-to-LAN forwarding |
@@ -422,13 +424,58 @@ registrations and the three WAN reader/writer pairs. Keep
 Event and RouterHealth uses Periodic/Status; their WAN CFT cases must retain
 `source_id <> %0`. No extra WAN monitoring pair is permitted.
 
-**Catalog boundary:** the external type registry must supply the complete
-current ACT catalog and matching WanEvent/WanStatus unions. Type, branch and
-instance-field properties are validated against the fixed
-[WanCodec catalog](../src/core/WanCodec.cxx); they do not define new codec
-branches. A custom SensorReport union branch does not become supported merely
-by naming it in XML. Whole original payload copies and the existing
-authoritative ContactReport source restoration remain unchanged.
+**Prepared schema boundary:** ACT-only configurations still validate the complete
+[ACT catalog](../src/core/WanCodec.cxx), with unchanged whole-payload copies and
+authoritative ContactReport source restoration. Built-in ACT topic/type/branch/key
+definitions cannot be overridden. Custom bindings use the same grouped properties
+and frozen `WanEvent`/`WanStatus` envelope layout. Their named payload branch must
+have exactly the declared original type, not merely an assignable type, and one
+nonnegative, non-default union label. Missing/wrong branches, conflicting labels
+or member IDs, duplicate bindings and unsupported keys reject before forwarding.
+No application IDL or generated application classes are needed.
+
+For custom types, `event_*` and `state_*` select branches in `WanEvent`;
+`periodic_*` selects branches in `WanStatus`. The channel still chooses the
+physical family and priority. The configured node is the envelope source, the
+configured existing string key becomes the raw instance ID, and explicit
+`control`, `global`, `teams` or `exact:NAME` recipients supply audiences.
+ACT-only addressed-command extraction is not inferred for custom commands.
+Custom payloads are copied whole; no audit/source fields are guessed or rewritten.
+Envelope audit fields stay at their defaults on this bounded custom path.
+Custom bindings currently require static receive policy and disabled monitoring;
+the shared endpoint/independent-binding and LAN auto-QoS work remains separate.
+
+Explicit binding IDs are local labels, separate from literal topic names, and
+are preserved when preparing or reloading a bundle. For example, binding ID
+`command` can carry topic `devices.commands`; the dot stays in `topic_name`,
+not in the property-group ID. Development preparation retains its existing
+ACT topic-based IDs.
+
+Registry validation also checks envelope capacity before forwarding: at least
+255 characters for source/topic/role/run strings, 512 for the instance ID,
+and 16 audience names of at least 255 characters each. These are the existing
+envelope limits, not new payload fields. Payload instance keys must be strings
+with declared capacity no greater than the supported 512-character instance ID.
+Undersized envelopes and oversized/unbounded instance keys reject at startup
+with a capacity diagnostic rather than fail on later valid traffic.
+
+[`fixtures/full_type_bindings.xml`](fixtures/full_type_bindings.xml) is an
+entity-free registry fixture with a non-ACT command and nested status. Build
+`test_full_type_bindings` and run the `full_type_bindings`, `wan_codec` and
+`wan_interests` CTest cases in a fresh private build. With
+`ACT_RS_BUILD_DIR` pointing at its `routing_service` directory, run:
+
+```bash
+PYTHONPATH=router/routing_service python3 -m unittest test_config test_full_type_bindings
+```
+
+Set `ACT_RS_TEST_WORKDIR` to an owned writable work directory. Only inside an
+owned private network namespace, set `ACT_RS_SCHEMA_ISOLATED=1` to also run native
+processor round trips for both custom types and existing ACT command/status.
+The custom checks also cover dotted topic names, rejected undersized envelopes,
+and exact-boundary keys, identities, topics and full audience sets.
+These tests exercise prepared XML, the bundled registry and real LAN/WAN
+endpoints; they are not fleet/mission or independent late-binding qualification.
 
 ### Native LAN auto-QoS qualification
 
