@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="CatalogEntry">
+      <member name="original_topic" type="string" stringMaxLength="128"/>
+      <member name="type_name" type="string" stringMaxLength="128"/>
+      <member name="branch" type="string" stringMaxLength="64"/>
+      <member name="label" type="long"/>
+    </struct>
+    <struct name="CatalogState">
+      <member name="source" type="string" stringMaxLength="64" key="true"/>
+      <member name="revision" type="unsignedLong"/>
+      <member name="wan_topic" type="string" stringMaxLength="128"/>
+      <member name="envelope_type" type="string" stringMaxLength="128"/>
+      <member name="entries" type="nonBasic" nonBasicTypeName="CatalogEntry"
+              sequenceMaxLength="16"/>
+    </struct>
+    <struct name="SpikeProgress">
+      <member name="actor" type="string" stringMaxLength="32" key="true"/>
+      <member name="phase" type="unsignedLong"/>
+      <member name="status" type="string" stringMaxLength="32"/>
+      <member name="selection" type="string" stringMaxLength="128"/>
+      <member name="count" type="unsignedLong"/>
+      <member name="expected" type="unsignedLong"/>
+      <member name="pushed" type="longLong"/>
+      <member name="local_readers" type="unsignedLong"/>
+    </struct>
+  </types>
+</dds>

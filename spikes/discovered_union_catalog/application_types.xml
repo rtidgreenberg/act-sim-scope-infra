@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="SpikePoint">
+      <member name="north" type="double"/>
+      <member name="east" type="double"/>
+    </struct>
+    <struct name="SpikeMoveCommand">
+      <member name="command_id" type="string" stringMaxLength="64" key="true"/>
+      <member name="destination" type="string" stringMaxLength="64"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="issued_at" type="longLong"/>
+      <member name="waypoints" type="nonBasic" nonBasicTypeName="SpikePoint"
+              sequenceMaxLength="8"/>
+      <member name="limits" type="double" arrayDimensions="3"/>
+    </struct>
+    <struct name="SpikeModeCommand">
+      <member name="command_id" type="string" stringMaxLength="64" key="true"/>
+      <member name="destination" type="string" stringMaxLength="64"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="issued_at" type="longLong"/>
+      <member name="mode" type="string" stringMaxLength="64"/>
+      <member name="enabled" type="boolean"/>
+      <member name="arguments" type="long" sequenceMaxLength="8"/>
+    </struct>
+  </types>
+</dds>
