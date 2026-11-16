@@ -18,7 +18,7 @@ GOAL_FIELDS = {
 }
 OPTIMIZED_KINDS = (0, 3, 4, 5, 9, 12)
 OPTIMIZED_NAMES = {
-    0: "ControlCommand", 3: "MissionState", 4: "CoordinationState",
+    0: "Mission", 3: "MissionState", 4: "CoordinationState",
     5: "ControlFeedback", 9: "NavigationState", 12: "SituationalAwareness",
 }
 OPTIMIZED_RATES = {3: 0.2, 4: 0.2, 5: 0, 9: 1, 12: 0.8}
@@ -124,7 +124,7 @@ def datamodel(count, optimized=False):
             "version": 2, "application_type_count": 6, "dds_topic_count": 7,
             "squad_topics": ["NavigationState"],
             "team_topics": [OPTIMIZED_NAMES[k] for k in selected],
-            "c2_topics": ["ControlCommand", "ControlFeedback"],
+            "c2_topics": ["Mission", "ControlFeedback"],
             "team_endpoints_per_platform": 6, "endpoints_per_platform": 12,
             "control_endpoints": 8, "control_wire_learned_types": 4,
             "consolidation": {
@@ -132,7 +132,7 @@ def datamodel(count, optimized=False):
                 "MissionState": ["MissionState", "TaskProgress"],
                 "SituationalAwareness": ["ContactReport", "SharedObservation"],
                 "CoordinationState": ["RendezvousState", "CoordinationIntent"],
-                "ControlCommand": ["MissionAdd", "operator commands"],
+                "Mission": ["MissionAdd", "operator commands"],
                 "ControlFeedback": ["command acknowledgments", "ControlReport",
                                     "TransferReport", "TransferRequest", "ControlRequest"],
             },

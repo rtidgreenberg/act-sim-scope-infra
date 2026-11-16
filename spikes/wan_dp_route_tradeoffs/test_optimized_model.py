@@ -38,7 +38,7 @@ class OptimizedModelTests(unittest.TestCase):
         model = datamodel(3, True)
         self.assertEqual(model["squad_topics"], ["NavigationState"])
         self.assertEqual(len(model["team_topics"]), 3)
-        self.assertEqual(model["c2_topics"], ["ControlCommand", "ControlFeedback"])
+        self.assertEqual(model["c2_topics"], ["Mission", "ControlFeedback"])
         self.assertEqual(model["dds_topic_count"], 7)
         self.assertEqual(model["team_endpoints_per_platform"], 6)
         self.assertEqual(endpoint_inventory(6, 3, True), 80)

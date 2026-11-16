@@ -50,7 +50,7 @@ class WorkloadTests(unittest.TestCase):
         for mode in TOPIC_PRIORITY_MODES:
             with self.subTest(mode=mode), mock.patch.object(
                     sys, "argv", ["run.py", "--family", "Event", "--priority-mode", mode,
-                                  "--topic-priority", "ControlCommand=200"]), mock.patch.object(
+                                  "--topic-priority", "Mission=200"]), mock.patch.object(
                     runner, "resolve_wan_policy", side_effect=ParsedArguments):
                 with self.assertRaises(ParsedArguments):
                     runner.main()
@@ -58,7 +58,7 @@ class WorkloadTests(unittest.TestCase):
             error = io.StringIO()
             with self.subTest(mode=mode), redirect_stderr(error), mock.patch.object(
                     sys, "argv", ["run.py", "--family", "Event", "--priority-mode", mode,
-                                  "--topic-priority", "ControlCommand=200"]), mock.patch.object(
+                                  "--topic-priority", "Mission=200"]), mock.patch.object(
                     runner, "resolve_wan_policy") as policy:
                 with self.assertRaises(SystemExit) as stopped:
                     runner.main()
@@ -82,7 +82,7 @@ class WorkloadTests(unittest.TestCase):
                 with redirect_stdout(output), redirect_stderr(error), mock.patch.object(
                         sys, "argv", ["spike.py", "--output", work, "--control-only",
                                       "--family", "Event", "--priority-mode", mode,
-                                      "--topic-priority", "ControlCommand=200"]), mock.patch.object(
+                                      "--topic-priority", "Mission=200"]), mock.patch.object(
                         spike, "run_case", return_value=result):
                     with self.assertRaises(SystemExit) as stopped:
                         spike.main(endpoint_class=endpoint)
@@ -90,7 +90,7 @@ class WorkloadTests(unittest.TestCase):
                     self.assertEqual(stopped.exception.code, 0, error.getvalue())
                     endpoint.assert_called_once_with(
                         "Event", True, "production", mode,
-                        {"ControlCommand": 200, "PlatformCommandAck": 100, "ContactReport": 10},
+                        {"Mission": 200, "PlatformCommandAck": 100, "ContactReport": 10},
                         "coarse")
                     endpoint.return_value.close.assert_called_once_with()
                     self.assertTrue((Path(work) / "results.json").is_file())
@@ -198,15 +198,15 @@ class WorkloadTests(unittest.TestCase):
         self.assertEqual(entries[0].findtext("value"), "50")
 
     def test_logical_topic_priority_mapping(self):
-        priorities = topic_priorities(["ControlCommand=500", "ContactReport=5"])
+        priorities = topic_priorities(["Mission=500", "ContactReport=5"])
         self.assertEqual(priorities, {
-            "ControlCommand": 500, "PlatformCommandAck": 100, "ContactReport": 5})
+            "Mission": 500, "PlatformCommandAck": 100, "ContactReport": 5})
         for value in ("Unknown=10", "ContactReport=0", "ContactReport=-1",
-                      "ContactReport=nan", "ContactReport=2147483648", "ControlCommand",
+                      "ContactReport=nan", "ContactReport=2147483648", "Mission",
                       "ContactReport=١", "ContactReport=1.5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 topic_priorities([value])
-        self.assertEqual(topic_priorities([])["ControlCommand"], 100)
+        self.assertEqual(topic_priorities([])["Mission"], 100)
         self.assertEqual(topic_priorities(["ContactReport=2147483647"])["ContactReport"],
                          2_147_483_647)
 

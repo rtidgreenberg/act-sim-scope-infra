@@ -2,7 +2,7 @@
 
 TOPIC_CLASSES = {
     "ContactReport": "Contacts",
-    "ControlCommand": "Event",
+    "Mission": "Event",
     "PlatformCommandAck": "Event",
     "RouterHealth": "Status",
 }

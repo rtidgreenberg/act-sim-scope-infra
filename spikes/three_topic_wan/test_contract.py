@@ -40,7 +40,7 @@ class ContractTests(unittest.TestCase):
 
     def test_exact_three_class_mapping(self):
         self.assertEqual(TOPIC_CLASSES, {
-            "ContactReport": "Contacts", "ControlCommand": "Event",
+            "ContactReport": "Contacts", "Mission": "Event",
             "PlatformCommandAck": "Event", "RouterHealth": "Status"})
         self.assertEqual({topic_class(topic) for topic in TOPIC_CLASSES}, {"Contacts", "Event", "Status"})
         with self.assertRaisesRegex(ValueError, "Unmapped prototype topic"):

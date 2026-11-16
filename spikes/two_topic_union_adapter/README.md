@@ -25,6 +25,10 @@ and original key field. Patterns use POSIX `fnmatch`, without first-match
 precedence: unmapped or multiply matched topics fail explicitly. Startup checks
 the actual branch schema and discriminator against each mapping.
 
+The current application names are `PlatformStatus` and `Mission`; their original
+payload type names are unchanged. Startup checks resolve every exercised topic,
+including the `PlatformStatusAlias` wildcard case, before creating DDS entities.
+
 The current production C++ router selects explicit topic names. This small
 pattern-to-union selector is **spike logic**, not a claim that production already
 has wildcard conversion. The alias check proves that a wildcard can select a

@@ -454,7 +454,7 @@ def write_goal_report(rows, manifest, grouped, output):
         "| MissionState | Team + C2 | Mission state and task progress |",
         "| SituationalAwareness | Team + C2 | Contacts and shared observations |",
         "| CoordinationState | Team + C2 | Rendezvous and coordination intent |",
-        "| ControlCommand | C2 to platform | Mission/operator commands |",
+        "| Mission | C2 to platform | Mission/operator commands |",
         "| ControlFeedback | Platform to C2 | Tagged acknowledgments, reports and requests |",
         "| RouterHealth | C2/platform | Separate synthetic health |",
         "",

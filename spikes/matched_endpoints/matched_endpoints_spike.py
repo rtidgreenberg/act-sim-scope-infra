@@ -40,7 +40,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
 ACT_TYPES_XML = str(REPO_ROOT / "harness_v2/datamodel/gen/ActTypes.xml")
 
-TOPIC = "ControlCommand"
+TOPIC = "Mission"
 TYPE = "control_command"
 FIELD = "msg.destination"
 DOMAIN = int(sys.argv[1]) if len(sys.argv) > 1 else 61

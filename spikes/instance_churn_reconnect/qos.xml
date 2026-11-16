@@ -105,7 +105,7 @@
           <filter_name>DDSSQL</filter_name>
           <channels>
             <element>
-              <filter_expression>original_topic = 'ControlCommand'</filter_expression>
+              <filter_expression>original_topic = 'Mission'</filter_expression>
               <priority>-1</priority>
             </element>
             <element>

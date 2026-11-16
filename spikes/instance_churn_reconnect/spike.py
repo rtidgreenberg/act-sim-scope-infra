@@ -96,10 +96,10 @@ def wait_for(predicate, seconds=15):
 
 def frame(types, family, identity, sequence, run_id, topic=None):
     data = dds.DynamicData(types.type("Wan" + family))
-    topic = topic or ("ContactReport" if family == "Event" else "PlatformInitStatus")
-    source = f"Node_{identity}" if topic == "PlatformInitStatus" else "ChurnSource"
-    instance = source if topic == "PlatformInitStatus" else f"contact_{identity}"
-    if topic == "ControlCommand":
+    topic = topic or ("ContactReport" if family == "Event" else "PlatformStatus")
+    source = f"Node_{identity}" if topic == "PlatformStatus" else "ChurnSource"
+    instance = source if topic == "PlatformStatus" else f"contact_{identity}"
+    if topic == "Mission":
         instance = source
     data["source_id"] = source
     data["original_topic"] = topic
@@ -111,9 +111,9 @@ def frame(types, family, identity, sequence, run_id, topic=None):
     data["audit_sequence"] = sequence
     data["sent_at_ns"] = time.time_ns()
     data["audience.control"] = True
-    data["audience.global"] = topic == "PlatformInitStatus"
-    branch = {"ContactReport": "contact_report", "PlatformInitStatus": "navigation",
-              "ControlCommand": "command"}[topic]
+    data["audience.global"] = topic == "PlatformStatus"
+    branch = {"ContactReport": "contact_report", "PlatformStatus": "navigation",
+              "Mission": "command"}[topic]
     with data.loan_value("payload") as payload:
         with payload.data.loan_value(branch) as value:
             value.data["source"] = source
@@ -123,7 +123,7 @@ def frame(types, family, identity, sequence, run_id, topic=None):
             value.data["sent_at_ns"] = data["sent_at_ns"]
             if topic == "ContactReport":
                 value.data["contact_id"] = instance
-            elif topic == "ControlCommand":
+            elif topic == "Mission":
                 value.data["destination"] = "Receiver"
                 value.data["command_id"] = f"probe_{sequence}"
                 value.data["command_type"] = "CHURN_PROBE"
@@ -463,7 +463,7 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                 if item.info.valid:
                     data = item.data
                     topic = str(data["original_topic"])
-                    if topic == "ControlCommand":
+                    if topic == "Mission":
                         command_receives[int(data["audit_sequence"])] += 1
                         endpoints.acknowledge(data)
                         continue
@@ -473,14 +473,14 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                             health_events.append({"at": now, "age_s": now - sent,
                                                   "sent": sent, "sequence": int(data["audit_sequence"])})
                         continue
-                    if topic not in ("ContactReport", "PlatformInitStatus"):
+                    if topic not in ("ContactReport", "PlatformStatus"):
                         continue
                     instance = key(data)
                     value_sequence = int(data["audit_sequence"])
                     observed_writes.add(value_sequence)
                 else:
                     data = reader.key_value(item.info.instance_handle)
-                    if str(data["original_topic"]) not in ("ContactReport", "PlatformInitStatus"):
+                    if str(data["original_topic"]) not in ("ContactReport", "PlatformStatus"):
                         continue
                     instance = key(data)
                     value_sequence = actual.get(instance, {}).get("sequence", 0)
@@ -553,7 +553,7 @@ def run_case(endpoints, pattern, outage, baseline, recovery, offset=0.0, filtere
                 probe_sequence = int(next_probe - start) + 1
                 command_sends[probe_sequence] = time.monotonic()
                 endpoints.write(endpoints.command_writer, frame(
-                    endpoints.types, "Event", 0, probe_sequence, run_id, "ControlCommand"))
+                    endpoints.types, "Event", 0, probe_sequence, run_id, "Mission"))
                 health_sends[probe_sequence] = time.monotonic()
                 endpoints.heartbeat(probe_sequence, run_id)
                 next_probe += 1

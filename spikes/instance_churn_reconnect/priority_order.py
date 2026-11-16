@@ -40,7 +40,7 @@ def observe(mode, command_priority, contact_priority=10):
         for index in range(total):
             writer.write(frame(types, "Event", index, index + 1, run_id), params)
         params.priority = command_priority
-        writer.write(frame(types, "Event", 0, total + 1, run_id, "ControlCommand"), params)
+        writer.write(frame(types, "Event", 0, total + 1, run_id, "Mission"), params)
         if writer.qos.batch.enable:
             writer.flush()
         before_trigger = [s for s in reader.take() if s.info.valid]
@@ -58,7 +58,7 @@ def observe(mode, command_priority, contact_priority=10):
         if [sequence for topic, sequence in received if topic == "ContactReport"] != list(
                 range(1, total + 1)):
             raise AssertionError("Contact sample ordering changed")
-        command_index = received.index(("ControlCommand", total + 1))
+        command_index = received.index(("Mission", total + 1))
         overtakes = ((mode == "priority_channels" and command_priority > contact_priority)
                      or (mode in ("priority_bands", "priority_bands_batch", "priority_bands_repair",
                                   "priority_bands_last1")
@@ -120,7 +120,7 @@ def observe_self_ignore(mode, endpoint_class=NativeEndpoints):
         wait_for(lambda: any(
             sample.info.valid and int(sample.data["audit_sequence"]) == 1
             for sample in endpoints.reader.take()))
-        command = frame(endpoints.types, "Event", 1, 2, run_id, "ControlCommand")
+        command = frame(endpoints.types, "Event", 1, 2, run_id, "Mission")
         endpoints.acknowledge(command)
         wait_for(lambda: any(
             sample.info.valid and int(sample.data["audit_sequence"]) == 2

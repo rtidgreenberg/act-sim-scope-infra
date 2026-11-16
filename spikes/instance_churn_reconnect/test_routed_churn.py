@@ -27,7 +27,7 @@ def test_routed_churn(mesh, family, outage, e2e_tmp_dir):
     source = nodes["Boat30"][1]
     receiver = nodes["Control_20"][1]
     topic, type_name = (("ContactReport", "contact_report") if family == "Event"
-                        else ("PlatformInitStatus", "platform_init_status"))
+                        else ("PlatformStatus", "platform_init_status"))
     writer = (source.writer(topic, type_name) if family == "Event"
               else wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_status")))
     reader = receiver.reader(topic, type_name)

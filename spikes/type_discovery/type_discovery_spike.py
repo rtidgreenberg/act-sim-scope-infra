@@ -71,7 +71,7 @@ def _act_types():
         _types_provider = dds.QosProvider(ACT_TYPES_XML)
     return _types_provider
 
-TOPIC = "ControlCommand"
+TOPIC = "Mission"
 TYPE = "control_command"
 FIELD = "msg.destination"          # nested member — the real CFT / access path
 ADDRESSED = "Platform_30"

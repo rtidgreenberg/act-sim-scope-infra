@@ -1,6 +1,6 @@
 """Experimental logical-topic priorities, applied to writes and lifecycle samples."""
 
-DEFAULT_PRIORITIES = {"ControlCommand": 100, "PlatformCommandAck": 100, "ContactReport": 10}
+DEFAULT_PRIORITIES = {"Mission": 100, "PlatformCommandAck": 100, "ContactReport": 10}
 TOPIC_PRIORITY_MODES = ("sample_priority", "priority_channels", "priority_bands",
                         "priority_bands_batch", "priority_bands_repair", "priority_bands_last1")
 PRIORITY_MODES = ("production", "paced_fifo", *TOPIC_PRIORITY_MODES)

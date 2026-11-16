@@ -322,13 +322,17 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
     dds::core::QosProvider types(xml), qos(qos_xml);
     auto rules = load_rules(mapping);
     Codec codec(types, rules);
-    const std::string navigation = "PlatformInitStatus";
+    const std::string navigation = "PlatformStatus";
+    for (const auto& topic : {navigation, std::string("RouterHealth"), std::string("Mission"),
+                             std::string("PlatformCommandAck"), std::string("PlatformStatusAlias")}) {
+        select_rule(rules, topic);
+    }
     const auto nav = fixture(types, select_rule(rules, navigation), 1);
     const auto nav_meta = metadata(select_rule(rules, navigation), nav);
     auto frame = codec.pack(navigation, nav, nav_meta);
     require(codec.unpack(frame) == nav, "Whole-structure local copy changed data");
     reject("unknown topic", [&] { codec.pack("UnsupportedTopic", nav, nav_meta); });
-    reject("wrong original type", [&] { codec.pack("ControlCommand", nav, nav_meta); });
+    reject("wrong original type", [&] { codec.pack("Mission", nav, nav_meta); });
     reject("ambiguous patterns", [&] {
         auto ambiguous = rules;
         ambiguous.push_back(rules.front());
@@ -345,8 +349,8 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
         Codec bad(types, invalid);
     });
     reject("wrong envelope family", [&] {
-        auto command = fixture(types, select_rule(rules, "ControlCommand"), 1);
-        auto event = codec.pack("ControlCommand", command, nav_meta);
+        auto command = fixture(types, select_rule(rules, "Mission"), 1);
+        auto event = codec.pack("Mission", command, nav_meta);
         event.value<std::string>("original_topic", navigation);
         codec.unpack(event);
     });
@@ -387,8 +391,8 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
     dds::sub::Subscriber input_subscriber(adapter_input), wan_subscriber(wan_destination), output_subscriber(destination_app);
 
     std::vector<std::unique_ptr<Leg>> legs;
-    for (const auto& topic : {navigation, std::string("RouterHealth"), std::string("ControlCommand"),
-                             std::string("PlatformCommandAck"), std::string("PlatformInitStatusAlias")}) {
+    for (const auto& topic : {navigation, std::string("RouterHealth"), std::string("Mission"),
+                             std::string("PlatformCommandAck"), std::string("PlatformStatusAlias")}) {
         legs.emplace_back(new Leg(topic, select_rule(rules, topic), types, qos,
                                   source_publisher, input_subscriber, output_publisher, output_subscriber));
     }

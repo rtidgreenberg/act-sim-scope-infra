@@ -46,7 +46,7 @@ def inventory():
                     if topic != "Status" and endpoint["flow_controller"] != result["flow_controller"]:
                         raise AssertionError(f"Reliable classes do not share one budget: {name}: {endpoint}")
         for original_topic, writer in (
-                ("ContactReport", endpoints.command_writer), ("ControlCommand", endpoints.writer)):
+                ("ContactReport", endpoints.command_writer), ("Mission", endpoints.writer)):
             try:
                 endpoints.write(writer, frame(
                     endpoints.types, "Event", 1, 1, "wrong-class", original_topic))
@@ -96,7 +96,7 @@ def queued_priority(command_priority, contact_priority):
         commands = list(range(10001, 10005))
         for sequence in commands:
             writers["Event"].write(frame(
-                types, "Event", 0, sequence, run_id, "ControlCommand"), params)
+                types, "Event", 0, sequence, run_id, "Mission"), params)
         if any(list(reader.take()) for reader in readers.values()):
             raise AssertionError("On-demand controller leaked before its trigger")
         received = []

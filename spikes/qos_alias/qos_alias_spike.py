@@ -84,7 +84,7 @@ PARTICIPANT_ALIASES = {
     "platform_wan_udpv4_qos": "ACT_QOS_LIB::wan_router_participant",
 }
 
-TOPIC = "ControlCommand"
+TOPIC = "Mission"
 TYPE = "control_command"
 DOMAIN = int(sys.argv[1]) if len(sys.argv) > 1 else 71
 
