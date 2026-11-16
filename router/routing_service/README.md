@@ -1,20 +1,144 @@
 # Parallel Routing Service gateway
 
 This is the in-repository implementation of the ACT Routing Service processor.
-The existing C++ router remains the default. Nothing is migrated to
+The custom C++ router remains available; the retained mesh below explicitly
+selects Routing Service. Nothing is migrated to
 `references/legacy_harness` until the replacement passes the existing behavior
 and deployment gates.
 
-**Status: working data-plane milestone, not full router parity.** The launcher
-requires `--data-plane-only` and refuses to imply that health or monitoring
-parity is present.
+**Status: the XML-only, fixed-ACT processor, full native monitoring and platform
+mission receive policy are implemented and mesh-qualified for the reference workload.** Full startup is the
+launcher default. `--data-plane-only` explicitly disables ACT monitoring.
+Neither mode restores the retired route-management/reporting-mode controls.
+
+The current [architecture and development plan](../../docs/routing-service-processor-architecture-and-plan.md)
+consolidates the latest decisions. Platform-local mission-state CFTs start in
+Init and reset to Init after a whole-platform restart. ActiveMission additionally
+receives fleet-global peer PlatformStatus navigation positions and same-team
+peer PlatformMissionStatus/ContactReport; Init does not select those reports.
+
+For a minimal C2/platform connection, see the
+[step-by-step setup guide](../../docs/routing-service-c2-platform-setup.md).
+It separates the current executable three-topic recipe from the proposed
+scan/import, GUI mapping and generated-configuration workflow.
+
+**Release scope:** v1 explicitly defines application types, full-type unions,
+QoS and bindings, shipping them with environment files, start/stop scripts and
+a guide. Discovery/capture, automatic bundle generation and the setup/test app
+are deferred to later work over the same contract, not v1 prerequisites.
+Runtime consumes prepared native XML without YAML or the development helper.
+Bindings are explicit but limited to the current fixed ACT codec catalog:
+this is not an arbitrary application-type registry.
+See the [release split](../../docs/routing-service-c2-platform-setup.md#agreed-release-split).
+The selected mapping implementation extends this processor, not a separate
+Transformation plugin; see the
+[XML mapping research and phased plan](../../docs/routing-service-xml-mapping-plan.md).
+Each branch carries the complete original type. Selected-field/subtree mapping
+is deferred; no general field-copy engine is required for v1.
+XML bindings select one logical channel (`event_high`, `event_normal`,
+`state_high`, `state_normal`, `periodic_high` or `periodic_normal`), deriving
+family and priority together. The three physical topics and prototype YAML
+development settings remain supported.
+
+## Runtime correctness safeguards
+
+Prepared XML must give the LAN participant the DDS identity
+`act.node/act.router/act.lan_participant` in
+`domain_participant_qos/participant_name/name`. The renderer supplies it.
+Native startup checks every application LAN input/output's actual participant
+identity and domain against `act.lan_participant` / `act.lan_domain`, in addition
+to its type. Launcher preflight also rejects mismatched LAN participant references
+and domains. These source changes do not update a retained running mesh.
+When the combined LAN identity exceeds DDS's 255-byte name limit, it becomes
+`act.lan.sha256/` plus the SHA-256 digest of the three UTF-8 components, each
+prefixed by its decimal byte length and `:`. Renderer, preflight and native checks
+use the same rule; supported node/router names are not shortened or rejected.
+
+Rejected commands, receive-policy failures (including rollback failures), and
+route errors are bounded to the DDS diagnostic fields' 255-byte limit. Full
+errors remain in the structured router log; shortened diagnostics retain an
+explicit `ROLLBACK FAILED` indication. Invalid Periodic/Status lifecycle samples
+never count as valid traffic: health loss starts the configured STALE countdown,
+nonhealth lifecycle does not revive peers, and valid Status traffic recovers them.
+
+With monitoring enabled, platform mission-policy startup and successfully
+committed profile/team changes append `receive_policy` records to the existing
+`NODE_DEBUG_DIR/events.jsonl`. Run identity uses `ACT_RUN_ID`, falling back to
+`NODE_DEBUG_DIR/run_id`. Records contain `run_id`, local `node` / `source_node`,
+`topic: "PlatformStatus"`, a process-local `sequence`, equal positive
+`sent_at_ns` / `recorded_at_ns`, `receive_profile`, and the committed nonidentity
+`teams` list. Startup/restart emits Init before subsequent transitions; unchanged
+profile/team pairs, failed changes, static policies and control nodes emit none.
+An append failure is explicitly logged. This is committed receive-policy history,
+not a claim that already queued deliveries were removed atomically.
+
+## Retained mesh and final evidence (2026-11-16)
+
+The verified mesh is **retained running** on Control_20 and Platform_30–35,
+dashboard port **8080**, with canonical workdir `debug/mesh_runs/emane`.
+Its backend is `routing_service`, WAN contract `three_topic_union`, with
+**always-on reports** and prepared XML-only runtime configuration.
+Current compact evidence is retained under `debug/test_reports/`:
+`mission_cft_runtime.json`, `mission_cft_native_policy.xml`,
+`mission_cft_native_static.xml`, `mission_cft_live_missions.xml` and browser
+screenshots. These are local generated evidence, not committed source.
+
+Final recorded gates:
+
+- **9/9 C++ regression targets passed.**
+- **70 native processor/configuration tests plus 55 subtests passed**:
+  34 policy/configuration/mesh tests and 36 static compatibility tests.
+- **165 offline tests plus 60 subtests passed.**
+- **119 legacy/routes/configuration tests plus 5 subtests passed.**
+- **8 legacy monitoring tests passed.**
+- **5/5 live browser workflows passed**, zero skips, 375.89 seconds.
+- An owned one-platform route → cancel → RTB → COMPLETE check passed before
+  the six-platform gate. All seven final router logs were verified free of the
+  processor callback failure reproduced and repaired by the model-swap regression.
+
+Post-test state: all six platform peers `Init` / `CANCELLED`,
+`PRESENCE_ALIVE` / `ROUTER_OK`, teams unassigned,
+clocks at 1x, zero speed, targets hidden and impairments cleared. These results
+qualify the fixed-ACT reference deployment, not a generic registry, discovery/
+setup generation, automatic QoS selection or agreed fleet/load/resource limits;
+those remain open. Each platform peer's health contains three WAN writer
+observations with six native reader filters each. Native coverage includes
+whole-platform restart, all active/terminal phases, fleet-global navigation
+across teams/unassigned, same-team mission/contact selection, and 24 model-swap
+transitions with continued forwarding/heartbeats and clean callback logs.
+Queued-sample draining and sustained rapid-transition/load stress remain
+unqualified; these results do not establish atomic queue removal or fleet-wide
+filter barriers. Rollback failure coverage uses injected faults through the
+production transaction path, not induced native DDS failures.
+
+Owned lifecycle reference—the mesh is already running, so do not launch a
+second copy:
+
+```bash
+CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 \
+  harness_v2/scripts/run_mesh.sh up --emane --platforms 6 \
+  --router-backend routing_service --wan-contract three_topic_union \
+  --with-dashboard --workdir "$PWD/debug/mesh_runs/emane"
+```
+
+**Run the owned teardown before any binary/configuration changes, then
+rebuild/prepare/relaunch as one coordinated operation. Never patch generated live
+configs, rebuild live binaries or restart an individual router.**
+
+```bash
+CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 \
+  harness_v2/scripts/run_mesh.sh down --emane \
+  --workdir "$PWD/debug/mesh_runs/emane"
+```
 
 ## Architecture
 
 Each node runs one always-running multi-input/multi-output TopicRoute:
 
 - Static original-type LAN inputs and outputs, selected by node role.
-- Exactly one Event reader/writer and one Status reader/writer.
+- In `three_topic_union` mode, exactly one Event, State and Periodic
+  reader/writer pair, including State when no contact binding is enabled.
+- The existing `two_topic_union` mode retains its Event/Status pairs.
 - One `ActGatewayPlugin` processor; Routing Service creates and owns its DDS
   entities. No standalone custom-router forwarding engine runs underneath it.
 - The production [codec](../src/core/WanCodec.cxx), [audience rules](../src/core/WanInterests.cxx),
@@ -24,7 +148,26 @@ Each node runs one always-running multi-input/multi-output TopicRoute:
 
 Empty and `default` LAN endpoint QoS aliases resolve to the production
 `router_default_reader`/`router_default_writer` profiles. Named aliases still
-require an entry in `qos_profiles`; periodic Status inputs retain `lan_status_1s`.
+require an entry in `qos_profiles`. There is no automatic one-second Periodic
+input filter: native ports select manually authored XML profiles. An explicitly
+selected native profile remains in effect. Development translation replaces the
+old inherited `lan_status_1s` default with its unfiltered `lan_status` base unless
+that topic is explicitly selected in `periodic_input_profiles`.
+
+Physical topic names and payload types are independent:
+
+| Three-topic WAN name | DDS type | Payload branches |
+| --- | --- | --- |
+| Event | WanEvent | Commands, ACKs, assignments and reserved RouterConfig |
+| State | WanEvent | ContactReport only |
+| Periodic | WanStatus | Existing periodic reports, diagnostics and reserved health |
+
+These are unchanged schema-3 union types, not new WanState/WanPeriodic types.
+The processor rejects wrong-family frames after decoding; CFT interests also
+select original topics by physical family. In full mode, health and RouterConfig
+share these existing pairs; there are no hidden WAN monitoring endpoints.
+The deployed custom router calls the last topic Telemetry; do not mix it with
+Periodic on a live deployment.
 
 The processor merges source aliases, packs/unpacks whole structures, restores
 authoritative contact sources, and forwards native dispose/unregister only for
@@ -41,40 +184,46 @@ WAN content filters exclude the local origin. Own WAN publications and
 subscriptions are ignored on both sides, so local readers are not reliable
 writer destinations.
 
-## Agreed simplified scope (2026-11-12)
+## Selected v1 scope
+
+The three-topic data plane, six priority classes, explicit XML configuration,
+optional per-topic LAN input filtering and service-owned monitoring are
+implemented. Deployment/load/recovery gates in the
+[remaining deployment plan](../../docs/routing-service-three-topic-plan.md)
+remain separate.
 
 - Keep sessions, routes and endpoints static. Normal operation does not require
   Routing Service remote administration or compatibility with the old router's
   route-management commands.
-- Platforms publish all available telemetry locally by default. Control selects
-  the desired nodes, teams and original report types through reader content
-  filters, rather than commanding primary/detail/debug producer modes.
-- Apply a one-second `TIME_BASED_FILTER.minimum_separation` to periodic-status
-  **LAN input readers**, before processor packing and WAN publication. The
-  existing external `ACT_QOS_LIB::lan_status_1s` profile expresses this policy.
-  It means at most one accepted update per second **per original keyed
-  instance**, not one aggregate processor invocation per second or a guaranteed
-  periodic/latest-value snapshot.
-- Use that same one-second LAN-input policy for all periodic telemetry. Do not
-  add WAN-reader time throttling or per-original-topic WAN rate controls; WAN
-  CFTs select scope only. The WAN time-filter experiment below is retained as
-  evidence, not selected for implementation.
+- Platforms publish all available telemetry locally by default. The latest
+  mission-dependent selection direction is platform-side receive CFTs driven by
+  local state, not C2-driven route or producer-mode commands. Existing C2 receive
+  behavior is unchanged; the new policy is not implemented yet.
+- Keep Periodic reports always on, independent of old primary/detail/debug
+  gates. Input filtering is a separate **optional, off-by-default** per-topic
+  LAN-reader choice. `ACT_QOS_LIB::lan_status_1s` is an available one-second
+  profile, not an automatically selected policy. Its minimum separation is
+  per original keyed instance, not a periodic/latest-value snapshot guarantee.
+- Do not add WAN-reader time throttling or per-original-topic WAN rate
+  controls; WAN CFTs select scope only. Event/State LAN input time filtering is
+  explicitly rejected. The WAN time-filter experiment below is historical
+  evidence, not the selected architecture.
 - Do not throttle discrete Event traffic, application commands or their ACKs.
   Health keeps its separately specified cadence and presence behavior.
 - Historical queries and Persistence Service are deferred.
-- Keep the existing web server/bridge unchanged. The Routing Service variant
-  must publish the same externally consumed topics, DDS types, keys and field
+- Keep existing application monitoring contracts. The Routing Service variant
+  publishes the same externally consumed topics, DDS types, keys and field
   semantics as the custom router, including router status, health/presence,
   mesh summaries, link statistics and diagnostics. Controller journals are
   explicitly deferred; journal-driven views are not part of this parity gate.
   Static-route status must truthfully describe the configured topology; dropping
   old route-management commands does not remove these publication contracts.
 
-All-on periodic forwarding and the one-second LAN-input policy are implemented.
-The existing platform simulator already publishes its full set of telemetry
-tasks. Live scope changes and the existing server-consumed monitoring
-publications are still outstanding. WAN reader time filtering is qualified
-separately below but is deliberately not enabled.
+The existing platform simulator publishes its full telemetry task set. The
+processor retains team/audience updates and transactional model validation.
+These controls do not restore route-management or report-mode gating. Full
+monitoring reuses production presence/link collection with service-owned
+endpoints. WAN reader time filtering remains deliberately disabled.
 
 ## Build
 
@@ -90,19 +239,26 @@ cmake --build /tmp/act-rs-build \
 
 Outputs are `routing_service/libact_gateway_processor.so` and
 `routing_service/act_rs_config` under that build directory. This does not rebuild
-or overwrite the live mesh binary. Python launch/configuration requires PyYAML,
-already used by the repository.
+or overwrite the live mesh binary. Development YAML translation requires
+PyYAML and `act_rs_config`; prepared XML launch needs neither.
 
 ## Configure and run
 
 Run from the repository root with an offline copy of the production YAML:
 
-- Select `router.wan_contract: two_topic_union`.
-- Select `ACT_QOS_LIB::wan_two_topic_participant` for the WAN participant alias.
+- Select `router.wan_contract: three_topic_union`.
+- Select `ACT_QOS_LIB::wan_three_topic_participant` for the WAN participant alias
+  (or its `_emane` variant for the owned EMANE environment).
+- Select `ACT_QOS_LIB::wan_three_topic_event` for `wan_event` and
+  `ACT_QOS_LIB::wan_union_contacts` for `wan_contacts`.
 - Select `ACT_QOS_LIB::wan_union_status` for `wan_status`.
 - Set `router.admin_participant` to the local-role LAN participant.
-- Enable the desired Event bindings in that copy. Periodic Status bindings are
+- Enable the desired Event/State bindings in that copy. Periodic bindings are
   enabled automatically; old reporting-mode gates do not suppress them.
+
+For the retained two-topic mode, use `two_topic_union`, the
+`wan_two_topic_participant` profile and `wan_event: ACT_QOS_LIB::wan_event`;
+`wan_status` still resolves to `ACT_QOS_LIB::wan_union_status`.
 
 For example:
 
@@ -114,27 +270,266 @@ python3 router/routing_service/run.py \
 ```
 
 `--team` supplies initial audience membership without changing discovery
-partitions; repeat it for multiple exact IDs. Live membership changes are not
-implemented yet. `--render /tmp/gateway.xml` writes the complete configuration
-without starting DDS. All fixed QoS is copied from external production XML,
+partitions; repeat it for multiple exact IDs. Live membership changes are
+handled by the monitor's supported team-control path; old route-management
+commands are not restored. `--render FILE` writes the complete native XML and
+a sibling `FILE_STEM.types.xml` registry without starting DDS. All fixed QoS is
+copied from external production XML,
 including input instance retention. Three numeric DDS sentinel spellings are
 normalized to schema-equivalent symbolic values for Routing Service validation;
 their policy values are not retuned.
 
+### Prepared XML launch and preflight
+
+Prepare a deployment bundle using the development helper, or author the same
+native Routing Service XML directly:
+
+```bash
+python3 router/routing_service/run.py \
+  --config platform.yaml --role platform --node-name Boat30 --name rs \
+  --build-dir router/build/routing_service --team TEAM_A \
+  --render bundle/platform.xml
+
+python3 router/routing_service/run.py --xml bundle/platform.xml --validate-only
+python3 router/routing_service/run.py --xml bundle/platform.xml
+```
+
+`--render FILE` persists that XML and `FILE_STEM.types.xml` beside it. The XML
+embeds the prepared types and QoS; the processor also loads the companion type
+registry through `act.types_uri`. Generated registry and processor-library paths
+are absolute: update them deliberately if relocating the bundle. Deployment
+requires the matching compiled plugin, SDK/runtime and readable type registry,
+not the source YAML, `act_rs_config`, PyYAML or discovery/setup tooling.
+
+Without `--render`, development launch uses an owned temporary XML/type
+directory, honoring `TMPDIR` and cleaning it after the owned service exits.
+It does not write into a read-only checkout. Direct `--xml` launch writes no
+configuration files. `--service-name NAME` selects a non-default native service
+name; the default is `ACTGateway`.
+
+Preflight checks the original property entries before RTI converts them to a
+map: duplicate/unknown/missing properties, unresolved processor values, binding
+ports/types and unsupported Event/State input time filtering fail explicitly.
+It creates no DDS entities and is not a replacement for the native schema,
+codec/type and endpoint activation checks performed at startup. Launch through
+this wrapper to retain duplicate-property checking; a direct RTI executable
+invocation is not an equally preflight-validated path.
+
+Full mode has `act.monitoring=true`. For prepared XML, `--data-plane-only`
+requires an already-authored `act.monitoring=false`; it does not rewrite the
+bundle. Node/role/router/team command-line overrides belong only to development
+`--config` translation. Prepared XML supplies those values itself.
+
+### Exact processor-property grammar (v1)
+
+Properties are native `<processor><property><value><element>` entries, each
+containing one `<name>` and one `<value>`. Names are case-sensitive and unique.
+Processor values must be concrete at wrapper preflight; QoS configuration
+variables remain native XML configuration. Unknown fields, selected-field
+copies, transformations and omitted-field/default rules are rejected.
+
+Required globals:
+
+| Property | Value / constraint |
+| --- | --- |
+| `act.version` | Exactly `1` |
+| `act.types_uri` | Prepared type XML path/URI; absolute paths recommended |
+| `act.node` | Originating system/node identity, not the router process name |
+| `act.role` | `control` or `platform` |
+| `act.router` | Router half of the node/router identity |
+| `act.wan_contract` | `three_topic_union`, or retained `two_topic_union` |
+| `act.monitoring` | Lowercase `true` or `false` |
+| `act.lan_participant` | Native local LAN participant name |
+| `act.wan_participant` | Native WAN participant name, distinct from LAN |
+| `act.admin_participant` | Must equal `act.lan_participant` |
+| `act.lan_domain`, `act.wan_domain` | Decimal DDS domain IDs, each 0–232, matching those participants |
+
+Optional globals:
+
+- `act.teams`: semicolon-separated initial exact team names; empty/omitted means
+  no teams. Semicolons are list delimiters, with no escaping syntax. Empty or
+  duplicate entries reject.
+- `act.async_bandwidth_bps`: default `2000000`; positive 32-bit integer at least
+  2,000,000 and divisible by 800. The native XML flow-controller values must
+  express the intended budget; this property is not runtime QoS construction.
+
+Each unique group `act.binding.ID.` binds one catalog topic. There is one group
+per original topic; multiple legacy YAML aliases are merged during translation.
+
+| Group suffix | Requirement |
+| --- | --- |
+| `topic_name` | Exact original LAN/catalog topic, unchanged on receive |
+| `type` | Exact catalog payload type; must match native port type |
+| `branch` | Exact catalog full-type union branch |
+| `instance_id` | Exact existing catalog string-identity field, not a literal instance value |
+| `channel` | One supported family/priority channel, consistent with the catalog |
+| `tx.port` | Native LAN **input** port for LAN-to-WAN forwarding |
+| `rx.port` | Native LAN **output** port for WAN-to-LAN forwarding |
+| `tx.recipients`, `rx.recipients` | Required for each configured direction |
+| `tx.enabled`, `rx.enabled` | Optional lowercase startup `true`/`false`; default `true` |
+
+At least one direction is required. A transmit binding does not imply a receive
+binding. Direction settings without that direction's port reject. Ports must
+be unique and cannot use reserved `wan_in_`, `wan_out_` or `monitor_` prefixes.
+Default generated LAN names remain `lan_in_TOPIC` and `lan_out_TOPIC`; explicit
+LAN names are supported. WAN ports remain `wan_in_FAMILY`/`wan_out_FAMILY`.
+Monitoring's static route summaries name the logical directions `ID.tx` and
+`ID.rx`, not the original merged YAML route names.
+
+Recipients are semicolon-separated unions of:
+
+| Selector | Meaning |
+| --- | --- |
+| `control` | Control audience flag |
+| `global` | Global audience flag |
+| `addressed` | Existing payload destination; only Mission / ActPlatformStatusMode |
+| `teams` | Current team interests plus protected node/direct-peer identity |
+| `exact:NAME` | One exact destination node/team |
+| `none` | No audience selected; must be the sole selector, and does not mean disabled |
+
+Names retain the existing exact-name, 255-byte and aggregate 16-name checks;
+patterns, apostrophes and NULs reject. Team updates rebuild source/destination
+interests with rollback if validation rejects them. They do not change native
+WAN discovery partitions or reintroduce report-mode/route-management controls.
+
+For three-topic mode, supported channels are `event_high=600`,
+`periodic_high=500`, `state_high=400`, `event_normal=300`, `state_normal=200`,
+`periodic_normal=100`. ContactReport selects State; periodic ACT cases select
+Periodic. Explicit RouterHealth bindings require `periodic_high`. Two-topic
+mode uses Event/Status with `event_high=400`, `periodic_high=300`,
+`event_normal=200`, `periodic_normal=100`; `state_*` rejects.
+
+Example binding fragment inside the native processor's property `<value>`:
+
+```xml
+<element><name>act.binding.contacts.topic_name</name><value>ContactReport</value></element>
+<element><name>act.binding.contacts.type</name><value>contact_report</value></element>
+<element><name>act.binding.contacts.branch</name><value>contact_report</value></element>
+<element><name>act.binding.contacts.instance_id</name><value>contact_id</value></element>
+<element><name>act.binding.contacts.channel</name><value>state_normal</value></element>
+<element><name>act.binding.contacts.tx.port</name><value>lan_in_ContactReport</value></element>
+<element><name>act.binding.contacts.tx.recipients</name><value>control;teams</value></element>
+<element><name>act.binding.contacts.rx.port</name><value>lan_out_ContactReport</value></element>
+<element><name>act.binding.contacts.rx.recipients</name><value>teams</value></element>
+```
+
+This is a fragment, not a runnable service by itself. Declare matching native
+LAN ports/types, manually selected reader/writer profiles, participant type
+registrations and the three WAN reader/writer pairs. Keep
+`auto_configure_qos=false`. Full monitoring additionally declares the
+`monitor_command` LAN input and `monitor_ack`, `monitor_status`, `monitor_mesh`,
+`monitor_links`, `monitor_diagnostics` LAN outputs. Internal RouterConfig uses
+Event and RouterHealth uses Periodic/Status; their WAN CFT cases must retain
+`source_id <> %0`. No extra WAN monitoring pair is permitted.
+
+**Catalog boundary:** the external type registry must supply the complete
+current ACT catalog and matching WanEvent/WanStatus unions. Type, branch and
+instance-field properties are validated against the fixed
+[WanCodec catalog](../src/core/WanCodec.cxx); they do not define new codec
+branches. A custom SensorReport union branch does not become supported merely
+by naming it in XML. Whole original payload copies and the existing
+authoritative ContactReport source restoration remain unchanged.
+
+### Platform mission receive policy
+
+`act.receive_policy` defaults to `mission` on platforms; control reception is
+unchanged. The development YAML equivalent is `routing_service.receive_policy`.
+The approved fixed profiles are:
+
+| Profile | Local authority | Application WAN interests |
+| --- | --- | --- |
+| Init | Startup, IDLE, COMPLETE, CANCELLED | C2 Mission and Team |
+| ActiveMission | TRANSIT, ORBIT, RTB, HOLDING | C2 Mission/Team; same-team peer PlatformMissionStatus/ContactReport; fleet-global peer PlatformStatus navigation |
+
+Required RouterHealth/RouterConfig interests remain enabled. PlatformData and
+ActPlatformStatusMode are not selected. PlatformStatus positions are selected
+from all platform peers only while active, including across teams and when
+unassigned. An unassigned platform has no peer mission/contact interests; its
+protected node identity is not a team. Platform reporting to C2 remains always on. Peer report sources add
+the team audience without duplicating their logical sends.
+
+Preparation emits Init CFTs directly into the native XML, before readers start.
+The YAML helper adds the static peer LAN outputs; explicit XML must provide
+Mission, Team, PlatformStatus, PlatformMissionStatus and ContactReport output bindings and local
+PlatformMissionStatus/ContactReport inputs. The processor validates these
+requirements. State observation runs only on the local mission input, with
+native own-publication ignore retained. `source` must match the configured node;
+nonempty `source_node` must also match. Ordering uses `sent_at_ns` (or the existing
+microsecond `timestamp` converted to nanoseconds) and `audit_sequence` for equal
+timestamps. Invalid identity/state, missing timestamps and stale updates are
+diagnosed without preventing outgoing application forwarding or widening filters.
+The local timestamp watermark advances before state/filter application, so an
+older valid phase cannot supersede a newer rejected update. Foreign-source
+samples do not advance that watermark.
+
+State/team updates validate all filters first and use the same serialized
+transactional native CFT path. Failure rolls back every family, including the
+family whose update threw. Any rollback failure is explicitly reported; applied
+state/profile is not advanced. Already accepted reader samples may still drain
+after narrowing; changes do not promise an atomic fleet-wide barrier or replay.
+Whole-system startup always uses Init with no saved policy or request protocol.
+The source pump snapshots topic names before taking loans: a policy transaction
+replaces the model, so no iterator or binding reference may survive observation.
+
+RouterHealth reports `receive_profile`, `receive_state` (startup `Init`, then last
+successfully applied local phase) and `receive_filter_error`, separately from
+`reporting_policy=always_on`. Successful policy/team updates clear filter errors.
+For intentionally broad static data-plane acceptance or explicit legacy
+compatibility, set `act.receive_policy=static` (YAML:
+`routing_service: {receive_policy: static}`). This opt-in keeps existing static
+receive bindings and reports `receive_profile=static`; it is not the platform
+production default.
+
+### Optional Periodic LAN input filtering
+
+Leave native LAN readers unfiltered unless a particular topic needs filtering.
+Choose an XML-authored reader profile on that topic's native `<input>`; there
+is no second processor-property QoS authority. The development equivalent is:
+
+```yaml
+qos_profiles:
+  periodic_1s: ACT_QOS_LIB::lan_status_1s
+routing_service:
+  periodic_input_profiles:
+    PlatformData: periodic_1s
+```
+
+The helper emits `inputs[topic=PlatformData].profile` as the resolved profile,
+and the renderer uses it as the LAN input's `datareader_qos` base. Without the
+override, the inherited legacy `ACT_QOS_LIB::lan_status_1s` profile becomes
+`ACT_QOS_LIB::lan_status`; other selected route reader profiles remain unchanged.
+This selects existing XML profiles rather than constructing or retuning QoS in
+code. Explicit native XML reader profiles remain the deployment authority.
+Filtering does not turn always-on reports into old primary/detail/debug modes.
+Event/State input filtering is unsupported; WAN readers are not time-throttled.
+
 ### Asynchronous priority configuration
 
-The WAN writers use opt-in `rs_wan_event` and `rs_wan_status` XML profiles.
+The three WAN writers use opt-in `rs_three_topic_event`,
+`rs_three_topic_state` and `rs_three_topic_periodic` XML profiles.
 Their two `DDSPRIFLTR` channels share the `act_rs` highest-priority-first flow
-controller on the existing WAN participant. The launcher composes only the
-controller properties into that participant; discovery/transport settings,
-including EMANE settings when selected, remain inherited from its profile.
+controller on the existing WAN participant. The launcher composes the controller
+properties and only `resource_limits.participant_property_list_max_length` from
+`rs_priority_participant` into that participant. The external XML supplies the
+capacity (currently 64); no limit is hard-coded in Python. Other resource limits,
+discovery and transport settings, including EMANE interface selection, remain
+inherited from the selected WAN base profile.
 
 | Class | Sample priority | Default original topics |
 | --- | --- | --- |
-| Event / High | 400 | ControlCommand, PlatformCommandAck, ActTeamAssignment, ActPlatformStatusMode |
-| Status / High | 300 | RouterHealth |
-| Event / Normal | 200 | ContactReport |
-| Status / Normal | 100 | All other Status cases |
+| Event / High | 600 | Mission, PlatformCommandAck, Team, ActPlatformStatusMode |
+| Periodic / High | 500 | RouterHealth |
+| State / High | 400 | Explicit ContactReport override |
+| Event / Normal | 300 | Event topics explicitly assigned Normal; reserved RouterConfig defaults here |
+| State / Normal | 200 | ContactReport |
+| Periodic / Normal | 100 | All other periodic cases |
+
+Event retains reliable KEEP_ALL. State inherits reliable writer KEEP_LAST(1)
+and reader KEEP_ALL. Periodic remains best effort KEEP_LAST(1). All three
+writers share the same nominal 2 Mbps controller. The retained two-topic
+profiles `rs_wan_event` / `rs_wan_status` and their 400/300/200/100 ordering
+are unchanged. Priority preferences do not guarantee starvation-free health
+delivery or bounded application latency.
 
 Data, dispose and unregister all carry the configured priority. Both channels
 accept priority zero in their Normal band, but the processor stamps the
@@ -165,20 +560,20 @@ the radio/link capacity setting. The Config screen must expose the configured
 and effective budget, units and restart requirement, backed by the same
 validated setting rather than a separate UI-only value. A future environment
 override should feed that same resolver; precedence and validation must be
-explicit. Config-screen integration and an environment override are not yet
-implemented. Current changes take effect on service restart, not by retuning
+explicit. The read-only Config and Delivery APIs inspect native XML, embedded
+QoS overrides, configured bandwidth, priorities and LAN filtering. An environment
+override of the logical bandwidth setting is not implemented. Changes take effect on service restart, not by retuning
 the running mesh.
 
-No third contact topic is added. ContactReport remains reliable `KEEP_ALL` on
-Event; Status remains best effort `KEEP_LAST(1)`. These additions do not change
-legacy/custom-router profile selection. Strict priority does not prevent
-starvation under unlimited higher-class load.
+In three-topic mode ContactReport uses State's reliable latest-value policy,
+separate from Event retention. Two-topic mode still carries it on Event with
+KEEP_ALL. Legacy/custom-router profile selection is unchanged.
 
-**RouterHealth is assigned and tested as Status/High, but this data-plane
-milestone does not yet generate health or implement presence.** The native
-four-class scheduler test injects real health-branch samples; it is not a
-replacement for health/presence integration. Processor execution priority,
-journals and existing status/diagnostic publication parity remain separate.
+**RouterHealth is assigned Periodic/High (Status/High in two-topic mode).**
+Full mode produces health, presence, status, mesh summaries, link statistics and
+diagnostics through service-owned endpoints. Scheduler-only tests that inject
+health frames remain distinct from full-monitoring integration checks.
+Processor execution priority and controller journals remain separate/deferred.
 
 The launcher resolves the same WAN timeout/heartbeat/retry inputs as the current
 router, uses a disposable configuration directory, forwards termination to its
@@ -192,6 +587,42 @@ Node-local service grouping must not be changed into fleet-wide grouping.
 
 Never point development tests at the retained live mesh. Use private network
 namespaces, UDPv4, and the existing safe-domain allocator.
+
+## Three-topic data-plane qualification (2026-11-13, historical)
+
+This gate predates explicit XML configuration and the full-monitoring path.
+
+A fresh processor/config-helper build in Connext / Routing Service 7.7.0 passed:
+
+- **36 acceptance tests**, zero skips, across retained two-topic and new
+  three-topic modes (154.97 s). Coverage includes all fourteen application
+  payloads, exact physical endpoint counts, lifecycle, addressed filtering,
+  malformed-frame recovery, per-topic priorities, native writer policies,
+  six-class middleware reception order and State-only contact forwarding.
+- **18 configuration/launcher tests**. A broader unit discovery also found
+  three separately opt-in WAN time-filter checks, which were skipped.
+- Both documented role renders have ten ports and pass the installed Routing
+  Service XSD after variable expansion; all eight guide Bash blocks parse.
+
+The initial combined test run exposed shared-fixture directory collisions and
+domain-budget exhaustion, not processor failures. Contract-specific workdirs
+and removal of unused DDS reservations from configuration-only checks fixed
+the harness; the complete combined acceptance run then passed.
+
+Run acceptance checks with `ACT_RS_BUILD_DIR` set to the fresh variant build:
+
+```bash
+python3 -m unittest discover -s router/routing_service -p test_config.py
+PYTHONPATH=router/routing_service python3 -m unittest test_launcher
+python3 -m pytest -q -p no:cacheprovider \
+  router/test_e2e/test_routing_service.py \
+  router/test_e2e/test_three_topic_routing_service.py
+```
+
+Use an owned private network namespace, not host networking against the live
+mesh. The retained seven-node mesh was untouched. This is not a two-host,
+fleet/load, restart/recovery or health-generation integration gate. Evidence:
+[acceptance JUnit](../../debug/test_reports/rs_three_topic_0480d1ea.xml).
 
 ## Initial forwarding milestone (historical)
 
@@ -287,8 +718,9 @@ scheduling. No such architecture change is made by this qualification.
 For these keyed samples the writer still pushed **every write**: 644 pushes
 despite only 16 accepted samples in the one-second test, and 422 pushes in the
 split-reader test. WAN-reader time filtering limits processing/delivery, **not
-WAN transmission**. Keep the agreed pre-WAN LAN-input throttle for bandwidth
-reduction. Applying a period to the shared reader also applies it to health
+WAN transmission**. When filtering is explicitly needed, select it on the
+original LAN input, before WAN publication; it is not enabled by default.
+Applying a period to the shared reader also applies it to health
 instances; keep the health/deadline implications explicit. The tested one- and
 two-second separations fit the production two-second reader deadline.
 
@@ -321,34 +753,37 @@ Output resource records. Thus basic configured-route/port state and throughput
 do not require rebuilding the custom router's state machine or journal.
 
 These are not the application's `ActRouterStatus` topic or `RouterStatus` type.
-Keeping existing subscribers unchanged still requires a compatibility publisher
-for that contract, deriving fields from native monitoring, endpoint information,
-static configuration and processor counters as appropriate. One native
+The full gateway path supplies the application contracts through its
+service-owned `monitor_*` LAN ports, static configuration, native endpoint
+facts and processor counters, reusing production presence/link collection on
+the shared WAN ports. It does not depend on subscribing to RTI's monitoring bus.
+One native
 multi-port TopicRoute does not automatically describe every logical original-topic
 mapping inside the processor, nor prove end-to-end delivery. Native monitoring
 can be enabled independently of remote administration.
 
 This distinction was checked against the installed 7.7.0 IDL and
 [monitoring documentation](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/services/routing_service/monitoring.html);
-native monitoring integration is not yet runtime-qualified in this variant.
+RTI monitoring-bus integration is not selected or runtime-qualified in this variant.
 Do not implement controller journal machinery in the current scope.
 
 ### Per-original-topic status requirement
 
 Each logical original-topic entry in `ActRouterStatus` must identify its WAN
-family (`Event` or `Status`) and its configured priority, alongside processor
+family (Event/State/Periodic, or Event/Status in two-topic mode) and its configured priority, alongside processor
 forwarding/lifecycle counts and errors. The family identifies the shared WAN
 endpoint, not a second physical Routing Service TopicRoute. Matching and
 protocol counters remain shared-endpoint facts, not branch-specific evidence.
 
 The selected priority model has two levels, **High** and **Normal**, within
-each family: Event/High, Event/Normal, Status/High and Status/Normal. Each
+each family. Each
 original topic is assigned a level; Event is not implicitly High and Status is
-not implicitly Normal. These are priority classes, not four WAN topic names
+not implicitly Normal. These are priority classes, not six WAN topic names
 or a decision to create additional endpoints.
 
-The selected asynchronous transmission ordering is Event/High, Status/High,
-Event/Normal, then Status/Normal. Put RouterHealth in Status/High. Use
+The selected three-topic asynchronous ordering is Event/High, Periodic/High,
+State/High, Event/Normal, State/Normal, then Periodic/Normal. Put RouterHealth in
+Periodic/High and ContactReport in State/Normal by default. Use
 asynchronous writers sharing a highest-priority-first flow controller, with
 High/Normal MultiChannel separation within each family. Fixed policies belong
 in external XML; original-topic assignments supply the sample priorities.
@@ -356,12 +791,10 @@ Processor execution scheduling is a separate, deferred layer. This ordering
 improves health's preference over normal traffic but cannot guarantee health
 progress under continuously saturated Event/High traffic. The implementation
 and its default assignments are described above; fleet capacity, outage recovery
-and health-generation integration remain unqualified.
+and health progress under saturation remain unqualified.
 
-A third WAN topic for reliable `KEEP_LAST(1)` contact state is deferred:
-the selected implementation keeps ContactReport on Event/Normal with
-`KEEP_ALL`. A future separate contact topic would separate latest-contact
-retention from Event's reliable `KEEP_ALL` retention. History depth is per
+The third WAN topic now separates latest-contact retention from Event's
+reliable KEEP_ALL retention. History depth is per
 complete key, not one contact sample for the whole writer. Superseded updates
 may be replaced without delivering every observation; a writer's dispose also
 counts toward history depth. This may reduce disposal delay from same-contact
@@ -369,15 +802,11 @@ update backlogs, but does not bound delays across many contacts, transmission
 queues or outages. Qualify write/dispose/revive and remote final-state recovery
 before claiming a disposal-latency improvement. This is not persistence.
 
-The current `RouterRouteTopicStatus` type has neither an explicit WAN-family
-field nor a priority field. Plan an additive, explicitly typed extension rather
-than encoding these values in names or diagnostic strings. Publish priority
-assignments from the validated model described above; do not present configured
-priority as proof of latency.
-Existing topic names and fields remain the compatibility baseline. Showing the
-new fields in the dashboard requires checking bridge serialization and UI
-support; unchanged existing views do not imply automatic new-field rendering.
-This publication/schema work is not implemented yet.
+`RouterRouteTopicStatus` carries explicit `wan_family` and
+`publication_priority` fields supplied from the validated model. Do not present
+configured priority as proof of latency. Existing topic names and compatible
+fields remain the baseline; unchanged UI views do not imply that every added
+status field is rendered automatically.
 
 ## Remaining parity gates
 
@@ -385,19 +814,17 @@ The migration is **not complete** until retained-scope behavior tests can run
 against this backend. Deliberately retired management/mode behavior must be
 identified explicitly rather than reported as unchanged parity:
 
-- Broader unchanged application-command/ACK and live-mission acceptance.
-  All-on periodic forwarding and one-second LAN input now have targeted gates.
-- Config-screen integration of the system-level DDS flow-controller budget;
-  an environment override is a later configuration enhancement.
-- Live membership changes, outgoing metadata revisions, fixed-expression filter
-  parameter updates, rejection/rollback, and remote writer-side suppression.
-- Health on the same Status endpoints, presence transitions, restart/session
-  handling, passive RTT, LAN mesh summaries and independent publication cadence.
-- Protocol statistics, writer-observed filters, diagnostics and existing
-  server-consumed status publications, with unchanged topic/type/key
-  contracts. Validate against the existing web server/bridge without backend
-  changes; do not shift compatibility work into the server. Controller journals
-  and journal-driven views are deferred.
+- Broader retained application-command/ACK and live-mission acceptance.
+  Always-on reports, optional LAN filtering and full-monitoring acceptance have
+  focused tests, not a complete fleet/load gate.
+- Configured/effective budget qualification under load; an environment override
+  of the logical bandwidth setting remains a later enhancement.
+- Team/audience convergence and rollback under fleet churn/load, including
+  outgoing metadata revisions and remote writer-side suppression.
+- Health on the shared Periodic/Status pair under congestion, fleet restart,
+  teardown and session recovery; monitoring startup tests alone do not close this.
+- End-to-end protocol-statistics, diagnostics and monitoring freshness under
+  impairments. Controller journals and journal-driven views remain deferred.
 - Exact remote original-type validation, wrong-type containment, multi-producer
   lifecycle/alias stress, unknown keys, and queued final-state behavior.
 - Backend selection for the existing e2e suite; legacy/dynamic-route test contracts

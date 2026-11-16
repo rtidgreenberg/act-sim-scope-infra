@@ -2,8 +2,28 @@
 
 Date: 2026-11-13
 
-Status: implementation plan only. No code change, deployment or new test gate
-is implied by this document.
+Latest checkpoint (2026-11-14): native XML-only ACT bindings and monitoring are
+deployed on the owned six-platform mesh; **5/5 live browser workflows passed**.
+[Migration checkpoint 3.51](two-topic-wan-migration-plan.md#351-xml-only-processor-deployed-and-mesh-qualified-2026-11-14)
+records the current evidence and the remaining release boundaries.
+
+Current entry point: [processor architecture and development plan](routing-service-processor-architecture-and-plan.md).
+Next agreed direction: [platform mission-state receive filters](platform-mission-cft-plan.md).
+Whole-platform restart starts in Init with minimum C2 receive interests;
+local mission-state changes update platform CFTs, not routes or outgoing reports.
+That focused policy is planned, not implemented by the baseline above.
+
+Status: three-topic data-plane implementation is qualified in this checkout.
+The physical topic/type mapping and approved six-class priority configuration
+are implemented; 36 acceptance tests across both modes and 18
+configuration/launcher checks passed in an isolated Connext 7.7.0 environment.
+Both documented role renders passed the installed Routing Service XSD.
+XML-only configuration and shared-endpoint production health/control integration
+are now implemented for the fixed ACT catalog. See the
+[processor README](../router/routing_service/README.md) for executable native
+properties and launch commands. The phased text below retains the original
+acceptance plan; full mesh qualification and wider release gates must be recorded
+separately. Live deployment requires lifecycle ownership and explicit authorization.
 
 ## Agreed target
 
@@ -66,11 +86,84 @@ execution-priority scheduling.
   Reject time-filter configuration for Event or State inputs explicitly; do
   not apply a route-wide or participant-wide sampling default.
 
-### Remaining decision before priority implementation
+## Release scope: v1 manual bundle, v2 setup/test app
 
-Choose State/High and State/Normal positions in the global ordering and the
-initial ContactReport assignment. ContactReport was Event/Normal before this
-split; its new State priority must be explicit, not silently inferred.
+The user confirmed this split on 2026-11-13:
+
+| Release | Deliverable | Mapping/setup responsibility |
+| --- | --- | --- |
+| V1 | Explicit type/union XML, manual QoS and binding XML, per-node environment files, tested plugin, start/stop scripts and guide | Define and validate the configured deployment now; discovery-driven setup is deferred |
+| V2 | Setup/test app producing the same bundle | Discovery or XML import, catalog/field-tree editor, schema/config generation and isolated route tests |
+
+The latest user decision simplifies v1 to a union containing the **full original
+type**, not selected fields/subtrees. XML describes the LAN topic/type, logical channel,
+branch and generic identity/routing metadata. Preserve all nested structures,
+sequences, arrays and keys, and restore the same complete type on receive,
+including existing agreed authoritative source restoration. Field selection,
+renaming, partial reconstruction and default rules are deferred.
+Configurable full-type bindings are not limited to the current ACT catalog.
+
+Both ends receive the same prepared union/type and mapping contract before
+startup; each node's local bindings may differ. Schemas/mappings are static for
+the run. XML-only configuration is implemented, but this configurable full-type
+registry remains implementation work: adding XML files cannot bypass the current fixed catalog.
+Define and test the XML mapping contract before building a GUI over it.
+
+The latest decision is to define types, full-type union branches, bindings and
+QoS explicitly now, then add discovery/capture and setup generation later.
+The preparation helper is not a v1 prerequisite. Router runtime must run
+without that helper, YAML, the YAML helper, a setup app or an
+automated operator ping/pong tool. Use explicit qualified XML QoS profiles and
+safe manual verification; engineering acceptance tests remain mandatory.
+V2 automates authoring/testing, not a different forwarding runtime or a second
+configuration authority. Existing health/monitoring/parity gates below remain
+v1 obligations; a new setup GUI must not be confused with retained dashboard
+status/configuration integration.
+
+The user also confirmed native grouped properties, identical LAN topic names
+and full types at both ends, one existing string instance-ID field, and
+preservation of existing control/addressed/team/global rules. Keep LAN QoS
+references on the native port declarations. Start qualification with the
+reference workload and agree measured release limits before shipping.
+
+See the [release/setup procedure](routing-service-c2-platform-setup.md#agreed-release-split)
+for bundle contents and the staged implementation order.
+
+### XML mapping reuse investigation
+
+Mappings must be XML-authored. Follow Routing Service's transformation property
+conventions rather than adding a separate runtime mapping language. The shipped
+7.7.0 Assign library and example were inspected: its property convention is
+destination member path -> source member path. The
+[7.7 tutorials](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/services/routing_service/tutorials.html#example-changing-some-values-in-data)
+limit Assign to primitive fields, including strings/nested primitive leaves,
+not arrays/sequences. V1 therefore reuses the processor's whole-value union
+copy pattern, not Assign or a new general field-mapping engine.
+
+Reuse the standard property framework and existing copy helpers; retain
+custom envelope/union, identity, audience and lifecycle behavior. The user
+selected extending the existing processor, with XML syntax/conventions, rather
+than adding a Transformation plugin. The
+[processor-only XML mapping plan](routing-service-xml-mapping-plan.md) records
+the native copy research, proposed full-type binding properties, affected
+surfaces and staged gates. Four entity-free whole-member copy cases passed;
+XML-only startup is implemented for ACT; arbitrary full-type registry integration
+remains unfinished.
+
+### Approved priority order (2026-11-13)
+
+For the planned XML bindings, call the user-facing selection **channel**:
+`event_high`, `periodic_high`, `state_high`, `event_normal`, `state_normal`,
+`periodic_normal`. Each value determines both the WAN family and High/Normal
+priority; users do not configure those independently. These are six logical
+scheduling channels on the same three physical topics, not additional endpoints
+or payload branches. The current prototype's YAML settings are unchanged.
+
+The user selected Event/High > Periodic/High > State/High > Event/Normal >
+State/Normal > Periodic/Normal, with ContactReport initially State/Normal.
+The new profiles use sample priorities 600, 500, 400, 300, 200 and 100
+respectively, sharing the existing `act_rs` controller. The retained two-topic
+mode keeps its previous priorities and profiles.
 
 Strict priority does not guarantee health progress under an unbounded
 Event/High load. Qualification must distinguish configured preference from
@@ -82,10 +175,11 @@ The current dev/custom router already selects Event / State / Telemetry in
 three-topic mode. Its selected policy and qualification history are recorded in
 [migration-plan sections 3.40-3.42](two-topic-wan-migration-plan.md).
 
-The Routing Service variant still explicitly requires `two_topic_union`,
-enumerates Event/Status, constructs WAN type names from physical family names,
-and unconditionally selects `lan_status_1s` for Periodic-equivalent inputs.
-It is a data-plane milestone, not complete health/monitoring parity.
+The Routing Service variant now also accepts `three_topic_union` and enumerates
+Event/State/Periodic with explicit WanEvent/WanEvent/WanStatus type selection.
+It still supports the earlier two-topic mode, reads YAML and unconditionally
+selects `lan_status_1s` for Periodic-equivalent inputs. This is a data-plane
+milestone, not XML-only deployment or complete health/monitoring parity.
 
 The shared [codec catalog](../router/src/core/WanCodec.cxx) already separates
 physical selection from payload types: State carries the ContactReport branch
@@ -103,7 +197,7 @@ immutable while developing and qualifying the replacement.
 
 - Record the current dev mapping, QoS, lifecycle policy, health/config behavior
   and relevant test expectations as the comparison baseline.
-- Resolve State priority placement before implementing the new scheduling map.
+- Use the approved State priority placement recorded above.
 - Define the three-topic processor selection explicitly. Preserve existing
   legacy and two-topic behavior rather than globally replacing strings.
 - Use a physical-family mapping that produces Event / State / Periodic while
@@ -124,6 +218,11 @@ distinguish physical topic names from union type/branch names.
   by Routing Service XML, retaining the shared codec/catalog and audience helpers
   without depending on the custom router's YAML parser. Define each physical
   input/output once and keep logical audience selection separate.
+- Add the v1 XML full-type binding contract. Reuse whole-value union packing and
+  unpacking; reject branch/type mismatches, missing required keys and invalid
+  identity/routing metadata before forwarding. Qualify complete original types
+  containing nested structures, sequences and arrays without a selected-field
+  engine, the v2 app or silent fallback to the ACT catalog.
 - State accepts only ContactReport; Event excludes it; Periodic retains the
   existing periodic/health interests and source suppression.
 - Keep one intended logical output, two-sided local endpoint isolation and
@@ -217,6 +316,9 @@ new controls and labels.
 
 - Verify XML-only startup with no YAML configuration present and no YAML helper
   invocation, including processor mappings and explicit QoS profile references.
+- Install and run the complete v1 bundle without development/build tools or the
+  v2 app. Verify documented environment substitutions, type/mapping compatibility,
+  manual safe connectivity checks and rollback to the previous complete bundle.
 - Keep launcher shutdown bounded: allow ten seconds after the first stop signal,
   then report and force termination of the owned process group if needed.
   Verify graceful exit, stuck-child cleanup and signal-handler restoration

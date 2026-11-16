@@ -28,6 +28,43 @@ These documents hold the detailed evidence, code surfaces, decisions, and test g
 Update this dated handoff as implementation progresses; do not treat it as live state
 without inspecting the current worktree, commits, and runtime ownership first.
 
+### Current runtime checkpoint (2026-11-16)
+
+This supersedes older retained-mesh descriptions below. The owned EMANE mesh now
+runs the **XML-only Routing Service processor**, Control_20 plus Platform_30-35,
+contract `three_topic_union` (Event/State/Periodic), dashboard port 8080,
+workdir `debug/mesh_runs/emane`. All six peers are ALIVE/ROUTER_OK; missions
+cancelled, teams unassigned, clocks 1x, speed zero, targets hidden, impairments empty.
+Application names are Mission, Team and PlatformStatus; payload type names are
+unchanged. Platforms start Init (Mission/Team from C2 plus internal traffic).
+ActiveMission adds fleet-global PlatformStatus positions and same-team
+PlatformMissionStatus/ContactReport. Local mission state alone selects filters;
+whole-platform restart resets Init. Outgoing reports remain always on.
+Fresh gates: 9 C++ targets, 70 native/config tests plus 55 subtests,
+165 offline UI/mission/workload tests plus 60 subtests, 119 related legacy/config
+tests plus 5 subtests, 8 legacy monitor regressions and all 5 live browser mission
+workflows (375.89 s) passed, zero skips. Test groups overlap.
+The live-discovered model-replacement iterator bug is fixed; a red/green
+production-path regression covers 24 transitions without callback errors.
+The processor remains ACT-catalog-specific;
+discovery/auto-QoS and wider release gates are not complete. See
+[migration checkpoint 3.52](../docs/two-topic-wan-migration-plan.md#352-platform-mission-cfts-deployed-and-qualified-2026-11-16)
+and the [native XML guide](../router/routing_service/README.md).
+Use the owned `run_mesh.sh down --emane --workdir` lifecycle before rebuilding
+live binaries/types/configuration; do not restart individual routers.
+
+**Review follow-up (2026-11-16), qualified but not deployed:** source now bounds
+ACK/health diagnostics, gates presence refresh on valid Status, validates actual
+LAN endpoint ownership/domain, records applied receive-policy audit history,
+and repairs the renamed adapter spike catalog. Isolated gates passed: 38 config
+tests plus 59 subtests; 20 native policy/monitor tests; 36 native static acceptance
+tests; actual audit-record consumer and long-name boundary checks; 9 adapter
+PASS groups with 10 expected rejections. Groups overlap. The live mesh remains
+the checkpoint above, not these new binaries. Regenerate prepared XML before
+future deployment: LAN identities now include `/participant`, with a deterministic
+SHA-256 form beyond 255 bytes; WAN identities are unchanged. See
+[checkpoint 3.53](../docs/two-topic-wan-migration-plan.md#353-processor-review-fixes-qualified-not-deployed-2026-11-16).
+
 ### Baseline and implementation status
 
 - **2026-11-13 exhaustive-review follow-up resolved:** cross-writer spike controls

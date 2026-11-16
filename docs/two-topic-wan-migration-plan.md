@@ -2418,6 +2418,371 @@ changed. All DDS controls used owned network-isolated containers. The retained
 seven-node EMANE mesh was not restarted or modified; the deployed baseline and
 open recovery/load/health-priority qualification limits remain unchanged.
 
+### 3.44 Routing Service three-topic data plane (2026-11-13)
+
+The parallel Routing Service processor now supports the user-approved
+Event / State / Periodic contract, retaining its earlier Event / Status mode.
+Event and State reuse WanEvent; Periodic reuses WanStatus. No IDL changed.
+ContactReport is State/Normal; required Event retention and periodic policies
+remain separate. All writers share `act_rs`, with the approved preference:
+Event/High > Periodic/High > State/High > Event/Normal > State/Normal >
+Periodic/Normal (600/500/400/300/200/100).
+
+A fresh Connext / Routing Service 7.7.0 build passed **36 acceptance tests,
+zero skips** (154.97 s), across both contracts, and **18 configuration/launcher
+checks**. Three separately opt-in time-filter checks were skipped. Acceptance
+covers all fourteen application payloads, physical endpoint sharing, native
+lifecycle, filtering/recovery, writer policies and six-class middleware
+reception ordering. The initial combined run's directory collisions and
+domain-budget exhaustion were fixed in the shared test fixtures before the
+complete passing rerun. Both documented role renders have ten ports and pass
+the installed service XSD; all eight guide Bash blocks pass syntax checks.
+
+See the [processor README](../router/routing_service/README.md),
+[setup guide](routing-service-c2-platform-setup.md),
+[remaining plan](routing-service-three-topic-plan.md) and
+[acceptance JUnit](../debug/test_reports/rs_three_topic_0480d1ea.xml).
+The processor still requires YAML and the fixed catalog; XML-only startup,
+optional off-by-default Periodic input filtering, health/config generation,
+monitoring parity and wider recovery/load qualification remain open.
+Periodic is not the deployed custom router's Telemetry name. All tests used
+owned private network namespaces; no live deployment, binary overwrite or
+mesh reconfiguration occurred.
+
+### 3.45 Release scope and XML mapping reuse (2026-11-13)
+
+The user selected a manual bundle for v1: prepared types/QoS/Routing Service
+XML, XML-authored typed mappings, per-node environment files, start/stop scripts
+and a setup/check guide. Mapping includes selected fields/subtrees, nested
+structures, sequences and arrays, generic instance/routing assignments and
+explicit destination reconstruction. It is not limited to today's ACT catalog.
+V2 adds discovery/import, a mapping editor and an isolated route-test app that
+produces the same bundle; it is not a second runtime configuration authority.
+
+The installed 7.7.0 Assign library/example and official tutorials were checked.
+Reuse its destination/source XML property convention and extension framework,
+but the documented primitive-only mapper excludes arrays/sequences and cannot
+replace the required typed subtree/collection/envelope engine. Processor versus
+custom Transformation placement needs native qualification. XML-only startup
+and general mapping remain implementation work, not completed by §3.44.
+
+The [setup guide](routing-service-c2-platform-setup.md#agreed-release-split),
+[processor plan](routing-service-three-topic-plan.md) and
+[product-gap record](product-gaps.md) now reflect this release split. Existing
+health/monitoring/parity gates remain required; no runtime source or live
+deployment changed in this scope clarification.
+
+### 3.46 Processor-only XML mapping research and plan (2026-11-13)
+
+The user selected keeping typed mappings inside the existing processor, using
+Routing Service XML/Assign-style destination-to-source conventions, rather
+than adding a Transformation plugin. The
+[draft XML mapping plan](routing-service-xml-mapping-plan.md) covers the grammar,
+schema distribution, keys/lifecycle, audience/filter registry, XML-only launch,
+v1 packaging and v2 app boundary.
+
+An entity-free C++11 probe in the installed Connext 7.7.0 container passed four
+whole-member owning-copy cases: a struct, bounded primitive sequence, 2 x 3
+array and sequence of structs. No DDS entities were created. Installed headers
+also confirm processor properties become a string map, so duplicate XML names
+must be checked before map conversion. General collections, optional/union
+behavior, reconstruction, ownership and native mapped routes remain gated.
+
+This is feasibility research and a draft plan, not implemented XML-only startup
+or general schema mapping. No production runtime source, binary or live mesh
+changed for this work; prior integration/load/recovery limits still apply.
+
+### 3.47 V1 simplified to full original types in unions (2026-11-13)
+
+The user superseded the selected-field/subtree proposal: v1 will bind each
+original LAN topic/type to a union branch containing that **complete type**.
+All nested structures, sequences, arrays, optional fields and keys travel
+intact, with the existing agreed authoritative source restoration retained.
+Generic envelope instance/routing metadata and keyed-instance lifecycle remain
+required, but per-payload-field selection, renaming, partial reconstruction and
+default rules are deferred.
+
+The [processor-only plan](routing-service-xml-mapping-plan.md),
+[three-topic plan](routing-service-three-topic-plan.md),
+[setup guide](routing-service-c2-platform-setup.md) and
+[product-gap record](product-gaps.md) now reflect this simpler scope. The
+processor reuses whole-value pack/unpack; there is no new Transformation plugin
+or general field-copy engine in v1. V2 initially automates full-type binding,
+bundle generation and testing; selected-field mapping is optional future work.
+XML-only startup and configurable full-type bindings remain unfinished.
+This update changes documentation only; the live mesh is untouched.
+
+### 3.48 Logical channel names for XML bindings (2026-11-13)
+
+The user selected **channel** as the single user-facing setting:
+`event_high`, `periodic_high`, `state_high`, `event_normal`, `state_normal`,
+`periodic_normal`, retaining sample priorities 600/500/400/300/200/100.
+The planned XML binding uses `act.binding.<id>.channel`; family and priority
+are derived, not independently configured.
+
+These are logical scheduling channels on the existing Event/State/Periodic
+topics, not six topics, new union branches or additional endpoint pairs.
+Native XML MultiChannel bands and receive-family dispatch remain unchanged.
+The [binding plan](routing-service-xml-mapping-plan.md) and release/setup docs
+record this naming decision. This is a documentation/proposed-interface update;
+the prototype YAML settings, runtime code and live mesh were not changed.
+
+### 3.49 Discovery-driven type preparation and v1 binding choices (2026-11-13)
+
+The user confirmed native grouped XML properties, identical LAN topic names
+and full types at both ends, one existing string field for instance identity,
+and preservation of control/addressed/team/global routing. Core binding fields
+are channel, topic name and instance-ID field; manually authored LAN reader/
+writer QoS references remain on native ports. Start with the reference workload
+and agree measured release limits before shipping.
+
+The v1 preparation workflow is **capture -> generate shared XML -> start both
+routers**. Users do not hand-author original application type definitions.
+A new headless capture/export/generation helper must resolve complete types,
+compose stable full-type union branches and distribute the shared catalog
+before endpoints start. Router runtime then consumes the frozen bundle without
+the helper. V2 adds the setup/test app over that engine.
+
+Auto-QoS remains recorded as qualification-first LP-9; v1 still uses manual
+profiles. Discovery supplies types, not automatic union construction or QoS
+selection. XML-only startup, preparation and generic full-type bindings remain
+unimplemented in the prototype. The plans/setup/product-gap docs reflect these
+choices; no runtime source or live mesh changed.
+
+### 3.50 Explicit schemas now; discovery-driven setup later (2026-11-13)
+
+The user retained the typed-union/full-original-type design and clarified the
+release order: explicitly define application types, shared union branches,
+bindings and QoS now; add discovery/capture and setup generation later.
+This supersedes §3.49's capture/generation helper as a v1 prerequisite.
+Existing identity, channel, audience and manual-QoS decisions remain unchanged.
+
+Both ends receive the matching frozen type/binding contract before startup.
+Later tooling must produce that same deployment bundle rather than introduce
+another runtime configuration authority. The mapping plan, setup guide,
+processor plan/README and LP-9 now reflect this split. No runtime source,
+binary or live mesh changed; XML-only startup and generic bindings remain
+implementation work.
+
+### 3.51 XML-only processor deployed and mesh-qualified (2026-11-14)
+
+The user authorized replacing the owned mesh with the Routing Service processor.
+The deployment now consumes native Routing Service XML: explicit grouped binding
+properties, a complete original-type/union XML asset, native LAN QoS references
+and external shared-family QoS. The YAML helper is development preparation only;
+`run.py --xml FILE` does not load YAML or regenerate configuration. See the
+[processor README](../router/routing_service/README.md) for the exact grammar,
+direct startup and preflight commands.
+
+The processor uses the production presence/session/RTT and physical protocol
+statistics implementations through service-owned endpoints. Health shares
+Periodic; no dedicated WAN health pair is added. Native admin team changes
+update existing receive filters and subsequent outgoing metadata. Initial and
+updated platform membership preserve the protected node identity, including an
+unassigned platform. The existing aggregate sixteen-name limit still applies.
+
+The user explicitly selected **always-on periodic reporting**. The dashboard
+shows ALL, removes misleading mode controls and rejects unsupported mode changes.
+The five existing browser workflows now verify that policy explicitly, including
+continued detailed terminal reporting after blackout recovery; legacy assertions
+remain for the custom backend. Fixtures hide scenario targets before/after each
+workflow, and the blackout test requires a complete rolling capture window before
+asserting loss. Unknown capture coverage is not treated as measured loss.
+
+Two real deployment findings were fixed before scaling: Routing Service plus
+EMANE exceeded the default 32-property participant capacity, and unassigned
+platforms initially omitted their protected identity from health. The opt-in
+`rs_priority_participant` XML profile now authors capacity 64; renderer composition
+preserves other WAN base settings. Actual DDS tests also caught inherited
+one-second filtering; unconfigured Periodic LAN inputs now pass high-rate data,
+with per-key filtering only when explicitly selected.
+
+Fresh results in the supported Connext 7.7.0 container:
+
+- **9/9 C++ targets passed.**
+- **40 processor acceptance tests passed**, covering both contracts, complete
+  application forwarding, lifecycle, priorities, actual default/opt-in filtering,
+  team data isolation, production monitoring and health deadline/recovery.
+- **237 configuration/UI/control tests plus 245 subtests passed**, zero skips.
+  The three private-network native time-filter checks were explicitly enabled.
+- **8 legacy presence/link-statistics regressions passed.**
+- **5/5 live browser mission workflows passed**, zero skips, **387.42 s**.
+  They include real one-way blackout/reset, command/ACK and terminal recovery,
+  reporting/targets, route editing, multi-team missions and live reassignment.
+  Browser checks also verified the current JS asset, XML Config view and
+  always-on graph context menu.
+
+The retained mesh is Control_20 plus Platform_30 through Platform_35, backend
+`routing_service`, contract `three_topic_union`, in `debug/mesh_runs/emane`,
+dashboard port 8080. Live physical-writer observations show exactly Event,
+State and Periodic on all seven routers, each matched to one reader on each of
+the other six routers. All six peers are ALIVE/ROUTER_OK; RTT/protocol rows are
+valid. Missions are cancelled, teams unassigned, clocks 1x, speed zero, scenario
+targets hidden and controller impairments empty. Routing Service still emits
+startup WARNING records; do not describe the logs as warning-free.
+
+Recreate through the owned lifecycle, never by editing live generated XML:
+
+```bash
+CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 \
+harness_v2/scripts/run_mesh.sh up --emane --platforms 6 \
+  --router-backend routing_service --wan-contract three_topic_union \
+  --workdir "$PWD/debug/mesh_runs/emane" --with-dashboard
+```
+
+Use the matching `down --emane --workdir "$PWD/debug/mesh_runs/emane"` before a
+binary/type/configuration rebuild. Compact evidence is retained under
+`debug/test_reports/rs_processor_*`.
+
+This qualifies the current **fixed ACT catalog**, not an arbitrary external
+type registry or discovery-driven schema setup. Auto-QoS, future schema
+compatibility, full restart/multiple-producer ownership and bounded-load/recovery
+release gates remain separate work. The custom backend remains the default and
+rollback option; no commit or push was requested.
+
+### 3.52 Platform mission CFTs deployed and qualified (2026-11-16)
+
+The approved processor increment is implemented and deployed through the owned
+EMANE lifecycle. Application topic names are now **Mission**, **Team** and
+**PlatformStatus**, replacing ControlCommand, ActTeamAssignment and
+PlatformInitStatus. Payload types/fields are unchanged. RouterHealth adds
+`receive_profile`, `receive_state` and `receive_filter_error`; matching IDL/XML
+and participants were rebuilt/restarted together.
+
+`act.receive_policy=mission` prepares platform readers with Init predicates
+before accepting traffic. Init/IDLE/COMPLETE/CANCELLED select Mission and Team
+from C2 plus required internal traffic. TRANSIT/ORBIT/RTB/HOLDING select
+ActiveMission: retain those inputs and add same-team PlatformMissionStatus and
+ContactReport, plus fleet-global PlatformStatus positions. The user approved
+the navigation addition after live testing exposed the existing
+`WAITING_PEERS` collision-avoidance dependency. No new navigation topic or
+weakened safety check was introduced. An unassigned active platform receives
+navigation but no team-scoped mission/contact data.
+
+Only valid local PlatformMissionStatus drives the policy. Peer reports do not
+become local authority or loop back onto WAN. Timestamp/source validation,
+transactional team/profile updates and explicit error reporting are implemented.
+Whole-platform restart resets Init without replaying the old selection.
+Outgoing reports remain always on; C2 report reception, the three shared WAN
+pairs, channels/priorities and fixed XML QoS remain unchanged. Explicit
+`act.receive_policy=static` retains catalog acceptance coverage; the minimal
+setup recipe selects that mode explicitly.
+
+Live qualification caught and fixed a dangling source iterator: observing a
+local mission update replaced the model during its source-map traversal.
+The pump now retains independent topic keys and reacquires bindings.
+A production-preparation red/green regression executes 24 transitions, checks
+immediate forwarding and continued health, and rejects sample/callback errors.
+The pre-fix binary failed; the rebuilt binary and final live mesh pass.
+Browser qualification also now waits for actual home-position/speed convergence
+after COMPLETE: independent status topics are not an atomic snapshot.
+
+Fresh executed gates:
+
+- **9/9 C++ targets passed.**
+- **34 native policy/configuration tests plus 55 subtests passed**, including
+  state/team/source/staleness, fleet-global navigation, lifecycle, writer-side
+  filter evidence, the model-replacement regression and complete target
+  simulator/controller/Routing Service restart while C2 and another platform
+  remain running.
+- **36 two-/three-topic static acceptance tests passed** after the callback fix.
+  Run these separately from the policy group: combining all native selectors
+  exhausts the existing 52 reserved domain triples. Do not raise the domain limit.
+- **165 offline UI/mission/workload tests plus 60 subtests passed.**
+- **119 renamed legacy-route/configuration/mission tests plus 5 subtests passed**;
+  **8 legacy presence/link-statistics regressions passed**. Groups overlap;
+  do not sum them as a unique full-suite count.
+- **5/5 live browser mission workflows passed**, zero skips, **375.89 s**.
+  Startup/terminal Init, active-profile diagnostics, always-on reporting,
+  current JS revision, real blackout/reset, home return, multi-team orbits
+  and goal inheritance/reassignment are covered.
+
+The retained mesh is Control_20 plus Platform_30-35, backend `routing_service`,
+contract `three_topic_union`, dashboard port 8080, workdir
+`debug/mesh_runs/emane`. Final checks: six peers ALIVE/ROUTER_OK, Init/CANCELLED,
+teams unassigned, clocks 1x, speed zero, scenario targets hidden, controller
+impairments empty. Each platform's native writer observations show exactly
+Event/State/Periodic with six matched readers and six filter records per writer.
+No `rs.sample.error` or processor callback failure appears in any of the seven
+current router logs. Existing startup warnings are not claimed resolved.
+One coordinated fleet startup hit simulator readiness timeout; the owned
+teardown/relaunch succeeded, without a speculative configuration change.
+
+Compact evidence: `debug/test_reports/mission_cft_native_policy.xml`,
+`mission_cft_native_static.xml`, `mission_cft_live_missions.xml`,
+`mission_cft_offline.xml`, `mission_cft_legacy_routes.xml`,
+`mission_cft_legacy_monitor.xml`, `mission_cft_cpp.txt`,
+`mission_cft_runtime.json` and `mission_cft_screenshots/`.
+The browser screenshot of Init explicitly separates receive selection from
+the ALL outgoing-report badge.
+
+This is not a full router-suite or generalized release claim. Queue draining
+and sustained rapid-transition stress remain unqualified. Rollback-failure
+coverage uses injected callbacks, not native DDS faults. Generic registry,
+future schema compatibility, fleet-scale load/admission and broader
+multiple-producer recovery remain separate work. No commit or push was requested.
+
+### 3.53 Processor review fixes qualified, not deployed (2026-11-16)
+
+The five findings from the follow-on review are resolved in source:
+
+1. Outgoing ACK and health diagnostics respect their 255-byte DDS bounds.
+   Full errors remain logged, including rollback-failure information. A
+   valid-sized rejected command can no longer poison subsequent heartbeats
+   with an oversized stored diagnostic.
+2. Only valid received Status data refreshes presence. Nonhealth lifecycle
+   notifications cannot revive a stale peer; health NO_WRITERS/dispose uses
+   the intended loss/countdown path rather than legacy immediate-DEAD handling.
+3. Application audit expectations use node-owned `receive_policy` history,
+   emitted for startup/restart Init and successfully committed profile/team
+   changes. Navigation eligibility is evaluated at the send timestamp, not
+   the final profile. Missing or malformed history is inconclusive evidence.
+   Dashboard application diagnostics use the same history; primary WAN wire
+   Delivery metrics remain independent. Existing static audit rules are retained.
+4. The whole-structure adapter spike's mapping and wildcard alias now use
+   PlatformStatus and Mission. Startup resolves every exercised topic before DDS.
+5. Prepared XML preflight and native endpoint startup validate LAN ownership
+   and domain as well as payload type. LAN DDS identities are now
+   `node/router/participant`, or a deterministic SHA-256 form when this exceeds
+   255 bytes; WAN identities are unchanged. The bounded form preserves previously
+   valid long node/router names instead of silently tightening their limits.
+
+Executed isolated gates:
+
+- Fresh supported Connext 7.7.0 processor/config-helper build.
+- **38 configuration/launcher tests plus 59 subtests passed**, zero skips.
+- **20 native mission/monitor tests passed**, zero skips; the strengthened
+  nonhealth lifecycle case also passed independently.
+- **36 static two-/three-topic native acceptance tests passed**, zero skips,
+  after the LAN identity changes.
+- The actual-record audit consumer integration passed; four real native records
+  were independently parsed through the shared history and report recipient
+  resolver, including team removal without a profile change and restart Init.
+- A name-boundary regression passed with **four subtests**, verifying C++/Python
+  agreement and actual native startup for the bounded identity.
+- **27 dashboard offline tests: 24 passed, 3 skipped** on the host; **14
+  application-audit tests** and **2 mesh-launcher checks** passed. Host skips
+  require the Connext binding or optional browser environment; they are not
+  presented as completed browser/native coverage.
+- Adapter spike: **9 PASS groups and 10 expected rejections**, fresh private
+  build and run, including wildcard alias and native lifecycle checks.
+- Four expected-red native fault replays demonstrated the original ownership,
+  oversized-diagnostic and lifecycle defects. Python syntax, shell syntax and
+  whitespace checks passed.
+
+Test groups overlap and must not be added as a unique full-suite count.
+Compact evidence is under `debug/test_reports/rs_review_runtime_*`, including
+the four actual policy records in `rs_review_runtime_audit_records.jsonl`.
+Disposable builds and DDS participants used private container network namespaces,
+not the retained mesh's host network or live binaries.
+
+**No deployment was performed.** The seven-node mesh and its generated XML/binaries
+remain at checkpoint 3.52 and were checked healthy. Do not start the new plugin
+with old prepared LAN identities: use the owned teardown, rebuild, regenerate
+and coordinated relaunch. No new live mission/browser gate or full router-suite
+gate is claimed. Queue-draining, sustained-load and native rollback-fault limits
+from checkpoint 3.52 remain open. No commits or pushes were requested.
+
 ## 4. Audience selection and runtime changes
 
 Use ContentFilteredTopics (CFTs) for sample selection. Keep the selection fields

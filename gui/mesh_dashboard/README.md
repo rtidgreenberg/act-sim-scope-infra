@@ -231,6 +231,17 @@ are unreported, not zero: missing observations are not proof of RF loss. Capture
 on different hosts require synchronized clocks. Existing application `events.jsonl`
 audits remain separate diagnostics and never feed this tab.
 
+For mission-policy Routing Service runs, the application audit uses the
+node-owned `receive_policy` records in `events.jsonl`. Startup Init and successfully
+applied profile/team changes form a history: navigation recipients and peer
+mission/contact eligibility are evaluated at each sample's `sent_at_ns`, not
+against the latest dashboard health. The immutable manifest declares
+`platform_receive_policy: mission`; it does not claim that every platform always
+receives navigation. Missing or malformed policy history is incomplete evidence
+(an inconclusive CLI verdict), not inferred packet loss or a successful audit.
+Legacy static recipient rules remain unchanged. Existing retained runs without
+these records cannot retroactively qualify mission-dependent application delivery.
+
 The workspace tabs are **Graph**, **Mission**, **Delivery**, and **EMANE**.
 
 The graph starts in the C2 operator view. **Infrastructure stats** is unchecked on
