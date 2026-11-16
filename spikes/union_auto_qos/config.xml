@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- Native Routing Service template. qualify.py inserts the frozen types/QoS
+     and independent per-topic routes, then replaces these two placeholders. -->
+<dds>
+  <plugin_library name="Union">
+    <processor_plugin name="Adapter">
+      <dll>SPIKE_PLUGIN</dll>
+      <create_function>UnionAutoPlugin_create_processor_plugin</create_function>
+    </processor_plugin>
+  </plugin_library>
+  <routing_service name="UnionAuto">
+    <administration><enabled>false</enabled></administration>
+    <domain_route name="Gateway">
+      <participant name="lan">
+        <domain_id>SPIKE_LAN_DOMAIN</domain_id>
+        <domain_participant_qos base_name="UAQ::participant"/>
+        <register_type name="UaqCommand" type_ref="UaqCommand"/>
+        <register_type name="UaqStatus" type_ref="UaqStatus"/>
+      </participant>
+      <session name="IndependentTopics"/>
+    </domain_route>
+  </routing_service>
+</dds>
