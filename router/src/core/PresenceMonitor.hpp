@@ -179,12 +179,16 @@ public:
                     const std::string &health_topic = "RouterHealth",
                     const std::string &mesh_topic = "ActRouterMeshStatus",
                     dds::core::QosProvider wan_types = dds::core::null,
-                    WanAdapterFactory* shared_status = nullptr);
+                    WanPresenceTransport* shared_status = nullptr,
+                    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_mesh_writer = dds::core::null,
+                    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer = dds::core::null);
 
     ~PresenceMonitor();
 
     // IPresencePublisher — called from the controller strand on each PresenceTick.
     void publish_heartbeat(const RouterHealth &hb) override;
+    void log_receive_policy_audit(const std::string& profile,
+                                  const std::vector<std::string>& teams);
     void publish_diagnostics(const RouterDiagnostics &snapshot) override;
 
     // IPresencePublisher (D98) — called from the controller strand on each MeshTick, its
@@ -254,7 +258,7 @@ private:
     // cached — see the constructor comment and publish_heartbeat. dds::core::null if this
     // process has no team_scoped participant.
     dds::domain::DomainParticipant team_scoped_participant_;
-    WanAdapterFactory* shared_status_;
+    WanPresenceTransport* shared_status_;
     std::shared_ptr<WanStatusCallbacks> status_callbacks_;
     std::shared_ptr<WanConfigCallbacks> config_callbacks_;
     std::shared_ptr<StatusDeadlineQueue> status_deadlines_ =
@@ -270,12 +274,14 @@ private:
     dds::pub::Publisher lan_publisher_;
     dds::topic::Topic<RouterMeshStatus> mesh_topic_;
     dds::pub::DataWriter<RouterMeshStatus> mesh_writer_;
+    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_mesh_writer_;
     dds::topic::Topic<dds::core::xtypes::DynamicData> diagnostics_topic_;
     dds::pub::DataWriter<dds::core::xtypes::DynamicData> diagnostics_writer_;
 
     std::mutex audit_mutex_;
     std::string audit_path_;
     std::string audit_run_id_;
+    uint64_t policy_audit_sequence_ = 0;
 
     mutable std::mutex roster_mutex_;
     RouterHealth last_published_health_;

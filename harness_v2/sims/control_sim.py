@@ -60,7 +60,7 @@ class C2Sim:
         # Create Topics and associate with types.
         self.control_cmd_topic = dds.DynamicData.Topic(
             self.participant,
-            "ControlCommand",
+            "Mission",
             self.control_cmd_type,
         )
         self.platform_cmd_ack_topic = dds.DynamicData.Topic(
@@ -70,7 +70,7 @@ class C2Sim:
         )
         self.platform_init_status_topic = dds.DynamicData.Topic(
             self.participant,
-            "PlatformInitStatus",
+            "PlatformStatus",
             self.platform_init_status_type,
         )
         self.platform_detail_status_topic = dds.DynamicData.Topic(
@@ -161,8 +161,8 @@ class C2Sim:
     async def read_primary_status_data(self):
         print("Waiting for Primary Status data")
         async for data in self.platform_init_status_reader.take_data_async():
-            print(f'- Received PlatformInitStatus from {data["source"]}')
-            AUDIT.log("received", "PlatformInitStatus", data)
+            print(f'- Received PlatformStatus from {data["source"]}')
+            AUDIT.log("received", "PlatformStatus", data)
 
     async def read_detail_status_data(self):
         print("Waiting for Detail Status data")
@@ -239,8 +239,8 @@ class C2Sim:
                 cmd_sample["sent_at_ns"] = time.time_ns()
                 cmd_sample["timestamp"] = int(time.time() * 1_000_000)
                 self.control_cmd_writer.write(cmd_sample)
-                AUDIT.log("sent", "ControlCommand", cmd_sample)
-                print("Writing to ControlCommand topic")
+                AUDIT.log("sent", "Mission", cmd_sample)
+                print("Writing to Mission topic")
 
             # Contact report
             contact_sample["contact_id"] = f"C2-{(seq // 20) % 3:03d}"

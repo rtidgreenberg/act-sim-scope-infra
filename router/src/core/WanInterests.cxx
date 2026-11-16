@@ -39,11 +39,11 @@ WanInterest wan_interest(const RouterRouteSpec& route, const ParticipantState& w
     result.topic = topic;
     const auto& endpoint = source ? route.output : route.input;
     const auto& partition = source ? endpoint.publisher_partition : endpoint.subscriber_partition;
-    if ((topic == "ControlCommand" || topic == "ActPlatformStatusMode" ||
-         topic == "ActTeamAssignment") && !partition.empty() && partition != "CONTROL") {
+    if ((topic == "Mission" || topic == "ActPlatformStatusMode" ||
+         topic == "Team") && !partition.empty() && partition != "CONTROL") {
         throw std::runtime_error("addressed/broadcast control topics require the CONTROL audience");
     }
-    if (topic == "ControlCommand" || topic == "ActPlatformStatusMode") {
+    if (topic == "Mission" || topic == "ActPlatformStatusMode") {
         result.addressed = true;
         if (!source) {
             const auto& names = wan.team_partitions_on_endpoints
@@ -57,7 +57,7 @@ WanInterest wan_interest(const RouterRouteSpec& route, const ParticipantState& w
             }
             add_destination(result.destination_ids, node);
         }
-    } else if (topic == "ActTeamAssignment") {
+    } else if (topic == "Team") {
         result.global = true;
     } else if (partition == "PLATFORM" || (!wan.team_scoped && partition.empty())) {
         result.control = true;

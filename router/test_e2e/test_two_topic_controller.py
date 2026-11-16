@@ -16,12 +16,12 @@ from util.dds_probe import (
 )
 
 CASES = [
-    ("ControlCommand", "control_command", "source", "control"),
-    ("ActTeamAssignment", "TeamAssignment", "platform_node", "control"),
+    ("Mission", "control_command", "source", "control"),
+    ("Team", "TeamAssignment", "platform_node", "control"),
     ("ActPlatformStatusMode", "PlatformStatusMode", "platform_node", "control"),
     ("PlatformCommandAck", "control_command_ack", "source", "platform"),
     ("ContactReport", "contact_report", "contact_id", "platform"),
-    ("PlatformInitStatus", "platform_init_status", "source", "platform"),
+    ("PlatformStatus", "platform_init_status", "source", "platform"),
     ("PlatformData", "platform_data", "source", "platform"),
     ("PlatformMissionStatus", "platform_mission_status", "source", "platform"),
     ("PlatformWaypointStatus", "platform_waypoint_status", "source", "platform"),
@@ -176,7 +176,7 @@ def test_all_application_cases_and_only_two_wan_topic_names(mesh, wan_contract):
         if topic == "ContactReport":
             sample["source"] = "Boat30"
             sample["source_node"] = "Boat30"
-        if topic == "ControlCommand":
+        if topic == "Mission":
             sample["destination"] = "Boat30"
             sample["payload"] = list(range(256)) * 32
         endpoints.append((source.writer(topic, type_name),
@@ -275,7 +275,7 @@ def test_multiple_contacts_preserve_system_origin_and_instance_identity(mesh, wa
 
 @pytest.mark.parametrize("topic,type_name,instance_field,family", [
     ("ContactReport", "contact_report", "contact_id", "Event"),
-    ("PlatformInitStatus", "platform_init_status", "source", "Status"),
+    ("PlatformStatus", "platform_init_status", "source", "Status"),
 ])
 @pytest.mark.parametrize("input_leg", ["lan", "wan"])
 def test_application_instance_lifecycle_through_route(
@@ -322,7 +322,7 @@ def test_application_instance_lifecycle_through_route(
         outgoing = routed_frame
         outgoing["source_id"] = origin
         outgoing["audience.control"] = True
-        if topic == "PlatformInitStatus":
+        if topic == "PlatformStatus":
             instance_id = origin
             outgoing["instance_id"] = instance_id
             outgoing["payload.navigation.source"] = origin
@@ -464,10 +464,10 @@ def test_team_updates_exact_interests_and_source_alias_gates(mesh):
     boat, other, control = (nodes[name][1] for name in ("Boat30", "Boat31", "Control_20"))
     data_writer = boat.writer("PlatformData", "platform_data")
     data_reader = other.reader("PlatformData", "platform_data")
-    nav_writer = boat.writer("PlatformInitStatus", "platform_init_status")
-    nav_other = other.reader("PlatformInitStatus", "platform_init_status",
+    nav_writer = boat.writer("PlatformStatus", "platform_init_status")
+    nav_other = other.reader("PlatformStatus", "platform_init_status",
                              qos=reader_qos("lan_status_1s"))
-    nav_control = control.reader("PlatformInitStatus", "platform_init_status")
+    nav_control = control.reader("PlatformStatus", "platform_init_status")
     sample = boat.sample("platform_data", source="Boat30", audit_sequence=1)
     ready(nodes, "Boat30", "platform_team_to_wan")
     ready(nodes, "Boat31", "wan_team_to_platform")
@@ -531,9 +531,9 @@ def test_addressed_and_broadcast_control_survive_team_changes(mesh):
     nodes, _, provider = mesh
     control = nodes["Control_20"][1]
     boat, other = nodes["Boat30"][1], nodes["Boat31"][1]
-    writer = control.writer("ControlCommand", "control_command")
-    local = boat.reader("ControlCommand", "control_command")
-    remote = other.reader("ControlCommand", "control_command")
+    writer = control.writer("Mission", "control_command")
+    local = boat.reader("Mission", "control_command")
+    remote = other.reader("Mission", "control_command")
     sample = control.sample("control_command", source="Control_20", destination="Boat30",
                             audit_sequence=1)
     receive(nodes, writer, local, sample)
@@ -558,9 +558,9 @@ def test_addressed_and_broadcast_control_survive_team_changes(mesh):
     sample["audit_sequence"] = 5
     receive(nodes, writer, remote, sample)
     absent(nodes, writer, local, sample)
-    assignment_writer = control.writer("ActTeamAssignment", "TeamAssignment")
-    assignment_local = boat.reader("ActTeamAssignment", "TeamAssignment")
-    assignment_other = other.reader("ActTeamAssignment", "TeamAssignment")
+    assignment_writer = control.writer("Team", "TeamAssignment")
+    assignment_local = boat.reader("Team", "TeamAssignment")
+    assignment_other = other.reader("Team", "TeamAssignment")
     assignment = control.sample("TeamAssignment", platform_node="Boat30")
     receive(nodes, assignment_writer, assignment_local, assignment, "platform_node")
     receive(nodes, assignment_writer, assignment_other, assignment, "platform_node")
@@ -592,7 +592,7 @@ def test_wire_readiness_and_wrong_original_type_are_explicit(mesh):
         admin.status, "control_command", lambda value: value["topic_state"] == "TOPIC_IDLE",
         check_alive=lambda: alive(nodes))
     assert waiting and waiting["topic_state"] == "TOPIC_IDLE"
-    wrong = control.writer("ControlCommand", "platform_init_status")
+    wrong = control.writer("Mission", "platform_init_status")
     failed = wait_for_route(
         admin.status, "control_command", lambda value: value["topic_state"] == "TOPIC_ERROR",
         check_alive=lambda: alive(nodes))
@@ -600,8 +600,8 @@ def test_wire_readiness_and_wrong_original_type_are_explicit(mesh):
     assert "wire-learned original type differs" in control_proc.log_path.read_text()
     assert wrong is not None and alive(nodes)
     boat = nodes["Boat30"][1]
-    writer = boat.writer("PlatformInitStatus", "platform_init_status")
-    reader = control.reader("PlatformInitStatus", "platform_init_status")
+    writer = boat.writer("PlatformStatus", "platform_init_status")
+    reader = control.reader("PlatformStatus", "platform_init_status")
     receive(nodes, writer, reader, boat.sample("platform_init_status", source="Boat30",
                                              audit_sequence=99))
 
@@ -681,8 +681,8 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary, 
     assert measured == received == pushed == expected, (measured, received, pushed)
 
     probe_writer = wan.writer(health_family, "WanStatus", qos=writer_qos("wan_union_status"))
-    navigation_reader = control.reader("PlatformInitStatus", "platform_init_status")
-    navigation_discovery = control.writer("PlatformInitStatus", "platform_init_status")
+    navigation_reader = control.reader("PlatformStatus", "platform_init_status")
+    navigation_discovery = control.writer("PlatformStatus", "platform_init_status")
     ready(nodes, "Control_20", "platform_init_status")
     frame = dds.DynamicData(frames["Boat31/phase4"])
     frame["source_id"] = "ProbeNode"
@@ -715,7 +715,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary, 
     navigation = wan.sample(
         "WanStatus", source_id="ProbeNode",
         instance_id="ProbeNode",
-        schema_version=3, original_topic="PlatformInitStatus")
+        schema_version=3, original_topic="PlatformStatus")
     navigation["payload.navigation.source"] = "ProbeNode"
     navigation["audience.global"] = True
     navigation["audience.control"] = True

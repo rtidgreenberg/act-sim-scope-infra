@@ -257,7 +257,7 @@ def test_shared_location_delivery_includes_other_teams_but_not_self(backend, mon
     monkeypatch.setattr(backend, "_audit_nodes_for_run",
                         lambda run: ["Control_20", "Platform_30", "Platform_31", "Platform_32"])
     assert backend._expected_recipients({
-        "topic": "PlatformInitStatus", "source_node": "Platform_30", "run_id": "mission-test-run",
+        "topic": "PlatformStatus", "source_node": "Platform_30", "run_id": "mission-test-run",
     }) == ["Control_20", "Platform_31", "Platform_32"]
 
 
@@ -353,7 +353,7 @@ def backend(mission_modules, monkeypatch, tmp_path):
     bridge.mesh_updated_at = {"Control_20": now_ms}
     bridge.platform_cache = {
         f"Platform_{number}": {
-            "init": {"PlatformInitStatus": {
+            "init": {"PlatformStatus": {
                 "latitude": module.launch_position_for(f"Platform_{number}")[0],
                 "longitude": module.launch_position_for(f"Platform_{number}")[1],
             }}, "mission": {}, "init_updated_at": now_ms, "updated_at": now_ms,
@@ -485,7 +485,7 @@ def test_go_rechecks_position_and_confirmed_squad(backend, mission_modules):
         calls.append(start)
         return original(start, waypoints)
     backend.mission_planner.plan = plan
-    backend.platform_cache["Platform_30"]["init"]["PlatformInitStatus"]["latitude"] = 32.695
+    backend.platform_cache["Platform_30"]["init"]["PlatformStatus"]["latitude"] = 32.695
     backend.write_mission_command({"operation": "route", "plan_id": validated["plan_id"]})
     assert calls == [[32.695, -117.32]]
     backend.cache["Control_20"]["peers"][0]["health"]["team_partition"] = ["Platform_30", "TEAM_B"]
@@ -532,7 +532,7 @@ def test_real_coastline_detour_and_rtb_use_water_route(backend, mission_modules)
     for point in route:
         assert planner.water_segment(project(previous), project(point))
         previous = point
-    backend.platform_cache["Platform_30"]["init"]["PlatformInitStatus"].update(
+    backend.platform_cache["Platform_30"]["init"]["PlatformStatus"].update(
         latitude=finish[0], longitude=finish[1])
     result = backend.write_mission_command({"operation": "return_to_base", "targets": ["Platform_30"]})
     assert not result["errors"]
@@ -573,7 +573,7 @@ def test_register_before_write_ack_correlates_but_lan_audit_is_not_wan_delivery(
     assert backend.delivery_snapshot()["scope"] == "wan_wire"
     assert not backend.delivery_snapshot()["rows"]
     row = backend.application_delivery_snapshot()["rows"][0]
-    assert (row["topic"], row["sent"], row["received"], row["lost"]) == ("ControlCommand", 1, 1, 0)
+    assert (row["topic"], row["sent"], row["received"], row["lost"]) == ("Mission", 1, 1, 0)
     ack_sent = dict(sent, topic="PlatformCommandAck", source_node="Platform_30",
                     source="Platform_30", destination="Control_20", node="Platform_30")
     with backend._mission_audit_path().open("a") as events:
@@ -582,7 +582,7 @@ def test_register_before_write_ack_correlates_but_lan_audit_is_not_wan_delivery(
     backend.poll_audit_events()
     rows = backend.application_delivery_snapshot()["rows"]
     assert [(row["topic"], row["sent"], row["received"]) for row in rows] == [
-        ("ControlCommand", 1, 1), ("PlatformCommandAck", 1, 1)]
+        ("Mission", 1, 1), ("PlatformCommandAck", 1, 1)]
     assert len(backend.mission_ack_snapshot()["acks"]) == 1
 
 
@@ -896,7 +896,7 @@ def test_fresh_init_recovers_terminal_mission_and_clears_completed_team_goal(bac
         entry["mission"]["PlatformMissionStatus"] = {
             "mission_id": mission_id, "mission_phase": "TRANSIT", "sent_at_ns": now - 20_000_000_000,
         }
-        entry["init"]["PlatformInitStatus"].update(
+        entry["init"]["PlatformStatus"].update(
             mission_id=mission_id, mission_phase="COMPLETE", sent_at_ns=now)
         backend.team_followers[node] = {"team": "TEAM_A", "version": "v1", "command_id": mission_id}
         backend.team_memberships[node] = "TEAM_A"
@@ -913,7 +913,7 @@ def test_new_init_mission_does_not_inherit_previous_mission_progress(backend):
         "mission_id": "previous", "mission_phase": "COMPLETE", "waypoints_total": 12,
         "waypoint_index": 12, "sent_at_ns": 10,
     }
-    entry["init"]["PlatformInitStatus"].update(
+    entry["init"]["PlatformStatus"].update(
         mission_id="current", mission_phase="TRANSIT", sent_at_ns=20)
     boat = next(boat for boat in backend.mission_inventory_snapshot()["platforms"]
                 if boat["platform"] == "Platform_30")

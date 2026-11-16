@@ -170,12 +170,12 @@ def pushed(writer):
 
 
 @pytest.mark.parametrize("family,topic,branch,type_name,key,profile", [
-    ("Event", "ControlCommand", "command", "control_command", "source", "wan_event"),
-    ("Event", "ActTeamAssignment", "team_assignment", "TeamAssignment", "platform_node", "wan_event"),
+    ("Event", "Mission", "command", "control_command", "source", "wan_event"),
+    ("Event", "Team", "team_assignment", "TeamAssignment", "platform_node", "wan_event"),
     ("Event", "ActPlatformStatusMode", "status_mode", "PlatformStatusMode", "platform_node", "wan_event"),
     ("Event", "PlatformCommandAck", "command_ack", "control_command_ack", "source", "wan_event"),
     ("Event", "ContactReport", "contact_report", "contact_report", "contact_id", "wan_event"),
-    ("Status", "PlatformInitStatus", "navigation", "platform_init_status", "source", "wan_status"),
+    ("Status", "PlatformStatus", "navigation", "platform_init_status", "source", "wan_status"),
     ("Status", "PlatformData", "data", "platform_data", "source", "wan_status"),
     ("Status", "PlatformMissionStatus", "mission", "platform_mission_status", "source", "wan_status"),
     ("Status", "PlatformWaypointStatus", "waypoint", "platform_waypoint_status", "source", "wan_status"),
@@ -264,7 +264,7 @@ def test_production_three_key_contact_identity(peers, qualification_types):
         assert sorted(collect_sequences(reader, 3)) == [1, 2, 3]
         other_topic = dds.DynamicData(qualification_types.type("WanEvent"))
         other_topic["source_id"] = "Boat30"
-        other_topic["original_topic"] = "ControlCommand"
+        other_topic["original_topic"] = "Mission"
         other_topic["instance_id"] = "contact-101"
         assert all(writer.register_instance(other_topic) != handle for handle in handles)
 
@@ -274,14 +274,14 @@ def test_production_boolean_audience_filter(peers, qualification_types, selector
     frame = dds.DynamicData(qualification_types.type("WanStatus"))
     frame["source_id"] = "Boat30"
     frame["instance_id"] = "Boat30"
-    frame["original_topic"] = "PlatformInitStatus"
+    frame["original_topic"] = "PlatformStatus"
     frame["schema_version"] = 3
     frame["audit_sequence"] = 1
     with frame.loan_value("payload") as payload:
         with payload.data.loan_value("navigation") as active:
             active.data["source"] = "Boat30"
     with endpoints(peers, qualification_types, type_name="WanStatus",
-                   expression=f"original_topic = 'PlatformInitStatus' AND audience.{selector} = TRUE") as (
+                   expression=f"original_topic = 'PlatformStatus' AND audience.{selector} = TRUE") as (
             writer, reader, _, _, _):
         baseline = pushed(writer)
         writer.write(frame)
@@ -317,7 +317,7 @@ def test_production_mixed_audience_filter(peers, qualification_types):
         assert sequences(reader) == []
         assert pushed(writer) == baseline
         cft.set_filter(dds.Filter(
-            "source_id <> %0 AND ((original_topic = 'PlatformInitStatus' AND audience.global = TRUE) OR "
+            "source_id <> %0 AND ((original_topic = 'PlatformStatus' AND audience.global = TRUE) OR "
             f"(original_topic = 'PlatformData' AND ({team_expression})))", parameters))
         frame["audit_sequence"] = 2
         writer.write(frame)

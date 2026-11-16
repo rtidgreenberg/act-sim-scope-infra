@@ -1,6 +1,6 @@
 # e2e_platform_status.yaml — router_main-runnable fixture for the Python e2e suite
 # (router/test_e2e/). Same shape as control-platform.yaml's platform_init_status route
-# (after the D50 topic-name fix: PlatformInitStatus, not the stale PlatformStatus).
+# (after the D50 topic-name fix: PlatformStatus, not the stale PlatformStatus).
 # Empty/default endpoint aliases select fixed production XML defaults, as in
 # e2e_control_command.yaml. The historical output-readiness gate is retired.
 #
@@ -56,7 +56,7 @@ routes:
     source: platform
     destination: control
     topics:
-      - name: PlatformInitStatus
+      - name: PlatformStatus
     source_side:
       input:
         participant: platform_lan

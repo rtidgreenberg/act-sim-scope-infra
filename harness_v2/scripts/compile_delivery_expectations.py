@@ -35,30 +35,37 @@ def compile_expectations(manifest):
     control_nodes = [event_node_name(node) for node in control_ids]
     platform_nodes = [event_node_name(node) for node in platform_ids]
     required_topics = manifest["topics"]
-    expected_topics = {"ControlCommand", "PlatformInitStatus"}
+    expected_topics = {"Mission", "PlatformStatus"}
     if set(required_topics) != expected_topics:
-        raise ValueError("baseline expectations support ControlCommand and PlatformInitStatus only")
+        raise ValueError("baseline expectations support Mission and PlatformStatus only")
     shared_locations = manifest.get("shared_platform_locations", False)
     if not isinstance(shared_locations, bool):
         raise ValueError("shared_platform_locations must be a boolean")
+    receive_policy = manifest.get("platform_receive_policy", "static")
+    if receive_policy not in ("static", "mission"):
+        raise ValueError("platform_receive_policy must be static or mission")
+    if receive_policy == "mission" and shared_locations:
+        raise ValueError("mission receive policy cannot declare unconditional shared locations")
     return {
         "schema_version": 1,
         "run_id": manifest["run_id"],
         "nodes": nodes,
         "topics": {
-            "ControlCommand": {
+            "Mission": {
                 "route": "control_command",
                 "enabled": True,
                 "source_nodes": control_nodes,
                 "recipient_rule": {"kind": "sample_destination", "nodes": platform_nodes},
             },
-            "PlatformInitStatus": {
+            "PlatformStatus": {
                 "route": "platform_init_status",
                 "enabled": True,
                 "source_nodes": platform_nodes,
                 "recipient_rule": {
-                    "kind": "fixed_nodes_except_source" if shared_locations else "fixed_nodes",
-                    "nodes": control_nodes + platform_nodes if shared_locations else control_nodes,
+                    "kind": ("mission_navigation" if receive_policy == "mission" else
+                             "fixed_nodes_except_source" if shared_locations else "fixed_nodes"),
+                    "nodes": control_nodes + platform_nodes
+                    if shared_locations or receive_policy == "mission" else control_nodes,
                 },
             },
         },

@@ -91,7 +91,7 @@ routes:
     source: control
     destination: platform
     topics:
-      - name: ControlCommand
+      - name: Mission
     source_side:
       input:
         participant: control_lan
@@ -122,7 +122,7 @@ routes:
     source: control
     destination: platform
     topics:
-      - name: ActTeamAssignment
+      - name: Team
     source_side:
       input:
         participant: control_lan
@@ -172,7 +172,7 @@ routes:
     source: platform
     destination: control
     topics:
-      - name: PlatformInitStatus
+      - name: PlatformStatus
     source_side:
       input:
         participant: platform_lan
@@ -195,7 +195,7 @@ routes:
     source: platform
     destination: platform
     topics:
-      - name: PlatformInitStatus
+      - name: PlatformStatus
     source_side:
       input:
         participant: platform_lan
@@ -211,7 +211,7 @@ routes:
     source: platform
     destination: platform
     topics:
-      - name: PlatformInitStatus
+      - name: PlatformStatus
     source_side:
       input:
         participant: platform_wan

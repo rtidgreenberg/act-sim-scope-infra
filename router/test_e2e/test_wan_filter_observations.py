@@ -334,8 +334,8 @@ def test_config_before_health_replay_session_change_and_empty_snapshot(mesh, cac
 def test_config_reports_team_filter_changes_and_reader_departure(mesh, router_binary):
     nodes, wan, provider = mesh
     control, boat, other = (nodes[name][1] for name in ("Control_20", "Boat30", "Boat31"))
-    command_writer = control.writer("ControlCommand", "control_command")
-    command_reader = boat.reader("ControlCommand", "control_command")
+    command_writer = control.writer("Mission", "control_command")
+    command_reader = boat.reader("Mission", "control_command")
     data_writer = boat.writer("PlatformData", "platform_data")
     data_reader = other.reader("PlatformData", "platform_data")
     health_reader = wan.reader("Event", "WanEvent", qos=reader_qos("wan_event"))
@@ -365,7 +365,7 @@ def test_config_reports_team_filter_changes_and_reader_departure(mesh, router_bi
     assert "original_topic = 'RouterHealth'" in previous["expression"]
     assert "payload._d" not in previous["expression"]
     event = remote_filter(initial, "Control_20/phase4", "Event", "Boat30/phase4")
-    assert "original_topic = 'ControlCommand'" in event["expression"]
+    assert "original_topic = 'Mission'" in event["expression"]
     assert "payload._d" not in event["expression"]
     assert initial["Boat30/phase4"]["filters"]["Status"]["observed_at_ns"] > 0
     assert False in initial["Boat30/phase4"]["filters"]["Event"]["unnamed_readers"]

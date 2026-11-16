@@ -192,7 +192,7 @@ class NativeSystemConfigurationTests(unittest.TestCase):
         self.assertEqual(values["ALIVE to STALE"], "2 s")
         self.assertEqual(values["DDS endpoint liveliness lease"], "3 s")
         qos_rows = next(s for s in legacy["sections"] if s["id"] == "wan-qos")["rows"]
-        self.assertTrue(any(row[0] == "ControlCommand" and row[3] == "Reliable" for row in qos_rows))
+        self.assertTrue(any(row[0] == "Mission" and row[3] == "Reliable" for row in qos_rows))
 
 
 class SystemConfigurationApiTests(unittest.IsolatedAsyncioTestCase):

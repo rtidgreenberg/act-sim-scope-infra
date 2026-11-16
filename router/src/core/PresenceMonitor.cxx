@@ -118,7 +118,9 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  const std::string &health_topic,
                                  const std::string &mesh_topic,
                                  dds::core::QosProvider wan_types,
-                                 WanAdapterFactory* shared_status)
+                                 WanPresenceTransport* shared_status,
+                                 dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_mesh_writer,
+                                 dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer)
         : aws_(aws),
           node_name_(node_name),
           router_name_(router_name),
@@ -141,11 +143,19 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                   : dds::sub::DataReader<dds::core::xtypes::DynamicData>(
                           wan_subscriber_, health_topic_, health_reader_qos)),
           lan_publisher_(lan_participant),
-          mesh_topic_(lan_participant, mesh_topic),
-          mesh_writer_(lan_publisher_, mesh_topic_, mesh_writer_qos),
-          diagnostics_topic_(lan_participant, "ActRouterDiagnostics",
-                             rti::topic::dynamic_type<RouterDiagnostics>::get()),
-          diagnostics_writer_(lan_publisher_, diagnostics_topic_, diagnostics_writer_qos),
+          mesh_topic_(service_mesh_writer != dds::core::null ? dds::core::null
+                  : dds::topic::Topic<RouterMeshStatus>(lan_participant, mesh_topic)),
+          mesh_writer_(service_mesh_writer != dds::core::null ? dds::core::null
+                  : dds::pub::DataWriter<RouterMeshStatus>(lan_publisher_, mesh_topic_, mesh_writer_qos)),
+          service_mesh_writer_(service_mesh_writer),
+          diagnostics_topic_(service_diagnostics_writer != dds::core::null ? dds::core::null
+                  : dds::topic::Topic<dds::core::xtypes::DynamicData>(
+                          lan_participant, "ActRouterDiagnostics",
+                          rti::topic::dynamic_type<RouterDiagnostics>::get())),
+          diagnostics_writer_(service_diagnostics_writer != dds::core::null
+                  ? service_diagnostics_writer
+                  : dds::pub::DataWriter<dds::core::xtypes::DynamicData>(
+                          lan_publisher_, diagnostics_topic_, diagnostics_writer_qos)),
           shut_down_(false) {
     const char *debug_dir = std::getenv("NODE_DEBUG_DIR");
     if (debug_dir != nullptr && *debug_dir != '\0') {
@@ -353,7 +363,8 @@ void PresenceMonitor::publish_heartbeat(const RouterHealth &hb) {
         } else {
             stamp(sample);
         }
-        health_writer_.write(sample);
+        if (shared_status_) shared_status_->write_status(sample);
+        else health_writer_.write(sample);
         success = true;
         log_router_health_audit("sent", out);
     } catch (const dds::core::NotEnabledError &) {
@@ -845,6 +856,27 @@ void PresenceMonitor::on_health_samples(const dds::core::xtypes::DynamicData* fr
     }
 }
 
+void PresenceMonitor::log_receive_policy_audit(const std::string& profile,
+                                              const std::vector<std::string>& teams) {
+    if (audit_path_.empty() || audit_run_id_.empty()) return;
+    const auto now = now_unix_ns();
+    std::lock_guard<std::mutex> lock(audit_mutex_);
+    std::ofstream output(audit_path_, std::ios::app);
+    output << "{\"event\":\"receive_policy\",\"run_id\":\"" << json_escape(audit_run_id_)
+           << "\",\"node\":\"" << json_escape(node_name_)
+           << "\",\"topic\":\"PlatformStatus\",\"source_node\":\"" << json_escape(node_name_)
+           << "\",\"sequence\":" << ++policy_audit_sequence_
+           << ",\"sent_at_ns\":" << now << ",\"recorded_at_ns\":" << now
+           << ",\"receive_profile\":\"" << json_escape(profile) << "\",\"teams\":[";
+    for (size_t i = 0; i < teams.size(); ++i) {
+        if (i) output << ',';
+        output << '"' << json_escape(teams[i]) << '"';
+    }
+    output << "]}\n";
+    output.flush();
+    if (!output) Log::error("rs.receive_policy.audit_failed", {{"path", audit_path_}});
+}
+
 void PresenceMonitor::log_router_health_audit(const std::string &event,
                                               const RouterHealth &hb) {
     if (audit_path_.empty() || audit_run_id_.empty()) {
@@ -1067,7 +1099,11 @@ void PresenceMonitor::publish_mesh() {
         mesh = build_mesh_locked();
     }
     try {
-        mesh_writer_.write(mesh);
+        if (service_mesh_writer_ != dds::core::null) {
+            service_mesh_writer_.write(rti::core::xtypes::convert(mesh));
+        } else {
+            mesh_writer_.write(mesh);
+        }
     } catch (const dds::core::NotEnabledError &) {
         // Roster events before enable_all() would be discovery-order surprises, but a
         // disabled write must not crash the AWS worker (D52 defensive symmetry).

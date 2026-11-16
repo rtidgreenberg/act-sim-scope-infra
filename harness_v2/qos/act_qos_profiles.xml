@@ -775,8 +775,8 @@
         <multi_channel>
           <filter_name>DDSPRIFLTR</filter_name>
           <channels>
-            <element><filter_expression>@priority &gt;= 100</filter_expression><priority>-1</priority></element>
-            <element><filter_expression>@priority &lt; 100</filter_expression><priority>-1</priority></element>
+            <element><filter_expression>@priority &gt;= 100</filter_expression><priority>-1</priority><multicast_settings/></element>
+            <element><filter_expression>@priority &lt; 100</filter_expression><priority>-1</priority><multicast_settings/></element>
           </channels>
         </multi_channel>
         <protocol>
@@ -906,6 +906,9 @@
     <!-- Opt-in Routing Service scheduling; existing router aliases are unchanged. -->
     <qos_profile name="rs_priority_participant">
       <domain_participant_qos>
+        <resource_limits>
+          <participant_property_list_max_length>64</participant_property_list_max_length>
+        </resource_limits>
         <property>
           <value>
             <element>
@@ -991,7 +994,54 @@
       </datawriter_qos>
     </qos_profile>
 
-    <!-- Composed only into two-topic adapter input readers; legacy profiles are unchanged. -->
+    <qos_profile name="rs_three_topic_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
+      <datawriter_qos>
+        <publish_mode>
+          <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
+        </publish_mode>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element><filter_expression>@priority &gt;= 500</filter_expression><priority>-1</priority><multicast_settings/></element>
+            <element><filter_expression>@priority &lt; 500</filter_expression><priority>-1</priority><multicast_settings/></element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="rs_three_topic_state" base_name="ACT_QOS_LIB::wan_union_contacts">
+      <datawriter_qos>
+        <publish_mode>
+          <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
+        </publish_mode>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element><filter_expression>@priority &gt;= 300</filter_expression><priority>-1</priority><multicast_settings/></element>
+            <element><filter_expression>@priority &lt; 300</filter_expression><priority>-1</priority><multicast_settings/></element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+
+    <qos_profile name="rs_three_topic_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+      <datawriter_qos>
+        <publish_mode>
+          <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
+          <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
+          <priority>-1</priority>
+        </publish_mode>
+        <multi_channel>
+          <filter_name>DDSPRIFLTR</filter_name>
+          <channels>
+            <element><filter_expression>@priority &gt;= 400</filter_expression><priority>-1</priority><multicast_settings/></element>
+            <element><filter_expression>@priority &lt; 400</filter_expression><priority>-1</priority><multicast_settings/></element>
+          </channels>
+        </multi_channel>
+      </datawriter_qos>
+    </qos_profile>
+
+    <!-- Composed only into union adapter input readers; legacy profiles are unchanged. -->
     <qos_profile name="router_lifecycle_reader">
       <datareader_qos>
         <reader_data_lifecycle>

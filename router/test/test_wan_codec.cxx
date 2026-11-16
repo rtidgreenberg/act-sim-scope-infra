@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     CHECK(std::string(router::wan_transport_mapping("ContactReport", true).family) == "State");
     CHECK(std::string(router::wan_transport_mapping("ContactReport", true).qos_profile) == "wan_contacts");
     CHECK(std::string(router::wan_mapping("ContactReport").family) == "Event");
-    for (const auto& topic : {"ControlCommand", "PlatformCommandAck", "RouterConfig"}) {
+    for (const auto& topic : {"Mission", "PlatformCommandAck", "RouterConfig"}) {
         CHECK(std::string(router::wan_transport_mapping(topic, true).family)
               == router::wan_mapping(topic).family);
     }
@@ -202,12 +202,12 @@ int main(int argc, char** argv) {
     rejected([&] { codec.pack("PlatformPowerStatus", nav, metadata); });
     auto invalid_metadata = metadata;
     invalid_metadata.destination_ids.push_back("TEAM_17");
-    rejected([&] { codec.pack("PlatformInitStatus", nav, invalid_metadata); });
+    rejected([&] { codec.pack("PlatformStatus", nav, invalid_metadata); });
     invalid_metadata = metadata;
     invalid_metadata.source_id.clear();
-    rejected([&] { codec.key_frame("PlatformInitStatus", nav, invalid_metadata); });
-    auto frame = codec.pack("PlatformInitStatus", nav, metadata);
-    for (const auto& topic : {"", "Unknown", "ControlCommand"}) {
+    rejected([&] { codec.key_frame("PlatformStatus", nav, invalid_metadata); });
+    auto frame = codec.pack("PlatformStatus", nav, metadata);
+    for (const auto& topic : {"", "Unknown", "Mission"}) {
         auto corrupt = frame;
         corrupt.value<std::string>("original_topic", topic);
         rejected([&] { codec.unpack_key(corrupt); });
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
     rejected([&] { codec.unpack(frame); });
     Data command(types->type("control_command"));
     command.set_values<uint8_t>("payload", std::vector<uint8_t>(8192, 255));
-    CHECK(codec.unpack(codec.pack("ControlCommand", command, metadata)).data == command);
+    CHECK(codec.unpack(codec.pack("Mission", command, metadata)).data == command);
     // Compiled and XML-loaded envelope types must agree before either lane is wired.
     CHECK(types->type("WanEvent") == rti::topic::dynamic_type<WanEvent>::get());
     CHECK(types->type("WanStatus") == rti::topic::dynamic_type<WanStatus>::get());

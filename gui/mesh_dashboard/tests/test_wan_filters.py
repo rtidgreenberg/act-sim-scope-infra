@@ -73,7 +73,7 @@ class WanFilterDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://filters.test/{revision}")
-            self.assertIn("20261112-optional-filter-snapshots-v1", revision)
+            self.assertIn("20261114-mission-cft-v2", revision)
             page.wait_for_function("window.__network.body.data.nodes.get('Platform_30') && window.meshSocket")
 
             def select(node):

@@ -48,7 +48,7 @@ SAN_DIEGO_LAUNCH_POSITIONS = {
 
 
 def parse_mission_payload(payload):
-    """Validate the compact, versioned JSON carried by ControlCommand.payload."""
+    """Validate the compact, versioned JSON carried by Mission.payload."""
     try:
         raw = bytes(payload)
         if not raw or len(raw) > MAX_MISSION_PAYLOAD_BYTES:
@@ -195,7 +195,7 @@ class PlatformSim:
       # Create Topics and associate with types
       self.control_cmd_topic = dds.DynamicData.Topic(
           self.participant,
-          "ControlCommand",
+          "Mission",
           self.control_cmd_type
       )
       self.control_cmd_ack_topic = dds.DynamicData.Topic(
@@ -205,7 +205,7 @@ class PlatformSim:
       )
       self.platform_init_status_topic = dds.DynamicData.Topic(
           self.participant,
-          "PlatformInitStatus",
+          "PlatformStatus",
           self.platform_init_status_type
       )
       self.platform_detail_status_topic = dds.DynamicData.Topic(
@@ -271,6 +271,10 @@ class PlatformSim:
           self.contact_report_topic,
           self.qos_provider.datareader_qos_from_profile(args.qos_profile)
       )
+      self.peer_mission_reader = dds.DynamicData.DataReader(
+          self.platform_mission_status_topic,
+          self.qos_provider.datareader_qos_from_profile("ACT_QOS_LIB::lan_status")
+      )
       self.control_cmd_ack_writer = dds.DynamicData.DataWriter(
           self.control_cmd_ack_topic,
           self.qos_provider.datawriter_qos_from_profile("ACT_QOS_LIB::lan_event")
@@ -321,6 +325,8 @@ class PlatformSim:
       print("ignoring self published ContactReport")
       self.participant.ignore_datawriter(
           self.contact_report_writer.instance_handle)
+      self.participant.ignore_datawriter(
+          self.platform_mission_status_writer.instance_handle)
 
 
     async def read_control_command(self):
@@ -328,8 +334,8 @@ class PlatformSim:
       async for data in self.control_cmd_reader.take_data_async():
           self.destination_ids = local_destination_ids(
               self.membership_reader, self.args.source, self.destination_ids)
-          print(f'- Received ControlCommand from {data["source"]}')
-          AUDIT.log("received", "ControlCommand", data)
+          print(f'- Received Mission from {data["source"]}')
+          AUDIT.log("received", "Mission", data)
           accepted = True
           message = "received"
           addressed_here = data["destination"] in self.destination_ids
@@ -499,7 +505,7 @@ class PlatformSim:
           sample = json.loads(data.to_json())
           self.navigator.record_location(sample, time.time())
           if sample.get("source_node") != self.args.source and sample.get("run_id") == RUN_ID:
-              AUDIT.log("received", "PlatformInitStatus", data)
+              AUDIT.log("received", "PlatformStatus", data)
 
     async def navigate(self):
       while True:
@@ -511,6 +517,10 @@ class PlatformSim:
       async for data in self.contact_report_reader.take_data_async():
                 print(f'- Received ContactReport from {data["source"]}'); AUDIT.log("received", "ContactReport", data)
 
+    async def read_peer_missions(self):
+      async for data in self.peer_mission_reader.take_data_async():
+          if data["source"] != self.args.source:
+              AUDIT.log("received", "PlatformMissionStatus", data)
 
     async def write_primary_status(self):
       sample = dds.DynamicData(self.platform_init_status_type)
@@ -537,8 +547,8 @@ class PlatformSim:
         sample["sent_at_ns"] = time.time_ns()
         sample["timestamp"] = int(time.time() * 1_000_000)
         self.platform_init_status_writer.write(sample)
-        AUDIT.log("sent", "PlatformInitStatus", sample)
-        print("Writing to PlatformInitStatus topic")
+        AUDIT.log("sent", "PlatformStatus", sample)
+        print("Writing to PlatformStatus topic")
         await asyncio.sleep(1)
 
     async def write_detail_status(self):
@@ -770,6 +780,7 @@ class PlatformSim:
             self.navigate(),
             self.read_platform_data(),
             self.read_contact_report(),
+            self.read_peer_missions(),
             self.write_primary_status(),
             self.write_detail_status(),
             self.write_mission_status(),

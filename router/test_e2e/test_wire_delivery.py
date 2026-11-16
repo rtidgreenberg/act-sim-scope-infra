@@ -96,7 +96,7 @@ def observation(kind="sent", sequence=1, timestamp=NOW - 20_000_000_000, **chang
              "timestamp_ns": timestamp, "source": "Control_20", "recipient": "Platform_30",
              "source_ip": "10.0.0.1", "destination_ip": "10.0.0.2",
              "node": "Platform_30" if kind == "received" else "Control_20",
-             "topic": "ControlCommand", "reliability": "reliable"}
+             "topic": "Mission", "reliability": "reliable"}
     if kind == "retransmitted":
         value.update(requested_at_ns=timestamp - 1, reader_guid=READER_PREFIX.hex() + READER.hex())
     return dict(value, **changes)
@@ -434,7 +434,7 @@ class WireMetricTests(unittest.TestCase):
     def test_no_lan_or_application_events(self):
         metrics = WireDelivery()
         with self.assertRaises(ValueError):
-            metrics.ingest({"event": "sent", "topic": "ControlCommand", "scope": "lan"})
+            metrics.ingest({"event": "sent", "topic": "Mission", "scope": "lan"})
         self.assertEqual(metrics.snapshot(now_ns=NOW)["rows"], [])
 
     def test_dedup_late_receive_corrects_loss_and_survives_mode_changes(self):
@@ -594,7 +594,7 @@ class ConfiguredWanQosTests(unittest.TestCase):
             ROOT / "router/config/control-platform.yaml", dds.QosProvider, dds.Duration.infinite)
         self.assertNotIn("RouterLinkProbe", result["topics"])
         expected = {"RouterHealth": "BEST_EFFORT",
-                    "ControlCommand": "RELIABLE", "PlatformInitStatus": "BEST_EFFORT"}
+                    "Mission": "RELIABLE", "PlatformStatus": "BEST_EFFORT"}
         for topic, reliability in expected.items():
             with self.subTest(topic=topic):
                 entries = result["topics"][topic]
@@ -1057,7 +1057,7 @@ class WireDashboardTests(unittest.TestCase):
         common = dict(percentage_ready=True, sent_event_version=1, received_event_version=1,
                       recovered_samples=0, avg_recovery_ms=None)
         snapshot = {"scope": "wan_wire", "window_ms": 30_000, "rows": [
-            dict(common, topic="ControlCommand", source="Control_20", recipient="Platform_30",
+            dict(common, topic="Mission", source="Control_20", recipient="Platform_30",
                  reliability="reliable", sent=2, received=1, settled=2, settled_received=1, lost=1),
             dict(common, topic="ContactReport", source="Platform_30", recipient="Control_20",
                  reliability="reliable", sent=3, received=3, settled=3, settled_received=3, lost=0),
@@ -1120,7 +1120,7 @@ class WireDashboardTests(unittest.TestCase):
             self.assertEqual(rows.count(), 2)
             page.locator("#delivery-filter-destination").select_option("Platform_30")
             self.assertEqual(rows.count(), 1)
-            self.assertIn("ControlCommand", rows.inner_text())
+            self.assertIn("Mission", rows.inner_text())
             self.assertIn("1/2", page.locator("#delivery-reliable-summary").inner_text())
             page.locator("#delivery-filter-source").select_option("all")
             page.locator("#delivery-filter-destination").select_option("Control_20")
@@ -1166,7 +1166,7 @@ class WireDashboardTests(unittest.TestCase):
                       sent_event_version=1, received_event_version=1)
         snapshot = {"scope": "wan_wire", "window_ms": 30_000, "unknown_qos_flows": 1,
                     "node_modes": {"Platform_30": "init"}, "rows": [
-            dict(common, topic="ControlCommand", reliability="reliable", sent=2,
+            dict(common, topic="Mission", reliability="reliable", sent=2,
                  received=2, settled=2, settled_received=2, lost=0,
                  avg_recovery_ms=125.5, recovered_samples=2),
             dict(common, topic="RouterHealth", reliability="best_effort", sent=3,

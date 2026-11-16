@@ -23,6 +23,10 @@ public:
                        const dds::pub::qos::DataWriterQos &stats_writer_qos,
                        int period_ms = kLinkStatsPeriodMs,
                        const std::string &stats_topic = "ActRouterLinkStats");
+    LinkStatsCollector(dds::pub::DataWriter<dds::core::xtypes::DynamicData> writer,
+                       const std::string &observer_router,
+                       const std::string &network,
+                       int period_ms = kLinkStatsPeriodMs);
     ~LinkStatsCollector();
     void register_source(IWanStatsSource *source) override;
     void unregister_source(IWanStatsSource *source) override;
@@ -37,6 +41,7 @@ private:
     dds::pub::Publisher lan_publisher_;
     dds::topic::Topic<RouterLinkStats> stats_topic_;
     dds::pub::DataWriter<RouterLinkStats> stats_writer_;
+    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_stats_writer_{dds::core::null};
     std::vector<IWanStatsSource *> sources_;
     std::uint64_t capture_seq_ = 0;
     std::chrono::steady_clock::time_point last_tick_;

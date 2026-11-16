@@ -129,6 +129,8 @@ def main():
                         help="Platform node name (e.g. Platform_30)")
     parser.add_argument("--router-name", type=str, required=True,
                         help="Target router.name from the rendered node config")
+    parser.add_argument("--always-on-reports", action="store_true",
+                        help="keep processor report routes enabled; translate team assignments only")
     args = parser.parse_args()
 
     router_name = args.router_name
@@ -152,7 +154,7 @@ def main():
     )
 
     # TeamAssignment reader (RELIABLE + VOLATILE)
-    team_topic = dds.DynamicData.Topic(participant, "ActTeamAssignment",
+    team_topic = dds.DynamicData.Topic(participant, "Team",
                                        team_assignment_type)
     reader_qos = (dds.QosProvider.default
                   .datareader_qos_from_profile("ACT_QOS_LIB::lan_event"))
@@ -339,7 +341,7 @@ def main():
                 print(f"[platform_mesh_control] {exc}", flush=True)
 
         mode = reporting.mode(time.monotonic())
-        if mode != tracked_mode:
+        if not args.always_on_reports and mode != tracked_mode:
             apply_mode(mode)
             tracked_mode = mode
 

@@ -53,12 +53,26 @@ struct WanConfigCallbacks {
                        const dds::sub::SampleInfo&)> data;
 };
 
+class WanPresenceTransport {
+public:
+    virtual ~WanPresenceTransport() = default;
+    virtual void bind_status(std::shared_ptr<WanStatusCallbacks> callbacks) = 0;
+    virtual dds::pub::DataWriter<dds::core::xtypes::DynamicData> status_writer() const = 0;
+    virtual dds::sub::DataReader<dds::core::xtypes::DynamicData> status_reader() const = 0;
+    virtual void write_status(const dds::core::xtypes::DynamicData& frame) {
+        status_writer().write(frame);
+    }
+    virtual void bind_config(std::shared_ptr<WanConfigCallbacks> callbacks) = 0;
+    virtual void write_config(const dds::core::xtypes::DynamicData& frame) = 0;
+    virtual std::vector<RouterWriterFilterObservation> writer_filter_observations() const = 0;
+};
+
 // Bind/unbind/shutdown run on the controller strand. Metadata providers run on
 // AWS workers: read an immutable snapshot and never call back into this factory.
 // Shared readers have one class-wide filter. Application lifecycle uses the same
 // bound routes and native writer registry as valid data. Health lifecycle starts
 // the presence countdown. Input instance retention is composed from external XML.
-class WanAdapterFactory {
+class WanAdapterFactory : public WanPresenceTransport {
 public:
     using MetadataProvider = std::function<WanMetadata(const dds::core::xtypes::DynamicData&)>;
 

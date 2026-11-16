@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from harness_v2.receive_policy import ReceivePolicyHistory
+
 
 class PassiveRttJsonTests(unittest.TestCase):
     def test_single_wan_health_and_direct_peer_delivery_audiences(self):
@@ -19,11 +21,14 @@ class PassiveRttJsonTests(unittest.TestCase):
                             if isinstance(node, ast.ClassDef) and node.name == "DdsBridge")
         bridge_class.body = [node for node in bridge_class.body
                              if isinstance(node, ast.FunctionDef) and node.name in
-                             {"_expected_recipients", "_team_names_for_node"}]
-        namespace = {"FIXED_CONTROL_RECIPIENT_TOPICS": set()}
+                             {"_expected_recipients", "_team_names_for_node",
+                              "_receive_profile_for_node", "_receive_policy_at"}]
+        namespace = {"FIXED_CONTROL_RECIPIENT_TOPICS": {"PlatformMissionStatus", "ContactReport"}}
         exec(compile(ast.Module(body=[bridge_class], type_ignores=[]), str(path), "exec"),
              namespace)
         bridge = namespace["DdsBridge"]()
+        bridge.audit_policy_history = ReceivePolicyHistory()
+        bridge.audit_policy_errors = set()
         nodes = ["Control_20", "Platform_30", "Platform_31", "Platform_32"]
         bridge._audit_nodes_for_run = lambda _: nodes
         bridge._health_discovery_is_global = lambda _: True
@@ -44,6 +49,57 @@ class PassiveRttJsonTests(unittest.TestCase):
         self.assertEqual(bridge._expected_recipients(event), ["Platform_30"])
         event["source_node"] = "Platform_32"
         self.assertEqual(bridge._expected_recipients(event), [])
+        bridge._platform_topic_expected = lambda *args: True
+        peers = bridge.cache["observer"]["peers"]
+        peers[0]["health"].update(receive_profile="Init", team_partition=["Platform_30", "TEAM_A"])
+        peers[1]["health"].update(receive_profile="ActiveMission",
+                                  team_partition=["Platform_31", "TEAM_A"])
+        peers[2]["health"].update(receive_profile="ActiveMission",
+                                  team_partition=["Platform_32", "TEAM_B"])
+        event["sent_at_ns"] = 150
+        for node, teams, profile in (
+                ("Platform_30", ["TEAM_A"], "Init"),
+                ("Platform_31", ["TEAM_A"], "ActiveMission"),
+                ("Platform_32", ["TEAM_B"], "ActiveMission")):
+            for timestamp, selected in ((1, "Init"), (100, profile)):
+                bridge.audit_policy_history.add({
+                    "run_id": "run", "node": node, "sent_at_ns": timestamp,
+                    "receive_profile": selected, "teams": teams,
+                })
+        event["source_node"] = "Platform_30"
+        for topic in ("PlatformMissionStatus", "ContactReport"):
+            event["topic"] = topic
+            self.assertEqual(bridge._expected_recipients(event), ["Control_20", "Platform_31"])
+        event["topic"] = "PlatformStatus"
+        self.assertEqual(bridge._expected_recipients(event),
+                         ["Control_20", "Platform_31", "Platform_32"])
+        event["topic"] = "PlatformData"
+        self.assertEqual(bridge._expected_recipients(event), [])
+        peers[1]["health"]["receive_profile"] = "Init"
+        # Latest health must not rewrite earlier eligibility.
+        event["topic"] = "PlatformMissionStatus"
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20", "Platform_31"])
+        bridge.audit_policy_history.add({
+            "run_id": "run", "node": "Platform_31", "sent_at_ns": 200,
+            "receive_profile": "Init", "teams": ["TEAM_A"],
+        })
+        event["sent_at_ns"] = 250
+        event["topic"] = "PlatformMissionStatus"
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20"])
+        peers[1]["health"].update(receive_profile="ActiveMission", team_partition=["Platform_31"])
+        bridge.audit_policy_history.add({
+            "run_id": "run", "node": "Platform_31", "sent_at_ns": 300,
+            "receive_profile": "ActiveMission", "teams": [],
+        })
+        event["sent_at_ns"] = 350
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20"])
+        event["sent_at_ns"] = 150
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20", "Platform_31"])
+        self.assertEqual(set(), bridge.audit_policy_errors)
+        bridge.audit_policy_history = ReceivePolicyHistory()
+        event["topic"] = "PlatformStatus"
+        self.assertEqual(bridge._expected_recipients(event), ["Control_20"])
+        self.assertEqual(2, len(bridge.audit_policy_errors))
 
     def test_poll_and_snapshots_preserve_session_ack_and_rtt_metadata(self):
         path = Path(__file__).resolve().parents[1] / "server/mesh_bridge.py"
@@ -83,7 +139,7 @@ class PassiveRttJsonTests(unittest.TestCase):
         bridge.command_ack_reader = reader()
         bridge.diagnostics_reader = reader()
         bridge.scenario_reader = reader()
-        bridge.platform_readers = [("init", "PlatformInitStatus", reader())]
+        bridge.platform_readers = [("init", "PlatformStatus", reader())]
         bridge.link_stats_reader = reader(stats)
         bridge.cache_lock = threading.RLock()
         bridge.cache = {}

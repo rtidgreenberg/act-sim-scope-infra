@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from util.dds_probe import Probe, write_until_seen  # noqa: E402
 
 TYPE_NAME = "control_command"
-TOPIC_NAME = "ControlCommand"
+TOPIC_NAME = "Mission"
 THIS_NODE = "Platform_30"
 OTHER_NODE = "Platform_31"
 
@@ -61,11 +61,11 @@ def test_command_reaches_only_addressed_platform(router_pair, unique_domains):
             f"platform router exited early, see {platform_proc.log_path}"
 
         assert seen_us, (
-            f"ControlCommand addressed to {THIS_NODE} never arrived at the platform "
+            f"Mission addressed to {THIS_NODE} never arrived at the platform "
             f"reader; router logs: control={control_proc.log_path} "
             f"platform={platform_proc.log_path}")
         assert not seen_other, (
-            "ControlCommand addressed to a different platform leaked through the "
+            "Mission addressed to a different platform leaked through the "
             "content filter — should have been dropped by the platform_wan CFT")
     finally:
         control_app.close()

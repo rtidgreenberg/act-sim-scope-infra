@@ -5,9 +5,13 @@ import argparse
 import html
 import json
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from harness_v2.receive_policy import ReceivePolicyHistory
 
 
 def load_events(debug_root, run_id, nodes):
@@ -77,13 +81,14 @@ def load_expectations(path, manifest, run_id):
         if not isinstance(expectation.get("enabled"), bool) \
                 or not isinstance(expectation.get("source_nodes"), list) \
                 or not isinstance(rule, dict) \
-                or rule.get("kind") not in {"fixed_nodes", "fixed_nodes_except_source", "sample_destination"} \
+                or rule.get("kind") not in {"fixed_nodes", "fixed_nodes_except_source",
+                                            "sample_destination", "mission_navigation"} \
                 or not isinstance(rule.get("nodes"), list):
             return {}, [f"invalid expectation for topic {topic}"]
     return topics, []
 
 
-def expected_receivers(event, expectation):
+def expected_receivers(event, expectation, policies=None):
     if not expectation["enabled"]:
         return []
     rule = expectation["recipient_rule"]
@@ -91,6 +96,15 @@ def expected_receivers(event, expectation):
         return rule["nodes"]
     if rule["kind"] == "fixed_nodes_except_source":
         return [node for node in rule["nodes"] if node != event["source_node"]]
+    if rule["kind"] == "mission_navigation":
+        if policies is None:
+            raise ValueError("mission navigation requires receive-policy audit history")
+        return [
+            node for node in rule["nodes"]
+            if node == "Control_20" or node != event["source_node"]
+            and policies.state_at(event.get("run_id"), node, event.get("sent_at_ns"))
+            ["receive_profile"] == "ActiveMission"
+        ]
     destination = event.get("destination")
     return [destination] if destination in rule["nodes"] else []
 
@@ -98,6 +112,13 @@ def expected_receivers(event, expectation):
 def analyze(events, event_paths, evidence_errors, manifest, expectations, run_id):
     requirements = manifest.get("topics", {})
     errors = list(evidence_errors)
+    policies = ReceivePolicyHistory()
+    for event in events:
+        if event.get("event") == "receive_policy":
+            try:
+                policies.add(event)
+            except ValueError as error:
+                errors.append(str(error))
     sends = [event for event in events if event.get("event") == "sent"
              and event.get("topic") in expectations]
     receives = [event for event in events if event.get("event") == "received"
@@ -112,7 +133,11 @@ def analyze(events, event_paths, evidence_errors, manifest, expectations, run_id
         if sent["source_node"] not in expectation["source_nodes"]:
             errors.append(f"unexpected source {sent['source_node']} for {sent['topic']}")
             continue
-        receivers = expected_receivers(sent, expectation)
+        try:
+            receivers = expected_receivers(sent, expectation, policies)
+        except ValueError as error:
+            errors.append(str(error))
+            continue
         if not receivers:
             not_expected.append({"topic": sent["topic"], "source_node": sent["source_node"],
                                  "sequence": sent["sequence"]})
@@ -180,7 +205,7 @@ def analyze(events, event_paths, evidence_errors, manifest, expectations, run_id
         "run_id": run_id,
         "verdict": verdict,
         "event_log_paths": [str(path) for path in event_paths],
-        "evidence_errors": errors,
+        "evidence_errors": list(dict.fromkeys(errors)),
         "sent": len(sends),
         "expected_deliveries": len(expected),
         "received_expected_deliveries": len(expected) - len(missing),

@@ -62,7 +62,7 @@ routes:
     source: platform
     destination: control
     topics:
-      - name: PlatformInitStatus
+      - name: PlatformStatus
     source_side:
       input:
         participant: platform_lan

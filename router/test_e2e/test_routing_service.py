@@ -33,13 +33,33 @@ def rs_build():
 
 
 @pytest.fixture
-def rs_mesh(rs_build, unique_domains, extra_domains, e2e_tmp_dir, monkeypatch, request):
+def rs_contract(request):
+    return getattr(request.module, "RS_WAN_CONTRACT", "two_topic_union")
+
+
+def configure_contract(config, contract):
+    config["router"]["wan_contract"] = contract
+    three_topic = contract == "three_topic_union"
+    config["qos_profiles"]["wan_participant"] = (
+        "ACT_QOS_LIB::wan_three_topic_participant" if three_topic
+        else "ACT_QOS_LIB::wan_two_topic_participant")
+    config["qos_profiles"]["wan_event"] = (
+        "ACT_QOS_LIB::wan_three_topic_event" if three_topic else "ACT_QOS_LIB::wan_event")
+    config["qos_profiles"]["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts"
+    config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
+
+
+@pytest.fixture
+def rs_mesh(rs_build, rs_contract, unique_domains, extra_domains, e2e_tmp_dir,
+            monkeypatch, request):
     set_wan_qos_env()
     for index in range(1, 12):
         monkeypatch.setenv("WAN_PEER" + (str(index) if index > 1 else ""),
                            "[0-15]@builtin.udpv4://127.0.0.1")
     with ExitStack() as cleanup:
-        observer = Probe(unique_domains["wan"], participant_profile="wan_two_topic_participant",
+        observer = Probe(unique_domains["wan"], participant_profile=(
+            "wan_three_topic_participant" if rs_contract == "three_topic_union"
+            else "wan_two_topic_participant"),
                          participant_partition=["SHARED"])
         cleanup.callback(observer.close)
         # Start builtin readers before the gateways so discovery evidence is retained.
@@ -52,19 +72,20 @@ def rs_mesh(rs_build, unique_domains, extra_domains, e2e_tmp_dir, monkeypatch, r
             ("Boat31", "platform", dict(unique_domains, platform_lan=extra_domains["platform_lan"]),
              "platform_lan"),
         ):
-            work = e2e_tmp_dir / node
-            work.mkdir()
+            work = e2e_tmp_dir / rs_contract / node
+            work.mkdir(parents=True)
             path = render_config("control-platform.yaml", domains, work)
             config = yaml.safe_load(path.read_text())
-            config["router"]["wan_contract"] = "two_topic_union"
+            configure_contract(config, rs_contract)
             config["router"]["admin_participant"] = participant
-            config["qos_profiles"]["wan_participant"] = "ACT_QOS_LIB::wan_two_topic_participant"
-            config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
-            config["routing_service"] = getattr(request, "param", {})
+            config["routing_service"] = dict(getattr(request, "param", {}))
+            config["routing_service"].setdefault(
+                "receive_policy", getattr(request.module, "RS_RECEIVE_POLICY", "static"))
+            config["qos_profiles"].update(getattr(request.module, "RS_QOS_PROFILES", {}))
             for route in config["routes"]:
                 route["enabled"] = True
                 if route.get("topics") and all(
-                        topic["name"] not in ("ControlCommand", "ActTeamAssignment",
+                        topic["name"] not in ("Mission", "Team",
                                               "ActPlatformStatusMode", "PlatformCommandAck",
                                               "ContactReport") for topic in route["topics"]):
                     route["enabled"] = False
@@ -74,7 +95,9 @@ def rs_mesh(rs_build, unique_domains, extra_domains, e2e_tmp_dir, monkeypatch, r
                 process = RouterProcess(subprocess.Popen(
                     [sys.executable, str(REPO_ROOT / "router/routing_service/run.py"),
                      "--config", str(path), "--role", role, "--node-name", node,
-                     "--name", "rs", "--build-dir", str(rs_build), "--data-plane-only",
+                     "--name", "rs", "--build-dir", str(rs_build),
+                     *([] if getattr(request.module, "RS_MONITORING", False)
+                       else ["--data-plane-only"]),
                      *(["--team", "TEAM_A"] if role == "platform" else [])],
                     cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT), log_path)
             cleanup.callback(process.stop)
@@ -94,7 +117,7 @@ def rs_mesh(rs_build, unique_domains, extra_domains, e2e_tmp_dir, monkeypatch, r
         yield nodes, observer
 
 
-def test_rs_all_existing_application_cases_and_shared_endpoint_counts(rs_mesh):
+def test_rs_all_existing_application_cases_and_shared_endpoint_counts(rs_mesh, rs_contract):
     nodes, observer = rs_mesh
     control = nodes["Control_20"][1]
     boat = nodes["Boat30"][1]
@@ -110,7 +133,7 @@ def test_rs_all_existing_application_cases_and_shared_endpoint_counts(rs_mesh):
         if topic == "ContactReport":
             sample["source"] = "Boat30"
             sample["source_node"] = "Boat30"
-        if topic == "ControlCommand":
+        if topic == "Mission":
             sample["destination"] = "Boat30"
             sample["payload"] = list(range(256)) * 32
         writer = source.writer(topic, type_name, writer_qos("lan_event"))
@@ -125,22 +148,23 @@ def test_rs_all_existing_application_cases_and_shared_endpoint_counts(rs_mesh):
     counts = {}
     for publication in publications:
         counts.setdefault(publication["participant_key"], []).append(publication["topic"])
-    gateways = [topics for topics in counts.values() if "Event" in topics or "Status" in topics]
+    expected = ["Event", "Periodic", "State"] if rs_contract == "three_topic_union" else ["Event", "Status"]
+    gateways = [topics for topics in counts.values() if "Event" in topics]
     assert len(gateways) == 3, counts
-    assert all(sorted(topics) == ["Event", "Status"] for topics in gateways), counts
+    assert all(sorted(topics) == expected for topics in gateways), counts
     subscriptions = {}
     for data, info in observer.participant.subscription_reader.read():
         if info.valid:
             subscriptions.setdefault(str(data.participant_key.value), []).append(data.topic_name)
-    gateways = [topics for topics in subscriptions.values() if "Event" in topics or "Status" in topics]
+    gateways = [topics for topics in subscriptions.values() if "Event" in topics]
     assert len(gateways) == 3, subscriptions
-    assert all(sorted(topics) == ["Event", "Status"] for topics in gateways), subscriptions
+    assert all(sorted(topics) == expected for topics in gateways), subscriptions
 
 
 @pytest.mark.parametrize("operation", ["dispose", "unregister"])
 @pytest.mark.parametrize("topic,type_name,key", [
     ("ContactReport", "contact_report", "contact_id"),
-    ("PlatformInitStatus", "platform_init_status", "source"),
+    ("PlatformStatus", "platform_init_status", "source"),
     ("PlatformCommandAck", "control_command_ack", "source"),
 ])
 def test_rs_native_lifecycle(rs_mesh, operation, topic, type_name, key):
@@ -178,9 +202,9 @@ def test_rs_native_lifecycle(rs_mesh, operation, topic, type_name, key):
 def test_rs_addressed_filtering_and_malformed_frame_recovery(rs_mesh):
     nodes, observer = rs_mesh
     control, boat, other = (nodes[node][1] for node in ("Control_20", "Boat30", "Boat31"))
-    writer = control.writer("ControlCommand", "control_command", writer_qos("lan_event"))
-    intended = boat.reader("ControlCommand", "control_command")
-    forbidden = other.reader("ControlCommand", "control_command")
+    writer = control.writer("Mission", "control_command", writer_qos("lan_event"))
+    intended = boat.reader("Mission", "control_command")
+    forbidden = other.reader("Mission", "control_command")
     sample = control.sample("control_command", source="control", destination="Boat30",
                             audit_sequence=123, command_id="addressed")
     seen = write_until_seen(lambda: writer.write(sample), intended,
@@ -220,13 +244,13 @@ def test_rs_addressed_filtering_and_malformed_frame_recovery(rs_mesh):
 
 
 @pytest.fixture
-def priority_config(rs_build, unique_domains, e2e_tmp_dir):
-    path = render_config("control-platform.yaml", unique_domains, e2e_tmp_dir)
+def priority_config(rs_build, rs_contract, e2e_tmp_dir):
+    # These configuration-only checks create no DDS entities or domain reservations.
+    domains = {"control_lan": 101, "wan": 102, "platform_lan": 103}
+    path = render_config("control-platform.yaml", domains, e2e_tmp_dir)
     config = yaml.safe_load(path.read_text())
-    config["router"]["wan_contract"] = "two_topic_union"
+    configure_contract(config, rs_contract)
     config["router"]["admin_participant"] = "platform_lan"
-    config["qos_profiles"]["wan_participant"] = "ACT_QOS_LIB::wan_two_topic_participant"
-    config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
     path.write_text(yaml.safe_dump(config))
 
     def normalized(settings=None):
@@ -241,16 +265,19 @@ def priority_config(rs_build, unique_domains, e2e_tmp_dir):
     return normalized
 
 
-def test_rs_priority_defaults_and_overrides(priority_config):
+def test_rs_priority_defaults_and_overrides(priority_config, rs_contract):
     result = priority_config()
     assert result.returncode == 0, result.stderr
     model = yaml.safe_load(result.stdout)
     assert model["async_bandwidth_bps"] == 2000000
-    assert model["publication_priorities"]["ControlCommand"] == 400
-    assert model["publication_priorities"]["RouterHealth"] == 300
+    three_topic = rs_contract == "three_topic_union"
+    assert model["publication_priorities"]["Mission"] == (600 if three_topic else 400)
+    assert model["publication_priorities"]["RouterHealth"] == (500 if three_topic else 300)
     assert model["publication_priorities"]["ContactReport"] == 200
-    assert model["publication_priorities"]["PlatformInitStatus"] == 100
-    assert all(port["profile"] == "ACT_QOS_LIB::lan_status_1s"
+    assert model["publication_priorities"]["PlatformStatus"] == 100
+    qos = dds.QosProvider(str(REPO_ROOT / "harness_v2/qos/act_qos_profiles.xml"))
+    assert all(qos.datareader_qos_from_profile(port["profile"])
+               .time_based_filter.minimum_separation == dds.Duration.zero
                for port in model["inputs"] if port["type"].startswith("platform_"))
     result = priority_config({"topic_priorities": {"ContactReport": "high",
                                                   "RouterHealth": "normal"}})
@@ -315,10 +342,10 @@ def test_rs_four_classes_overtake_pending_lower_classes(priority_config, unique_
         assert all(w.publication_matched_status.current_count == 1 for w, _ in endpoints.values())
         # Queue low classes first, with repeated keys kept separate to avoid cache replacement.
         queued = [
-            ("Status", "PlatformInitStatus", "navigation", "source"),
+            ("Status", "PlatformStatus", "navigation", "source"),
             ("Event", "ContactReport", "contact_report", "contact_id"),
             ("Status", "RouterHealth", "health", "router"),
-            ("Event", "ControlCommand", "command", "source"),
+            ("Event", "Mission", "command", "source"),
         ]
         for family, original, branch, key in queued:
             for sequence in (1, 2):
@@ -332,7 +359,7 @@ def test_rs_four_classes_overtake_pending_lower_classes(priority_config, unique_
                 with frame.loan_value("payload") as payload:
                     with payload.data.loan_value(branch) as value:
                         value.data[key] = f"priority-{sequence}"
-                        if original == "ControlCommand":
+                        if original == "Mission":
                             value.data["destination"] = "Control_20"
                 params = dds.WriteParams()
                 params.priority = priorities[original]
@@ -351,7 +378,7 @@ def test_rs_four_classes_overtake_pending_lower_classes(priority_config, unique_
                     for data, info in reader.take() if info.valid)
         assert [(topic, sequence) for _, topic, sequence in sorted(received)] == [
             (topic, sequence) for topic in
-            ("ControlCommand", "RouterHealth", "ContactReport", "PlatformInitStatus")
+            ("Mission", "RouterHealth", "ContactReport", "PlatformStatus")
             for sequence in (1, 2)]
 
 
@@ -410,11 +437,15 @@ def test_rs_actual_processor_ack_priority_under_contact_backlog(rs_mesh, high):
         assert position == total, position
 
 
-def test_rs_periodic_lan_input_is_one_hz_per_instance(rs_mesh):
+@pytest.mark.parametrize("rs_mesh", [
+    {"periodic_input_profiles": {"PlatformStatus": "lan_status_1hz"}},
+], indirect=True)
+def test_rs_periodic_lan_input_is_one_hz_per_instance(rs_mesh, rs_contract):
     nodes, observer = rs_mesh
     source = nodes["Boat30"][1]
-    writer = source.writer("PlatformInitStatus", "platform_init_status", writer_qos("lan_event"))
-    reader = observer.reader("Status", "WanStatus", reader_qos("wan_union_status"))
+    writer = source.writer("PlatformStatus", "platform_init_status", writer_qos("lan_event"))
+    reader = observer.reader("Periodic" if rs_contract == "three_topic_union" else "Status",
+                             "WanStatus", reader_qos("wan_union_status"))
     sample = source.sample("platform_init_status", source="rate-test", run_id="rs-rate")
     deadline = time.monotonic() + 10
     while writer.publication_matched_status.current_count == 0 and time.monotonic() < deadline:

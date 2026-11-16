@@ -138,6 +138,15 @@ LinkStatsCollector::LinkStatsCollector(dds::domain::DomainParticipant lan_partic
                {"network", network_}});
 }
 
+LinkStatsCollector::LinkStatsCollector(
+        dds::pub::DataWriter<dds::core::xtypes::DynamicData> writer,
+        const std::string &observer_router, const std::string &network, int period_ms)
+        : observer_router_(observer_router), network_(network),
+          period_ms_(period_ms > 0 ? period_ms : kLinkStatsPeriodMs),
+          lan_publisher_(dds::core::null), stats_topic_(dds::core::null),
+          stats_writer_(dds::core::null), service_stats_writer_(writer),
+          shut_down_(false) {}
+
 LinkStatsCollector::~LinkStatsCollector() {
     shutdown();
 }
@@ -203,7 +212,11 @@ void LinkStatsCollector::on_link_stats_tick() {
         s.capture_timestamp = capture_ts;
         s.interval_ms = interval_ms;
         try {
-            stats_writer_.write(s);
+            if (service_stats_writer_ != dds::core::null) {
+                service_stats_writer_.write(rti::core::xtypes::convert(s));
+            } else {
+                stats_writer_.write(s);
+            }
         } catch (const dds::core::NotEnabledError &) {
             Log::debug("link_stats_skipped_not_enabled", {});
         } catch (const std::exception &e) {

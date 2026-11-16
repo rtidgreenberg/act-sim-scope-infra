@@ -7,7 +7,7 @@ TOPIC_IDLE because a WIS publication did not propagate its TypeObject.
 
 Usage:
     python3 debug/scripts/dds_type_probe.py --domain 20 \
-        [--topic ActTeamAssignment] [--wait 5]
+        [--topic Team] [--wait 5]
 """
 
 import argparse

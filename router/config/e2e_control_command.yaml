@@ -58,7 +58,7 @@ routes:
     source: control
     destination: platform
     topics:
-      - name: ControlCommand
+      - name: Mission
     source_side:
       input:
         participant: control_lan

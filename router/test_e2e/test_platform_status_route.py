@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from util.dds_probe import Probe, write_until_seen  # noqa: E402
 
 TYPE_NAME = "platform_init_status"
-TOPIC_NAME = "PlatformInitStatus"
+TOPIC_NAME = "PlatformStatus"
 THIS_NODE = "Platform_30"
 
 
@@ -52,7 +52,7 @@ def test_status_reaches_control(router_pair, unique_domains):
             f"platform router exited early, see {platform_proc.log_path}"
 
         assert seen, (
-            f"PlatformInitStatus from {THIS_NODE} never arrived at the control "
+            f"PlatformStatus from {THIS_NODE} never arrived at the control "
             f"reader; router logs: control={control_proc.log_path} "
             f"platform={platform_proc.log_path}")
     finally:

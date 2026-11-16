@@ -2,7 +2,7 @@
 
 Two router_main processes (control + platform roles, config/e2e_link_stats.yaml). Each
 runs a LinkStatsCollector on its WAN participant: it polls every registered WAN endpoint's
-per-matched-endpoint reliable-protocol statuses (the ENABLED PlatformInitStatus route's
+per-matched-endpoint reliable-protocol statuses (the ENABLED PlatformStatus route's
 WAN leg + PresenceMonitor's RouterHealth bellwether pair), rolls them up per peer NAME
 resolved from the middleware discovery DB (D81 — no roster join), measures passive RTT via
 scheduled RouterHealth acknowledgment metadata, and publishes ActRouterLinkStats on its admin
@@ -55,7 +55,7 @@ RTPS_PORT_BASE = 7400
 RTPS_DOMAIN_GAIN = 250
 
 TYPE_NAME = "platform_init_status"
-TOPIC_NAME = "PlatformInitStatus"
+TOPIC_NAME = "PlatformStatus"
 # The reliable event leg (production platform_events uses wan_event) — same platform_wan
 # participant as the best-effort status leg, so the node carries both QoS classes (D95).
 EVENT_TYPE_NAME = "contact_report"
@@ -171,7 +171,7 @@ def test_link_stats(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains,
                 break
             time.sleep(0.1)
 
-        assert forwarded, (f"PlatformInitStatus never forwarded end-to-end; "
+        assert forwarded, (f"PlatformStatus never forwarded end-to-end; "
                            f"control={control.log_path} platform={platform.log_path}")
 
         plat_cp = [f for f in plat_acc if f["observer"] == PLATFORM

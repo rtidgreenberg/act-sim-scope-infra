@@ -6,7 +6,7 @@ control app (control_lan) --[router control-role: control_lan -> control_wan]-->
 
 Unfiltered counterpart to test_control_command_route.py: control_event broadcasts every
 sample to every platform (no ContentFilteredTopic), unlike control_command which uses a
-msg.destination CFT. Exercises TeamAssignment (ActTeamAssignment topic, from
+msg.destination CFT. Exercises TeamAssignment (Team topic, from
 RouterAdminTypes.idl/ActTypes.idl, wire-learned via D70) — the existing
 test_team_assignment_e2e.py is a standalone argparse script using WIS, not a pytest test
 through router_main (docs/cpp_router/debug-tooling-and-missing-tests.md #2a).
@@ -24,7 +24,7 @@ import rti.connextdds as dds
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from util.dds_probe import Probe, write_until_seen  # noqa: E402
 
-TOPIC_NAME = "ActTeamAssignment"
+TOPIC_NAME = "Team"
 TYPE_NAME = "TeamAssignment"
 
 

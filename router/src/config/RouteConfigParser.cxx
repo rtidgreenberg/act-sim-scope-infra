@@ -501,7 +501,7 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
                 if (!configured.empty() && configured != "default" && configured != alias && !event_hint) {
                     throw std::runtime_error("unsupported WAN QoS class for " + topic.name);
                 }
-                const bool command = topic.name == "ControlCommand";
+                const bool command = topic.name == "Mission";
                 const bool mode = topic.name == "ActPlatformStatusMode";
                 if (!wan.filter_expression.empty() &&
                     (source || (!command && !mode) ||

@@ -40,7 +40,7 @@ int main() {
 
     // Per-topic status sequence (D11): route active when >= 1 topic forwards.
     RouterRouteTopicStatus topic;
-    topic.name = "ControlCommand";
+    topic.name = "Mission";
     topic.discovery_state = RouterRouteDiscoveryState::DISCOVERY_READY;
     topic.topic_state = RouterRouteTopicState::TOPIC_FORWARDING;
     topic.samples_forwarded = 3;
@@ -88,7 +88,7 @@ int main() {
     spec.desired_enabled = true;
     spec.forwarding_mode = "dynamic_data";
     spec.topics.resize(1);
-    spec.topics.at(0).name = "ControlCommand";
+    spec.topics.at(0).name = "Mission";
     spec.input.filter_parameters.push_back("Platform_30");
     CHECK(spec.topics.size() == 1);
     CHECK(spec.input.filter_parameters.size() == 1);

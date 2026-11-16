@@ -95,10 +95,10 @@ class Rig:
         self.topic_bindings = {}
         self.readers = []
         self.writers = []
-        self.command_writer = self.writer(0, "ControlCommand", "control_command", "lan_event")
-        self.command_reader = self.reader(1, "ControlCommand", "control_command", "lan_event")
-        self.nav_writer = self.writer(1, "PlatformInitStatus", "platform_init_status", "lan_status_1s")
-        self.nav_reader = self.reader(0, "PlatformInitStatus", "platform_init_status", "lan_status_1s")
+        self.command_writer = self.writer(0, "Mission", "control_command", "lan_event")
+        self.command_reader = self.reader(1, "Mission", "control_command", "lan_event")
+        self.nav_writer = self.writer(1, "PlatformStatus", "platform_init_status", "lan_status_1s")
+        self.nav_reader = self.reader(0, "PlatformStatus", "platform_init_status", "lan_status_1s")
         self.event_reader = self.reader(2, "Event", "WanEvent", "wan_event")
         self.status_reader = self.reader(2, "Status", "WanStatus", "wan_status")
         wait_until(lambda: self.command_writer.publication_matched_status.current_count == 1)
@@ -213,7 +213,7 @@ def test_production_codec_wire_codec_and_single_publication(pilot, rig):
     rig.command_writer.write(command)
     assert receive(rig.command_reader, 1) == command
     event = receive(rig.event_reader, 1)
-    assert event["original_topic"] == "ControlCommand"
+    assert event["original_topic"] == "Mission"
     assert event["source_id"] == "Control20"
     assert event["session_id"] == 42
     with event.loan_value("payload") as payload:
@@ -379,7 +379,7 @@ def test_detach_under_active_traffic(pilot, rig):
 
 def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     pilot.command("bind nav_local_destination 40")
-    local_reader = rig.reader(1, "PlatformInitStatus", "platform_init_status", "lan_status_1s")
+    local_reader = rig.reader(1, "PlatformStatus", "platform_init_status", "lan_status_1s")
     remote_writer = rig.writer(2, "Status", "WanStatus", "wan_union_status")
     wait_until(lambda: remote_writer.publication_matched_status.current_count == 3)
     local = rig.sample("platform_init_status", 50)
@@ -389,7 +389,7 @@ def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     frame["source_id"] = "OtherBoat"
     frame["instance_id"] = "OtherBoat"
     frame["schema_version"] = 3
-    frame["original_topic"] = "PlatformInitStatus"
+    frame["original_topic"] = "PlatformStatus"
     frame["audit_sequence"] = 50
     with frame.loan_value("payload") as payload:
         with payload.data.loan_value("navigation") as navigation:
@@ -436,7 +436,7 @@ def wait_state(reader, field, key, state):
 def test_native_lifecycle_shared_routes_and_multiple_input_writers(pilot, rig):
     first = rig.sample("platform_init_status", 301)
     second = rig.sample("platform_init_status", 302)
-    other_writer = rig.writer(1, "PlatformInitStatus", "platform_init_status", "lan_status_1s")
+    other_writer = rig.writer(1, "PlatformStatus", "platform_init_status", "lan_status_1s")
     wait_until(lambda: other_writer.publication_matched_status.current_count == 1)
     for writer, sample in ((rig.nav_writer, first), (other_writer, second)):
         time.sleep(1.05)
@@ -567,7 +567,7 @@ def test_malformed_lifecycle_does_not_stop_later_samples(pilot, rig):
     time.sleep(0.3)
     assert pilot.stats()["errors"] == 0, "Unsupported topic should be filtered before decoding"
     assert not any(s.info.valid for s in rig.command_reader.take())
-    frame["original_topic"] = "ControlCommand"
+    frame["original_topic"] = "Mission"
     frame["source_id"] = ""
     remote.write(frame)
     wait_until(lambda: pilot.stats()["errors"] >= 1)
@@ -582,7 +582,7 @@ def test_malformed_lifecycle_does_not_stop_later_samples(pilot, rig):
 
 def test_dispose_then_unregister_uses_native_reader_transition_policy(pilot, rig):
     sample = rig.sample("control_command", 801)
-    source_observer = rig.reader(0, "ControlCommand", "control_command", "lan_event")
+    source_observer = rig.reader(0, "Mission", "control_command", "lan_event")
     wait_until(lambda: source_observer.subscription_matched_status.current_count == 1)
     rig.command_writer.write(sample)
     receive(source_observer, 801)

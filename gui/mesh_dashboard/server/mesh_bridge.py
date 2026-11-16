@@ -7,7 +7,7 @@ Reads ActRouterMeshStatus (control_lan, domain 20 by default) and serves it as:
   GET  /api/mesh_status        -> [{"data": {...}}, ...]  (current cached samples)
   GET  /ws                     -> WebSocket; pushes {"data": {...}} per new sample
   POST /api/team_assignment    -> body {"platform_node": ..., "team_name": ...};
-                                   writes one ActTeamAssignment sample, 204 on success
+                                   writes one Team sample, 204 on success
   POST /api/mission_validate   -> {targets, waypoints}; returns a five-minute plan_id
   POST /api/mission_commands   -> {operation, plan_id} for validated routes, or legacy
                                    {operation, targets, waypoints}; cancel/RTB omit
@@ -29,10 +29,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from harness_v2.receive_policy import ReceivePolicyHistory
 
 from aiohttp import web
 try:
@@ -74,11 +78,11 @@ MESH_STATUS_TOPIC = "ActRouterMeshStatus"
 MESH_STATUS_TYPE = "RouterMeshStatus"
 LINK_STATS_TOPIC = "ActRouterLinkStats"
 LINK_STATS_TYPE = "RouterLinkStats"
-TEAM_ASSIGNMENT_TOPIC = "ActTeamAssignment"
+TEAM_ASSIGNMENT_TOPIC = "Team"
 TEAM_ASSIGNMENT_TYPE = "TeamAssignment"
 STATUS_MODE_TOPIC = "ActPlatformStatusMode"
 STATUS_MODE_TYPE = "PlatformStatusMode"
-CONTROL_COMMAND_TOPIC = "ControlCommand"
+CONTROL_COMMAND_TOPIC = "Mission"
 CONTROL_COMMAND_TYPE = "control_command"
 CONTROL_COMMAND_ACK_TOPIC = "PlatformCommandAck"
 CONTROL_COMMAND_ACK_TYPE = "control_command_ack"
@@ -101,7 +105,7 @@ class MissionConflict(ValueError):
 
 
 INIT_STATUS_TOPICS = {
-    "PlatformInitStatus": "platform_init_status",
+    "PlatformStatus": "platform_init_status",
 }
 MISSION_STATUS_TOPICS = {
     "PlatformDetailStatus": "platform_detail_status",
@@ -116,14 +120,14 @@ DEBUG_STATUS_TOPICS = {
 MISSION_MODE_TOPICS = set(MISSION_STATUS_TOPICS)
 DEBUG_MODE_TOPICS = set(DEBUG_STATUS_TOPICS)
 FIXED_CONTROL_RECIPIENT_TOPICS = {
-    "PlatformInitStatus", "PlatformDetailStatus", "PlatformMissionStatus",
+    "PlatformStatus", "PlatformDetailStatus", "PlatformMissionStatus",
     "PlatformWaypointStatus", "PlatformDebugStatus", "PlatformThrusterStatus",
     "PlatformPowerStatus", "PlatformCommandAck", "ContactReport",
 }
 PERCENTAGE_MIN_SAMPLES = 30
 DELIVERY_SETTLE_MS = 2_000
 RELIABLE_DELIVERY_SETTLE_MS = 15_000
-RELIABLE_DELIVERY_TOPICS = {"ControlCommand", "PlatformCommandAck", "RouterHealth"}
+RELIABLE_DELIVERY_TOPICS = {"Mission", "PlatformCommandAck", "RouterHealth"}
 EMANE_EVENT_GROUP = "224.1.2.8"
 EMANE_EVENT_PORT = "45702"
 EMANE_PATHLOSS_MAX_DB = 200
@@ -189,7 +193,7 @@ def validate_mission_request(body):
         payload_object["l"] = loop_start
     payload = json.dumps(payload_object, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(payload) > MAX_MISSION_PAYLOAD_BYTES:
-        raise ValueError("mission payload exceeds the 8192-byte ControlCommand limit")
+        raise ValueError("mission payload exceeds the 8192-byte Mission limit")
     return {
         "operation": operation,
         "targets": targets,
@@ -322,6 +326,9 @@ class DdsBridge:
         self.audit_sent = {}  # (run_id, topic, source, sequence) -> sent event
         self.audit_received = {}  # (run_id, topic, source, sequence, receiver) -> receive event
         self.audit_versions = {}  # (topic, source, recipient) -> [sent, received]
+        self.audit_policy_history = ReceivePolicyHistory()
+        self.audit_policy_errors = set()
+        self.audit_policy_record_errors = {}
         self.wire_delivery = WireDelivery()
         self.platform_status_modes = {}  # platform_node -> init|mission|debug
         self.platform_status_mode_changed_ns = {}  # platform_node -> monotonic mode-change cutoff
@@ -423,7 +430,7 @@ class DdsBridge:
                         }
 
                     self._broadcast(payload)
-                    if topic_name in {"PlatformInitStatus", "PlatformMissionStatus",
+                    if topic_name in {"PlatformStatus", "PlatformMissionStatus",
                                       "PlatformWaypointStatus"}:
                         self._broadcast({
                             "type": "mission_inventory",
@@ -546,6 +553,8 @@ class DdsBridge:
                 health = peer.get("health", {})
                 if health.get("router", "").split("/", 1)[0] != source_node:
                     continue
+                if health.get("reporting_policy") == "always_on":
+                    return "all"
                 routes = {route["route_name"]: route["state"]
                           for route in health.get("routes", [])}
                 if "platform_debug_status" in routes:
@@ -560,6 +569,8 @@ class DdsBridge:
         if not source_node.startswith("Platform_"):
             return True
         mode = self._reported_status_mode(source_node)
+        if mode == "all":
+            return True
         cutoff_ns = self.platform_status_mode_changed_ns.get(source_node, 0)
         if topic in MISSION_MODE_TOPICS | DEBUG_MODE_TOPICS and sent_at_ns < cutoff_ns:
             return False
@@ -619,8 +630,28 @@ class DdsBridge:
                 )
         return names
 
+    def _receive_profile_for_node(self, node_name):
+        statuses = sorted(self.cache.items(), key=lambda item: item[0] != "Control_20")
+        for _, status in statuses:
+            for peer in status.get("peers", []):
+                health = peer.get("health", {})
+                if str(health.get("router", "")).split("/", 1)[0] == node_name:
+                    return health.get("receive_profile", "")
+        return ""
+
+    def _receive_policy_at(self, event, node_name):
+        run = event.get("run_id", "")
+        if (self._receive_profile_for_node(node_name) not in {"Init", "ActiveMission"}
+                and not self.audit_policy_history.has_node(run, node_name)):
+            return {"receive_profile": "Static", "teams": self._team_names_for_node(node_name)}
+        try:
+            return self.audit_policy_history.state_at(run, node_name, event.get("sent_at_ns"))
+        except ValueError as error:
+            self.audit_policy_errors.add(str(error))
+            return {"receive_profile": "Unknown", "teams": ()}
+
     def _expected_recipients(self, event):
-        if event["topic"] == "ControlCommand":
+        if event["topic"] == "Mission":
             return [event["destination"]] if event.get("destination") else []
         if event["topic"] == "PlatformData" and event["source_node"].startswith("Platform_"):
             run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
@@ -628,6 +659,7 @@ class DdsBridge:
             return [node for node in run_nodes
                     if node.startswith("Platform_")
                     and node != event["source_node"]
+                    and self._receive_profile_for_node(node) not in {"Init", "ActiveMission"}
                     and source_teams.intersection(self._team_names_for_node(node) | {node})]
         if event["topic"] == "RouterHealth":
             run_nodes = self._audit_nodes_for_run(event.get("run_id", ""))
@@ -638,15 +670,25 @@ class DdsBridge:
             if event["source_node"].startswith("Platform_"):
                 return ["Control_20"] if "Control_20" in run_nodes else []
             return []
-        if event["topic"] == "PlatformInitStatus" and event["source_node"].startswith("Platform_"):
+        if event["topic"] == "PlatformStatus" and event["source_node"].startswith("Platform_"):
             return [node for node in self._audit_nodes_for_run(event.get("run_id", ""))
-                    if node == "Control_20" or node.startswith("Platform_") and node != event["source_node"]]
+                    if node == "Control_20" or node.startswith("Platform_")
+                    and node != event["source_node"]
+                    and self._receive_policy_at(event, node)["receive_profile"] in {"Static", "ActiveMission"}]
         if event["topic"] in FIXED_CONTROL_RECIPIENT_TOPICS \
                 and event["source_node"].startswith("Platform_"):
             sent_at_ns = int(event.get("sent_at_ns", 0))
             if not self._platform_topic_expected(event["source_node"], event["topic"], sent_at_ns):
                 return []
-            return ["Control_20"]
+            recipients = ["Control_20"]
+            if event["topic"] in {"PlatformMissionStatus", "ContactReport"}:
+                source_teams = set(self._receive_policy_at(event, event["source_node"])["teams"])
+                recipients.extend(
+                    node for node in self._audit_nodes_for_run(event.get("run_id", ""))
+                    if node.startswith("Platform_") and node != event["source_node"]
+                    and self._receive_policy_at(event, node)["receive_profile"] == "ActiveMission"
+                    and source_teams.intersection(self._receive_policy_at(event, node)["teams"]))
+            return recipients
         return []
 
     @functools.lru_cache(maxsize=16)
@@ -671,6 +713,11 @@ class DdsBridge:
         return self.audit_versions.setdefault(flow, [0, 0])
 
     def _prune_audit_events(self, earliest_ns):
+        self.audit_policy_history.prune(earliest_ns, self.audit_run_id)
+        self.audit_policy_record_errors = {
+            run: errors for run, errors in self.audit_policy_record_errors.items()
+            if run == self.audit_run_id
+        }
         self.audit_sent = {
             key: event for key, event in self.audit_sent.items()
             if event["sent_at_ns"] >= earliest_ns
@@ -717,7 +764,14 @@ class DdsBridge:
                         continue
                     key = (event["run_id"], event["topic"], event["source_node"], event["sequence"])
                     with self.cache_lock:
-                        if event["event"] == "sent":
+                        if event["event"] == "receive_policy":
+                            try:
+                                self.audit_policy_history.add(event)
+                            except ValueError as error:
+                                self.audit_policy_record_errors.setdefault(event["run_id"], set()).add(str(error))
+                                logger.error("Invalid receive-policy audit: %s", error)
+                            changed = True
+                        elif event["event"] == "sent":
                             if key in self.audit_sent:
                                 continue
                             self.audit_sent[key] = event
@@ -786,6 +840,7 @@ class DdsBridge:
         now_ns = time.time_ns()
         earliest_ns = now_ns - window_ms * 1_000_000
         with self.cache_lock:
+            self.audit_policy_errors = set(self.audit_policy_record_errors.get(self.audit_run_id, ()))
             flows = {}
             node_modes = {}
             for key, sent in self.audit_sent.items():
@@ -850,6 +905,8 @@ class DdsBridge:
             return {
                 "window_ms": window_ms,
                 "node_modes": node_modes,
+                "coverage_complete": not self.audit_policy_errors,
+                "evidence_errors": sorted(self.audit_policy_errors),
                 "rows": sorted(rows, key=lambda row: (row["topic"], row["source"], row["recipient"])),
             }
 
@@ -960,7 +1017,7 @@ class DdsBridge:
             inventory = []
             for node in sorted(nodes):
                 entry = self.platform_cache.get(node, {})
-                init = entry.get("init", {}).get("PlatformInitStatus", {})
+                init = entry.get("init", {}).get("PlatformStatus", {})
                 mission = entry.get("mission", {}).get("PlatformMissionStatus", {})
                 # The compact always-on summary can recover terminal state after WAN loss.
                 if init.get("mission_phase"):
@@ -1010,6 +1067,9 @@ class DdsBridge:
                     "position_age_ms": age_ms,
                     "squad": squad,
                     "team_confirmed": bool(connected and node in teams),
+                    "receive_profile": peer.get("health", {}).get("receive_profile"),
+                    "receive_state": peer.get("health", {}).get("receive_state"),
+                    "receive_filter_error": peer.get("health", {}).get("receive_filter_error"),
                     "inheritance_error": self.mission_inheritance_errors.get(node),
                     "squad_label": next(choice["label"] for choice in SQUADS if choice["value"] == squad),
                     "home": {"latitude": home_lat, "longitude": home_lon},
@@ -1527,7 +1587,7 @@ class DdsBridge:
                     payload["l"] = plan["loop_start"]
                 encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
                 if len(encoded) > MAX_MISSION_PAYLOAD_BYTES:
-                    raise ValueError("mission payload exceeds the 8192-byte ControlCommand limit")
+                    raise ValueError("mission payload exceeds the 8192-byte Mission limit")
                 sample = dds.DynamicData(self.control_command_type)
                 for field, value in {
                     "source": "Control_20", "destination": target, "run_id": run_id,
@@ -1564,6 +1624,8 @@ class DdsBridge:
         self.writer.write(sample)
 
     def write_status_mode(self, platform_node, mode):
+        if self._reported_status_mode(platform_node) == "all":
+            raise ValueError("This processor keeps all periodic reports always on; mode changes are unsupported")
         mode_map = {
             "init": 0,
             "mission": 1,

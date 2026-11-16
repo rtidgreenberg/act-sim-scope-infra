@@ -7,6 +7,7 @@
 #                    [--with-dashboard] [--dashboard-port <port>]
 #   ./run_mesh.sh {up|render|smoke|audit|isolation|down} --emane [--platforms <N>] \
 #                    [--wan-contract legacy|two_topic_union|three_topic_union] \
+#                    [--router-backend custom|routing_service] \
 #                    [--workdir <dir>] [--verbosity <0-3>] [--test-id <id>]
 #   ./run_mesh.sh down [--workdir <dir>]
 #

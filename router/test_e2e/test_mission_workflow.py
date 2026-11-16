@@ -36,12 +36,17 @@ def live_mission_dashboard():
         inventory = wait_for(page, lambda: (
             boats if len(boats := get(page, "/api/mission_inventory")["platforms"]) == platform_count
             and all(boat["available"] and boat["team_confirmed"] for boat in boats) else None))
+        if os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service":
+            wait_for(page, lambda: all(boat["receive_profile"] == "Init"
+                                      and not boat["receive_filter_error"]
+                                      for boat in get(page, "/api/mission_inventory")["platforms"]))
         original = {boat["platform"]: boat["squad"] for boat in inventory}
         original_clock = {boat["platform"]: boat["time_scale"] for boat in inventory}
         reset = page.request.post("/api/emane_controller", data={"reset_all": True})
         assert reset.ok, reset.text()
         assert not get(page, "/api/emane_controller")["impairments"]
         try:
+            hide_scenario_targets(page)
             for platform, squad in original.items():
                 if squad:
                     response = page.request.post("/api/team_assignment", data={
@@ -62,6 +67,10 @@ def live_mission_dashboard():
                 command(page, {
                     "operation": "cancel", "targets": list(original),
                 })
+                if os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service":
+                    wait_for(page, lambda: all(boat["receive_profile"] == "Init"
+                                              and not boat["receive_filter_error"]
+                                              for boat in get(page, "/api/mission_inventory")["platforms"]))
                 for platform, squad in original.items():
                     response = page.request.post("/api/team_assignment", data={
                         "platform_node": platform, "team_name": squad,
@@ -76,6 +85,7 @@ def live_mission_dashboard():
                     })
                 wait_for(page, lambda: all(boat["time_scale"] == original_clock[boat["platform"]]
                                           for boat in get(page, "/api/mission_inventory")["platforms"]))
+                hide_scenario_targets(page)
             finally:
                 browser.close()
 
@@ -91,8 +101,9 @@ def wan_topic(original):
         return original
     if contract not in ("two_topic_union", "three_topic_union"):
         raise ValueError(f"Unknown MISSION_WAN_CONTRACT: {contract}")
-    return {"ControlCommand": "Event", "PlatformCommandAck": "Event",
-            "PlatformInitStatus": "Telemetry" if contract == "three_topic_union" else "Status"}[original]
+    periodic = "Periodic" if os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service" else "Telemetry"
+    return {"Mission": "Event", "PlatformCommandAck": "Event",
+            "PlatformStatus": periodic if contract == "three_topic_union" else "Status"}[original]
 
 
 def wait_for(page, predicate, timeout=30):
@@ -118,6 +129,17 @@ def command(page, body):
             entry["state"] in ("accepted", "accepted_late") for entry in entries)
     wait_for(page, accepted)
     return result
+
+def hide_scenario_targets(page):
+    for target in get(page, "/api/mission_inventory")["scenario_targets"]:
+        if target["revealed"]:
+            response = page.request.post("/api/mission_scenario", data={
+                "target_id": target["id"], "visible": False,
+            })
+            assert response.ok, response.text()
+    wait_for(page, lambda: all(
+        not target["revealed"]
+        for target in get(page, "/api/mission_inventory")["scenario_targets"]))
 
 def geographic_distance(first, last):
     lat1, lat2 = math.radians(first["latitude"]), math.radians(last["latitude"])
@@ -250,6 +272,10 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
     detailed = wait_for(page, lambda: (
         status if (status := get(page, raw_path)["mission"].get("PlatformMissionStatus", {}))
         .get("mission_phase") == "TRANSIT" and status.get("mission_id") == mission_id else None))
+    wait_for(page, lambda: any(
+        row["source"] == node and row["recipient"] == "Control_20"
+        and row["coverage_complete"] and row["percentage_ready"]
+        for row in get(page, "/api/delivery_stats")["rows"]), timeout=45)
     page.locator('[data-tab="experiment"]').click()
     wait_for(page, lambda: not page.locator("#experiment-apply").is_disabled())
     page.locator("#experiment-source").select_option(node)
@@ -275,10 +301,10 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
         rows = [row for row in snapshot["rows"]
                 if row["source"] == node and row["recipient"] == "Control_20"]
         for reliability in ("reliable", "best_effort"):
-            assert any(row["reliability"] == reliability and row["lost"] > 0
+            assert any(row["reliability"] == reliability and row["coverage_complete"] and row["lost"] > 0
                        for row in rows), rows
         assert any(row["source"] == "Platform_31" and row["recipient"] == "Control_20"
-                   and row["topic"] == wan_topic("PlatformInitStatus") and row["percentage_ready"]
+                   and row["topic"] == wan_topic("PlatformStatus") and row["percentage_ready"]
                    and row["lost"] == 0 for row in snapshot["rows"])
         assert get(page, raw_path)["mission"]["PlatformMissionStatus"]["mission_phase"] == "TRANSIT"
         page.locator("#experiment-reset").click()
@@ -287,12 +313,17 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
         response = page.request.post("/api/emane_controller", data={"reset_all": True})
         assert response.ok, response.text()
     recovered = wait_for(page, lambda: (
-        status if (status := get(page, raw_path))["init"]["PlatformInitStatus"]
+        status if (status := get(page, raw_path))["init"]["PlatformStatus"]
         .get("mission_phase") == "CANCELLED" and
-        status["init"]["PlatformInitStatus"].get("mission_id") == mission_id else None))
-    # No detailed terminal report arrived: reconciliation must use the compact Init summary.
-    assert recovered["mission"]["PlatformMissionStatus"]["mission_phase"] == "TRANSIT"
-    assert recovered["init"]["PlatformInitStatus"]["mission_id"] == detailed["mission_id"]
+        status["init"]["PlatformStatus"].get("mission_id") == mission_id else None))
+    if os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service":
+        wait_for(page, lambda: (
+            (status := get(page, raw_path)["mission"]["PlatformMissionStatus"])
+            ["mission_phase"] == "CANCELLED" and status["mission_id"] == mission_id))
+    else:
+        # Legacy report gating leaves only the compact Init summary after cancellation.
+        assert recovered["mission"]["PlatformMissionStatus"]["mission_phase"] == "TRANSIT"
+    assert recovered["init"]["PlatformStatus"]["mission_id"] == detailed["mission_id"]
     wait_for(page, lambda: any(
         boat["platform"] == node and boat["mission"]["phase"] == "CANCELLED"
         for boat in get(page, "/api/mission_inventory")["platforms"]))
@@ -308,11 +339,14 @@ def test_wire_blackout_and_init_terminal_recovery(live_mission_dashboard):
 def test_automatic_reporting_and_independent_target_toggles(live_mission_dashboard):
     page, errors, external = live_mission_dashboard
     node = "Platform_30"
+    always_on = os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service"
 
     def mode(platform):
         peers = [peer for row in get(page, "/api/mesh_status")
                  for peer in row["data"]["peers"]
                  if peer["health"]["router"].split("/")[0] == platform]
+        if peers[0]["health"].get("reporting_policy") == "always_on":
+            return "all"
         routes = {route["route_name"]: route["state"] for route in peers[0]["health"]["routes"]}
         return ("debug" if routes["platform_debug_status"] != "ROUTE_DISABLED" else
                 "mission" if routes["platform_detail_status"] != "ROUTE_DISABLED" else "init")
@@ -326,7 +360,42 @@ def test_automatic_reporting_and_independent_target_toggles(live_mission_dashboa
                    for boat in get(page, "/api/mission_inventory")["platforms"])
 
     platforms = [boat["platform"] for boat in get(page, "/api/mission_inventory")["platforms"]]
-    wait_for(page, lambda: all(mode(platform) == "init" for platform in platforms))
+    default_mode = "all" if always_on else "init"
+    wait_for(page, lambda: all(mode(platform) == default_mode for platform in platforms))
+    if always_on:
+        wait_for(page, lambda: all(
+            get(page, "/api/platform_status?platform=" + platform).get(level)
+            for platform in platforms for level in ("init", "mission", "debug")))
+        assert page.locator(
+            'script[src="mesh_graph.js?v=20261114-mission-cft-v2"]').count() == 1
+        assert get(page, "/api/system_config")["format"] == "routing_service_xml"
+        page.locator('[data-tab="config"]').click()
+        page.wait_for_function(
+            "() => document.querySelector('#config-sections').textContent.includes('Periodic')")
+        page.locator('[data-tab="mesh"]').click()
+        page.evaluate("() => window.__network.fit({animation: false})")
+        page.wait_for_timeout(500)
+        position = page.evaluate("""() => {
+            const network = window.__network;
+            const node = network.body.data.nodes.get("Platform_30");
+            const point = network.canvasToDOM(network.getPositions([node.id])[node.id]);
+            const box = document.querySelector("#graph").getBoundingClientRect();
+            return {x: box.x + point.x, y: box.y + point.y};
+        }""")
+        page.mouse.click(position["x"], position["y"], button="right")
+        assert page.locator('#ctx-menu [aria-disabled="true"]').all_text_contents() == [
+            "Mode: All reports (always on)", "WAN receive: Init"]
+        assert "Mode: Debug" not in page.locator("#ctx-menu").inner_text()
+        page.mouse.click(15, 15)
+        page.mouse.click(position["x"], position["y"])
+        section = page.locator('#detail [data-section-key="Platform_30:platform-data"]')
+        section.wait_for()
+        if section.locator("button").first.get_attribute("aria-expanded") == "false":
+            section.locator("button").first.click()
+        wait_for(page, lambda: "WAN receive profile" in page.locator("#detail").inner_text())
+        assert "C2: Mission, Team" in page.locator("#detail").inner_text()
+        page.locator("#detail .detail-close").click()
+        page.locator('[data-tab="mission"]').click()
     assert not get(page, "/api/mission_inventory")["scenario_targets"][0]["revealed"]
     assert not get(page, "/api/mission_inventory")["scenario_targets"][1]["revealed"]
     assert page.locator(".mission-target").count() == 0
@@ -343,15 +412,26 @@ def test_automatic_reporting_and_independent_target_toggles(live_mission_dashboa
 
     assign_team(page, [node], "Alpha", "TEAM_A")
     command(page, {"operation": "route", "targets": [node], "waypoints": [[32.74, -117.38]]})
-    wait_for(page, lambda: mode(node) == "mission")
-    assert all(mode(platform) == "init" for platform in platforms if platform != node)
+    wait_for(page, lambda: mode(node) == ("all" if always_on else "mission"))
+    assert all(mode(platform) == default_mode for platform in platforms if platform != node)
     command(page, {"operation": "cancel", "targets": [node]})
     wait_for(page, lambda: phase("CANCELLED"))
-    wait_for(page, lambda: mode(node) == "init")
+    wait_for(page, lambda: mode(node) == default_mode)
     assert phase("CANCELLED"), "Final mission status must survive return to Init"
     command(page, {"operation": "return_to_base", "targets": [node]})
     wait_for(page, lambda: phase("COMPLETE"))
-    wait_for(page, lambda: mode(node) == "init")
+    wait_for(page, lambda: mode(node) == default_mode)
+
+    if always_on:
+        response = page.request.post("/api/status_resolution", data={"platform_node": node, "mode": "init"})
+        assert response.status == 400
+        assert "always on" in response.text()
+        wait_for(page, lambda: all(
+            get(page, "/api/platform_status?platform=" + platform).get(level)
+            for platform in platforms for level in ("init", "mission", "debug")))
+        assert all(mode(platform) == "all" for platform in platforms)
+        assert not errors and not external
+        return
 
     set_mode("debug")
     wait_for(page, lambda: mode(node) == "debug")
@@ -460,7 +540,7 @@ def test_drag_team_validate_go_and_cross_tab_dds(live_mission_dashboard):
     assert page.evaluate("__network.getPositions()") == graph_positions
     page.locator('[data-tab="delivery"]').click()
     assert page.locator("#delivery-filter-node").input_value() == "mission"
-    wait_for(page, lambda: any(row["topic"] == wan_topic("ControlCommand") and row["source"] == "Control_20" and
+    wait_for(page, lambda: any(row["topic"] == wan_topic("Mission") and row["source"] == "Control_20" and
                               row["recipient"] in ("Platform_30", "Platform_31") and
                               row["sent"] > 0 and row["received"] > 0 for row in get(page, "/api/delivery_stats")["rows"]))
     wait_for(page, lambda: any(row["topic"] == wan_topic("PlatformCommandAck") and row["recipient"] == "Control_20" and
@@ -481,7 +561,7 @@ def test_drag_team_validate_go_and_cross_tab_dds(live_mission_dashboard):
     new_draft(page); click_point(page, 500, 370); validate(page)
     assert all(entry["operation"] == "replace_route" for entry in go(page))
     for topic, sources, recipients in (
-            ("ControlCommand", ("Control_20",), ("Platform_30", "Platform_31")),
+            ("Mission", ("Control_20",), ("Platform_30", "Platform_31")),
             ("PlatformCommandAck", ("Platform_30", "Platform_31"), ("Control_20",))):
         wait_for(page, lambda: any(row["topic"] == wan_topic(topic) and row.get("percentage_ready") and
                                   row.get("settled_received", 0) > 0 and row["lost"] == 0 and
@@ -503,8 +583,13 @@ def test_drag_team_validate_go_and_cross_tab_dds(live_mission_dashboard):
                               get(page, "/api/mission_inventory")["platforms"] if boat["platform"] in ("Platform_30", "Platform_31")))
     page.wait_for_function("!document.querySelector('#mission-rtb').disabled")
     page.locator("#mission-rtb").click()
-    wait_for(page, lambda: all(boat["mission"]["phase"] == "COMPLETE" for boat in
-                              get(page, "/api/mission_inventory")["platforms"] if boat["platform"] in ("Platform_30", "Platform_31")), timeout=150)
+    wait_for(page, lambda: all(
+        boat["mission"]["phase"] == "COMPLETE"
+        and boat["position"]["latitude"] == pytest.approx(boat["home"]["latitude"], abs=0.00002)
+        and boat["position"]["longitude"] == pytest.approx(boat["home"]["longitude"], abs=0.00002)
+        and boat["position"]["speed_knots"] == 0
+        for boat in get(page, "/api/mission_inventory")["platforms"]
+        if boat["platform"] in ("Platform_30", "Platform_31")), timeout=150)
     for boat in get(page, "/api/mission_inventory")["platforms"]:
         if boat["platform"] in ("Platform_30", "Platform_31"):
             assert boat["position"]["latitude"] == pytest.approx(boat["home"]["latitude"], abs=0.00002)
@@ -570,6 +655,10 @@ def test_multiple_teams_boats_and_missions_at_demo_speed(live_mission_dashboard)
     assert {command["target"] for command in bravo_commands} == set(bravo)
     bravo_ids = {command["command_id"] for command in bravo_commands}
     wait_for(page, lambda: all(boat["mission"]["phase"] == "ORBIT" for boat in get(page, "/api/mission_inventory")["platforms"]), timeout=180)
+    if os.environ.get("MISSION_ROUTER_BACKEND") == "routing_service":
+        wait_for(page, lambda: all(boat["receive_profile"] == "ActiveMission"
+                                  and not boat["receive_filter_error"]
+                                  for boat in get(page, "/api/mission_inventory")["platforms"]))
     verify_fleet_motion(page)
     capture(page, "08-two-teams-orbiting-fleet")
     assert page.locator(".mission-route").evaluate_all(

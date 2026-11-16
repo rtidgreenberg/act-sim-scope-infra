@@ -15,7 +15,7 @@ import rti.connextdds as dds
 
 ROOT = Path(__file__).resolve().parents[2]
 DOMAINS = itertools.count(201)
-NAVIGATION = "PlatformInitStatus"
+NAVIGATION = "PlatformStatus"
 MISSION = "PlatformMissionStatus"
 KEYS = (
     ("Boat30", NAVIGATION, "same"),

@@ -139,7 +139,7 @@ def test_dashboard_control_topics_reconfigure_target_platform(
         platform_admin = AdminChannel(platform, provider)
         team_type = provider.type("TeamAssignment")
         mode_type = provider.type("PlatformStatusMode")
-        team_writer = control.writer("ActTeamAssignment", "TeamAssignment", dtype=team_type)
+        team_writer = control.writer("Team", "TeamAssignment", dtype=team_type)
         mode_writer = control.writer("ActPlatformStatusMode", "PlatformStatusMode", dtype=mode_type)
         status_writers = [
             platform.writer(topic, type_name)

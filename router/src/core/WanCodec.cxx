@@ -33,8 +33,8 @@ void validate_keys(const dds::core::xtypes::DynamicType& type,
 
 const std::vector<WanMapping>& wan_mappings() {
     static const std::vector<WanMapping> mappings{
-        {"ControlCommand", "control_command", "Event", "command", 1, "source", "wan_event"},
-        {"ActTeamAssignment", "TeamAssignment", "Event", "team_assignment", 2,
+        {"Mission", "control_command", "Event", "command", 1, "source", "wan_event"},
+        {"Team", "TeamAssignment", "Event", "team_assignment", 2,
          "platform_node", "wan_event"},
         {"ActPlatformStatusMode", "PlatformStatusMode", "Event", "status_mode", 3,
          "platform_node", "wan_event"},
@@ -42,7 +42,7 @@ const std::vector<WanMapping>& wan_mappings() {
          "source", "wan_event"},
         {"ContactReport", "contact_report", "Event", "contact_report", 5, "contact_id", "wan_event"},
         {"RouterConfig", "RouterConfig", "Event", "router_config", 6, "router", "wan_event"},
-        {"PlatformInitStatus", "platform_init_status", "Status", "navigation", 1,
+        {"PlatformStatus", "platform_init_status", "Status", "navigation", 1,
          "source", "wan_status"},
         {"PlatformData", "platform_data", "Status", "data", 2, "source", "wan_status"},
         {"PlatformMissionStatus", "platform_mission_status", "Status", "mission", 3,

@@ -145,6 +145,7 @@
   const PLATFORM_ROW_Y_FIELDS = { y: PLATFORM_PIN_Y, fixed: { x: true, y: true } };
   const nodeRates = new Map(); // node name -> capture-time DDS rate history
   const RESOLUTION_BADGES = {
+    all: { label: "ALL", color: "#3aa655" },
     init: { label: "INIT", color: "#8a94a6" },
     mission: { label: "MISSION", color: "#e0b84d" },
     debug: { label: "DEBUG", color: "#e6553a" },
@@ -795,6 +796,7 @@
   }
 
   function resolutionModeFromHealth(health) {
+    if (health && health.reporting_policy === "always_on") return "all";
     const routeStates = routeStatesFromHealth(health);
     if (routeStates.debug === "ROUTE_ENABLED") return "debug";
     if (routeStates.mission === "ROUTE_ENABLED") return "mission";
@@ -856,7 +858,9 @@
 
     // Route-status-driven badges (primary signal: the router knows its own route states)
     let badgeHtml;
-    if (hasRouteData) {
+    if (health && health.reporting_policy === "always_on") {
+      badgeHtml = routeBadge("all reports (always on)", "ROUTE_ENABLED");
+    } else if (hasRouteData) {
       badgeHtml = routeBadge("init", routeStates.init) +
                   routeBadge("mission", routeStates.mission) +
                   routeBadge("debug", routeStates.debug);
@@ -882,6 +886,19 @@
 
     let platformHtml = `<div class="detail-row"><span class="k">resolution</span><span class="v">` +
       badgeHtml + `</span></div>`;
+    if (health && health.receive_profile) {
+      platformHtml += detailRow("WAN receive profile", escHtml(health.receive_profile)) +
+                      detailRow("local mission state", escHtml(health.receive_state));
+      if (health.receive_profile === "Init" || health.receive_profile === "ActiveMission") {
+        const interests = health.receive_profile === "ActiveMission"
+          ? "C2: Mission, Team; fleet navigation: PlatformStatus; same-team peers: PlatformMissionStatus, ContactReport"
+          : "C2: Mission, Team";
+        platformHtml += detailRow("application interests", escHtml(interests));
+      }
+      if (health.receive_filter_error) {
+        platformHtml += detailRow("receive filter error", escHtml(health.receive_filter_error));
+      }
+    }
 
     if (data) {
       platformHtml += detailRow("init data", summarizeTopicGroup(data.init)) +
@@ -1971,16 +1988,29 @@
     ctxMenu.appendChild(ctxItem("Remove from team", (nodeId) => {
       publishTeamAssignment(nodeId, "");
     }));
-    ctxMenu.appendChild(ctxItem("Mode: Auto (Init / Mission)", (nodeId) => {
-      publishStatusResolution(nodeId, "init");
-      network.selectNodes([nodeId]);
-      renderDetail(nodeId);
-    }));
-    ctxMenu.appendChild(ctxItem("Mode: Debug", (nodeId) => {
-      publishStatusResolution(nodeId, "debug");
-      network.selectNodes([nodeId]);
-      renderDetail(nodeId);
-    }));
+    if (n.health && n.health.reporting_policy === "always_on") {
+      const mode = document.createElement("div");
+      mode.textContent = "Mode: All reports (always on)";
+      mode.setAttribute("aria-disabled", "true");
+      ctxMenu.appendChild(mode);
+      if (n.health.receive_profile) {
+        const receive = document.createElement("div");
+        receive.textContent = `WAN receive: ${n.health.receive_profile}`;
+        receive.setAttribute("aria-disabled", "true");
+        ctxMenu.appendChild(receive);
+      }
+    } else {
+      ctxMenu.appendChild(ctxItem("Mode: Auto (Init / Mission)", (nodeId) => {
+        publishStatusResolution(nodeId, "init");
+        network.selectNodes([nodeId]);
+        renderDetail(nodeId);
+      }));
+      ctxMenu.appendChild(ctxItem("Mode: Debug", (nodeId) => {
+        publishStatusResolution(nodeId, "debug");
+        network.selectNodes([nodeId]);
+        renderDetail(nodeId);
+      }));
+    }
     ctxMenu.style.left = params.event.pageX + "px";
     ctxMenu.style.top = params.event.pageY + "px";
     ctxMenu.style.display = "block";

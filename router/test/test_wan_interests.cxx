@@ -130,24 +130,24 @@ int main(int argc, char** argv) {
     wan.team_partition = {"Boat30", "TEAM_A"};
     RouterRouteSpec route;
     route.output.publisher_partition = "PLATFORM";
-    auto control = wan_interest(route, wan, "Boat30", true, "PlatformInitStatus");
+    auto control = wan_interest(route, wan, "Boat30", true, "PlatformStatus");
     CHECK(control.control && !control.global && control.destination_ids.empty());
     route.output.publisher_partition = "NAVIGATION";
-    auto global = wan_interest(route, wan, "Boat30", true, "PlatformInitStatus");
+    auto global = wan_interest(route, wan, "Boat30", true, "PlatformStatus");
     CHECK(global.global && !global.control);
     route.output.publisher_partition.clear();
     auto team = wan_interest(route, wan, "Boat30", true, "PlatformData");
     CHECK(team.destination_ids.size() == 2);
-    auto command = wan_interest(route, wan, "Boat30", false, "ControlCommand");
+    auto command = wan_interest(route, wan, "Boat30", false, "Mission");
     CHECK(command.addressed && !command.global);
     CHECK(command.destination_ids == team.destination_ids);
-    auto assignment = wan_interest(route, wan, "Boat30", true, "ActTeamAssignment");
+    auto assignment = wan_interest(route, wan, "Boat30", true, "Team");
     CHECK(assignment.global && !assignment.addressed);
 
     auto filter = wan_receive_filter("Status", "Boat30", {control, global, team});
     CHECK(filter.expression.find("audience.control = TRUE") != std::string::npos);
     CHECK(filter.expression.find("audience.global = TRUE") != std::string::npos);
-    CHECK(filter.expression.find("original_topic = 'PlatformInitStatus'") != std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'PlatformStatus'") != std::string::npos);
     CHECK(filter.expression.find("original_topic = 'PlatformData'") != std::string::npos);
     CHECK(filter.expression.find("RouterHealth") == std::string::npos);
     CHECK(filter.expression.find("payload._d") == std::string::npos);
@@ -162,8 +162,8 @@ int main(int argc, char** argv) {
     CHECK(wan_receive_filter("Event", "Boat30", {}).expression ==
           "source_id <> %0 AND (original_topic = '')");
     filter = wan_receive_filter("Event", "Boat30", {command, assignment});
-    CHECK(filter.expression.find("original_topic = 'ControlCommand'") != std::string::npos);
-    CHECK(filter.expression.find("original_topic = 'ActTeamAssignment'") != std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'Mission'") != std::string::npos);
+    CHECK(filter.expression.find("original_topic = 'Team'") != std::string::npos);
     CHECK(filter.expression.find("audience.destination_ids[15] = %0") != std::string::npos);
     CHECK(filter.parameters == std::vector<std::string>({"'Boat30'", "'TEAM_A'"}));
     WanInterest contacts_interest;
@@ -172,9 +172,9 @@ int main(int argc, char** argv) {
     auto events_filter = wan_receive_filter("Event", "Boat30", {command, contacts_interest}, true);
     auto contacts_filter = wan_receive_filter("State", "Boat30", {command, contacts_interest}, true);
     CHECK(events_filter.expression.find("ContactReport") == std::string::npos);
-    CHECK(events_filter.expression.find("ControlCommand") != std::string::npos);
+    CHECK(events_filter.expression.find("Mission") != std::string::npos);
     CHECK(contacts_filter.expression.find("ContactReport") != std::string::npos);
-    CHECK(contacts_filter.expression.find("ControlCommand") == std::string::npos);
+    CHECK(contacts_filter.expression.find("Mission") == std::string::npos);
     CHECK(wan_receive_filter("Event", "Boat30", {contacts_interest}).expression.find("ContactReport")
           != std::string::npos);
     for (const auto& invalid : std::vector<std::string>{
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     } catch (const std::runtime_error&) {}
     alias.topic = "PlatformData";
     if (full.front().topic == alias.topic) {
-        alias.topic = "PlatformInitStatus";
+        alias.topic = "PlatformStatus";
     }
     validate_wan_source_interests({full.front(), alias});
     dds::core::xtypes::DynamicData contact(model->type("contact_report"));

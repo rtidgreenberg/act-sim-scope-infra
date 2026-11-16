@@ -17,6 +17,7 @@ TOPOLOGY=
 WITH_DASHBOARD=0
 DASHBOARD_PORT=8080
 WAN_CONTRACT=legacy
+ROUTER_BACKEND=custom
 PLATFORM_IDS=()
 declare -A EMANE_NEM_ID EMANE_IP EMANE_CONTROL_IP
 WAN_PEERS=()
@@ -32,7 +33,8 @@ while [[ $# -gt 0 ]]; do
         --with-dashboard) WITH_DASHBOARD=1; shift ;;
         --dashboard-port) DASHBOARD_PORT="$2"; shift 2 ;;
         --wan-contract) WAN_CONTRACT="$2"; shift 2 ;;
-        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union|three_topic_union] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
+        --router-backend) ROUTER_BACKEND="$2"; shift 2 ;;
+        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union|three_topic_union] [--router-backend custom|routing_service] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -41,6 +43,14 @@ case "$WAN_CONTRACT" in
     legacy|two_topic_union|three_topic_union) ;;
     *) echo "--wan-contract must be legacy, two_topic_union or three_topic_union" >&2; exit 1 ;;
 esac
+case "$ROUTER_BACKEND" in
+    custom|routing_service) ;;
+    *) echo "--router-backend must be custom or routing_service" >&2; exit 1 ;;
+esac
+if [[ "$ROUTER_BACKEND" == routing_service && "$WAN_CONTRACT" != three_topic_union ]]; then
+    echo "Routing Service mesh requires --wan-contract three_topic_union" >&2
+    exit 1
+fi
 
 load_topology() {
     PLATFORM_IDS=()
@@ -171,6 +181,9 @@ render_control_config() {
         sed -i 's/qos: wan_participant\b/qos: wan_participant_emane/' "$output"
     fi
     apply_wan_contract "$output"
+    if [[ "$ROUTER_BACKEND" == routing_service ]]; then
+        sed -i 's/admin_participant: platform_lan/admin_participant: control_lan/' "$output"
+    fi
 }
 
 emane_runtime_yaml() {
@@ -270,6 +283,7 @@ $(container_user_yaml)
       NODE_NAME: Control_20
       NODE_DEBUG_DIR: /node-debug
       NODE_CONFIG_PATH: /run/node-config.yaml
+      ROUTER_BACKEND: ${ROUTER_BACKEND}
       SIM_DESTINATION: Platform_30
       SIM_VERBOSITY: "${VERBOSITY}"
       NDDSHOME: /opt/rti.com/rti_connext_dds-7.7.0
@@ -291,6 +305,7 @@ $(traffic_monitor_environment_yaml)
       - ${REPO_ROOT}:/workspace:ro
       - ${CONNEXT_SHARED_DIR:?Set CONNEXT_SHARED_DIR to the license directory}:/shared:ro
       - ${WORKDIR}/control-platform-20.yaml:/run/node-config.yaml:ro
+      - ${WORKDIR}:/run/mesh-config:ro
       - ${REPO_ROOT}/debug/control_20_debug:/node-debug
 $(dashboard_port_yaml)
 $(emane_network_yaml "${EMANE_CONTROL_IP[control_20]}")
@@ -312,6 +327,7 @@ $(container_user_yaml)
 $(platform_router_name_yaml "$id")
       NODE_DEBUG_DIR: /node-debug
       NODE_CONFIG_PATH: /run/node-config.yaml
+      ROUTER_BACKEND: ${ROUTER_BACKEND}
       SIM_DESTINATION: Control_20
       SIM_VERBOSITY: "${VERBOSITY}"
       NDDSHOME: /opt/rti.com/rti_connext_dds-7.7.0
@@ -332,6 +348,7 @@ $(traffic_monitor_environment_yaml)
       - ${REPO_ROOT}:/workspace:ro
       - ${CONNEXT_SHARED_DIR:?Set CONNEXT_SHARED_DIR to the license directory}:/shared:ro
       - ${WORKDIR}/control-platform-${id}.yaml:/run/node-config.yaml:ro
+      - ${WORKDIR}:/run/mesh-config:ro
       - ${REPO_ROOT}/debug/platform_${id}_debug:/node-debug
 $(emane_network_yaml "${EMANE_CONTROL_IP[platform_${id}]}")
 EOF
@@ -390,13 +407,21 @@ release_audit_start() {
         done
         local log
         for log in "$REPO_ROOT/debug/control_20_debug/logs/router.log"; do
-            grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
-            grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
+            if [[ "$ROUTER_BACKEND" == routing_service ]]; then
+                grep -q 'event=rs.gateway.started .*mode=mesh' "$log" 2>/dev/null || ready=false
+            else
+                grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
+                grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
+            fi
         done
         for id in $(platform_ids); do
             log="$REPO_ROOT/debug/platform_${id}_debug/logs/router.log"
-            grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
-            grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
+            if [[ "$ROUTER_BACKEND" == routing_service ]]; then
+                grep -q 'event=rs.gateway.started .*mode=mesh' "$log" 2>/dev/null || ready=false
+            else
+                grep -q "$ready_event .*route=control_command" "$log" 2>/dev/null || ready=false
+                grep -q "$ready_event .*route=platform_init_status" "$log" 2>/dev/null || ready=false
+            fi
         done
         [[ "$ready" == true ]] && break
         sleep 1
@@ -406,6 +431,36 @@ release_audit_start() {
     printf 'start\n' > "$REPO_ROOT/debug/control_20_debug/audit-start"
     for id in $(platform_ids); do
         printf 'start\n' > "$REPO_ROOT/debug/platform_${id}_debug/audit-start"
+    done
+}
+
+prepare_routing_service_configs() {
+    [[ "$ROUTER_BACKEND" == routing_service ]] || return 0
+    [[ -s "$REPO_ROOT/router/build/routing_service/libact_gateway_processor.so" &&
+       -x "$REPO_ROOT/router/build/routing_service/act_rs_config" ]] || {
+        echo "Build the Routing Service variant before launching this backend" >&2
+        exit 1
+    }
+    local id role node name index
+    local environment=(-e WAN_RECEIVE_MULTICAST=0 -e "WAN_TIMEOUT_SEC=$WAN_TIMEOUT_SEC"
+                       -e "WAN_HB_PERIOD_SEC=$WAN_HB_PERIOD_SEC")
+    for index in $(seq 1 11); do
+        if [[ "$index" == 1 ]]; then
+            environment+=(-e "WAN_PEER=${WAN_PEERS[0]}")
+        else
+            environment+=(-e "WAN_PEER${index}=${WAN_PEERS[$((index - 1))]:-${WAN_PEERS[0]}}")
+        fi
+    done
+    for id in 20 "${PLATFORM_IDS[@]}"; do
+        role=platform node="Platform_$id" name="platform-$id-control-platform"
+        [[ "$id" != 20 ]] || { role=control; node=Control_20; name=control-20-control-platform; }
+        docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$REPO_ROOT":/workspace:ro -v "$WORKDIR":/run/mesh-config \
+            -w /workspace "${environment[@]}" connext:7.7.0 \
+            python3 router/routing_service/run.py \
+            --config "/run/mesh-config/control-platform-$id.yaml" --role "$role" \
+            --node-name "$node" --name "$name" \
+            --render "/run/mesh-config/control-platform-$id.xml"
     done
 }
 
@@ -437,12 +492,19 @@ up() {
         render_config "$id" "$WORKDIR/control-platform-${id}.yaml"
         printf ',"platform_%s"' "$id" >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     done
-    printf '],"shared_platform_locations":true,"router_health_scope":"full_mesh","topics":{"ControlCommand":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformInitStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
+    local shared_locations=true receive_policy=static
+    [[ "$ROUTER_BACKEND" != "routing_service" ]] || {
+        shared_locations=false
+        receive_policy=mission
+    }
+    printf '],"shared_platform_locations":%s,"platform_receive_policy":"%s","router_health_scope":"full_mesh","topics":{"Mission":{"priority":"high","minimum_sent":3,"completion_threshold_percent":100},"PlatformStatus":{"priority":"normal","minimum_sent":3,"completion_threshold_percent":100}}}\n' \
+        "$shared_locations" "$receive_policy" \
         >> "$REPO_ROOT/debug/test_controller_debug/manifest.json"
     python3 "$V2_ROOT/scripts/compile_delivery_expectations.py" \
         --manifest "$REPO_ROOT/debug/test_controller_debug/manifest.json" \
         --output "$REPO_ROOT/debug/test_controller_debug/expectations.json"
     write_compose
+    prepare_routing_service_configs
     compose up -d --remove-orphans
     trap 'compose down --remove-orphans >/dev/null 2>&1 || true' ERR
     wait_for_emane_interfaces
@@ -468,6 +530,7 @@ render() {
         render_config "$id" "$WORKDIR/control-platform-${id}.yaml"
     done
     write_compose
+    prepare_routing_service_configs
     echo "$WORKDIR/compose.yaml"
 }
 

@@ -341,6 +341,9 @@ struct RouterRouteTopicStatus {
     uint32 input_matched;
     uint32 output_matched;
     string match_reason;
+    string wan_family;
+    int32 publication_priority;
+    uint64 output_write_timeouts;
 };
 
 struct RouterRouteStatus {
@@ -450,6 +453,11 @@ struct RouterHealth {
     uint32 n_degraded;
     uint32 n_error;
     RouterOverallState overall_state;
+    string router_backend;
+    string reporting_policy;
+    string receive_profile;
+    string receive_state;
+    string receive_filter_error;
     sequence<string, 16> team_partition;
     sequence<RouterPeerRef> peers_seen;
     sequence<RouterCompactRouteHealth> routes;

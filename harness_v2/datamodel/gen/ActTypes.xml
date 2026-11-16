@@ -271,6 +271,9 @@
   <member name="input_matched" type="uint32"/>
   <member name="output_matched" type="uint32"/>
   <member name="match_reason" stringMaxLength="255" type="string"/>
+  <member name="wan_family" stringMaxLength="255" type="string"/>
+  <member name="publication_priority" type="int32"/>
+  <member name="output_write_timeouts" type="uint64"/>
 </struct>
 <struct name= "RouterRouteStatus">
   <member name="route_name" stringMaxLength="255" type="string"/>
@@ -361,6 +364,11 @@
   <member name="n_degraded" type="uint32"/>
   <member name="n_error" type="uint32"/>
   <member name="overall_state" type="nonBasic"  nonBasicTypeName= "RouterOverallState"/>
+  <member name="router_backend" stringMaxLength="255" type="string"/>
+  <member name="reporting_policy" stringMaxLength="255" type="string"/>
+  <member name="receive_profile" stringMaxLength="255" type="string"/>
+  <member name="receive_state" stringMaxLength="255" type="string"/>
+  <member name="receive_filter_error" stringMaxLength="255" type="string"/>
   <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
   <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterCompactRouteHealth"/>

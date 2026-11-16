@@ -4,11 +4,11 @@ import hashlib
 import time
 
 try:
-    from delivery_config import load_router_config, qos_settings
+    from delivery_config import load_router_config, native_port_settings, qos_settings
 except ModuleNotFoundError as exc:
     if exc.name != "delivery_config":
         raise
-    from gui.mesh_dashboard.server.delivery_config import load_router_config, qos_settings
+    from gui.mesh_dashboard.server.delivery_config import load_router_config, native_port_settings, qos_settings
 
 
 def duration(seconds):
@@ -25,12 +25,13 @@ def load_system_config(path, provider_factory, infinite_duration):
                 "sections": []}
     path, config, libraries, provider = load_router_config(path, provider_factory)
     router = config["router"]
+    native = config.get("native")
     contract = router.get("wan_contract", "legacy")
     if contract not in ("legacy", "two_topic_union", "three_topic_union"):
         raise ValueError(f"Unknown WAN contract: {contract}")
     shared = contract != "legacy"
     separate_contacts = contract == "three_topic_union"
-    health_family = "Telemetry" if separate_contacts else "Status"
+    health_family = ("Periodic" if native else "Telemetry") if separate_contacts else "Status"
     aliases = config.get("qos_profiles", {})
     sections = []
 
@@ -41,21 +42,37 @@ def load_system_config(path, provider_factory, infinite_duration):
         return table["rows"]
 
     overview = section("system", "System overview",
-                       "Settings from the router YAML supplied to this dashboard, covering both roles. "
-                       "Node identity and admin participant may be overridden by launcher arguments.",
+                       ("Settings from the prepared native Routing Service XML for this node. "
+                        "QoS includes native port and participant XML overrides." if native else
+                        "Settings from the router YAML supplied to this dashboard, covering both roles. "
+                        "Node identity and admin participant may be overridden by launcher arguments."),
                        ["Setting", "Configured value", "Meaning"])
     overview.extend([
         ["WAN contract", "Three-topic union" if separate_contacts else "Two-topic union" if shared else "Legacy per-topic",
-         "Shared Event, State and Telemetry topics." if separate_contacts else
+         f"Shared Event, State and {health_family} topics." if separate_contacts else
          "Shared Event and Status topics." if shared else "Application topics have separate WAN endpoints."],
         ["Configuration set", router.get("config_set", "Not specified"), "Deployment configuration family."],
         ["Forwarding mode", router.get("default_forwarding_mode", "Not specified"),
          "Default payload forwarding; individual routes may override it."],
         ["Configuration file", str(path), "Loaded once at dashboard startup; not a live router query."],
         ["Configuration SHA-256", hashlib.sha256(path.read_bytes()).hexdigest(),
-         "Fingerprint of the supplied YAML file, not verification of every deployed node."],
+         f"Fingerprint of the supplied {'native XML' if native else 'YAML'} file, "
+         "not verification of every deployed node."],
         ["QoS libraries", "\n".join(map(str, libraries)), "Inherited QoS is resolved by the installed Connext provider."],
     ])
+    if native:
+        overview.extend([
+            ["Node identity", f"{config['node']['name']} ({config['node']['role']})",
+             "Explicit act.node and act.role; this snapshot covers only the supplied node XML."],
+            ["Admin participant", native["admin_participant"], "Service-owned monitoring uses this LAN."],
+            ["Type registry URI", native["types_uri"], "act.types_uri; no YAML or registry file is read by this snapshot."],
+            ["Asynchronous WAN bandwidth", f"{native['async_bandwidth_bps']} bit/s",
+             "act.async_bandwidth_bps; shared configured budget, not measured throughput."],
+            ["Platform receive policy",
+             "Mission-state CFT selection" if native["receive_policy"] == "mission" else "Static CFT bindings",
+             "act.receive_policy; applies to platforms only. Live applied profile is shown in node health, "
+             "separately from always-on outgoing reports."],
+        ])
     presence = section("presence", "Presence and reachability",
                        "Router reachability is separate from application position freshness and DDS discovery.",
                        ["Setting", "Configured value", "Meaning / source"])
@@ -75,7 +92,10 @@ def load_system_config(path, provider_factory, infinite_duration):
          "Compiled router policy; distinct from the final system timeout."],
     ])
     profiles = []
-    if shared:
+    if native:
+        profiles = [(family, port["resolved_profile"], endpoint)
+                    for family, ports in native["wan"].items() for endpoint, port in ports.items()]
+    elif shared:
         families = [("Event", "wan_event"), (health_family, "wan_status")]
         if separate_contacts:
             families.insert(1, ("State", "wan_contacts"))
@@ -104,6 +124,7 @@ def load_system_config(path, provider_factory, infinite_duration):
                        ["Topic", "Endpoint", "Profile", "Reliability", "History", "Durability",
                         "Deadline", "Liveliness", "Lease"])
     for topic, profile, endpoint in profiles:
+        display_profile = native["profile_labels"].get(profile, profile) if native else profile
         if profile is None:
             qos_rows.append([topic, endpoint.title(), "Automatic QoS",
                              *["Not resolved (wire-learned)"] * 6])
@@ -115,7 +136,7 @@ def load_system_config(path, provider_factory, infinite_duration):
         if settings["history_depth"] is not None:
             history += f" / {settings['history_depth']} per instance"
         qos_rows.append([
-            topic, endpoint.title(), profile,
+            topic, endpoint.title(), display_profile,
             settings["reliability"].replace("_", " ").title(), history,
             settings["durability"].replace("_", " ").title(),
             duration(settings["deadline_seconds"]),
@@ -133,14 +154,14 @@ def load_system_config(path, provider_factory, infinite_duration):
         if endpoint != "reader" or topic != (health_family if shared else "RouterHealth") or not presence_names:
             continue
         presence.append(["ALIVE to STALE", duration(settings["deadline_seconds"]),
-                         f"{profile}: reader deadline. Only RouterHealth deadline misses trigger STALE."])
+                         f"{display_profile}: reader deadline. Only RouterHealth deadline misses trigger STALE."])
         if shared:
             value = qos.property.get("act.presence.dead_timeout_sec")
             if not value or not value.isascii() or not value.isdigit() or not 0 < int(value) <= 2_147_483_647:
                 raise ValueError("act.presence.dead_timeout_sec must be a positive integer <= 2147483647")
             presence.extend([
                 [f"Last {health_family} to DEAD", duration(int(value)),
-                 f"{profile}: act.presence.dead_timeout_sec from WAN_TIMEOUT_SEC. Measured from the "
+                 f"{display_profile}: act.presence.dead_timeout_sec from WAN_TIMEOUT_SEC. Measured from the "
                  f"last received {health_family}, not from STALE; repeated misses do not restart it."],
                 ["Recovery to ALIVE", f"Any valid received {health_family}",
                  "Restores ALIVE and cancels the pending countdown; Event traffic does not."],
@@ -173,8 +194,56 @@ def load_system_config(path, provider_factory, infinite_duration):
         else:
             transport = lease = peers = multicast = "Default profile (not resolved)"
         participants.append([name, participant.get("role", "Any"), participant["domain"],
-                             "WAN" if participant.get("on_wan", False) else "LAN", profile or "Default",
+                             "WAN" if participant.get("on_wan", False) else "LAN",
+                             native["profile_labels"].get(profile, profile) if native else profile or "Default",
                              transport, lease, peers, multicast])
+
+    if native:
+        lan_rows = section("lan-qos", "LAN endpoint quality of service",
+                           "Manual native XML profiles, including endpoint-specific overrides. "
+                           "Minimum separation is reader input filtering, not WAN history or a publication rate.",
+                           ["Topic", "Port", "Endpoint", "Type", "Profile", "Reliability",
+                            "History", "Minimum separation"])
+        for port in native["ports"].values():
+            if config["participants"][port["participant"]]["on_wan"]:
+                continue
+            settings = native_port_settings(port, provider, infinite_duration)
+            history = settings["history"].replace("_", " ").title()
+            if settings["history_depth"] is not None:
+                history += f" / {settings['history_depth']} per instance"
+            separation = settings.get("minimum_separation_seconds")
+            lan_rows.append([port["topic"], port["name"], port["endpoint"].title(), port["type"],
+                             port["profile"], settings["reliability"].replace("_", " ").title(),
+                             history, ("Off" if separation == 0 else duration(separation))
+                             if port["endpoint"] == "reader" else "Not applicable"])
+        priorities = section("priorities", "WAN scheduling channels",
+                             f"{'Six' if separate_contacts else 'Four'} logical priority classes share "
+                             "the configured WAN family endpoints. "
+                             "These are configured priorities, not delivery or overload guarantees.",
+                             ["Binding direction", "Original topic", "WAN family", "Channel",
+                              "Publication priority", "Recipients"])
+        routes = section("routes", "Configured native bindings",
+                         "Read-only startup snapshot; one explicit LAN/WAN direction per row. "
+                         "This is not a route-management interface or a live state query.",
+                         ["Binding direction", "From participant", "To participant", "Topic", "Enabled"])
+        wan = next(name for name, participant in config["participants"].items() if participant["on_wan"])
+        for binding in native["bindings"]:
+            priorities.append([binding["name"], binding["topic"], binding["family"], binding["channel"],
+                               str(binding["priority"]), binding["recipients"]])
+            lan = native["ports"][binding["port"]]["participant"]
+            routes.append([binding["name"], lan if binding["direction"] == "tx" else wan,
+                           wan if binding["direction"] == "tx" else lan, binding["topic"],
+                           "Yes" if binding["enabled"] else "No"])
+        if native["monitoring"]:
+            for topic, family, channel, priority in (
+                    ("RouterConfig", "Event", "event_normal", 300 if separate_contacts else 200),
+                    ("RouterHealth", health_family, "periodic_high", 500 if separate_contacts else 300)):
+                if any(binding["topic"] == topic for binding in native["bindings"]):
+                    continue
+                priorities.append(["Internal monitoring", topic, family, channel, str(priority),
+                                   "Service-owned monitoring"])
+        return {"available": True, "format": "routing_service_xml",
+                "loaded_at_ms": round(time.time() * 1000), "sections": sections}
 
     routes = section("routes", "Configured routes",
                      "Startup configuration only. Operator changes to enabled state, teams or filters "

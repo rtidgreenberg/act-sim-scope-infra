@@ -77,7 +77,7 @@ def test_full_control_platform_config(
 
     status_type = dds.QosProvider(str(admin_types_xml)).type("RouterStatus")
     # Same production QoS libs the router resolves its aliases against: the app-side
-    # PlatformInitStatus writer uses the profile family the route's lan_status_1hz
+    # PlatformStatus writer uses the profile family the route's lan_status_1hz
     # input reader resolves to, guaranteeing RxO compatibility (the 7a technique).
     qos_prov = dds.QosProvider(";".join(str(REPO_ROOT / f) for f in QOS_LIB_FILES))
     status_writer_qos = qos_prov.datawriter_qos_from_profile(
@@ -99,13 +99,13 @@ def test_full_control_platform_config(
         # endpoint's inline SEDP type object teaches its local router the topic's type
         # (7c/D70 — writers and readers both teach), so both routers can build all
         # three enabled routes without any local type XML.
-        cmd_writer = control_app.writer("ControlCommand", "control_command")
-        cmd_reader = platform_app.reader("ControlCommand", "control_command")
+        cmd_writer = control_app.writer("Mission", "control_command")
+        cmd_reader = platform_app.reader("Mission", "control_command")
         pstatus_writer = platform_app.writer(
-            "PlatformInitStatus", "platform_init_status",
+            "PlatformStatus", "platform_init_status",
             qos=status_writer_qos)
         pstatus_reader = control_app.reader(
-            "PlatformInitStatus", "platform_init_status")
+            "PlatformStatus", "platform_init_status")
         ack_writer = platform_app.writer("PlatformCommandAck", "control_command_ack")
         ack_reader = control_app.reader("PlatformCommandAck", "control_command_ack")
         contact_writer = platform_app.writer("ContactReport", "contact_report")
@@ -150,7 +150,7 @@ def test_full_control_platform_config(
             classify=lambda d: d["destination"], stop_key=PLATFORM_NODE,
             check_alive=alive)
         assert buckets.get(PLATFORM_NODE), (
-            f"ControlCommand never crossed the WAN; logs: "
+            f"Mission never crossed the WAN; logs: "
             f"control={control_proc.log_path} platform={platform_proc.log_path}")
 
         # (E5) platform_init_status crosses platform_lan -> WAN -> control_lan.
@@ -161,7 +161,7 @@ def test_full_control_platform_config(
             classify=lambda d: d["source"], stop_key=PLATFORM_NODE,
             check_alive=alive)
         assert buckets.get(PLATFORM_NODE), (
-            f"PlatformInitStatus never crossed the WAN; logs: "
+            f"PlatformStatus never crossed the WAN; logs: "
             f"control={control_proc.log_path} platform={platform_proc.log_path}")
 
         # (E5) platform_events carries BOTH topics through ONE route. Both payload types
@@ -186,7 +186,7 @@ def test_full_control_platform_config(
         # resolves lan_status_1hz (a 1 s time_based_filter), so keep writing and give
         # the counter a couple of tick periods to visibly advance.
         def _pstatus_count(facts):
-            return facts["topics"].get("PlatformInitStatus",
+            return facts["topics"].get("PlatformStatus",
                                        {}).get("samples_forwarded", 0)
 
         first = wait_for_route(

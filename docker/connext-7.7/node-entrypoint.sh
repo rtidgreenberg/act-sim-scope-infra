@@ -9,6 +9,12 @@ set -euo pipefail
 WORKSPACE="${ACT_WORKSPACE:-/workspace}"
 ROUTER_BINARY="${WORKSPACE}/router/build/router_main"
 CONFIG_PATH="${NODE_CONFIG_PATH:-/run/node-config.yaml}"
+ROUTER_BACKEND="${ROUTER_BACKEND:-custom}"
+case "$ROUTER_BACKEND" in
+    custom) ;;
+    routing_service) CONFIG_PATH="/run/mesh-config/control-platform-${NODE_ID}.xml" ;;
+    *) echo "Unsupported ROUTER_BACKEND: $ROUTER_BACKEND" >&2; exit 1 ;;
+esac
 LOG_DIR="${NODE_DEBUG_DIR}/logs"
 PIDS=()
 RUN_ID="${ACT_RUN_ID:-}"
@@ -100,7 +106,7 @@ EOF
         return 1
 }
 
-if [[ ! -x "$ROUTER_BINARY" ]]; then
+if [[ "$ROUTER_BACKEND" == custom && ! -x "$ROUTER_BINARY" ]]; then
     echo "router_main is not executable at $ROUTER_BINARY; build router/build first" >&2
     exit 1
 fi
@@ -154,10 +160,15 @@ if [[ "${EMANE_ENABLED:-0}" == "1" ]]; then
     }
 fi
 
-bash -c 'exec -a "$0" "$@"' "${NODE_NAME}-router-main" \
-    "$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
-    --node-name "$NODE_NAME" \
-    --admin-participant "${NODE_ROLE}_lan" > "$LOG_DIR/router.log" 2>&1 &
+if [[ "$ROUTER_BACKEND" == routing_service ]]; then
+    python3 "$WORKSPACE/router/routing_service/run.py" --xml "$CONFIG_PATH" \
+        > "$LOG_DIR/router.log" 2>&1 &
+else
+    bash -c 'exec -a "$0" "$@"' "${NODE_NAME}-router-main" \
+        "$ROUTER_BINARY" --config "$CONFIG_PATH" --role "$NODE_ROLE" \
+        --node-name "$NODE_NAME" \
+        --admin-participant "${NODE_ROLE}_lan" > "$LOG_DIR/router.log" 2>&1 &
+fi
 PIDS+=("$!")
 
 ACT_PARTICIPANT_NAME="${NODE_NAME}/router_journal_subscriber" \
@@ -183,6 +194,8 @@ if [[ "$NODE_ROLE" == "control" ]]; then
     PIDS+=("$!")
 else
     : "${NODE_ROUTER_NAME:?NODE_ROUTER_NAME is required for platform nodes}"
+    REPORTING_ARGS=()
+    [[ "$ROUTER_BACKEND" != routing_service ]] || REPORTING_ARGS+=(--always-on-reports)
     ACT_PROCESS_NAME="${NODE_NAME}-platform-sim" \
     ACT_PARTICIPANT_NAME="${NODE_NAME}/platform_sim" \
     ACT_PARTICIPANT_ROLE="act.platform_sim" \
@@ -199,6 +212,7 @@ else
         bash -c 'exec -a "$0" python3 "$@"' "${NODE_NAME}-mesh-control" \
         "$WORKSPACE/harness_v2/scripts/platform_mesh_control.py" \
         --domain "$NODE_ID" --node "$NODE_NAME" --router-name "$NODE_ROUTER_NAME" \
+        "${REPORTING_ARGS[@]}" \
         > "$LOG_DIR/mesh_control.log" 2>&1 &
     PIDS+=("$!")
 fi

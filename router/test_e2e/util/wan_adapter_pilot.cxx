@@ -125,25 +125,25 @@ int main(int argc, char** argv) {
         std::map<std::string, Binding> bindings;
         const router::WanReceiveFilter nav_filter{"original_topic <> 'RouterHealth'", {}};
         const router::WanReceiveFilter command_filter{
-            "original_topic = 'ControlCommand' AND audience.destination_ids[0] = %0", {"'Boat30'"}};
+            "original_topic = 'Mission' AND audience.destination_ids[0] = %0", {"'Boat30'"}};
         auto bind = [&](const std::string& name, uint64_t generation) {
             if (name == "command_source") {
-                control.bind_source(name, "ControlCommand", generation, "control_lan",
+                control.bind_source(name, "Mission", generation, "control_lan",
                                     "lan_event", metadata("Control20", false, false));
-                bindings.emplace(name, Binding{&control, "ControlCommand", generation});
+                bindings.emplace(name, Binding{&control, "Mission", generation});
             } else if (name == "command_destination") {
-                platform.bind_destination(name, "ControlCommand", generation, "platform_lan",
+                platform.bind_destination(name, "Mission", generation, "platform_lan",
                                           "lan_event", command_filter);
-                bindings.emplace(name, Binding{&platform, "ControlCommand", generation});
+                bindings.emplace(name, Binding{&platform, "Mission", generation});
             } else if (name == "nav_c2" || name == "nav_global") {
-                platform.bind_source(name, "PlatformInitStatus", generation, "platform_lan",
+                platform.bind_source(name, "PlatformStatus", generation, "platform_lan",
                                      "lan_status", metadata("Boat30", name == "nav_c2",
                                                            name == "nav_global"));
-                bindings.emplace(name, Binding{&platform, "PlatformInitStatus", generation});
+                bindings.emplace(name, Binding{&platform, "PlatformStatus", generation});
             } else if (name == "nav_destination" || name == "nav_destination_alias") {
-                control.bind_destination(name, "PlatformInitStatus", generation, "control_lan",
+                control.bind_destination(name, "PlatformStatus", generation, "control_lan",
                                          "lan_status", nav_filter);
-                bindings.emplace(name, Binding{&control, "PlatformInitStatus", generation});
+                bindings.emplace(name, Binding{&control, "PlatformStatus", generation});
             } else if (name == "power_source") {
                 platform.bind_source(name, "PlatformPowerStatus", generation, "platform_lan",
                                      "lan_status", metadata("Boat30", true, false));
@@ -153,9 +153,9 @@ int main(int argc, char** argv) {
                                          "lan_status", nav_filter);
                 bindings.emplace(name, Binding{&control, "PlatformPowerStatus", generation});
             } else if (name == "nav_local_destination") {
-                platform.bind_destination(name, "PlatformInitStatus", generation, "platform_lan",
+                platform.bind_destination(name, "PlatformStatus", generation, "platform_lan",
                                           "lan_status", nav_filter);
-                bindings.emplace(name, Binding{&platform, "PlatformInitStatus", generation});
+                bindings.emplace(name, Binding{&platform, "PlatformStatus", generation});
             } else if (name == "contact_source") {
                 platform.bind_source(name, "ContactReport", generation, "platform_lan",
                                      "lan_event", metadata("Boat30", true, false));
@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
                     control.bind_destination("bad_destination", "ActRouterDiagnostics", 100,
                                              "control_lan", "missing_alias", nav_filter);
                 } else if (operation == "bad_filter") {
-                    control.bind_destination("bad_filter", "ControlCommand", 100,
+                    control.bind_destination("bad_filter", "Mission", 100,
                                              "control_lan", "lan_event",
                                              {"INVALID_FIELD = 1", {}});
                 } else if (operation == "bad_contact_destination") {
@@ -240,8 +240,8 @@ int main(int argc, char** argv) {
                     if (!(input >> name) || (name != "Boat30" && name != "OtherBoat")) {
                         throw std::runtime_error("filter_command needs Boat30 or OtherBoat");
                     }
-                    platform.update_receive_filter("ControlCommand",
-                        {"original_topic = 'ControlCommand' AND audience.destination_ids[0] = %0",
+                    platform.update_receive_filter("Mission",
+                        {"original_topic = 'Mission' AND audience.destination_ids[0] = %0",
                          {"'" + name + "'"}});
                 } else if (operation == "shutdown") {
                     platform.shutdown();

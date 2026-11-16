@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""Render and launch the opt-in, single-route Routing Service data-plane variant."""
+"""Launch prepared Routing Service XML, or render it from development YAML."""
 
 import argparse
 import copy
+import hashlib
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
 
-import yaml
-
-
 SHUTDOWN_TIMEOUT = 10
+
+
+def lan_participant_identity(properties):
+    values = [properties[key] for key in ("act.node", "act.router", "act.lan_participant")]
+    identity = "/".join(values)
+    if len(identity.encode("utf-8")) <= 255:
+        return identity
+    canonical = "".join(f"{len(value.encode('utf-8'))}:{value}" for value in values)
+    return "act.lan.sha256/" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _signal_process_group(process, signum):
@@ -113,10 +121,25 @@ def render(model, config, library, data_plane_only):
     service = child(root, "routing_service", name="ACTGateway", group_name=model["node"])
     domain = child(service, "domain_route", name="gateway")
     needed_types = {}
-    for port in model.get("inputs", []) + model.get("outputs", []):
+    inputs = list(model.get("inputs", []))
+    outputs = list(model.get("outputs", []))
+    if not data_plane_only:
+        lan = model["admin_participant"]
+        inputs.append({"name": "monitor_command", "topic": "ActRouterCommand",
+                       "type": "RouterCommand", "participant": lan,
+                       "profile": "ACT_QOS_LIB::router_admin_command"})
+        for name, topic, type_name, profile in (
+                ("ack", "ActRouterCommandAck", "RouterCommandAck", "router_admin_command_ack"),
+                ("status", "ActRouterStatus", "RouterStatus", "router_admin_status"),
+                ("mesh", "ActRouterMeshStatus", "RouterMeshStatus", "router_mesh_status"),
+                ("links", "ActRouterLinkStats", "RouterLinkStats", "router_link_stats"),
+                ("diagnostics", "ActRouterDiagnostics", "RouterDiagnostics", "lan_status")):
+            outputs.append({"name": "monitor_" + name, "topic": topic, "type": type_name,
+                            "participant": lan, "profile": "ACT_QOS_LIB::" + profile})
+    for port in inputs + outputs:
         needed_types.setdefault(port["participant"], set()).add(port["type"])
     wan = model["wan"][0]["participant"]
-    needed_types.setdefault(wan, set()).update(("WanEvent", "WanStatus"))
+    needed_types.setdefault(wan, set()).update(family["type"] for family in model["wan"])
     for participant in model["participants"]:
         name = participant["name"]
         if name not in needed_types:
@@ -125,7 +148,10 @@ def render(model, config, library, data_plane_only):
         child(element, "domain_id", participant["domain"])
         qos = child(element, "domain_participant_qos", base_name=participant["profile"])
         identity = child(qos, "participant_name")
-        child(identity, "name", model["node"] + "/" + model["router"])
+        participant_identity = model["node"] + "/" + model["router"]
+        if name == model["properties"]["act.lan_participant"]:
+            participant_identity = lan_participant_identity(model["properties"])
+        child(identity, "name", participant_identity)
         child(identity, "role_name", "act.router")
         if participant["partitions"]:
             names = child(child(qos, "partition"), "name")
@@ -134,10 +160,16 @@ def render(model, config, library, data_plane_only):
         if name == wan:
             profile = root.find(
                 "./qos_library[@name='ACT_QOS_LIB']/qos_profile"
-                "[@name='rs_priority_participant']/domain_participant_qos/property")
-            if profile is None:
-                raise ValueError("production rs_priority_participant profile is required")
-            qos.append(copy.deepcopy(profile))
+                "[@name='rs_priority_participant']/domain_participant_qos")
+            properties = None if profile is None else profile.find("property")
+            limit = None if profile is None else profile.find(
+                "resource_limits/participant_property_list_max_length")
+            if properties is None or limit is None:
+                raise ValueError("production rs_priority_participant properties and "
+                                 "participant_property_list_max_length are required")
+            qos.append(copy.deepcopy(properties))
+            limits = child(qos, "resource_limits")
+            limits.append(copy.deepcopy(limit))
         for type_name in sorted(needed_types[name]):
             child(element, "register_type", name=type_name, type_ref=type_name)
 
@@ -149,11 +181,9 @@ def render(model, config, library, data_plane_only):
     child(duration, "nanosec", 10000000)
     processor = child(route, "processor", plugin_name="ACT::Gateway")
     properties = child(child(processor, "property"), "value")
-    for name, value in {
-        "config": config, "role": model["role"], "node": model["node"],
-        "router": model["router"], "data_plane_only": str(data_plane_only).lower(),
-        "teams": yaml.safe_dump(model["teams"], default_flow_style=True).strip(),
-    }.items():
+    explicit = dict(model["properties"])
+    explicit["act.monitoring"] = str(not data_plane_only).lower()
+    for name, value in explicit.items():
         entry = child(properties, "element")
         child(entry, "name", name)
         child(entry, "value", value)
@@ -176,15 +206,22 @@ def render(model, config, library, data_plane_only):
             qos.append(copy.deepcopy(retention))
         return element
 
-    for spec in model.get("inputs", []):
+    for spec in inputs:
         port("input", spec)
-    for spec in model.get("outputs", []):
+    for spec in outputs:
         port("output", spec)
     for family in model["wan"]:
-        spec = dict(family, type="Wan" + family["name"], topic=family["name"])
+        spec = dict(family, topic=family["name"])
         incoming = port("input", dict(spec, name="wan_in_" + family["name"]))
         cft = child(incoming, "content_filter")
-        child(cft, "expression", family["expression"])
+        expression = family["expression"]
+        if not data_plane_only:
+            internal = ("RouterConfig" if family["name"] == "Event" else
+                        "RouterHealth" if family["name"] in ("Periodic", "Status") else None)
+            if internal and f"original_topic = '{internal}'" not in expression:
+                expression = (f"({expression}) OR "
+                              f"(source_id <> %0 AND original_topic = '{internal}')")
+        child(cft, "expression", expression)
         parameters = child(cft, "expression_parameters")
         for parameter in family["parameters"]:
             child(parameters, "element", parameter)
@@ -193,62 +230,236 @@ def render(model, config, library, data_plane_only):
     return ET.tostring(root, encoding="unicode")
 
 
+def preflight(path, service_name="ACTGateway"):
+    """Validate original XML entries before Routing Service collapses its property map."""
+    root = ET.parse(path).getroot()
+    service = root.find(f"./routing_service[@name='{service_name}']")
+    if service is None:
+        raise ValueError(f"missing routing_service {service_name}")
+    processors = service.findall(".//topic_route/processor")
+    if len(processors) != 1:
+        raise ValueError("v1 requires exactly one explicit gateway processor")
+    processor = processors[0]
+    properties = {}
+    for entry in processor.findall("./property/value/element"):
+        name, value = entry.findtext("name"), entry.findtext("value", "")
+        if not name or name in properties:
+            raise ValueError(f"empty or duplicate processor property: {name}")
+        if "$(" in value or "${" in value:
+            raise ValueError(f"unresolved processor variable: {name}")
+        properties[name] = value
+    globals_ = {"act.version", "act.types_uri", "act.node", "act.role", "act.router",
+                "act.wan_contract", "act.monitoring", "act.teams", "act.admin_participant",
+                "act.lan_participant", "act.wan_participant", "act.lan_domain", "act.wan_domain",
+                "act.async_bandwidth_bps", "act.receive_policy"}
+    required = globals_ - {"act.teams", "act.async_bandwidth_bps", "act.receive_policy"}
+    for name in sorted(required):
+        if not properties.get(name):
+            raise ValueError(f"missing processor property: {name}")
+    if properties["act.version"] != "1":
+        raise ValueError("unsupported act.version (expected 1)")
+    if properties["act.monitoring"] not in ("true", "false"):
+        raise ValueError("act.monitoring must be true or false")
+    if properties.get("act.receive_policy", "mission") not in ("mission", "static"):
+        raise ValueError("act.receive_policy must be mission or static")
+    if properties["act.wan_contract"] not in ("two_topic_union", "three_topic_union"):
+        raise ValueError("unsupported act.wan_contract")
+    participants = service.findall("./domain_route/participant")
+    lan = [item for item in participants
+           if item.attrib.get("name") == properties["act.lan_participant"]]
+    if len(lan) != 1 or lan[0].findtext("domain_id") != properties["act.lan_domain"]:
+        raise ValueError("LAN participant/domain mismatch")
+    identity = lan_participant_identity(properties)
+    if lan[0].findtext("domain_participant_qos/participant_name/name") != identity:
+        raise ValueError("LAN participant identity mismatch")
+    groups = {}
+    fields = {"topic_name", "type", "channel", "branch", "instance_id",
+              "tx.port", "rx.port", "tx.recipients", "rx.recipients",
+              "tx.enabled", "rx.enabled"}
+    for name, value in properties.items():
+        if name in globals_:
+            continue
+        parts = name.split(".", 3)
+        if (len(parts) != 4 or parts[:2] != ["act", "binding"]
+                or not parts[2] or parts[3] not in fields):
+            raise ValueError(f"unknown processor property: {name}")
+        groups.setdefault(parts[2], {})[parts[3]] = value
+    if not groups:
+        raise ValueError("at least one explicit act.binding is required")
+    route = next(route for route in service.findall(".//topic_route") if processor in list(route))
+    ports = {}
+    for kind in ("input", "output"):
+        for port in route.findall(kind):
+            name = port.attrib.get("name")
+            if not name or name in ports:
+                raise ValueError(f"empty or duplicate port: {name}")
+            ports[name] = (kind, port)
+    profiles = {library.attrib["name"] + "::" + profile.attrib["name"]: profile
+                for library in root.findall("qos_library") for profile in library.findall("qos_profile")}
+
+    def filtered(qos, seen=()):
+        if qos is None:
+            return False
+        duration = qos.find("./time_based_filter/minimum_separation")
+        if duration is not None and any((item.text or "").strip() not in ("", "0")
+                                        for item in duration):
+            return True
+        base = qos.attrib.get("base_name")
+        if base:
+            if base in seen:
+                raise ValueError(f"cyclic QoS profile: {base}")
+            profile = profiles.get(base)
+            if profile is not None:
+                return (filtered(profile.find("datareader_qos"), seen + (base,)) or
+                        filtered(profile, seen + (base,)))
+        return False
+
+    topics, used = set(), set()
+    for identifier, binding in groups.items():
+        for field in ("topic_name", "type", "channel", "branch", "instance_id"):
+            if not binding.get(field):
+                raise ValueError(f"binding {identifier}: missing {field}")
+        topic, channel = binding["topic_name"], binding["channel"]
+        if topic in topics:
+            raise ValueError(f"duplicate binding topic: {topic}")
+        topics.add(topic)
+        if channel not in {family + "_" + priority for family in ("event", "state", "periodic")
+                           for priority in ("high", "normal")}:
+            raise ValueError(f"unsupported channel: {channel}")
+        directions = 0
+        for direction, kind in (("tx", "input"), ("rx", "output")):
+            name = binding.get(direction + ".port")
+            if name is None:
+                if direction + ".recipients" in binding or direction + ".enabled" in binding:
+                    raise ValueError(f"binding {identifier}: direction settings without {direction}.port")
+                continue
+            directions += 1
+            if not binding.get(direction + ".recipients"):
+                raise ValueError(f"binding {identifier}: missing {direction}.recipients")
+            if binding.get(direction + ".enabled", "true") not in ("true", "false"):
+                raise ValueError(f"binding {identifier}: invalid {direction}.enabled")
+            if name not in ports or ports[name][0] != kind or name in used:
+                raise ValueError(f"binding {identifier}: missing/duplicate {kind} port {name}")
+            used.add(name)
+            port = ports[name][1]
+            if port.attrib.get("participant") != properties["act.lan_participant"]:
+                raise ValueError(f"binding {identifier}: port participant must be act.lan_participant")
+            if (port.findtext("topic_name") != topic or
+                    port.findtext("registered_type_name") != binding["type"]):
+                raise ValueError(f"binding {identifier}: port topic/type mismatch")
+            if kind == "input" and not channel.startswith("periodic_"):
+                if filtered(port.find("datareader_qos")):
+                    raise ValueError(f"Event/State LAN input filtering is unsupported: {topic}")
+        if not directions:
+            raise ValueError(f"binding {identifier}: missing tx.port or rx.port")
+    if properties["act.monitoring"] == "true":
+        for name in ("command", "ack", "status", "mesh", "links", "diagnostics"):
+            if "monitor_" + name not in ports:
+                raise ValueError(f"missing service-owned monitoring port: monitor_{name}")
+    if properties["act.role"] == "platform" and properties.get("act.receive_policy", "mission") == "mission":
+        bindings = {binding["topic_name"]: binding for binding in groups.values()}
+        for topic in ("Mission", "Team", "PlatformMissionStatus", "ContactReport", "PlatformStatus"):
+            binding = bindings.get(topic, {})
+            if not binding.get("rx.port") or binding.get("rx.enabled", "true") != "true":
+                raise ValueError(f"mission receive policy requires enabled static LAN output: {topic}")
+        for topic in ("PlatformMissionStatus", "ContactReport"):
+            binding = bindings[topic]
+            if not binding.get("tx.port") or binding.get("tx.enabled", "true") != "true":
+                raise ValueError(f"mission receive policy requires enabled local input: {topic}")
+    return properties
+
+
+def write_bundle(model, library, data_plane_only, path):
+    """Keep the processor's external type registry beside the prepared service XML."""
+    path = Path(path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    types = path.with_name(path.stem + ".types.xml")
+    source = Path(model["types"]).resolve()
+    if source != types:
+        shutil.copyfile(source, types)
+    bundled = dict(model, types=str(types), properties=dict(model["properties"]))
+    bundled["properties"]["act.types_uri"] = str(types)
+    path.write_text(render(bundled, "", str(library), data_plane_only))
+    return path
+
+
+def launch_native(path, service_name):
+    home = os.environ.get("NDDSHOME")
+    if not home:
+        raise ValueError("NDDSHOME must point to the Routing Service 7.7 installation")
+    executables = list((Path(home) / "resource/app/bin").glob("*/rtiroutingserviceapp"))
+    if len(executables) != 1:
+        raise ValueError("expected exactly one native Routing Service architecture in NDDSHOME")
+    executable = executables[0]
+    environment = os.environ.copy()
+    architecture = executable.parent.name
+    library_paths = [str(Path(home) / "resource/app/lib" / architecture),
+                     str(Path(home) / "lib" / architecture)]
+    if environment.get("LD_LIBRARY_PATH"):
+        library_paths.append(environment["LD_LIBRARY_PATH"])
+    environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+    process = subprocess.Popen(
+        [str(executable), "-cfgFile", str(path), "-cfgName", service_name,
+         "-verbosity", "WARN"], start_new_session=True, env=environment)
+    return wait_for_service(process)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", type=Path, help="development-only YAML renderer input")
+    source.add_argument("--xml", type=Path, help="prepared v1 XML; no YAML/helper dependency")
+    parser.add_argument("--service-name", default="ACTGateway")
+    parser.add_argument("--validate-only", action="store_true", help="preflight XML without launching DDS")
     parser.add_argument("--role", default="")
     parser.add_argument("--node-name", default="")
     parser.add_argument("--name", default="")
     parser.add_argument("--team", action="append", default=[],
                         help="initial exact team ID; repeat for multiple memberships")
     parser.add_argument("--build-dir", type=Path, default=Path("router/build/routing_service"))
-    parser.add_argument("--render", type=Path, help="write XML without launching DDS")
+    parser.add_argument("--render", type=Path,
+                        help="persist XML and a sibling .types.xml registry without launching DDS")
     parser.add_argument("--data-plane-only", action="store_true",
-                        help="explicitly omit unimplemented ACT health/admin compatibility")
+                        help="omit ACT health/admin monitoring (act.monitoring=false)")
     args = parser.parse_args()
-    build = args.build_dir.resolve()
-    library = build / "libact_gateway_processor.so"
-    if not library.is_file():
-        parser.error(f"processor library not built: {library}")
     try:
-        description = subprocess.run(
-            [str(build / "act_rs_config"), str(args.config.resolve()), args.role,
-             args.node_name, args.name, *args.team], check=True, text=True, capture_output=True)
-        model = yaml.safe_load(description.stdout)
-        if not args.data_plane_only:
-            parser.error("full ACT parity is not implemented; --data-plane-only is required")
-        for name, key in (("WAN_TIMEOUT_SEC", "timeout"), ("WAN_HB_PERIOD_SEC", "heartbeat"),
-                          ("WAN_HB_RETRIES", "retries")):
-            os.environ[name] = str(model[key])
-        xml = render(model, str(args.config.resolve()), str(library), args.data_plane_only)
+        if args.xml:
+            if args.role or args.node_name or args.name or args.team or args.render:
+                parser.error("--xml uses frozen XML identity/teams; development overrides are unsupported")
+            path = args.xml.resolve()
+            properties = preflight(path, args.service_name)
+            if args.data_plane_only and properties["act.monitoring"] != "false":
+                parser.error("--data-plane-only requires act.monitoring=false in prepared XML")
+            if args.validate_only:
+                return 0
+            return launch_native(path, args.service_name)
+        else:
+            import yaml
+            build = args.build_dir.resolve()
+            library = build / "libact_gateway_processor.so"
+            if not library.is_file():
+                parser.error(f"processor library not built: {library}")
+            description = subprocess.run(
+                [str(build / "act_rs_config"), str(args.config.resolve()), args.role,
+                 args.node_name, args.name, *args.team], check=True, text=True, capture_output=True)
+            model = yaml.safe_load(description.stdout)
+            for name, key in (("WAN_TIMEOUT_SEC", "timeout"), ("WAN_HB_PERIOD_SEC", "heartbeat"),
+                              ("WAN_HB_RETRIES", "retries")):
+                os.environ[name] = str(model[key])
         if args.render:
-            args.render.write_text(xml)
+            path = write_bundle(model, library, args.data_plane_only, args.render)
+            preflight(path, args.service_name)
             return 0
-        home = os.environ.get("NDDSHOME")
-        if not home:
-            parser.error("NDDSHOME must point to the Routing Service 7.7 installation")
-        executables = list((Path(home) / "resource/app/bin").glob("*/rtiroutingserviceapp"))
-        if len(executables) != 1:
-            parser.error("expected exactly one native Routing Service architecture in NDDSHOME")
-        executable = executables[0]
-        environment = os.environ.copy()
-        architecture = executable.parent.name
-        library_paths = [str(Path(home) / "resource/app/lib" / architecture),
-                         str(Path(home) / "lib" / architecture)]
-        if environment.get("LD_LIBRARY_PATH"):
-            library_paths.append(environment["LD_LIBRARY_PATH"])
-        environment["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
         with tempfile.TemporaryDirectory(prefix="act-routing-service-") as work:
-            path = Path(work) / "gateway.xml"
-            path.write_text(xml)
-            process = subprocess.Popen(
-                [str(executable), "-cfgFile", str(path), "-cfgName", "ACTGateway",
-                 "-verbosity", "WARN"], start_new_session=True, env=environment)
-            return wait_for_service(process)
+            path = write_bundle(model, library, args.data_plane_only, Path(work) / "gateway.xml")
+            preflight(path, args.service_name)
+            if args.validate_only:
+                return 0
+            return launch_native(path, args.service_name)
     except subprocess.CalledProcessError as error:
         print(error.stderr or str(error), file=sys.stderr)
         return 2
-    except (OSError, ValueError, ET.ParseError, yaml.YAMLError) as error:
+    except (OSError, ValueError, ET.ParseError) as error:
         print(f"act Routing Service: {error}", file=sys.stderr)
         return 2
 

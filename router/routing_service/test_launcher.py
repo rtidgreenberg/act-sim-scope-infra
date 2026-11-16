@@ -1,5 +1,7 @@
 import io
+import json
 import os
+from pathlib import Path
 import select
 import signal
 import subprocess
@@ -8,7 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from run import SHUTDOWN_TIMEOUT, _signal_process_group, wait_for_service
+from run import SHUTDOWN_TIMEOUT, _signal_process_group, main, wait_for_service
 
 
 class RoutingServiceLauncherTests(unittest.TestCase):
@@ -165,6 +167,79 @@ class RoutingServiceLauncherTests(unittest.TestCase):
         with patch("run.os.killpg", side_effect=ProcessLookupError):
             with self.assertRaises(ProcessLookupError):
                 _signal_process_group(process, signal.SIGTERM)
+
+    def test_prepared_xml_validation_has_no_yaml_helper_or_sdk_dependency(self):
+        with patch.object(sys, "argv", ["run.py", "--xml", "gateway.xml", "--validate-only"]), \
+                patch.dict(sys.modules, {"yaml": None}), \
+                patch("run.preflight", return_value={"act.monitoring": "true"}) as check, \
+                patch("run.subprocess.run") as helper, \
+                patch("run.subprocess.Popen") as launch:
+            self.assertEqual(main(), 0)
+        helper.assert_not_called()
+        launch.assert_not_called()
+        check.assert_called_once_with(Path("gateway.xml").resolve(), "ACTGateway")
+
+    def test_prepared_xml_launches_directly_and_preserves_owned_lifecycle(self):
+        executable = Path("sdk/resource/app/bin/arch/rtiroutingserviceapp")
+        with patch.object(sys, "argv", ["run.py", "--xml", "gateway.xml",
+                                       "--service-name", "PreparedGateway"]), \
+                patch.dict(sys.modules, {"yaml": None}), \
+                patch.dict(os.environ, {"NDDSHOME": "sdk"}), \
+                patch("run.preflight", return_value={"act.monitoring": "true"}), \
+                patch("run.Path.glob", return_value=[executable]), \
+                patch("run.subprocess.run") as helper, \
+                patch("run.subprocess.Popen") as launch, \
+                patch("run.wait_for_service", return_value=17) as wait:
+            self.assertEqual(main(), 17)
+        helper.assert_not_called()
+        args, kwargs = launch.call_args
+        self.assertEqual(args[0], [str(executable), "-cfgFile", str(Path("gateway.xml").resolve()),
+                                  "-cfgName", "PreparedGateway", "-verbosity", "WARN"])
+        self.assertTrue(kwargs["start_new_session"])
+        wait.assert_called_once_with(launch.return_value)
+
+    def test_prepared_xml_cannot_silently_change_monitoring_mode(self):
+        with patch.object(sys, "argv", ["run.py", "--xml", "gateway.xml", "--data-plane-only"]), \
+                patch("run.preflight", return_value={"act.monitoring": "true"}), \
+                patch("run.subprocess.Popen") as launch, \
+                patch("run.sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as error:
+                main()
+        self.assertEqual(error.exception.code, 2)
+        launch.assert_not_called()
+
+    def test_development_launch_owns_temporary_xml_and_types_outside_checkout(self):
+        from test_config import RoutingServiceConfigurationTests
+        fixture = RoutingServiceConfigurationTests()
+        fixture.setUp()
+        model = dict(fixture.model, timeout=300, heartbeat=3, retries=100)
+        paths = []
+
+        def launch(path, service_name):
+            import xml.etree.ElementTree as ET
+            self.assertEqual(service_name, "ACTGateway")
+            self.assertTrue(path.is_file())
+            properties = {entry.findtext("name"): entry.findtext("value") for entry in
+                          ET.parse(path).findall(".//processor/property/value/element")}
+            types = Path(properties["act.types_uri"])
+            self.assertEqual(types.parent, path.parent)
+            self.assertTrue(types.is_file())
+            self.assertNotEqual(path.parent, Path("debug/routing_service").resolve())
+            paths.extend((path, types))
+            return 21
+
+        original_is_file = Path.is_file
+        with patch.object(sys, "argv", ["run.py", "--config", "removed-after-preparation.yaml",
+                                       "--data-plane-only"]), \
+                patch.dict(os.environ), \
+                patch("run.subprocess.run", return_value=Mock(stdout=json.dumps(model))), \
+                patch("run.Path.is_file", autospec=True,
+                      side_effect=lambda path: path.name == "libact_gateway_processor.so"
+                      or original_is_file(path)), \
+                patch("run.launch_native", side_effect=launch):
+            self.assertEqual(main(), 21)
+        self.assertTrue(paths)
+        self.assertTrue(all(not path.exists() for path in paths))
 
 
 if __name__ == "__main__":

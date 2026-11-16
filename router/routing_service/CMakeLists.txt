@@ -14,7 +14,11 @@ target_include_directories(act_rs_model PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/../generated")
 target_link_libraries(act_rs_model PUBLIC act_rs_types yaml-cpp::yaml-cpp)
 
-add_library(act_gateway_processor SHARED GatewayProcessor.cxx)
+add_library(act_gateway_processor SHARED
+    GatewayProcessor.cxx
+    GatewayMonitor.cxx
+    ../src/core/PresenceMonitor.cxx
+    ../src/core/LinkStatsCollector.cxx)
 target_link_libraries(act_gateway_processor PRIVATE
     act_rs_model RTIConnextDDS::routing_service_cpp2)
 if(UNIX AND NOT APPLE)

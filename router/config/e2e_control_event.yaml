@@ -61,7 +61,7 @@ routes:
     source: control
     destination: platform
     topics:
-      - name: ActTeamAssignment
+      - name: Team
     source_side:
       input:
         participant: control_lan
