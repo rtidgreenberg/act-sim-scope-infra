@@ -297,22 +297,23 @@ def preflight(path, service_name="ACTGateway"):
     profiles = {library.attrib["name"] + "::" + profile.attrib["name"]: profile
                 for library in root.findall("qos_library") for profile in library.findall("qos_profile")}
 
-    def filtered(qos, seen=()):
+    def filter_separation(qos, seen=()):
         if qos is None:
-            return False
-        duration = qos.find("./time_based_filter/minimum_separation")
-        if duration is not None and any((item.text or "").strip() not in ("", "0")
-                                        for item in duration):
-            return True
+            return {}
+        separation = {}
         base = qos.attrib.get("base_name")
         if base:
             if base in seen:
                 raise ValueError(f"cyclic QoS profile: {base}")
             profile = profiles.get(base)
             if profile is not None:
-                return (filtered(profile.find("datareader_qos"), seen + (base,)) or
-                        filtered(profile, seen + (base,)))
-        return False
+                separation.update(filter_separation(profile, seen + (base,)))
+        if qos.tag == "qos_profile":
+            separation.update(filter_separation(qos.find("datareader_qos"), seen))
+        duration = qos.find("./time_based_filter/minimum_separation")
+        if duration is not None:
+            separation.update({item.tag: (item.text or "").strip() for item in duration})
+        return separation
 
     topics, used = set(), set()
     for identifier, binding in groups.items():
@@ -348,7 +349,8 @@ def preflight(path, service_name="ACTGateway"):
                     port.findtext("registered_type_name") != binding["type"]):
                 raise ValueError(f"binding {identifier}: port topic/type mismatch")
             if kind == "input" and not channel.startswith("periodic_"):
-                if filtered(port.find("datareader_qos")):
+                if any(value not in ("", "0") for value in
+                       filter_separation(port.find("datareader_qos")).values()):
                     raise ValueError(f"Event/State LAN input filtering is unsupported: {topic}")
         if not directions:
             raise ValueError(f"binding {identifier}: missing tx.port or rx.port")

@@ -333,6 +333,50 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     self.check_xml(root)
 
+    def test_preflight_accepts_zero_filter_overrides(self):
+        for location in ("port", "profile", "reader_profile"):
+            with self.subTest(location=location):
+                root = ET.fromstring(ET.tostring(self.xml))
+                qos = root.find(".//input[@name='lan_in_ContactReport']/datareader_qos")
+                qos.set("base_name", "ACT_QOS_LIB::lan_status_1s")
+                if location != "port":
+                    profile = ET.SubElement(root.find("qos_library"), "qos_profile",
+                                            name="unfiltered")
+                    qos.set("base_name", "ACT_QOS_LIB::unfiltered")
+                    if location == "profile":
+                        profile.set("base_name", "ACT_QOS_LIB::lan_status_1s")
+                        qos = ET.SubElement(profile, "datareader_qos")
+                    else:
+                        qos = ET.SubElement(profile, "datareader_qos",
+                                            base_name="ACT_QOS_LIB::lan_status_1s")
+                separation = ET.SubElement(ET.SubElement(qos, "time_based_filter"),
+                                           "minimum_separation")
+                ET.SubElement(separation, "sec").text = "0"
+                ET.SubElement(separation, "nanosec").text = "0"
+                self.assertEqual(self.check_xml(root)["act.node"], "Boat30")
+
+    def test_preflight_preserves_inherited_filter_duration_components(self):
+        for nanoseconds in ("0", "500000000"):
+            with self.subTest(nanoseconds=nanoseconds):
+                root = ET.fromstring(ET.tostring(self.xml))
+                profile = ET.SubElement(root.find("qos_library"), "qos_profile",
+                                        name="partial_filter")
+                reader = ET.SubElement(profile, "datareader_qos")
+                separation = ET.SubElement(ET.SubElement(reader, "time_based_filter"),
+                                           "minimum_separation")
+                ET.SubElement(separation, "sec").text = "1"
+                ET.SubElement(separation, "nanosec").text = nanoseconds
+                qos = root.find(".//input[@name='lan_in_ContactReport']/datareader_qos")
+                qos.set("base_name", "ACT_QOS_LIB::partial_filter")
+                override = ET.SubElement(ET.SubElement(qos, "time_based_filter"),
+                                        "minimum_separation")
+                ET.SubElement(override, "sec").text = "0"
+                if nanoseconds == "0":
+                    self.check_xml(root)
+                else:
+                    with self.assertRaisesRegex(ValueError, "filtering"):
+                        self.check_xml(root)
+
 
 @unittest.skipUnless(os.environ.get("ACT_RS_BUILD_DIR"),
                      "set ACT_RS_BUILD_DIR to test the native configuration generator")
