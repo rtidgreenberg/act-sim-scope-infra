@@ -150,11 +150,16 @@ The installed Connext 7.7.0 `resource/schema/rti_routing_service.xsd` includes
 [renderer](../router/routing_service/run.py) explicitly disables it.
 The earlier conclusion that no such setting exists was too broad.
 
-Its existence does **not** establish which discovered policies it adapts, whether
-explicit policies take precedence, or how conflicting endpoints are handled.
-Verify those behaviors against the installed service before implementing a
-duplicate compatibility engine or claiming automatic QoS parity. Until then,
-the procedure below uses the processor's existing explicit XML profiles.
+The [2026-11-16 native qualification](../router/routing_service/README.md#native-lan-auto-qos-qualification)
+now proves reliability/durability inference and exact-payload forwarding with
+our custom processor under `ON_DOMAIN_MATCH`. Finite deadline requirements
+needed explicit configuration, and policy-specific profile interactions were
+observed. Enabled `IMMEDIATE` cases did not create the LAN endpoint within
+10 seconds. With discovery-triggered creation, an absent configured LAN input
+prevented the shared processor route from starting and forwarding other data.
+The renderer remains unchanged pending resolution of that startup barrier.
+Conflicting endpoints, replacement and complete policy coverage remain open;
+the procedure below retains the processor's explicit XML profiles.
 See [LP-9](product-gaps.md#-lp-9--routing-service-discovery-driven-qos-selection-needs-qualification).
 
 ### Confirmed v1 binding choices

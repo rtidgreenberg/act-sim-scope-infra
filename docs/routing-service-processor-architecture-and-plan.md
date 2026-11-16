@@ -2,6 +2,14 @@
 
 Date: 2026-11-14.
 
+**Latest completion work (2026-11-16):** follow the
+[processor completion and acceptance plan](router-processor-completion-plan.md)
+for typed unions, native LAN auto-QoS, independent topic activation, retained
+monitoring and the unchanged five-mission gate. The static all-in-one route
+ownership described below is the implemented baseline, not a decision to
+discard the subsequent auto-QoS work. Final shared WAN ownership is an explicit
+gate in the completion plan; the isolated spike is not production integration.
+
 Status: **current architecture and agreed development direction**.
 The fixed-ACT XML-only processor is implemented and reference-mesh-qualified.
 Platform mission-state receive filtering is implemented and reference-mesh-qualified

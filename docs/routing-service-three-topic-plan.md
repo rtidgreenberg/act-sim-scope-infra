@@ -2,6 +2,11 @@
 
 Date: 2026-11-13
 
+**Completion entry point (2026-11-16):**
+[router processor completion and acceptance plan](router-processor-completion-plan.md).
+It adds the unions/native-auto-QoS integration and independent-startup gates to
+the deployed baseline below, with existing monitoring and mission acceptance.
+
 Latest checkpoint (2026-11-14): native XML-only ACT bindings and monitoring are
 deployed on the owned six-platform mesh; **5/5 live browser workflows passed**.
 [Migration checkpoint 3.51](two-topic-wan-migration-plan.md#351-xml-only-processor-deployed-and-mesh-qualified-2026-11-14)

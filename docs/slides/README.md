@@ -2,12 +2,25 @@
 
 | Deck | Main decision | Source | PDF |
 |---|---|---|---|
+| WAN schema propagation options | Two architectures: generated typed unions versus fixed binary envelopes using local payload types; tested versus source-inspected | [Markdown](wan-schema-propagation-options.md) | [PDF](wan-schema-propagation-options.pdf) |
 | Event / State / Telemetry | Three-topic WAN names and delivery contracts: required occurrences, current instance state and fresh observations | [Markdown](event-state-telemetry.md) | [PDF](event-state-telemetry.pdf) |
 | Telemetry: typed or catalog-driven | One-slide payload comparison; State catalog drives application-managed Telemetry filters | [Markdown](telemetry-typed-or-catalog.md) | [PDF](telemetry-typed-or-catalog.pdf) |
 | Link health | Measure presence, RTT, and delivery pressure separately | [Markdown](connext-ddil-link-health.md) | [PDF](connext-ddil-link-health.pdf) |
 | Connext Edge Mesh Overview | Five slides: system diagram, isolation scope/runtime control, data-filtering strategies, discovery options, and DDIL link-health measurements | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) |
 | Discovery strategies | Four steps for mesh radio: router isolation, smaller discovery announcements, multicast vs. unicast, and peer setup | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 | System presence and liveliness | Compare writer liveliness, participant discovery, and periodic application health in Connext 7.7 | [Markdown](system-presence-liveliness.md) | [PDF](system-presence-liveliness.pdf) |
+
+The schema-propagation comparison also has a
+[PowerPoint export](wan-schema-propagation-options.pptx) and a detailed
+[workflow/options record](../wan-schema-propagation-options.md).
+It is one slide comparing typed unions (runtime discovery or preloaded XML)
+with fixed envelopes carrying binary payloads whose types are available locally.
+Binary means no WAN application type graph, not no outer DDS schema.
+The one-Event-union spikes are distinguished from Zenoh source evidence and the
+untested Connext binary path, proposed setup tooling, three-family priority
+integration and unmeasured WAN metadata cost. Periodic is
+the discussion's name for the current Telemetry family, not a deployed rename.
+The PowerPoint contains a rendered slide image; edit the Markdown source.
 
 The telemetry comparison also has a [PowerPoint export](telemetry-typed-or-catalog.pptx).
 Both options retain best-effort, freshness-first delivery. The catalog option

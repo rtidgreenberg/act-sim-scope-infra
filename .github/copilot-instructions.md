@@ -30,6 +30,14 @@ without inspecting the current worktree, commits, and runtime ownership first.
 
 ### Current runtime checkpoint (2026-11-16)
 
+**Next implementation plan (2026-11-16):**
+[processor completion and acceptance](../docs/router-processor-completion-plan.md)
+records unions + native LAN auto-QoS, independent topic activation, native-first
+shared WAN ownership, existing health/link-stat parity and required existing
+suites including all five live mission tests. It is a plan, not completed
+integration or authorization to replace the retained mesh. Python setup UI is
+separate from runtime acceptance.
+
 This supersedes older retained-mesh descriptions below. The owned EMANE mesh now
 runs the **XML-only Routing Service processor**, Control_20 plus Platform_30-35,
 contract `three_topic_union` (Event/State/Periodic), dashboard port 8080,
@@ -467,6 +475,61 @@ SHA-256 form beyond 255 bytes; WAN identities are unchanged. See
 - Preserve TeamAssignment broadcast, addressed-command rules, global navigation,
   and supported multiple audiences/teams. Membership changes do not make all traffic
   team-scoped. Do not invent receiver rejection of every already-accepted sample.
+
+### Isolated discovered-union/catalog spike (2026-11-16)
+
+- [Schema propagation options and proposed Python setup workflow](../docs/wan-schema-propagation-options.md)
+  records runtime union discovery, optional State catalog, preloaded shared
+  XML and opaque-codec alternatives, with a matching one-slide comparison.
+  Exactly three WAN families remain the design; the subsequent XML plan uses
+  six logical channels to derive family and priority. The development router's
+  Telemetry name is distinct from the Routing Service Periodic contract.
+  Preloaded XML generation/distribution and reduced WAN type traffic are
+  proposals requiring tooling and packet qualification, not spike results.
+- The same runner's `--discovery-only` mode removes State entirely. Topic-named
+  branches use sparse labels 17/42; the platform derives bindings from union
+  discovery and selects only alive local subscriptions with matching topic names
+  and exactly equal discovered structures. No topic-selection message or
+  per-sample `original_topic` field is needed. Five phases send 60 commands;
+  Move/Mode/none/same-name-incompatible/both produce 3/3/0/0/6 native WAN pushes
+  and exactly matching original LAN deliveries. State endpoint absence and
+  explicit structural rejection are checked. Local discovery uses controlled
+  test-phase barriers, not a production continuous-rebinding implementation.
+  Original catalog mode remains available and passes its regression.
+- [Startup discovery/catalog proof](../spikes/discovered_union_catalog/README.md)
+  passes in separate application, gateway and platform processes on Connext 7.7.
+  Gateway learns complete LAN command structures, constructs a runtime Event
+  union, and publishes one retained State catalog before the platform starts.
+  Platform discovers the envelope/nested types without application type XML,
+  selects a catalog binding and restores whole original LAN commands.
+- Each run sends 36 commands; Move/Mode/none selection restores 3/3/0 with exact
+  native Event writer push deltas of 3/3/0, full original payload equality,
+  duplicate/destination/family checks and two explicit rejection cases.
+  Private network/IPC namespaces isolate the spike from the retained mesh.
+  No production contract/configuration or live-mesh change was made.
+- This removes manual union authoring, not deployment-specific wire schemas.
+  Runtime branch addition, stable multi-sender contracts, large type graphs,
+  command execution/authorization/ACKs and outage/load/lifecycle remain untested.
+
+### Isolated native LAN auto-QoS qualification (2026-11-16)
+
+- [Qualification and repeat instructions](../router/routing_service/README.md#native-lan-auto-qos-qualification)
+  record a fresh Connext 7.7.0 processor build and 52 characterization scenarios,
+  plus a verbose diagnostic probe, in owned private network/IPC containers.
+  Native discovery shows input reliability/durability inference and output
+  durability inference with `ON_DOMAIN_MATCH`; focused positive cases verify
+  whole-payload forwarding through our processor, including explicit deadline
+  plus inferred durability. A finite consumer deadline was not inferred.
+- `IMMEDIATE` with auto-QoS enabled did not create the LAN endpoint or reach the
+  processor startup marker within 10 seconds. With `ON_DOMAIN_MATCH`, one
+  absent configured LAN input prevented the shared processor route from
+  starting and forwarding another matched input. This occurred with auto-QoS
+  both off and on. Resolve that startup barrier before adopting it by default.
+  Renderer/runtime/live mesh remain unchanged; full policy coverage, endpoint
+  conflicts, replacement and fleet/load behavior are not qualified.
+- Compact ignored evidence: `debug/test_reports/rs_autoqos_summary.json`.
+  The [Quickstart](../docs/quickstart.md) reflects these constraints. Temporary
+  build and raw diagnostic output are disposable, not deployment assets.
 
 ### Next work and unresolved checks
 

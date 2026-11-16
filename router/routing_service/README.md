@@ -430,6 +430,67 @@ branches. A custom SensorReport union branch does not become supported merely
 by naming it in XML. Whole original payload copies and the existing
 authoritative ContactReport source restoration remain unchanged.
 
+### Native LAN auto-QoS qualification
+
+XML preflight resolves inherited time-filter durations before rejecting
+Event/State input filtering. An effective zero minimum separation is allowed,
+including an explicit zero override of a filtered base profile.
+
+The user-supplied [ROUTING-1309 feature document](../../docs/routing-service-qos-auto-configuration-routing-1309.md)
+is retained verbatim as a reference, not a published manual. It also contains
+sections labeled "Potential Change (K Release)"; do not treat those proposals
+as verified behavior in the installed version.
+
+On 2026-11-16, a fresh Connext 7.7.0 processor build was tested in private
+`--network none` containers, with UDPv4-only participants and domains 91-106.
+No live mesh configuration or binary was changed.
+
+The [qualification runner](qualify_auto_qos.py) and its
+[XML profiles](fixtures/auto_qos.xml) compare `auto_configure_qos=false/true`,
+inspect native discovery QoS, and exercise actual application data through
+the processor. Whole-payload equality is checked in the focused positive reruns.
+Applications were created both before and after service startup.
+
+| Case | Observed result |
+|---|---|
+| `IMMEDIATE`, auto-QoS enabled | No application LAN endpoint or processor startup marker within the 10-second observation window, with or without explicit port profiles |
+| `ON_DOMAIN_MATCH`, no explicit LAN QoS profile, reliable/transient-local producer | Input reader changed from best-effort/volatile with auto-QoS off to reliable/transient-local with it on; exact original payload reached WAN |
+| `ON_DOMAIN_MATCH`, no explicit LAN QoS profile, reliable/transient-local consumer with infinite deadline | Output writer changed from reliable/volatile to reliable/transient-local; disabled control did not match, enabled case matched and restored the exact payload on LAN |
+| Consumer requests a 250 ms deadline | Auto-QoS selected transient-local durability but retained an infinite writer deadline; no match |
+| Explicit 100 ms writer deadline plus auto-QoS | Deadline remained explicit, durability became transient-local, and exact-payload LAN delivery passed |
+| Explicit incompatible reliability/durability profile | Input profile's reliable/transient-local request remained unchanged; output reliability remained best-effort while durability became transient-local. These cases remained incompatible |
+| A second configured LAN input is absent | The present input matched, but the shared processor route did not reach its startup marker or forward its data during the observation/delivery windows; this happened with auto-QoS both off and on under `ON_DOMAIN_MATCH` |
+
+This proves native QoS inference can operate with our custom processor, not
+that it copies every policy or continuously reconciles arbitrary endpoints.
+The creation mode, policy-specific profile interaction and shared-route startup
+barrier prevent enabling it by simply flipping the current renderer's flag.
+The renderer remains on explicit profiles with `IMMEDIATE` creation.
+Multiple conflicting producers/consumers, endpoint replacement and complete
+policy coverage remain unqualified.
+
+To repeat a positive comparison, run inside an owned private-network Connext
+container with a fresh processor build, the checkout read-only at `/workspace`,
+and its license mounted. For example, with the fresh build at `/tmp/rs-build`:
+
+```bash
+ACT_RS_AUTOQOS_ISOLATED=1 python3 -B \
+  router/routing_service/qualify_auto_qos.py \
+  --build-dir /tmp/rs-build/routing_service \
+  --creation-mode ON_DOMAIN_MATCH --profile defaults \
+  --application-profile application_infinite_deadline
+```
+
+The runner emits JSONL observations, including matching, actual delivery and
+startup status; exit zero alone does not mean every characterized combination
+supports forwarding. Use `--application-profile application_writer_reliable`
+to expose input-side inference, `--profile deadline --direction rx` for the
+finite-deadline positive case, and `--absent-input --direction tx` for the
+offline-port startup check. The unprofiled and explicit incompatible-profile
+matrices, focused deadline checks, positive reruns and offline-port check
+executed 52 scenarios; a separate verbose probe was also run. Compact evidence
+is retained locally in `debug/test_reports/rs_autoqos_summary.json`.
+
 ### Platform mission receive policy
 
 `act.receive_policy` defaults to `mission` on platforms; control reception is
