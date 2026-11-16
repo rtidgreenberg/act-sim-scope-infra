@@ -2,7 +2,8 @@
 
 Date: 2026-11-16.
 
-Status: **plan only; implementation and deployment are not authorized by this document.**
+Status: **implementation started with user authorization on 2026-11-16.
+Live replacement remains separately gated; the retained mesh is unchanged.**
 
 ### Confirmed implementation decisions (2026-11-16)
 
@@ -82,6 +83,134 @@ typed filtering checks are not a native writer push-count gate.
   general command redesign remain outside the retained scope.
 
 ## 4. Implementation phases
+
+### Implementation record — Phase 0 (2026-11-16)
+
+The starting source was clean at `b6d4c8d`. Read-only inspection confirmed seven
+running containers in Compose project `act-emane-container-baseline`, the
+checkpoint 3.52 XML-only deployment and dashboard port 8080. All six platform
+peers reported `PRESENCE_ALIVE` / `ROUTER_OK`; the operator controller was
+available with no impairments. This is a startup snapshot, not a new mission gate.
+
+A local ignored rollback bundle is retained under
+`debug/test_reports/processor_completion_baseline_20261116/`. Its manifest records
+container image identities, lifecycle command/mounts, source commit, health and
+SHA-256 hashes. The archive contains 30 matching deployment files: generated
+XML/types/YAML and Compose/run identity, processor/config helper, common type/QoS
+XML and lifecycle/renderer scripts. Every archived member was rehashed without
+extracting over the checkout. The SDK/image and license remain external
+prerequisites; no license or container environment values are archived.
+
+- Image: `sha256:cbabafb1dab80c66483f092e1770249a6196d974b01592fe3a52979613f5f7a0`.
+- On-disk plugin SHA-256:
+  `75afb441e0d9b770bcfd76fb0ef8dc7d50bcf908e5d46f87bf2aec11c1de5233`.
+- Archive SHA-256:
+  `bfdd98bf5d742ef1ae2db7319f88d5b0e7cc33dffd2fcba96c7392e1b17bf3da`.
+
+**Ownership decision:** use the approved minimal plugin-owned shared WAN manager
+for independent LAN routes. The bounded native investigation does not establish
+that native sharing is impossible; it establishes that no qualifying native
+cross-route shared endpoint mechanism has been found on installed 7.7.0.0.
+The installed Routing Service XSD defines ports within a route, and describes
+AutoRoute as creating routes for discovered streams, not sharing their endpoints.
+Existing isolated characterization retained in `rs_autoqos_summary.json` covers
+52 scenarios: with an absent input, another producer matched but forwarding and
+processor startup remained blocked, with auto-QoS both off and on. Conversely,
+the [union/auto-QoS spike](../spikes/union_auto_qos/README.md) qualified six cases
+with independent LAN routes, one pair per WAN family, and unchanged WAN
+endpoint identities after activating the missing input. These are existing
+measured results, not fresh production-integration results.
+
+The manager is therefore the bounded missing ownership surface in Phase 2,
+not permission to add a discovery engine, scheduler or intermediate DDS bus.
+Native LAN discovery/auto-QoS and XML-authored WAN policies remain the design.
+Production auto-QoS/independent-startup qualification is still open.
+
+**Required test inventory:** actual collection in a private-network,
+private-IPC `connext:7.7.0` container found **373 router tests** at this starting
+checkpoint. Pytest 9.2.0 and pytest-subtests were supplied offline after the
+image reported missing pytest; Python Connext and CMake 3.22.1 were checked in
+that same environment. Collection did not run any tests. Retained listing:
+`debug/test_reports/processor_completion_collection.txt`.
+
+| Collected baseline group | Items | Acceptance mapping |
+|---|---:|---|
+| Native processor, three-topic processor and mesh/policy modules | 56 | Required against freshly built final processor; set `ACT_RS_BUILD_DIR`, otherwise the fixtures skip |
+| Live mission workflows | 5 | Required unchanged, zero skips after authorized deployment; dashboard/backend/contract variables and working Chromium required |
+| Mission contract/map/navigation, EMANE config, traffic accounting/dashboard and wire-delivery modules | 220 | Shared application/UI/config regressions; browser prerequisites must be installed for browser checks |
+| Remaining controller, adapter, helper and discovery modules | 92 | Keep legacy-specific route-admin/journal/partition contracts on their original backend; retained forwarding/team/health/lifecycle behavior must also pass the processor modules |
+
+This is a collection map, not a claim that the 56 processor items replace every
+legacy assertion. Phase 5 must check equivalent retained behavior and report
+execution/skips explicitly; new binding tests will increase these counts.
+Rollback restoration itself has not been exercised: it requires the owned
+coordinated stop/restore/relaunch and separate deployment authorization.
+
+The shared 220-item offline group was also executed in that isolated environment:
+**197 passed, 2 failed, 21 skipped, 272 passing subtests** (4.27 s). Both failures
+are existing mission-contract fixture initialization gaps: the fixture bypasses
+`DdsBridge.__init__` and lacks `audit_policy_history` required by the committed
+receive-policy audit consumer. The new binding implementation does not modify
+that fixture or dashboard code. All 21 skips report missing Playwright. These
+are explicit remaining acceptance blockers, not a green offline gate.
+Evidence: `debug/test_reports/processor_completion_offline.{txt,xml}`.
+
+### Implementation record — Phase 1 first slice (2026-11-16)
+
+**Qualified source, not deployed; Phase 1 is not complete.** The production
+codec now accepts a frozen full-type binding registry. Grouped XML properties
+carry custom bindings through the model, configuration helper, receive filters,
+metadata/channel selection and processor. Whole structures are copied; original
+branch/type equality, string identity keys, envelope fields, selected union
+labels/member IDs and duplicates are validated before forwarding. Built-in ACT
+definitions and ContactReport's authoritative source/composite-key exception
+remain protected. Production IDL, generated XML and fixed QoS are unchanged.
+
+The prepared-schema fixture adds a non-ACT command and nested status structure.
+Custom bindings currently require **static receive policy and monitoring off**;
+unsupported addressed extraction, multi-key custom payloads and unsupported
+union-label shapes reject explicitly. Custom audit fields are not guessed.
+See the [processor guide](../router/routing_service/README.md) for the property
+contract and the [native acceptance test](../router/routing_service/test_full_type_bindings.py).
+
+Fresh builds in private-network/private-IPC `connext:7.7.0` containers passed:
+
+- Legacy `router_main`, processor, configuration helper and selected test targets.
+- **3/3 C++ tests**: existing ACT codec and interests plus the new binding test.
+- **34/34 Python unittest cases, zero skips**: 30 existing configuration cases,
+  prepared-bundle validation, malformed-schema rejection subcases and real
+  native processor round trips for custom command/nested status and existing
+  ACT command/power status. The ACT command contains an 8192-byte payload.
+
+Commands and durations are retained in
+`debug/test_reports/processor_phase1_schema_slice.txt`. Private builds/runtime
+state were removed; existing build outputs and the seven live containers were
+not changed. No commits or pushes were made.
+
+**Review fixes qualified (2026-11-16), not deployed:** explicit binding IDs now
+survive configuration/bundle round trips independently of literal topic names,
+including dots. Envelope string/sequence capacities and payload-key capacity
+are validated before forwarding against the existing 255-character names,
+512-character instance ID and sixteen-name audience contract. Regression tests
+first failed on the reviewed code, then passed after the fixes.
+
+A fresh full private-network/private-IPC build passed **10/10 C++ tests** and
+**49/49 Python unittest cases, zero skips** (0.70 s and 27.263 s). Python coverage
+includes configuration, launcher and real native processor ACT/custom/dotted
+topic round trips; schema checks cover thirteen insufficient-capacity cases,
+and C++ round trips exercise exact-boundary keys, identities, topics and all
+sixteen audience slots. Logs are retained as
+`debug/test_reports/processor_review_fixes_{cpp,python}.txt`; red-run logs use
+the `processor_review_fixes_red_` prefix. Existing build outputs, wire schemas
+and live containers remain unchanged; full fleet/mission acceptance is still
+open.
+
+**Next slice:** integrate the minimal shared WAN owner and independent native
+LAN routes/auto-QoS while preserving the existing ACT monitoring and application
+policy paths. The current renderer still uses the original all-in-one route;
+this code does not yet solve missing-topic startup blocking. New-type monitoring,
+independent activation, full native regression and unchanged mission acceptance
+remain open. The baseline offline blockers above also remain open.
 
 ### Phase 0 — Freeze baseline and resolve native ownership
 
