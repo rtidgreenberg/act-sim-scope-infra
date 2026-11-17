@@ -30,7 +30,9 @@ Runtime consumes prepared native XML without YAML or the development helper.
 Bindings are explicit. Existing ACT deployments retain their fixed catalog and
 application policy. Prepared non-ACT full-type branches are also supported with
 `act.receive_policy=static` and `act.monitoring=false`; this bounded data-plane
-path does not yet include generic monitoring or LAN auto-QoS.
+path does not yet include generic monitoring. Newly prepared bundles use
+independently activated native LAN routes with native auto-QoS; this source
+update is not deployed to the retained mesh.
 See the [release split](../../docs/routing-service-c2-platform-setup.md#agreed-release-split).
 The selected mapping implementation extends this processor, not a separate
 Transformation plugin; see the
@@ -135,24 +137,37 @@ CONNEXT_SHARED_DIR=/home/dgreenberg/rti_connext_dds-7.7.0 \
 
 ## Architecture
 
-Each node runs one always-running multi-input/multi-output TopicRoute:
+Newly prepared bundles use one native session with an always-on WAN hub route
+and independent one-way LAN binding routes:
 
-- Static original-type LAN inputs and outputs, selected by node role.
+- Static original-type LAN binding definitions, selected by node role. Each
+  application input or output has its own discovery-triggered route using
+  `ON_DOMAIN_MATCH` and native `auto_configure_qos=true`.
+- The hub uses `IMMEDIATE` ports and explicit XML QoS, with auto-QoS disabled.
+  Health/monitoring and available bindings run even when other applications
+  have not appeared. Missing bindings remain pending, not falsely active.
 - In `three_topic_union` mode, exactly one Event, State and Periodic
   reader/writer pair, including State when no contact binding is enabled.
 - The existing `two_topic_union` mode retains its Event/Status pairs.
-- One `ActGatewayPlugin` processor; Routing Service creates and owns its DDS
-  entities. No standalone custom-router forwarding engine runs underneath it.
+- One `ActGatewayPlugin` processor instance per route shares node state and
+  native port handles. Routing Service creates and owns all DDS entities.
+  There is no additional WAN participant, intermediate DDS bus or plugin backlog.
 - The production [codec](../src/core/WanCodec.cxx), [audience rules](../src/core/WanInterests.cxx),
   [configuration parser](../src/config/RouteConfigParser.cxx),
   [IDL](../../harness_v2/datamodel/ActTypes.idl), and
   [QoS XML](../../harness_v2/qos/act_qos_profiles.xml) are reused.
 
+Previously prepared combined-route XML remains supported. It has one processor
+without independent-runtime role properties; it retains the old startup barrier.
+The retained mesh still uses this older layout.
+Dashboard configuration tables aggregate these native binding routes and mark
+auto-QoS. Their policies are configured XML snapshots, not live inferred values.
+
 Empty and `default` LAN endpoint QoS aliases resolve to the production
 `router_default_reader`/`router_default_writer` profiles. Named aliases still
 require an entry in `qos_profiles`. There is no automatic one-second Periodic
-input filter: native ports select manually authored XML profiles. An explicitly
-selected native profile remains in effect. Development translation replaces the
+input filter. LAN auto-QoS does not infer every policy: finite output deadlines,
+retention and local resource budgets still need explicit XML. Development translation replaces the
 old inherited `lan_status_1s` default with its unfiltered `lan_status` base unless
 that topic is explicitly selected in `periodic_input_profiles`.
 
@@ -175,12 +190,25 @@ The processor merges source aliases, packs/unpacks whole structures, restores
 authoritative contact sources, and forwards native dispose/unregister only for
 materialized output instances. Key recovery happens while the input loan is
 held. Periodic Status bindings are always enabled, regardless of old
-primary/detail/debug route gates. Static readers remain present for initially
-disabled Event bindings; those samples are drained without forwarding.
+primary/detail/debug route gates. Already-created inputs for disabled Event
+bindings drain samples without forwarding; absent applications remain pending.
 
-Callbacks consume at most 32 samples per input per pass. A periodic callback
-continues draining without depending on another arrival. This bounds individual
-input work; it does not establish a command-latency guarantee under overload.
+The hub selects native application WAN history by original topic and consumes it only when
+that topic's LAN output exists. Required events can therefore wait in DDS history
+for a late consumer without blocking unrelated topics or adding a plugin queue.
+Native history/resource limits still apply. Admission rejection and write
+timeouts/errors are diagnosed; failed output writes have no plugin retry/replay.
+Forwarded counters mean submission, not confirmed application delivery.
+
+Callbacks consume at most 32 samples per LAN input or WAN original topic per
+pass. Monitored Status/Periodic inputs first observe at most 32 unread samples,
+validating their schema, payload and transport family before notifying presence.
+Only samples read by that observation pass can then be consumed, so forwarding
+cannot bypass observation; pending LAN outputs retain the observed DDS history.
+Lifecycle notifications still reach the health-loss callback, and valid health
+samples are not processed twice. A periodic callback continues draining without
+depending on another arrival. These bounds do not establish a command-latency
+guarantee under overload.
 LAN output publications are ignored by their own participant to prevent feedback.
 WAN content filters exclude the local origin. Own WAN publications and
 subscriptions are ignored on both sides, so local readers are not reliable
@@ -194,7 +222,8 @@ implemented. Deployment/load/recovery gates in the
 [remaining deployment plan](../../docs/routing-service-three-topic-plan.md)
 remain separate.
 
-- Keep sessions, routes and endpoints static. Normal operation does not require
+- Keep session, route and endpoint definitions static; native discovery activates
+  the independent LAN endpoints. Normal operation does not require
   Routing Service remote administration or compatibility with the old router's
   route-management commands.
 - Platforms publish all available telemetry locally by default. The latest
@@ -346,6 +375,14 @@ Required globals:
 | `act.admin_participant` | Must equal `act.lan_participant` |
 | `act.lan_domain`, `act.wan_domain` | Decimal DDS domain IDs, each 0–232, matching those participants |
 
+Generated independent bundles repeat the same globals and binding definitions
+on every processor, adding `act.runtime_mode=independent`. The hub declares
+`act.route_role=hub` and no `act.route_topic`. Each one-port LAN route declares
+`act.route_role=tx` or `rx`, plus `act.route_topic` equal to its literal original
+topic name. There must be exactly one hub, one session and unique direction/topic
+registrations. Only these role/topic properties differ between processors.
+WAN and `monitor_*` ports belong to the hub.
+
 Optional globals:
 
 - `act.teams`: semicolon-separated initial exact team names; empty/omitted means
@@ -443,7 +480,7 @@ ACT-only addressed-command extraction is not inferred for custom commands.
 Custom payloads are copied whole; no audit/source fields are guessed or rewritten.
 Envelope audit fields stay at their defaults on this bounded custom path.
 Custom bindings currently require static receive policy and disabled monitoring;
-the shared endpoint/independent-binding and LAN auto-QoS work remains separate.
+they use the same shared native hub and independent LAN activation.
 
 Explicit binding IDs are local labels, separate from literal topic names, and
 are preserved when preparing or reloading a bundle. For example, binding ID
@@ -488,7 +525,8 @@ is retained verbatim as a reference, not a published manual. It also contains
 sections labeled "Potential Change (K Release)"; do not treat those proposals
 as verified behavior in the installed version.
 
-On 2026-11-16, a fresh Connext 7.7.0 processor build was tested in private
+Initial combined-route characterization on 2026-11-16 tested a fresh Connext
+7.7.0 processor build in private
 `--network none` containers, with UDPv4-only participants and domains 91-106.
 No live mesh configuration or binary was changed.
 
@@ -497,6 +535,9 @@ The [qualification runner](qualify_auto_qos.py) and its
 inspect native discovery QoS, and exercise actual application data through
 the processor. Whole-payload equality is checked in the focused positive reruns.
 Applications were created both before and after service startup.
+The current independent-layout runner defaults to `ON_DOMAIN_MATCH` and rejects
+`IMMEDIATE` at argument parsing. The historical `IMMEDIATE` result below describes
+the earlier combined-route experiment, not a supported current runner option.
 
 | Case | Observed result |
 |---|---|
@@ -510,11 +551,20 @@ Applications were created both before and after service startup.
 
 This proves native QoS inference can operate with our custom processor, not
 that it copies every policy or continuously reconciles arbitrary endpoints.
-The creation mode, policy-specific profile interaction and shared-route startup
-barrier prevent enabling it by simply flipping the current renderer's flag.
-The renderer remains on explicit profiles with `IMMEDIATE` creation.
-Multiple conflicting producers/consumers, endpoint replacement and complete
-policy coverage remain unqualified.
+The creation mode, policy-specific profile interaction and combined-route startup
+barrier prevented enabling it by simply flipping a flag. The current renderer
+instead separates the always-on native hub from independent LAN bindings.
+
+The production [independent-binding acceptance module](../test_e2e/test_routing_service_auto_qos.py)
+passed **8/8 cases** in a fresh private-network/private-IPC build on 2026-11-17: false/true
+inference controls with applications before/after startup, exact payload
+forwarding, absent-topic isolation, stable WAN handles after late activation and
+producer replacement, no feedback, three same-instance required events retained
+for a late consumer, and an explicit 100 ms output deadline with inferred
+transient-local durability, plus standalone qualifier defaults and early rejection
+of unsupported creation modes. Event-history retention uses explicit XML; it is
+not claimed as inferred. Multiple conflicting producers/consumers and complete
+policy/load coverage remain unqualified.
 
 To repeat a positive comparison, run inside an owned private-network Connext
 container with a fresh processor build, the checkout read-only at `/workspace`,
@@ -524,7 +574,7 @@ and its license mounted. For example, with the fresh build at `/tmp/rs-build`:
 ACT_RS_AUTOQOS_ISOLATED=1 python3 -B \
   router/routing_service/qualify_auto_qos.py \
   --build-dir /tmp/rs-build/routing_service \
-  --creation-mode ON_DOMAIN_MATCH --profile defaults \
+  --profile defaults \
   --application-profile application_infinite_deadline
 ```
 
@@ -865,8 +915,7 @@ The full gateway path supplies the application contracts through its
 service-owned `monitor_*` LAN ports, static configuration, native endpoint
 facts and processor counters, reusing production presence/link collection on
 the shared WAN ports. It does not depend on subscribing to RTI's monitoring bus.
-One native
-multi-port TopicRoute does not automatically describe every logical original-topic
+The native hub and binding routes do not automatically describe every logical original-topic
 mapping inside the processor, nor prove end-to-end delivery. Native monitoring
 can be enabled independently of remote administration.
 
@@ -880,7 +929,7 @@ Do not implement controller journal machinery in the current scope.
 Each logical original-topic entry in `ActRouterStatus` must identify its WAN
 family (Event/State/Periodic, or Event/Status in two-topic mode) and its configured priority, alongside processor
 forwarding/lifecycle counts and errors. The family identifies the shared WAN
-endpoint, not a second physical Routing Service TopicRoute. Matching and
+endpoint; an independent native LAN route is not an additional WAN pair. Matching and
 protocol counters remain shared-endpoint facts, not branch-specific evidence.
 
 The selected priority model has two levels, **High** and **Normal**, within

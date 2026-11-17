@@ -107,7 +107,8 @@ prerequisites; no license or container environment values are archived.
 - Archive SHA-256:
   `bfdd98bf5d742ef1ae2db7319f88d5b0e7cc33dffd2fcba96c7392e1b17bf3da`.
 
-**Ownership decision:** use the approved minimal plugin-owned shared WAN manager
+**Initial ownership decision (superseded by the native-hub integration below):**
+use the approved minimal plugin-owned shared WAN manager
 for independent LAN routes. The bounded native investigation does not establish
 that native sharing is impossible; it establishes that no qualifying native
 cross-route shared endpoint mechanism has been found on installed 7.7.0.0.
@@ -121,7 +122,7 @@ with independent LAN routes, one pair per WAN family, and unchanged WAN
 endpoint identities after activating the missing input. These are existing
 measured results, not fresh production-integration results.
 
-The manager is therefore the bounded missing ownership surface in Phase 2,
+The manager was therefore the bounded missing ownership surface selected for Phase 2,
 not permission to add a discovery engine, scheduler or intermediate DDS bus.
 Native LAN discovery/auto-QoS and XML-authored WAN policies remain the design.
 Production auto-QoS/independent-startup qualification is still open.
@@ -205,12 +206,123 @@ the `processor_review_fixes_red_` prefix. Existing build outputs, wire schemas
 and live containers remain unchanged; full fleet/mission acceptance is still
 open.
 
-**Next slice:** integrate the minimal shared WAN owner and independent native
-LAN routes/auto-QoS while preserving the existing ACT monitoring and application
-policy paths. The current renderer still uses the original all-in-one route;
-this code does not yet solve missing-topic startup blocking. New-type monitoring,
-independent activation, full native regression and unchanged mission acceptance
-remain open. The baseline offline blockers above also remain open.
+### Implementation record — independent native bindings (2026-11-16)
+
+**Source implemented, not deployed.** Production integration found a native
+ownership arrangement that meets the endpoint/startup contract: one always-on
+native WAN hub route plus independent one-port LAN routes in the same session.
+Processor instances share node state and native port handles; Routing Service
+still owns every DDS entity. This supersedes the earlier fallback decision.
+There is no extra WAN participant, intermediate DDS bus or plugin pending queue.
+
+The hub owns the exact family reader/writer pairs and monitoring ports, using
+explicit XML QoS, `IMMEDIATE` creation and disabled auto-QoS. LAN routes default
+to `ON_DOMAIN_MATCH` and native auto-QoS. An absent producer/consumer leaves
+its binding pending without blocking unrelated traffic or the hub.
+Common XML properties are repeated and checked across processors, with
+`act.runtime_mode=independent` and distinct hub/tx/rx role registrations.
+Legacy combined-route XML remains supported, including its original startup
+barrier; it is still the retained deployment.
+
+Per-topic native-history selection leaves application events in DDS until their
+LAN output exists. Three same-instance command events survive a late consumer
+while unrelated Periodic traffic continues. Native resource limits still apply;
+admission rejection and write errors/timeouts are diagnosed, without plugin
+retry/replay or an end-to-end delivery guarantee. Detach/shutdown uses bounded
+shared registrations rather than adding a separate forwarding engine.
+
+The dashboard XML adapter now selects the hub, validates common properties,
+route registrations and session ownership, and aggregates LAN ports across
+bindings. It retains combined-route support. LAN QoS tables explicitly display
+configured values and mark native auto-QoS; they do not present those values as
+live inferred policies. The standalone characterization runner now selects its
+application port by name rather than accidentally editing the first WAN port.
+
+Qualification exposed two issues before completion:
+
+- Native content queries also returned unrelated invalid-data lifecycle samples.
+  The shared path now recovers and verifies the instance key before consuming
+  that instance, so a health query cannot steal an application's lifecycle
+  notification or the reverse. The existing health STALE/recovery checks remain.
+- Native ownership negatives assumed all LAN endpoints existed at startup.
+  They now deliberately activate the malformed binding, bypassing Python
+  preflight as before, and require native rejection with no forwarding. Starting
+  the independent hub is no longer incorrectly treated as activating every
+  application binding.
+
+Fresh full-source validation is recorded in
+`debug/test_reports/processor_independent_*.txt` and matching native JUnit files.
+The targeted lifecycle repair also has compact evidence under
+`debug/test_reports/processor_lifecycle_followup/`.
+
+- **10/10 C++ targets passed.**
+- **67 configuration/launcher/schema/dashboard unittest cases passed; one browser
+  case skipped because Playwright is unavailable.** Native XML/QoS-provider
+  checks and ACT/custom full-type round trips ran, rather than skipping the SDK.
+- **63/63 native pytest cases passed, zero skips:** seven new independent
+  activation/auto-QoS cases and all 56 existing two-topic, three-topic and
+  monitoring/mission-policy cases. Modules run separately with fresh runtime
+  directories to avoid domain-allocation exhaustion and fixture-directory reuse.
+  All builds, processes, logs and DDS traffic used private-network/private-IPC
+  containers; retained build outputs and live configurations were not replaced.
+- The standalone characterization runner also passed **2/2 false/true comparisons**
+  with a late reliable producer and an absent second input.
+
+Read-only post-checks matched both retained binary hashes and confirmed all six
+platform peers `PRESENCE_ALIVE` / `ROUTER_OK`, with an available controller and
+empty impairments. Compact evidence is in
+`debug/test_reports/processor_independent_postcheck.json`. Disposable build and
+runtime state was removed after qualification; no live deployment was performed.
+
+**Still open:** new-type monitoring, the remaining full regression/browser/fleet
+acceptance, quantitative load/recovery budgets and coordinated deployment/
+rollback qualification. The five unchanged live mission workflows have not been
+rerun against this source update. The baseline offline fixture/browser blockers
+remain separate; prior live mission results qualify the retained binary only.
+
+### Implementation record — independent-hub review fixes (2026-11-17)
+
+**All three review findings resolved in source, not deployed.**
+
+- Status/Periodic observation now uses the same codec and transport-family
+  validation as forwarding before notifying presence. Unsupported schema
+  versions cannot revive a stale peer, whether the LAN output is pending or
+  active.
+- Observation reads at most 32 unread samples, retaining native DDS history.
+  Monitored Status consumption selects only READ samples, so a per-topic query
+  cannot consume an unobserved instance or race ahead with a newly arrived sample.
+  Both the query's instance lookup and its take apply this state selection.
+  Invalid-data lifecycle notifications remain eligible for health-loss handling;
+  valid health/RTT callbacks are not repeated on forwarding. Native consumption
+  also has a 32-sample total per original topic per pass, rather than a separate
+  allowance for every instance.
+- The standalone auto-QoS qualifier defaults to `ON_DOMAIN_MATCH` and rejects
+  unsupported `IMMEDIATE` at argument parsing, before creating DDS entities.
+  Historical combined-route characterization remains identified as such.
+
+New native regressions first reproduced invalid-schema presence revival in both
+WAN contracts, missed presence updates in a 40-instance burst in both contracts,
+and failure of the qualifier's default invocation. After the fixes:
+
+- **10/10 C++ targets passed** after a fresh private build.
+- **67 configuration/launcher/schema/dashboard unittest cases passed; one
+  browser case skipped because Playwright is unavailable.**
+- **70/70 native pytest cases passed, zero skips:** eight independent auto-QoS/
+  qualifier cases, eighteen two-topic cases, eighteen three-topic cases and
+  twenty-six monitoring/mission-policy cases. New coverage checks invalid Status
+  with pending and active LAN outputs, every peer's recovery and exact source/
+  sequence delivery in a 40-instance burst, supported CLI defaults and early
+  rejection of `IMMEDIATE`. Existing health lifecycle/countdown and RTT tests
+  also passed.
+
+Compact red/green logs and JUnit reports are retained locally under
+`debug/test_reports/processor_presence_review_fixes_20261117/`. All tests used
+the current checkout read-only, private-network/private-IPC containers and
+disposable builds/runtime state under `/tmp`. Retained processor/config-helper
+hashes are unchanged; read-only checks confirmed all six live peers
+`PRESENCE_ALIVE` / `ROUTER_OK` and an available controller with empty impairments.
+No live deployment or mission rerun was performed. The wider release gates above
+remain open.
 
 ### Phase 0 — Freeze baseline and resolve native ownership
 
