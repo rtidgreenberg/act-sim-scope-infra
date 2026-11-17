@@ -30,9 +30,9 @@ Runtime consumes prepared native XML without YAML or the development helper.
 Bindings are explicit. Existing ACT deployments retain their fixed catalog and
 application policy. Prepared non-ACT full-type branches are also supported with
 `act.receive_policy=static` and `act.monitoring=false`; this bounded data-plane
-path does not yet include generic monitoring. Newly prepared bundles use
-independently activated native LAN routes with native auto-QoS; this source
-update is not deployed to the retained mesh.
+path does not yet include generic monitoring. Newly prepared bundles and the
+2026-11-17 retained deployment use independently activated native LAN routes
+with native auto-QoS.
 See the [release split](../../docs/routing-service-c2-platform-setup.md#agreed-release-split).
 The selected mapping implementation extends this processor, not a separate
 Transformation plugin; see the
@@ -52,7 +52,7 @@ Prepared XML must give the LAN participant the DDS identity
 Native startup checks every application LAN input/output's actual participant
 identity and domain against `act.lan_participant` / `act.lan_domain`, in addition
 to its type. Launcher preflight also rejects mismatched LAN participant references
-and domains. These source changes do not update a retained running mesh.
+and domains. The 2026-11-17 deployment includes these checks and regenerated XML.
 When the combined LAN identity exceeds DDS's 255-byte name limit, it becomes
 `act.lan.sha256/` plus the SHA-256 digest of the three UTF-8 components, each
 prefixed by its decimal byte length and `:`. Renderer, preflight and native checks
@@ -76,7 +76,43 @@ profile/team pairs, failed changes, static policies and control nodes emit none.
 An append failure is explicitly logged. This is committed receive-policy history,
 not a claim that already queued deliveries were removed atomically.
 
-## Retained mesh and final evidence (2026-11-16)
+Native loss accounting distinguishes the family policies. BEST_EFFORT
+`lost_by_writer` gaps and three-topic State `lost_by_writer` replacement are
+rate-limited warnings when no new rejection accompanies them. State intentionally
+uses writer KEEP_LAST(1); this is not required Event history. Rejections, other
+loss reasons and reliable Event history loss remain explicit errors.
+
+## Retained deployment (2026-11-17)
+
+The owned seven-node mesh uses the independent native hub/LAN architecture
+described below. Run `container-20261117T181119-2947503`, Compose project
+`act-emane-container-baseline`, Control_20 plus Platform_30–35, dashboard 8080
+and workdir `debug/mesh_runs/emane` are the current deployment identities.
+Final gates, rollback rehearsal and remaining limits are recorded in the
+[completion acceptance record](../../docs/router-processor-completion-plan.md).
+The final build passed 10 C++ targets, 74 native processor cases and all five
+live mission workflows (380.53 s, zero skips). All seven routers, including C2,
+publish ROUTER_OK; expected loss warnings remain visible without ERROR lines.
+Compact local evidence is under `debug/test_reports/processor_release_20261117/`.
+The 2026-11-16 results below are historical, not the current build's test counts.
+
+With ACT monitoring enabled, `ActRouterDiagnostics` is an internal producer,
+not an application LAN input waiting for its own monitor to match. The monitor
+keeps publishing the original `RouterDiagnostics` LAN sample and also passes it
+through the existing codec/shared Periodic writer. It preserves configured
+enable flags, audiences and priority without an extra endpoint or queue.
+Its truthful input match count is zero and its readiness reason identifies the
+internal producer. Default platform diagnostics target C2; C2 selects them and
+other platforms do not. `--data-plane-only` retains the ordinary application
+binding rather than this internal path.
+
+**Qualified source follow-up, not yet deployed:** internal diagnostics failures
+remain explicitly logged and counted, but no longer abort heartbeat/link-stat
+scheduling. Native persistent-failure regressions pass in both WAN contracts;
+see the [follow-up record](../../docs/router-processor-completion-plan.md#final-review-follow-up--diagnostics-failure-isolation-2026-11-17).
+The retained deployment above still uses the pre-fix binary.
+
+## Historical mesh evidence (2026-11-16)
 
 The verified mesh is **retained running** on Control_20 and Platform_30–35,
 dashboard port **8080**, with canonical workdir `debug/mesh_runs/emane`.
@@ -159,7 +195,7 @@ and independent one-way LAN binding routes:
 
 Previously prepared combined-route XML remains supported. It has one processor
 without independent-runtime role properties; it retains the old startup barrier.
-The retained mesh still uses this older layout.
+The retained mesh no longer uses this older layout.
 Dashboard configuration tables aggregate these native binding routes and mark
 auto-QoS. Their policies are configured XML snapshots, not live inferred values.
 

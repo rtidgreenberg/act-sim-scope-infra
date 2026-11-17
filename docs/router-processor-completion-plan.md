@@ -1,9 +1,11 @@
 # Router processor completion and acceptance plan
 
-Date: 2026-11-16.
+Date: 2026-11-16. Acceptance updated: 2026-11-17.
 
-Status: **implementation started with user authorization on 2026-11-16.
-Live replacement remains separately gated; the retained mesh is unchanged.**
+Status: **core processor completed, deployed and accepted on 2026-11-17.
+All five live mission workflows passed on the final qualified build.**
+Generic setup/export tooling and new numerical load/recovery guarantees remain
+separate; the baseline-reproduced BEST_EFFORT disposal limitation is recorded below.
 
 ### Confirmed implementation decisions (2026-11-16)
 
@@ -14,7 +16,8 @@ Live replacement remains separately gated; the retained mesh is unchanged.**
   Agree new numeric load/recovery limits separately. Preserve existing
   scheduling tests, safety checks and resource limits, but do not claim new
   performance/recovery guarantees or full load qualification from this release.
-- Authorization to replace the retained live mesh remains a separate decision.
+- Authorization to replace the retained live mesh was obtained separately on
+  2026-11-17, including the five live mission tests.
 
 ## 1. Outcome
 
@@ -27,14 +30,14 @@ The deliverable is a reproducible XML deployment bundle, a qualified processor,
 owned start/stop integration, rollback assets and current test evidence.
 Passing isolated spikes is not completion.
 
-## 2. Current baseline and what changes
+## 2. Starting baseline (2026-11-16)
 
-The retained mesh already runs the fixed-ACT, XML-only processor on Control_20
+The starting retained mesh ran the fixed-ACT, XML-only processor on Control_20
 and Platform_30-35, Event/State/Periodic, dashboard port 8080, owned workdir
 `debug/mesh_runs/emane`. The five live mission tests previously passed on
 [checkpoint 3.52](two-topic-wan-migration-plan.md#352-platform-mission-cfts-deployed-and-qualified-2026-11-16).
 The [3.53 review fixes](two-topic-wan-migration-plan.md#353-processor-review-fixes-qualified-not-deployed-2026-11-16)
-are qualified source changes, not the retained deployment. Inspect actual
+were qualified source changes, not that retained deployment. Inspect actual
 worktree, build hashes and lifecycle ownership before resuming; these are dated
 records, not proof of present runtime state.
 
@@ -323,6 +326,146 @@ hashes are unchanged; read-only checks confirmed all six live peers
 `PRESENCE_ALIVE` / `ROUTER_OK` and an available controller with empty impairments.
 No live deployment or mission rerun was performed. The wider release gates above
 remain open.
+
+### Completion acceptance record (2026-11-17)
+
+The user authorized completion of the existing checks, coordinated deployment
+and all five live mission tests. The owned mesh now deploys the native shared
+WAN hub and independent discovery-triggered LAN routes with native auto-QoS,
+including the review fixes above and checkpoint 3.53. Routing Service owns all
+entities; there is no intermediate bus, extra WAN participant or plugin backlog.
+Prepared full-type XML is sufficient; generic capture/export and the setup UI
+remain separate.
+
+Release qualification used the supported Connext 7.7.0 image with the current
+checkout, fresh builds, private network/IPC and temporary state under `/tmp`.
+Final retained-scope results:
+
+| Gate | Result |
+|---|---|
+| Fresh C++ build/regressions | 10/10 targets passed; private and persistent binaries match |
+| Router nonlive retained scope | 386 top-level cases and 284 subtests passed; no final failures, errors or skips |
+| Native processor subset | 74 passed: 18 two-topic, 8 auto-QoS, 30 monitoring/policy/mesh, 18 three-topic |
+| Configuration and native time filters | 56 unittest cases executed successfully, including all three opt-in time-filter cases |
+| Dashboard | 30 cases plus 24 subtests passed, including real Chromium |
+| WAN union qualification | 29 passed |
+| Selected workload regressions | 38 cases plus 37 subtests passed |
+| Whole-structure adapter spike | 9 PASS groups and 10 expected rejections |
+| Final live mission gate | 5/5 passed, zero skips, 380.53 s on the final deployed build |
+
+Groups overlap; do not sum them into a unique total. The router figure combines
+the complete per-module ladder with final affected native reruns by test ID,
+not one fresh monolithic full-suite invocation. Final native runs split the mesh
+module across processes to respect the domain allocator's 52 triples and the
+domain <=232 invariant. An earlier unsplit run exhausted that allocator at the
+last case; its case passed on rerun. A mistyped auto-QoS module path produced no
+tests and was corrected before the final 74-case gate.
+
+Two stale fixtures were repaired without weakening assertions: the mission
+backend fixture now initializes receive-policy audit state, and the browser
+fixture expects the actual mesh-graph cache revision.
+
+Deployment preflight and live log auditing exposed three production-path issues,
+each reproduced red/green against real native DDS before correction:
+
+1. Expected BEST_EFFORT `lost_by_writer` gaps must not permanently mark routes
+   failed. They now produce rate-limited warnings.
+2. The monitor's own diagnostics did not activate an application-style LAN
+   input. Monitored bundles now use the existing internal diagnostics producer,
+   retaining LAN publication and encoding directly into the existing shared
+   WAN output with configured audiences, enable flags and priority. There is
+   no extra endpoint or queue, and input matches remain truthfully zero.
+3. An initial live run passed all five missions (376.49 s), but the final log
+   audit found C2 marking 20 State replacements as a permanent history error
+   during blackout recovery. State writer KEEP_LAST(1) intentionally supersedes
+   older values. Only `lost_by_writer` with no new rejection is now a warning
+   for that family; reliable Event history loss, rejections and other loss
+   reasons remain errors. The native regression induces actual packet loss,
+   verifies final ContactReport sequence 30 and unchanged published C2 health.
+
+The installed Modern C++ extension uses `status->last_reason()`, verified by
+headers and compilation. With explicit user approval, that correction and the
+previous unpublished correction entries were published in the shared correction
+log (`dd90b8b`); parent commit `381a57d` pins it. No parent implementation branch
+was pushed.
+
+**Deployment and rollback:** the complete matching old bundle was launched from
+an isolated old checkout through its own lifecycle, verified with six healthy
+peers and matching old hashes, then stopped. Current binaries were rebuilt only
+with the retained mesh stopped. The final owned coordinated launch is
+`container-20261117T181119-2947503`, Compose project
+`act-emane-container-baseline`, Control_20 plus Platform_30–35, dashboard 8080,
+workdir `debug/mesh_runs/emane`. All seven deployed hashes match the qualified
+build:
+
+- Processor SHA-256:
+  `022941caaef2604dd41657da494b9144f17e5bbb7fd1a6c7b816e4dfd007f94b`.
+- Config helper SHA-256:
+  `406e734e0f713443fd4dd2a16bcbd6e4665d9eae583660211abb9fd1820ab6bf`.
+
+Native inspection checks exactly Event/State/Periodic reader/writer pairs per
+gateway and published health from all seven routers, including C2, rather than
+only the six platform summaries. Existing link-stat rows retain their shape,
+real protocol counters and RTT fields; no per-branch physical counters are
+invented. The observer must open builtin endpoint readers before loading its
+application reader, and run from `/workspace` to avoid stale image-local types.
+Parity checks select the six expected platform peers; the raw snapshot also
+retains a diagnostic observer row from its earlier router-role invocation.
+That extra row is explicitly identified in the parity report, not hidden or
+treated as a platform. The observer now uses a non-router role.
+
+Final postflight: six platform peers ALIVE/ROUTER_OK; all seven routers publish
+ROUTER_OK; missions CANCELLED with receive profile Init, teams empty, clocks 1x,
+zero speeds, targets hidden and impairments empty. Actual Chromium rendering
+verified a populated seven-node graph and XML configuration view with current
+assets and no page/console errors. All seven router logs contain zero structured
+or native ERROR lines; rate-limited BEST_EFFORT warnings and the expected C2
+latest-State replacement warning remain visible. This is not a warning-free log
+claim. The verified mesh is left running. Private qualification containers,
+builds, caches and the stopped rollback checkout were cleaned up; the rollback
+archive and compact evidence remain.
+
+**Known separate limitation:** an additional legacy routed-churn spike passes
+three cases but fails its BEST_EFFORT Status outage disposal check, retaining
+41 ghosts. The same case against the archived old `router_main` reproduces the
+same 41 ghosts. This is not a new processor regression or a passing disposal
+guarantee; the assertion remains unchanged. Quantitative sustained load/recovery
+budgets, generic monitoring/export/setup, persistence, exactly-once delivery,
+reliable BEST_EFFORT disposals and atomic fleet-wide filter barriers are not
+qualified by this release.
+
+Compact local evidence is under
+`debug/test_reports/processor_release_20261117/`: consolidated
+`final_router_nonlive.xml`, final native reports, `acceptance_counts.json`,
+red/green logs, live JUnit/screenshots, native inventory, all-node hashes,
+link-stat/browser checks and exercised rollback records. Failed attempts remain
+identified as such. The matching old rollback archive remains under
+`debug/test_reports/processor_completion_baseline_20261116/rollback.tar.gz`.
+
+### Final-review follow-up — diagnostics failure isolation (2026-11-17)
+
+**Qualified in source; not deployed.** A diagnostics encoding/WAN-write failure
+is now recorded in the existing route error/timeout counters and explicitly
+logged as `rs.diagnostics.error`, without escaping the diagnostics publisher.
+The monitoring tick can therefore advance its heartbeat timer and publish link
+statistics even while diagnostics continue failing. Errors are not hidden and
+the existing timeout versus non-timeout route-state distinction is preserved.
+
+A native regression caps the Periodic/Status writer at one instance: health
+occupies it and diagnostics fail persistently. Both WAN contracts reproduced
+the old heartbeat flood (roughly 300 sequence increments in 3.2 seconds).
+After the fix, **10/10 C++ targets and 4/4 focused native cases passed**, zero
+skips. The two failure cases verify bounded heartbeat cadence, continued fresh
+link-stat captures, visible route errors and explicit error logs; normal internal
+diagnostics forwarding and health/protocol/team updates also pass.
+Compact red/green evidence is under
+`debug/test_reports/processor_diagnostics_isolation_20261117/`.
+
+Only a private build was changed. The retained seven-node mesh and persistent
+processor hash `022941ca…` are unchanged; the qualified private processor hash
+is `5293552934ef180a9cf4d0f0dea93a06954697cd2453cb56ea0a0f77c7ca748e`.
+No new live mission gate or deployment is claimed. Use the owned coordinated
+teardown/build/prepare/relaunch lifecycle before deploying this follow-up.
 
 ### Phase 0 — Freeze baseline and resolve native ownership
 

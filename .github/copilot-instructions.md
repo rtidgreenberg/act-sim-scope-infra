@@ -28,50 +28,59 @@ These documents hold the detailed evidence, code surfaces, decisions, and test g
 Update this dated handoff as implementation progresses; do not treat it as live state
 without inspecting the current worktree, commits, and runtime ownership first.
 
-### Current runtime checkpoint (2026-11-16)
-
-**Next implementation plan (2026-11-16):**
-[processor completion and acceptance](../docs/router-processor-completion-plan.md)
-records unions + native LAN auto-QoS, independent topic activation, native-first
-shared WAN ownership, existing health/link-stat parity and required existing
-suites including all five live mission tests. It is a plan, not completed
-integration or authorization to replace the retained mesh. Python setup UI is
-separate from runtime acceptance.
+### Current runtime checkpoint (2026-11-17)
 
 This supersedes older retained-mesh descriptions below. The owned EMANE mesh now
-runs the **XML-only Routing Service processor**, Control_20 plus Platform_30-35,
-contract `three_topic_union` (Event/State/Periodic), dashboard port 8080,
-workdir `debug/mesh_runs/emane`. All six peers are ALIVE/ROUTER_OK; missions
+runs the **completed XML-only Routing Service processor with independent native
+LAN auto-QoS routes and an always-on shared WAN hub**, Control_20 plus
+Platform_30-35, contract `three_topic_union` (Event/State/Periodic), dashboard 8080,
+workdir `debug/mesh_runs/emane`, run `container-20261117T181119-2947503`.
+Routing Service owns all entities; exactly three WAN pairs per gateway are
+native-verified, with no extra participant, intermediate bus or plugin backlog.
+All seven routers including C2 publish ROUTER_OK; six peers are ALIVE; missions
 cancelled, teams unassigned, clocks 1x, speed zero, targets hidden, impairments empty.
 Application names are Mission, Team and PlatformStatus; payload type names are
 unchanged. Platforms start Init (Mission/Team from C2 plus internal traffic).
 ActiveMission adds fleet-global PlatformStatus positions and same-team
 PlatformMissionStatus/ContactReport. Local mission state alone selects filters;
 whole-platform restart resets Init. Outgoing reports remain always on.
-Fresh gates: 9 C++ targets, 70 native/config tests plus 55 subtests,
-165 offline UI/mission/workload tests plus 60 subtests, 119 related legacy/config
-tests plus 5 subtests, 8 legacy monitor regressions and all 5 live browser mission
-workflows (375.89 s) passed, zero skips. Test groups overlap.
-The live-discovered model-replacement iterator bug is fixed; a red/green
-production-path regression covers 24 transitions without callback errors.
-The processor remains ACT-catalog-specific;
-discovery/auto-QoS and wider release gates are not complete. See
-[migration checkpoint 3.52](../docs/two-topic-wan-migration-plan.md#352-platform-mission-cfts-deployed-and-qualified-2026-11-16)
-and the [native XML guide](../router/routing_service/README.md).
+
+Final gates: 10 C++ targets; 386 nonlive router cases plus 284 subtests
+(complete module ladder with final affected reruns); 74 native processor cases;
+56 configuration/native time-filter cases; 30 dashboard cases plus 24 subtests;
+29 WAN qualification cases; 38 workload cases plus 37 subtests; 9 adapter PASS
+groups / 10 expected rejections; **all 5 live mission workflows passed, zero
+skips, 380.53 s**, on matching qualified/deployed binaries. Groups overlap.
+Actual matching-bundle rollback was exercised. Final seven-router logs contain
+zero structured/native ERROR lines, not zero warnings: expected BEST_EFFORT
+gaps and State KEEP_LAST(1) supersession remain rate-limited warnings.
+Reliable Event history loss, rejections and other loss reasons remain errors.
+Monitored diagnostics use the existing internal producer/codec/shared WAN
+writer, retaining LAN publication and configured audiences/priority, not a LAN
+input waiting for its own monitor.
+
+Checkpoint 3.53's bounded diagnostics, valid-Status presence checks, LAN identity/
+domain validation, receive-policy audit and adapter catalog repairs are deployed.
+LAN identities include `/participant`, with a deterministic SHA-256 form beyond
+255 bytes. Prepared full-type non-ACT data-plane bindings are supported; ACT
+monitoring/policy remains catalog-specific. Generic export/setup UI and new
+numerical load/recovery guarantees remain separate. An additional legacy
+BEST_EFFORT Status churn/disposal case still fails with 41 ghosts, identically
+reproduced against the old binary; do not call every extra spike green.
+See the [completion acceptance record](../docs/router-processor-completion-plan.md#completion-acceptance-record-2026-11-17),
+[checkpoint 3.54](../docs/two-topic-wan-migration-plan.md#354-independent-native-processor-completed-and-deployed-2026-11-17)
+and [native XML guide](../router/routing_service/README.md).
+Compact local evidence is under `debug/test_reports/processor_release_20261117/`.
+Disposable test state/rollback checkout were removed; rollback archive retained.
 Use the owned `run_mesh.sh down --emane --workdir` lifecycle before rebuilding
 live binaries/types/configuration; do not restart individual routers.
 
-**Review follow-up (2026-11-16), qualified but not deployed:** source now bounds
-ACK/health diagnostics, gates presence refresh on valid Status, validates actual
-LAN endpoint ownership/domain, records applied receive-policy audit history,
-and repairs the renamed adapter spike catalog. Isolated gates passed: 38 config
-tests plus 59 subtests; 20 native policy/monitor tests; 36 native static acceptance
-tests; actual audit-record consumer and long-name boundary checks; 9 adapter
-PASS groups with 10 expected rejections. Groups overlap. The live mesh remains
-the checkpoint above, not these new binaries. Regenerate prepared XML before
-future deployment: LAN identities now include `/participant`, with a deterministic
-SHA-256 form beyond 255 bytes; WAN identities are unchanged. See
-[checkpoint 3.53](../docs/two-topic-wan-migration-plan.md#353-processor-review-fixes-qualified-not-deployed-2026-11-16).
+**Final-review follow-up (2026-11-17), source only:** internal diagnostics
+failures now retain route error/timeout accounting and explicit error logs
+without aborting heartbeat/link-stat scheduling. Persistent native writer
+exhaustion reproduced the heartbeat flood in both WAN modes; 10 C++ targets and
+four focused native cases pass after the fix. The retained mesh/persistent
+binary remain unchanged. See [checkpoint 3.55](../docs/two-topic-wan-migration-plan.md#355-diagnostics-failure-isolation-qualified-not-deployed-2026-11-17).
 
 ### Baseline and implementation status
 

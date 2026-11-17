@@ -2783,6 +2783,95 @@ and coordinated relaunch. No new live mission/browser gate or full router-suite
 gate is claimed. Queue-draining, sustained-load and native rollback-fault limits
 from checkpoint 3.52 remain open. No commits or pushes were requested.
 
+### 3.54 Independent native processor completed and deployed (2026-11-17)
+
+The user authorized the complete existing regression gate, coordinated
+replacement and all five live mission workflows. The retained seven-node mesh
+now uses the native shared WAN hub with independent one-way LAN activation and
+native auto-QoS, including checkpoint 3.53 and the independent-hub review fixes.
+Routing Service owns every endpoint. Exactly one Event/State/Periodic
+reader/writer pair per gateway was verified by native discovery; there is no
+extra WAN participant, intermediate bus or plugin backlog.
+
+The [completion acceptance record](router-processor-completion-plan.md#completion-acceptance-record-2026-11-17)
+contains scope, exact build identities, exercised rollback and reproducible
+evidence. Final results, with overlapping groups kept separate:
+
+- **10/10 C++ targets passed**, fresh private and persistent builds matching.
+- **386 retained-scope nonlive router cases plus 284 subtests passed**, merging
+  the complete module ladder with final affected reruns by test ID.
+- **74 native processor cases passed**: 18 two-topic, 8 auto-QoS, 30 monitoring/
+  policy/mesh and 18 three-topic. Runs were split to respect domain reservations.
+- **56 configuration/native time-filter unittest cases passed**, including all
+  three explicitly enabled opt-in cases.
+- **30 dashboard cases plus 24 subtests**, **29 WAN qualification cases**,
+  **38 selected workload cases plus 37 subtests**, and the adapter spike's
+  **9 PASS groups / 10 expected rejections** passed.
+- **All five unchanged live Chromium/DDS/EMANE mission workflows passed**,
+  zero skips, **380.53 s**, on the final deployed binary.
+
+Release preflight fixed expected loss being misreported as permanent failure:
+BEST_EFFORT `lost_by_writer` gaps and three-topic State KEEP_LAST(1)
+supersession are rate-limited warnings when no new rejection accompanies them.
+Reliable Event history loss, rejections and other loss reasons remain errors.
+Real packet-loss regressions verify both WAN contracts, final ContactReport
+sequence delivery and unchanged C2 health. An earlier five-workflow pass was
+not accepted as final when log auditing exposed the State classification bug;
+the mesh was stopped, rebuilt, regenerated and the complete live gate repeated.
+
+Internal `ActRouterDiagnostics` no longer waits for an application LAN input to
+match its own monitor. It retains LAN publication and uses the existing codec/
+shared WAN writer directly, preserving source enablement, audience and priority,
+without an extra endpoint or queue. Native red/green coverage requires actual
+WAN diagnostics without an external LAN producer. Default platform diagnostics
+go to C2, not other platforms. Two stale test fixtures were repaired without
+weakening their behavioral assertions.
+
+The old matching bundle was actually launched, verified with six healthy peers
+and old hashes, then stopped through its own lifecycle. Final retained run:
+`container-20261117T181119-2947503`, Compose project
+`act-emane-container-baseline`, Control_20 plus Platform_30–35, dashboard 8080,
+workdir `debug/mesh_runs/emane`. All seven deployed hashes match the qualified
+build. Every router, including C2, publishes ROUTER_OK; six platform peers are
+ALIVE, missions CANCELLED / receive Init, zero speed, unassigned teams, 1x clocks,
+hidden targets and empty impairments. Browser graph/configuration and actual
+assets were inspected. Final logs have zero structured/native ERROR lines;
+expected loss warnings remain visible. The mesh remains running under its owner.
+
+An **additional legacy routed-churn spike is not fully green**: three cases pass,
+but BEST_EFFORT Status outage disposal leaves 41 ghosts. The archived old
+`router_main` reproduces the same 41 ghosts. This known limitation is not hidden,
+fixed or claimed as new processor behavior. Generic setup/export/monitoring,
+new numerical sustained-load/recovery guarantees, persistence, exactly-once and
+atomic fleet-wide filter barriers remain outside this acceptance.
+
+Compact evidence: `debug/test_reports/processor_release_20261117/`, including
+final consolidated/native/live JUnit, red/green logs, screenshots, postflight,
+native all-node inventory, qualified/deployed hashes, link-stat parity and
+rollback records. Earlier allocator/setup errors and expected-red evidence are
+retained separately. Disposable qualification state and the stopped rollback
+checkout were removed; the matching rollback archive remains. The shared
+Connext correction log was published with explicit approval and pinned by
+parent commit `381a57d`; no parent implementation branch was pushed.
+
+### 3.55 Diagnostics failure isolation qualified, not deployed (2026-11-17)
+
+The final review found that rethrowing an internal diagnostics failure aborted
+the monitoring tick before advancing its heartbeat timer or collecting link
+statistics. Persistent failure therefore flooded heartbeats at the 10 ms pump
+cadence and starved link updates. Diagnostics now retain the original route
+error/timeout accounting and explicit `rs.diagnostics.error` logging without
+aborting those schedules.
+
+Real native writer-instance exhaustion reproduced the failure in both WAN
+contracts. **10 C++ targets and four focused native cases passed**, zero skips,
+including both fault cases, normal internal forwarding and existing health/
+protocol/team behavior. See the [follow-up record](router-processor-completion-plan.md#final-review-follow-up--diagnostics-failure-isolation-2026-11-17)
+and local `debug/test_reports/processor_diagnostics_isolation_20261117/`.
+Private qualification state was removed. The checkpoint 3.54 mesh/binaries
+remain untouched; this is source qualification, not deployment or a new live
+mission gate.
+
 ## 4. Audience selection and runtime changes
 
 Use ContentFilteredTopics (CFTs) for sample selection. Keep the selection fields
