@@ -200,7 +200,9 @@ def load_system_config(path, provider_factory, infinite_duration):
 
     if native:
         lan_rows = section("lan-qos", "LAN endpoint quality of service",
-                           "Manual native XML profiles, including endpoint-specific overrides. "
+                           "Configured native XML profiles, including endpoint-specific overrides. "
+                           "Native auto-QoS can change effective policies after discovery; "
+                           "these are not live inferred QoS values. "
                            "Minimum separation is reader input filtering, not WAN history or a publication rate.",
                            ["Topic", "Port", "Endpoint", "Type", "Profile", "Reliability",
                             "History", "Minimum separation"])
@@ -213,7 +215,8 @@ def load_system_config(path, provider_factory, infinite_duration):
                 history += f" / {settings['history_depth']} per instance"
             separation = settings.get("minimum_separation_seconds")
             lan_rows.append([port["topic"], port["name"], port["endpoint"].title(), port["type"],
-                             port["profile"], settings["reliability"].replace("_", " ").title(),
+                             port["profile"] + (" (native auto-QoS)" if port["auto_configure_qos"] else ""),
+                             settings["reliability"].replace("_", " ").title(),
                              history, ("Off" if separation == 0 else duration(separation))
                              if port["endpoint"] == "reader" else "Not applicable"])
         priorities = section("priorities", "WAN scheduling channels",

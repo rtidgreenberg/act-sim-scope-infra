@@ -88,9 +88,9 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
         }
         self.xml = ET.fromstring(render(self.model, "unused.yaml", "plugin.so", True))
 
-    def test_one_route_and_exact_shared_wan_endpoints(self):
+    def test_independent_lan_routes_and_exact_shared_wan_endpoints(self):
         routes = self.xml.findall(".//topic_route")
-        self.assertEqual(len(routes), 1)
+        self.assertEqual(len(routes), 2)
         route = routes[0]
         self.assertEqual([port.findtext("topic_name") for port in route.findall("input")
                           if port.attrib["participant"] == "wan"], ["Event", "Status"])
@@ -98,6 +98,9 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
                           if port.attrib["participant"] == "wan"], ["Event", "Status"])
         self.assertTrue(all(port.findtext("creation_mode") == "IMMEDIATE"
                             for port in list(route) if port.tag in ("input", "output")))
+        lan = routes[1].find("input")
+        self.assertEqual(lan.findtext("creation_mode"), "ON_DOMAIN_MATCH")
+        self.assertEqual(lan.findtext("auto_configure_qos"), "true")
 
     def test_reader_retention_is_copied_from_production_xml(self):
         original = ET.parse(self.model["qos_libraries"][0]).find(
@@ -242,6 +245,49 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
     def test_preflight_validates_explicit_xml(self):
         self.assertEqual(self.check_xml(self.xml)["act.version"], "1")
 
+    def test_preflight_preserves_combined_v1_xml(self):
+        root = copy.deepcopy(self.xml)
+        session = root.find(".//session")
+        routes = session.findall("topic_route")
+        combined = routes[0]
+        for route in routes[1:]:
+            for endpoint in route.findall("input") + route.findall("output"):
+                endpoint.find("creation_mode").text = "IMMEDIATE"
+                endpoint.find("auto_configure_qos").text = "false"
+                combined.append(endpoint)
+            session.remove(route)
+        entries = combined.find("./processor/property/value")
+        for entry in list(entries):
+            if entry.findtext("name") in ("act.runtime_mode", "act.route_role", "act.route_topic"):
+                entries.remove(entry)
+        self.assertEqual(self.check_xml(root)["act.version"], "1")
+
+    def test_preflight_rejects_independent_topology_and_model_mismatches(self):
+        for change, message in (
+                ("mode", "runtime_mode"), ("role", "role/topic"), ("session", "one native session"),
+                ("activation", "ON_DOMAIN_MATCH"), ("model", "identical gateway model"),
+                ("pair", "exactly one native pair"), ("qos", "explicit XML QoS")):
+            with self.subTest(change=change):
+                root = copy.deepcopy(self.xml)
+                hub = root.find(".//topic_route")
+                lan = root.findall(".//topic_route")[1]
+                if change in ("mode", "role", "model"):
+                    key = {"mode": "act.runtime_mode", "role": "act.route_role",
+                           "model": "act.node"}[change]
+                    entry = next(entry for entry in lan.findall("./processor/property/value/element")
+                                 if entry.findtext("name") == key)
+                    entry.find("value").text = "unsupported"
+                elif change == "session":
+                    ET.SubElement(root.find(".//domain_route"), "session", name="other")
+                elif change == "activation":
+                    lan.find("input/creation_mode").text = "IMMEDIATE"
+                elif change == "pair":
+                    hub.remove(hub.find("output[@name='wan_out_Event']"))
+                else:
+                    hub.find("input/datareader_qos").attrib.clear()
+                with self.assertRaisesRegex(ValueError, message):
+                    self.check_xml(root)
+
     def test_lan_identity_preserves_near_bound_node_router_names(self):
         for node in ("Boat30", "n" * 248, "n" * 252, "é" * 126):
             with self.subTest(node_bytes=len(node.encode())):
@@ -269,12 +315,13 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
                 port = root.find(".//topic_route/input[@name='lan_in_ContactReport']")
                 if kind == "output":
                     port.tag = "output"
-                    entry = next(entry for entry in root.findall(".//processor/property/value/element")
-                                 if entry.findtext("name") == "act.binding.contact.tx.port")
-                    entry.find("name").text = "act.binding.contact.rx.port"
-                    recipient = next(entry for entry in root.findall(".//processor/property/value/element")
-                                     if entry.findtext("name") == "act.binding.contact.tx.recipients")
-                    recipient.find("name").text = "act.binding.contact.rx.recipients"
+                    for entry in root.findall(".//processor/property/value/element"):
+                        if entry.findtext("name") == "act.binding.contact.tx.port":
+                            entry.find("name").text = "act.binding.contact.rx.port"
+                        elif entry.findtext("name") == "act.binding.contact.tx.recipients":
+                            entry.find("name").text = "act.binding.contact.rx.recipients"
+                        elif entry.findtext("name") == "act.route_role" and entry.findtext("value") == "tx":
+                            entry.find("value").text = "rx"
                 port.set("participant", "wan")
                 with self.assertRaisesRegex(ValueError, "port participant"):
                     self.check_xml(root)
@@ -306,18 +353,18 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
                 ("act.binding.contact.tx.port", "${PORT}", "unresolved")):
             with self.subTest(name=name):
                 root = ET.fromstring(ET.tostring(self.xml))
-                entries = root.find(".//processor/property/value")
-                if message == "unresolved":
-                    next(entry for entry in entries if entry.findtext("name") == name).find("value").text = value
-                else:
-                    entry = ET.SubElement(entries, "element")
-                    ET.SubElement(entry, "name").text = name
-                    ET.SubElement(entry, "value").text = value
+                for entries in root.findall(".//processor/property/value"):
+                    if message == "unresolved":
+                        next(entry for entry in entries if entry.findtext("name") == name).find("value").text = value
+                    else:
+                        entry = ET.SubElement(entries, "element")
+                        ET.SubElement(entry, "name").text = name
+                        ET.SubElement(entry, "value").text = value
                 with self.assertRaisesRegex(ValueError, message):
                     self.check_xml(root)
         root = ET.fromstring(ET.tostring(self.xml))
-        entries = root.find(".//processor/property/value")
-        entries.remove(next(entry for entry in entries if entry.findtext("name") == "act.types_uri"))
+        for entries in root.findall(".//processor/property/value"):
+            entries.remove(next(entry for entry in entries if entry.findtext("name") == "act.types_uri"))
         with self.assertRaisesRegex(ValueError, "missing processor property"):
             self.check_xml(root)
 

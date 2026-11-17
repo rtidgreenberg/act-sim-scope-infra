@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <limits>
 #include <stdexcept>
 
@@ -39,7 +40,6 @@ void validate_lan_participant(const dds::domain::DomainParticipant& participant,
         throw std::runtime_error("LAN participant/domain mismatch: " + port);
     }
 }
-
 bool enabled(const std::vector<Binding>& bindings) {
     return std::any_of(bindings.begin(), bindings.end(),
                        [](const Binding& binding) { return binding.enabled; });
@@ -69,7 +69,49 @@ bool lifecycle(Writer writer, const Data& key, const dds::sub::SampleInfo& info,
 class GatewayProcessor : public rti::routing::processor::NoOpProcessor {
 public:
     explicit GatewayProcessor(const Properties& properties)
-        : model_(properties), types_(model_.config.types_xml_path), codec_(types_, model_.codec_mappings()) {}
+        : model_(properties), types_(model_.config.types_xml_path), codec_(types_, model_.codec_mappings()),
+          independent_(properties.count("act.runtime_mode") != 0) {}
+
+    GatewayPorts ports;
+
+    void validate_registration(const std::string& role, const std::string& topic) const {
+        if (role == "hub" && topic.empty()) return;
+        if ((role == "tx" && model_.sources.count(topic)) ||
+            (role == "rx" && model_.destinations.count(topic))) return;
+        throw std::runtime_error("undeclared or invalid gateway route role/topic: " + role + ":" + topic);
+    }
+
+    void attach(Route& route, const std::string& role, const std::string& topic) {
+        if (role == "tx") {
+            if (!model_.sources.count(topic)) throw std::runtime_error("undeclared LAN input: " + topic);
+            auto input = route.input<Data>(model_.input_port(topic));
+            auto reader = input.dds_data_reader();
+            validate_lan_participant(reader.subscriber().participant(), model_, input.name());
+            if (input.create_data().type() != types_->type(codec_.mapping(topic).type))
+                throw std::runtime_error("LAN input type mismatch: " + topic);
+            if (!ports.inputs.emplace(topic, reader).second)
+                throw std::runtime_error("duplicate active LAN input: " + topic);
+        } else {
+            if (!model_.destinations.count(topic)) throw std::runtime_error("undeclared LAN output: " + topic);
+            auto output = route.output<Data>(model_.output_port(topic));
+            auto writer = output.dds_data_writer();
+            validate_lan_participant(writer.publisher().participant(), model_, output.name());
+            if (output.create_data().type() != types_->type(codec_.mapping(topic).type))
+                throw std::runtime_error("LAN output type mismatch: " + topic);
+            auto participant = writer.publisher().participant();
+            dds::pub::ignore(participant, writer.instance_handle());
+            if (!ports.outputs.emplace(topic, writer).second)
+                throw std::runtime_error("duplicate active LAN output: " + topic);
+        }
+        if (monitor_) monitor_->policy_changed();
+        router::Log::info("rs.gateway.lan_active", {{"direction", role}, {"topic", topic}});
+    }
+
+    void detach(const std::string& role, const std::string& topic) {
+        if (role == "tx") ports.inputs.erase(topic);
+        else ports.outputs.erase(topic);
+        if (monitor_) monitor_->policy_changed();
+    }
 
     void on_start(Route& route) override {
         for (const auto& family : model_.families()) {
@@ -79,7 +121,7 @@ public:
             dds::pub::ignore(participant, writer.instance_handle());
             dds::sub::ignore(participant, reader.instance_handle());
         }
-        for (const auto& destination : model_.destinations) {
+        if (!independent_) for (const auto& destination : model_.destinations) {
             auto output = route.output<Data>(model_.output_port(destination.first));
             auto writer = output.dds_data_writer();
             validate_lan_participant(writer.publisher().participant(), model_, output.name());
@@ -89,7 +131,7 @@ public:
             auto participant = writer.publisher().participant();
             dds::pub::ignore(participant, writer.instance_handle());
         }
-        for (const auto& source : model_.sources) {
+        if (!independent_) for (const auto& source : model_.sources) {
             auto input = route.input<Data>(model_.input_port(source.first));
             validate_lan_participant(input.dds_data_reader().subscriber().participant(), model_, input.name());
             if (input.create_data().type() != types_->type(codec_.mapping(source.first).type)) {
@@ -97,7 +139,7 @@ public:
             }
         }
         if (!model_.config.presence_participant.empty()) {
-            monitor_.reset(new GatewayMonitor(route, model_, types_));
+            monitor_.reset(new GatewayMonitor(route, model_, types_, independent_ ? &ports : nullptr));
         }
         router::Log::info("rs.gateway.started", {{"node", model_.config.node_name},
                           {"mode", monitor_ ? "mesh" : "data_plane_only"}});
@@ -105,7 +147,8 @@ public:
 
     void on_data_available(Route& route) override { pump(route); }
     void on_periodic_action(Route& route) override { pump(route); }
-    void on_stop(Route&) override { monitor_.reset(); }
+    void stop_hub() { monitor_.reset(); }
+    void on_stop(Route&) override { stop_hub(); }
 
 private:
     void observe_mission(Route& route, const Data& data) {
@@ -159,6 +202,7 @@ private:
             } catch (const std::exception& error) {
                 router::Log::error("rs.sample.error", {{"input", name}, {"error", error.what()}});
             }
+
         }
         // Keep the loan alive until native key recovery and final-state forwarding finish.
         for (const auto& instance : instances) {
@@ -171,6 +215,89 @@ private:
             } catch (const std::exception& error) {
                 router::Log::error("rs.lifecycle.error", {{"input", name}, {"error", error.what()}});
             }
+        }
+    }
+
+    template<typename Samples, typename Forward>
+    void process_native(Reader reader, const std::string& topic, const Samples& samples, Forward forward) {
+        std::map<std::string, dds::sub::SampleInfo> instances;
+        for (const auto& sample : samples) {
+            try {
+                instances[router::wan_handle_key(sample.info().instance_handle())] = sample.info();
+                if (sample.info().valid()) forward(sample.data(), sample.info(), true);
+            } catch (const std::exception& error) {
+                router::Log::error("rs.sample.error", {{"topic", topic}, {"error", error.what()}});
+            }
+        }
+        for (const auto& instance : instances) {
+            const auto& info = instance.second;
+            if (info.state().instance_state() == dds::sub::status::InstanceState::alive()) continue;
+            try {
+                Data key(types_->type(reader.topic_description().type_name()));
+                reader.key_value(key, info.instance_handle());
+                forward(key, info, false);
+            } catch (const std::exception& error) {
+                router::Log::error("rs.lifecycle.error", {{"topic", topic}, {"error", error.what()}});
+            }
+        }
+    }
+
+    router::WanDecoded decode(const std::string& family, const Data& frame, bool valid) {
+        auto decoded = valid ? codec_.unpack(frame) : codec_.unpack_key(frame);
+        if (family != model_.transport_mapping(decoded.topic).family) {
+            throw std::runtime_error("wrong WAN family for " + decoded.topic);
+        }
+        return decoded;
+    }
+
+    template<typename Forward>
+    void consume_native(Reader reader, const std::string& topic, Forward forward,
+                        bool observed_only = false) {
+        if (topic.empty()) {
+            const auto samples = reader.select().max_samples(32).take();
+            process_native(reader, topic, samples, forward);
+        } else {
+            dds::sub::Query query(reader, "original_topic = %0", {"'" + topic + "'"});
+            const auto state = observed_only
+                    ? dds::sub::status::DataState(dds::sub::status::SampleState::read())
+                    : dds::sub::status::DataState::any();
+            dds::core::InstanceHandle previous = dds::core::null;
+            int remaining = 32;
+            while (remaining > 0) {
+                const auto matching = reader.select().state(state).content(query).next_instance(previous)
+                        .max_samples(1).read();
+                auto handle = dds::core::InstanceHandle(dds::core::null);
+                for (const auto& sample : matching) {
+                    handle = sample.info().instance_handle();
+                    break;
+                }
+                if (handle == dds::core::null) break;
+                previous = handle;
+                Data key(types_->type(reader.topic_description().type_name()));
+                reader.key_value(key, handle);
+                // Native Query selection also admits unrelated invalid-data
+                // notifications. Check their authoritative key before taking.
+                if (key.value<std::string>("original_topic") != topic) continue;
+                const auto samples = reader.select().state(state).instance(handle)
+                        .max_samples(remaining).take();
+                remaining -= static_cast<int>(samples.length());
+                process_native(reader, topic, samples, forward);
+            }
+        }
+    }
+
+    void observe_admission(Reader reader, const std::string& family) {
+        const auto rejected = reader.sample_rejected_status().total_count();
+        const auto lost = reader.sample_lost_status().total_count();
+        auto& previous = admission_[family];
+        if (rejected == previous.first && lost == previous.second) return;
+        previous = {rejected, lost};
+        const auto message = "native WAN history admission failure: rejected=" +
+                std::to_string(rejected) + " lost=" + std::to_string(lost);
+        router::Log::error("rs.gateway.history_error", {{"family", family}, {"error", message}});
+        if (monitor_) for (const auto& destination : model_.destinations) {
+            if (family == model_.transport_mapping(destination.first).family)
+                monitor_->failed(destination.first, false, message, false);
         }
     }
 
@@ -187,8 +314,8 @@ private:
         std::vector<std::string> source_topics;
         for (const auto& source : model_.sources) source_topics.push_back(source.first);
         for (const auto& topic : source_topics) {
-            consume(route, model_.input_port(topic),
-                    [&](const Data& data, const dds::sub::SampleInfo& info, bool valid) {
+            if (independent_ && !ports.inputs.count(topic)) continue;
+            const auto forward = [&](const Data& data, const dds::sub::SampleInfo& info, bool valid) {
                 if (!enabled(model_.sources.at(topic))) return;
                 if (valid && topic == "PlatformMissionStatus") observe_mission(route, data);
                 router::WanMetadata metadata;
@@ -209,21 +336,21 @@ private:
                     }
                     return lifecycle(writer, frame, info, priority);
                 });
-            });
+            };
+            if (independent_) consume_native(ports.inputs.at(topic), "", forward);
+            else consume(route, model_.input_port(topic), forward);
         }
         for (const auto& family : model_.families()) {
-            consume(route, "wan_in_" + family,
-                    [&](const Data& frame, const dds::sub::SampleInfo& info, bool valid) {
+            const auto forward = [&](const Data& frame, const dds::sub::SampleInfo& info, bool valid) {
                 if (frame.value<std::string>("source_id") == model_.config.node_name) return;
-                auto decoded = valid ? codec_.unpack(frame) : codec_.unpack_key(frame);
-                if (family != model_.transport_mapping(decoded.topic).family) {
-                    throw std::runtime_error("wrong WAN family for " + decoded.topic);
-                }
-                if (monitor_) monitor_->received(family, frame, info);
+                auto decoded = decode(family, frame, valid);
+                if (monitor_ && (!independent_ || family == "Event" || family == "State" || !valid))
+                    monitor_->received(family, frame, info);
                 if (decoded.topic == "RouterHealth" || decoded.topic == "RouterConfig") return;
                 const auto found = model_.destinations.find(decoded.topic);
                 if (found == model_.destinations.end() || !enabled(found->second)) return;
-                auto writer = route.output<Data>(model_.output_port(decoded.topic)).dds_data_writer();
+                auto writer = independent_ ? ports.outputs.at(decoded.topic) :
+                        route.output<Data>(model_.output_port(decoded.topic)).dds_data_writer();
                 record_write(decoded.topic, false, valid, [&] {
                     if (valid) {
                         writer.write(decoded.data);
@@ -231,7 +358,43 @@ private:
                     }
                     return lifecycle(writer, decoded.data, info);
                 });
-            });
+            };
+            if (!independent_) consume(route, "wan_in_" + family, forward);
+            else {
+                auto reader = route.input<Data>("wan_in_" + family).dds_data_reader();
+                observe_admission(reader, family);
+                const bool observe_status = monitor_ &&
+                        family == (model_.three_topic() ? "Periodic" : "Status");
+                if (observe_status) {
+                    // Observe any received status for presence even if its LAN
+                    // destination is pending. Only this pass marks Status READ;
+                    // forwarding selects READ samples, including lifecycle data.
+                    const auto samples = reader.select().state(dds::sub::status::SampleState::not_read())
+                            .max_samples(32).read();
+                    for (const auto& sample : samples) {
+                        try {
+                            if (sample.info().valid() &&
+                                sample.data().value<std::string>("source_id") != model_.config.node_name) {
+                                decode(family, sample.data(), true);
+                                monitor_->received(family, sample.data(), sample.info());
+                            }
+                        } catch (const std::exception& error) {
+                            router::Log::error("rs.sample.error", {{"input", "wan_in_" + family},
+                                                                 {"error", error.what()}});
+                        }
+                    }
+                }
+                for (const auto& destination : model_.destinations) {
+                    const auto output = ports.outputs.find(destination.first);
+                    if (output != ports.outputs.end() &&
+                        output->second.publication_matched_status().current_count() > 0 &&
+                        family == model_.transport_mapping(destination.first).family)
+                        consume_native(reader, destination.first, forward, observe_status);
+                }
+                if (family == "Event") consume_native(reader, "RouterConfig", forward);
+                if (family == (model_.three_topic() ? "Periodic" : "Status"))
+                    consume_native(reader, "RouterHealth", forward, observe_status);
+            }
         }
     }
 
@@ -254,6 +417,44 @@ private:
     dds::core::QosProvider types_;
     router::WanCodec codec_;
     std::unique_ptr<GatewayMonitor> monitor_;
+    bool independent_;
+    std::map<std::string, std::pair<int, int>> admission_;
+};
+
+class IndependentProcessor : public rti::routing::processor::NoOpProcessor {
+public:
+    IndependentProcessor(std::shared_ptr<GatewayProcessor> owner, const Properties& properties)
+        : owner_(std::move(owner)), role_(properties.at("act.route_role")),
+          topic_(role_ == "hub" ? "" : properties.at("act.route_topic")) {}
+    ~IndependentProcessor() override {
+        std::lock_guard<std::recursive_mutex> lock(owner_->ports.mutex);
+        if (role_ == "hub") owner_->stop_hub();
+        else if (active_) owner_->detach(role_, topic_);
+    }
+    std::string registration() const { return role_ + ":" + topic_; }
+    void on_start(Route& route) override {
+        std::lock_guard<std::recursive_mutex> lock(owner_->ports.mutex);
+        if (role_ == "hub") owner_->on_start(route);
+        else owner_->attach(route, role_, topic_);
+        active_ = true;
+    }
+    void on_stop(Route& route) override {
+        std::lock_guard<std::recursive_mutex> lock(owner_->ports.mutex);
+        if (!active_) return;
+        if (role_ == "hub") owner_->on_stop(route);
+        else owner_->detach(role_, topic_);
+        active_ = false;
+    }
+    void on_data_available(Route& route) override { pump(route); }
+    void on_periodic_action(Route& route) override { pump(route); }
+private:
+    void pump(Route& route) {
+        std::lock_guard<std::recursive_mutex> lock(owner_->ports.mutex);
+        if (active_ && role_ == "hub") owner_->on_periodic_action(route);
+    }
+    std::shared_ptr<GatewayProcessor> owner_;
+    std::string role_, topic_;
+    bool active_ = false;
 };
 
 } // namespace
@@ -264,12 +465,40 @@ public:
     explicit ActGatewayPlugin(const rti::routing::PropertySet&) {}
     rti::routing::processor::Processor* create_processor(
             rti::routing::processor::Route&, const rti::routing::PropertySet& properties) override {
-        return new act_rs::GatewayProcessor(properties);
+        if (!properties.count("act.runtime_mode")) return new act_rs::GatewayProcessor(properties);
+        auto common = properties;
+        common.erase("act.route_role");
+        common.erase("act.route_topic");
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!owner_) {
+            owner_.reset(new act_rs::GatewayProcessor(properties));
+            common_ = common;
+        } else if (common != common_) {
+            throw std::runtime_error("independent routes must declare the identical gateway model");
+        }
+        const auto role = properties.at("act.route_role");
+        const auto topic = role == "hub" ? "" : properties.at("act.route_topic");
+        owner_->validate_registration(role, topic);
+        if (!registrations_.insert(role + ":" + topic).second)
+            throw std::runtime_error("duplicate gateway route role/topic");
+        return new act_rs::IndependentProcessor(owner_, properties);
     }
     void delete_processor(rti::routing::processor::Route&,
                           rti::routing::processor::Processor* processor) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto independent = dynamic_cast<act_rs::IndependentProcessor*>(processor);
+        if (independent) registrations_.erase(independent->registration());
         delete processor;
+        if (registrations_.empty()) {
+            owner_.reset();
+            common_.clear();
+        }
     }
+private:
+    std::mutex mutex_;
+    std::shared_ptr<act_rs::GatewayProcessor> owner_;
+    rti::routing::PropertySet common_;
+    std::set<std::string> registrations_;
 };
 
 using rti::routing::PropertySet;

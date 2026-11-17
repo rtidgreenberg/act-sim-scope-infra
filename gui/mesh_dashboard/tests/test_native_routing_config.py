@@ -144,7 +144,8 @@ class NativeXmlConfigurationTests(unittest.TestCase):
                     properties = root.find(".//processor/property/value")
                     properties.append(ET.fromstring(ET.tostring(properties[0])))
                 elif mutation == "port":
-                    route = root.find(".//topic_route")
+                    route = next(route for route in root.findall(".//topic_route")
+                                 if route.find("input[@name='lan_in_ContactReport']") is not None)
                     route.remove(route.find("input[@name='lan_in_ContactReport']"))
                 else:
                     root.find(".//qos_library/qos_profile").attrib["name"] = "$(ACT_UNDEFINED_SNAPSHOT_TEST)"
@@ -152,6 +153,75 @@ class NativeXmlConfigurationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     load_delivery_config(self.path, lambda _: snapshot_provider(), float("inf"))
         self.path.write_text(original)
+
+    def test_independent_lan_defaults_are_displayed_as_configured_not_inferred_qos(self):
+        root = ET.parse(self.path)
+        port = root.find(".//output[@name='lan_out_Mission']")
+        port.remove(port.find("datawriter_qos"))
+        port.find("auto_configure_qos").text = "1"
+        root.write(self.path)
+        _, config, _, _ = load_router_config(self.path, lambda _: snapshot_provider())
+        self.assertEqual(config["native"]["runtime_mode"], "independent")
+        lane = config["native"]["ports"]["lan_out_Mission"]
+        self.assertTrue(lane["auto_configure_qos"])
+        self.assertEqual(lane["creation_mode"], "ON_DOMAIN_MATCH")
+        delivery = load_delivery_config(self.path, lambda _: snapshot_provider(), float("inf"))
+        self.assertTrue(delivery["topics"]["Mission"][0]["lan"]["auto_configure_qos"])
+        system = load_system_config(self.path, lambda _: snapshot_provider(), float("inf"))
+        section = next(section for section in system["sections"] if section["id"] == "lan-qos")
+        self.assertIn("not live inferred", section["description"])
+        self.assertTrue(any(row[0] == "Mission" and "native auto-QoS" in row[4]
+                            for row in section["rows"]))
+
+    def test_independent_configuration_rejects_mismatched_routes_and_sessions(self):
+        original = self.path.read_text()
+        for mutation, message in (("role", "inconsistent native route registration"),
+                                  ("properties", "inconsistent native gateway"),
+                                  ("hub", "one native gateway hub"),
+                                  ("auto-qos", "invalid auto_configure_qos"),
+                                  ("session", "one gateway session")):
+            with self.subTest(mutation=mutation):
+                root = ET.fromstring(original)
+                session = root.find(".//session")
+                lane = next(route for route in session.findall("topic_route")
+                            if route.find("input[@name='lan_in_ContactReport']") is not None)
+                if mutation == "hub":
+                    duplicate = ET.fromstring(ET.tostring(session.find("topic_route")))
+                    duplicate.attrib["name"] += "_duplicate"
+                    session.append(duplicate)
+                elif mutation == "auto-qos":
+                    lane.find("./input/auto_configure_qos").text = "not-a-boolean"
+                elif mutation == "session":
+                    session.remove(lane)
+                    other = ET.SubElement(root.find(".//domain_route"), "session", name="other")
+                    other.append(lane)
+                else:
+                    name = "act.route_topic" if mutation == "role" else "act.node"
+                    entry = next(entry for entry in lane.findall("./processor/property/value/element")
+                                 if entry.findtext("name") == name)
+                    entry.find("value").text = "Wrong"
+                self.path.write_text(ET.tostring(root, encoding="unicode"))
+                with self.assertRaisesRegex(ValueError, message):
+                    load_delivery_config(self.path, lambda _: snapshot_provider(), float("inf"))
+
+    def test_existing_combined_gateway_xml_remains_readable(self):
+        root = ET.parse(self.path)
+        session = root.find(".//session")
+        hub = session.find("topic_route")
+        properties = hub.find("./processor/property/value")
+        for entry in list(properties):
+            if entry.findtext("name") in ("act.runtime_mode", "act.route_role", "act.route_topic"):
+                properties.remove(entry)
+        for lane in list(session.findall("topic_route"))[1:]:
+            for port in lane:
+                if port.tag in ("input", "output"):
+                    hub.append(port)
+            session.remove(lane)
+        root.write(self.path)
+        _, config, _, _ = load_router_config(self.path, lambda _: snapshot_provider())
+        self.assertEqual(config["native"]["runtime_mode"], "combined")
+        self.assertEqual(set(config["native"]["wan"]), {"Event", "State", "Periodic"})
+        self.assertEqual(len(config["native"]["bindings"]), 6)
 
 
 class NativeXmlProviderTests(unittest.TestCase):

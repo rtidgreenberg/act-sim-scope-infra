@@ -133,7 +133,8 @@ def run_case(auto, direction, timing, profile_mode, creation_mode, index, verbos
             })
         root = ET.fromstring(render(configuration, "", str(
             build / "libact_gateway_processor.so"), True))
-        port = root.find(".//topic_route/" + ("input" if direction == "tx" else "output"))
+        port = root.find(".//topic_route/" + ("input" if direction == "tx" else "output")
+                         + "[@name='application_port']")
         assert port.attrib["name"] == "application_port"
         port.find("auto_configure_qos").text = str(auto).lower()
         port.find("creation_mode").text = creation_mode
@@ -236,7 +237,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--profile", choices=["explicit", "defaults", "deadline"], default="explicit")
-    parser.add_argument("--creation-mode", choices=["IMMEDIATE", "ON_DOMAIN_MATCH"], default="IMMEDIATE")
+    parser.add_argument("--creation-mode", choices=["ON_DOMAIN_MATCH"], default="ON_DOMAIN_MATCH",
+                        help="independent LAN bindings require ON_DOMAIN_MATCH")
     parser.add_argument("--direction", choices=["tx", "rx"])
     parser.add_argument("--timing", choices=["before", "after"])
     parser.add_argument("--only-auto", action="store_true")

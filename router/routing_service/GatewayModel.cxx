@@ -138,6 +138,8 @@ std::string lan_participant_identity(const std::string& node, const std::string&
 GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     std::string canonical;
     for (const auto& property : properties) {
+        if (property.first == "act.runtime_mode" || property.first == "act.route_role" ||
+            property.first == "act.route_topic") continue;
         canonical += std::to_string(property.first.size()) + ":" + property.first +
                      std::to_string(property.second.size()) + ":" + property.second;
     }
@@ -146,7 +148,8 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
         "act.version", "act.types_uri", "act.node", "act.role", "act.router",
         "act.wan_contract", "act.monitoring", "act.teams", "act.admin_participant",
         "act.lan_participant", "act.wan_participant", "act.lan_domain", "act.wan_domain",
-        "act.async_bandwidth_bps", "act.receive_policy"};
+        "act.async_bandwidth_bps", "act.receive_policy",
+        "act.runtime_mode", "act.route_role", "act.route_topic"};
     std::map<std::string, Properties> groups;
     for (const auto& property : properties) {
         if (property.second.find("$(") != std::string::npos ||
@@ -169,6 +172,18 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     }
     if (required(properties, "act.version") != "1") {
         throw std::runtime_error("unsupported act.version (expected 1)");
+    }
+    const auto runtime = properties.find("act.runtime_mode");
+    if (runtime != properties.end()) {
+        if (runtime->second != "independent") throw std::runtime_error("unsupported act.runtime_mode");
+        const auto& role = required(properties, "act.route_role");
+        if (role != "hub" && role != "tx" && role != "rx")
+            throw std::runtime_error("unsupported act.route_role");
+        if (role != "hub") required(properties, "act.route_topic");
+        else if (properties.count("act.route_topic"))
+            throw std::runtime_error("hub must not declare act.route_topic");
+    } else if (properties.count("act.route_role") || properties.count("act.route_topic")) {
+        throw std::runtime_error("route role requires act.runtime_mode");
     }
     config.node_name = required(properties, "act.node");
     config.node_role = required(properties, "act.role");

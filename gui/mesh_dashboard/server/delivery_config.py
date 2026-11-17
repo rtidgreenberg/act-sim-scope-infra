@@ -83,16 +83,47 @@ def _load_native_xml(path, text, provider_factory):
         if element.text:
             element.text = resolve(element.text)
         element.attrib.update({key: resolve(value) for key, value in element.attrib.items()})
-    processors = root.findall("./routing_service/domain_route/session/topic_route/processor")
-    if len(processors) != 1:
-        raise ValueError(f"{path}: expected one native gateway processor")
-    processor = processors[0]
-    properties = {}
-    for entry in processor.findall("./property/value/element"):
-        name = entry.findtext("name")
-        if not name or name in properties:
-            raise ValueError(f"{path}: empty or duplicate processor property: {name}")
-        properties[name] = entry.findtext("value", "")
+    routes = root.findall("./routing_service/domain_route/session/topic_route")
+
+    def processor_properties(processor):
+        properties = {}
+        for entry in processor.findall("./property/value/element"):
+            name = entry.findtext("name")
+            if not name or name in properties:
+                raise ValueError(f"{path}: empty or duplicate processor property: {name}")
+            properties[name] = entry.findtext("value", "")
+        return properties
+
+    processors = [(route, processor, processor_properties(processor))
+                  for route in routes for processor in route.findall("processor")]
+    independent = any(properties.get("act.runtime_mode") == "independent"
+                      for _, _, properties in processors)
+    if independent:
+        hubs = [entry for entry in processors if entry[2].get("act.route_role") == "hub"]
+        if len(hubs) != 1:
+            raise ValueError(f"{path}: expected one native gateway hub processor")
+        route, processor, hub_properties = hubs[0]
+        role_keys = {"act.route_role", "act.route_topic"}
+        properties = {key: value for key, value in hub_properties.items() if key not in role_keys}
+        registrations = set()
+        for _, _, current in processors:
+            if ({key: value for key, value in current.items() if key not in role_keys}
+                    != properties):
+                raise ValueError(f"{path}: inconsistent native gateway processor properties")
+            role, topic = current.get("act.route_role"), current.get("act.route_topic")
+            if role == "hub":
+                if topic is not None:
+                    raise ValueError(f"{path}: hub must not declare act.route_topic")
+            elif role not in ("tx", "rx") or not topic or (role, topic) in registrations:
+                raise ValueError(f"{path}: invalid or duplicate native binding registration")
+            else:
+                registrations.add((role, topic))
+    else:
+        if (len(processors) != 1 or
+                any(key in properties for _, _, properties in processors
+                    for key in ("act.runtime_mode", "act.route_role", "act.route_topic"))):
+            raise ValueError(f"{path}: expected one native gateway processor")
+        route, processor, properties = processors[0]
 
     def required(name):
         if not properties.get(name):
@@ -124,7 +155,8 @@ def _load_native_xml(path, text, provider_factory):
     }
     native = {"bindings": [], "ports": {}, "wan": {}, "profile_labels": {},
               "monitoring": monitoring == "true", "types_uri": required("act.types_uri"),
-              "admin_participant": lan, "receive_policy": receive_policy}
+              "admin_participant": lan, "receive_policy": receive_policy,
+              "runtime_mode": "independent" if independent else "combined"}
     config["native"] = native
     qos_root = ET.Element("dds")
     for library in root.findall("qos_library"):
@@ -137,10 +169,12 @@ def _load_native_xml(path, text, provider_factory):
         library_name += "_"
     extracted = ET.SubElement(qos_root, "qos_library", name=library_name)
 
-    def profile(element, name, tag):
+    def profile(element, name, tag, allow_defaults=False):
         qos = element.find(tag)
         if qos is None:
-            raise ValueError(f"{path}: missing explicit {tag} for {name}")
+            if not allow_defaults:
+                raise ValueError(f"{path}: missing explicit {tag} for {name}")
+            qos = ET.Element(tag)
         resolved = f"{library_name}::{name}"
         wrapper = ET.SubElement(extracted, "qos_profile", name=name)
         wrapper.append(copy.deepcopy(qos))
@@ -150,6 +184,11 @@ def _load_native_xml(path, text, provider_factory):
 
     domain = next(domain for domain in root.findall("./routing_service/domain_route")
                   if processor in domain.findall("./session/topic_route/processor"))
+    if independent:
+        sessions = domain.findall("session")
+        if (len(sessions) != 1 or
+                set(sessions[0].findall("topic_route")) != {entry[0] for entry in processors}):
+            raise ValueError(f"{path}: independent bindings require one gateway session")
     for index, participant in enumerate(domain.findall("participant")):
         name = participant.attrib["name"]
         if name in config["participants"]:
@@ -161,26 +200,41 @@ def _load_native_xml(path, text, provider_factory):
     for name in (lan, wan):
         if name not in config["participants"]:
             raise ValueError(f"{path}: missing declared participant: {name}")
-    route = next(route for route in domain.findall("./session/topic_route") if processor in list(route))
+    ports = [(port, properties) for route, _, properties in processors
+             for port in route if port.tag in ("input", "output")]
     for kind, endpoint, qos_tag in (("input", "reader", "datareader_qos"),
                                      ("output", "writer", "datawriter_qos")):
-        for index, port in enumerate(route.findall(kind)):
+        for index, (port, owner_properties) in enumerate(
+                (port, properties) for port, properties in ports if port.tag == kind):
             name = port.attrib["name"]
             if name in native["ports"]:
                 raise ValueError(f"{path}: duplicate native port: {name}")
-            declared, resolved = profile(port, f"{kind}_{index}", qos_tag)
+            owner_role = owner_properties.get("act.route_role")
+            declared, resolved = profile(
+                port, f"{kind}_{index}", qos_tag,
+                allow_defaults=independent and owner_role in ("tx", "rx"))
             participant = port.attrib["participant"]
             if participant not in config["participants"]:
                 raise ValueError(f"{path}: port {name} has unknown participant {participant}")
+            auto_qos = port.findtext("auto_configure_qos", "false").strip()
+            if auto_qos not in ("true", "false", "1", "0"):
+                raise ValueError(f"{path}: port {name} has invalid auto_configure_qos")
             spec = {"name": name, "topic": port.findtext("topic_name"),
                     "type": port.findtext("registered_type_name"), "participant": participant,
-                    "endpoint": endpoint, "profile": declared, "resolved_profile": resolved}
+                    "endpoint": endpoint, "profile": declared, "resolved_profile": resolved,
+                    "auto_configure_qos": auto_qos in ("true", "1"),
+                    "creation_mode": port.findtext("creation_mode", "IMMEDIATE"),
+                    "route_role": owner_role, "route_topic": owner_properties.get("act.route_topic")}
             native["ports"][name] = spec
             if participant == wan:
+                if independent and owner_role != "hub":
+                    raise ValueError(f"{path}: WAN port {name} must belong to the hub")
                 family = spec["topic"]
                 if endpoint in native["wan"].setdefault(family, {}):
                     raise ValueError(f"{path}: duplicate {family} WAN {endpoint}")
                 native["wan"][family][endpoint] = spec
+            elif independent and owner_role == "hub" and not name.startswith("monitor_"):
+                raise ValueError(f"{path}: application LAN port {name} must have an independent route")
     expected = {"Event", "State", "Periodic"} if contract == "three_topic_union" else {"Event", "Status"}
     if set(native["wan"]) != expected or any(set(ports) != {"reader", "writer"}
                                              for ports in native["wan"].values()):
@@ -215,6 +269,9 @@ def _load_native_xml(path, text, provider_factory):
                     port["participant"] != lan or port["topic"] != binding["topic_name"] or
                     port["type"] != binding["type"]):
                 raise ValueError(f"{path}: binding {identifier}: invalid {direction} port {port_name}")
+            if independent and (port["route_role"] != direction or
+                                port["route_topic"] != binding["topic_name"]):
+                raise ValueError(f"{path}: binding {identifier}: inconsistent native route registration")
             used_ports.add(port_name)
             enabled = binding.get(direction + ".enabled", "true")
             if enabled not in ("true", "false") or not binding.get(direction + ".recipients"):
@@ -231,6 +288,14 @@ def _load_native_xml(path, text, provider_factory):
                                      "forwarding_mode": "dynamic_data"})
     if not native["bindings"]:
         raise ValueError(f"{path}: no explicit native bindings")
+    if independent:
+        expected = {(binding["direction"], binding["topic"]) for binding in native["bindings"]}
+        if registrations != expected:
+            raise ValueError(f"{path}: native route registrations must match declared bindings")
+        for route, _, current in processors:
+            if current.get("act.route_role") != "hub" and len([
+                    port for port in route if port.tag in ("input", "output")]) != 1:
+                raise ValueError(f"{path}: native LAN binding routes require exactly one port")
     bandwidth = properties.get("act.async_bandwidth_bps", "2000000")
     if not bandwidth.isascii() or not bandwidth.isdigit() or int(bandwidth) < 2000000 or int(bandwidth) % 800:
         raise ValueError(f"{path}: invalid act.async_bandwidth_bps")
@@ -286,6 +351,8 @@ def _native_delivery_config(path, config, libraries, provider, infinite_duration
                      recipients=binding["recipients"],
                      lan={"port": lan["name"], "endpoint": lan["endpoint"],
                           "profile": lan["profile"], "type": lan["type"],
+                          "auto_configure_qos": lan["auto_configure_qos"],
+                          "creation_mode": lan["creation_mode"],
                           "settings": native_port_settings(lan, provider, infinite_duration)})
         topics.setdefault(binding["topic"], []).append(value)
     if native["monitoring"]:

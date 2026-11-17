@@ -201,7 +201,7 @@ def render(model, config, library, data_plane_only):
         child(element, "creation_mode", "IMMEDIATE")
         child(element, "auto_configure_qos", "false")
         qos = child(element, "datareader_qos" if kind == "input" else "datawriter_qos",
-                    base_name=spec["profile"])
+                    **({"base_name": spec["profile"]} if spec.get("profile") else {}))
         if kind == "input":
             qos.append(copy.deepcopy(retention))
         return element
@@ -227,16 +227,53 @@ def render(model, config, library, data_plane_only):
             child(parameters, "element", parameter)
         port("output", dict(spec, name="wan_out_" + family["name"],
                             profile=family["writer_profile"]))
+    # Keep WAN discovery, native histories and monitor/control alive independently
+    # of each application's endpoint. All routes use the same native session.
+    route.attrib["name"] = "wan_hub"
+    def role_processor(target, role, topic=None):
+        plugin = copy.deepcopy(processor)
+        values = plugin.find("./property/value")
+        for name, value in (("act.runtime_mode", "independent"), ("act.route_role", role),
+                            *([("act.route_topic", topic)] if topic else [])):
+            entry = child(values, "element")
+            child(entry, "name", name)
+            child(entry, "value", value)
+        endpoints = target.findall("input") + target.findall("output")
+        if endpoints:
+            target.insert(list(target).index(endpoints[0]), plugin)
+        else:
+            target.append(plugin)
+
+    route.remove(processor)
+    role_processor(route, "hub")
+    for kind, specs, role in (("input", model.get("inputs", []), "tx"),
+                              ("output", model.get("outputs", []), "rx")):
+        for spec in specs:
+            endpoint = route.find(f"./{kind}[@name='{spec['name']}']")
+            route.remove(endpoint)
+            lan_route = child(session, "topic_route", name=role + "_" + spec["name"])
+            child(lan_route, "route_types", "false")
+            role_processor(lan_route, role, spec["topic"])
+            endpoint.find("creation_mode").text = "ON_DOMAIN_MATCH"
+            endpoint.find("auto_configure_qos").text = "true"
+            lan_route.append(endpoint)
     return ET.tostring(root, encoding="unicode")
 
 
 def preflight(path, service_name="ACTGateway"):
     """Validate original XML entries before Routing Service collapses its property map."""
-    root = ET.parse(path).getroot()
+    root = path.getroot() if isinstance(path, ET.ElementTree) else ET.parse(path).getroot()
     service = root.find(f"./routing_service[@name='{service_name}']")
     if service is None:
         raise ValueError(f"missing routing_service {service_name}")
     processors = service.findall(".//topic_route/processor")
+    # Validate the new topology first, then reuse v1's complete binding/type/QoS
+    # validation against a flattened in-memory route.
+    independent = any(entry.findtext("name") == "act.runtime_mode"
+                      for processor in processors
+                      for entry in processor.findall("./property/value/element"))
+    if independent:
+        return _preflight_independent(root, service, service_name)
     if len(processors) != 1:
         raise ValueError("v1 requires exactly one explicit gateway processor")
     processor = processors[0]
@@ -369,6 +406,102 @@ def preflight(path, service_name="ACTGateway"):
             if not binding.get("tx.port") or binding.get("tx.enabled", "true") != "true":
                 raise ValueError(f"mission receive policy requires enabled local input: {topic}")
     return properties
+
+
+def _preflight_independent(root, service, service_name):
+    sessions = service.findall("./domain_route/session")
+    if len(sessions) != 1:
+        raise ValueError("independent gateway requires one native session")
+    routes = sessions[0].findall("topic_route")
+    common = None
+    hub = None
+    seen = set()
+    flat = ET.Element("topic_route", name="gateway")
+    role_keys = {"act.runtime_mode", "act.route_role", "act.route_topic"}
+    for route in routes:
+        processors = route.findall("processor")
+        if len(processors) != 1:
+            raise ValueError("independent route requires exactly one processor")
+        processor = processors[0]
+        props = {}
+        for entry in processor.findall("./property/value/element"):
+            key, value = entry.findtext("name"), entry.findtext("value", "")
+            if not key or key in props:
+                raise ValueError(f"empty or duplicate processor property: {key}")
+            props[key] = value
+        if props.get("act.runtime_mode") != "independent":
+            raise ValueError("mixed or unsupported act.runtime_mode")
+        role = props.get("act.route_role")
+        topic = props.get("act.route_topic")
+        if role not in ("hub", "tx", "rx") or (role == "hub") == bool(topic):
+            raise ValueError("invalid independent route role/topic")
+        identity = (role, topic)
+        if identity in seen:
+            raise ValueError("duplicate independent route role/topic")
+        seen.add(identity)
+        canonical = {key: value for key, value in props.items() if key not in role_keys}
+        if common is not None and common != canonical:
+            raise ValueError("independent routes must declare the identical gateway model")
+        common = canonical
+        if role == "hub":
+            hub = route
+            plugin = copy.deepcopy(processor)
+            for entry in list(plugin.findall("./property/value/element")):
+                if entry.findtext("name") in role_keys:
+                    plugin.find("./property/value").remove(entry)
+            flat.append(plugin)
+        endpoints = route.findall("input") + route.findall("output")
+        if role != "hub":
+            if len(endpoints) != 1 or endpoints[0].tag != ("input" if role == "tx" else "output"):
+                raise ValueError("LAN routes must have exactly one direction-specific port")
+            endpoint = endpoints[0]
+            if endpoint.findtext("topic_name") != topic:
+                raise ValueError("LAN route topic does not match act.route_topic")
+            if endpoint.findtext("creation_mode") != "ON_DOMAIN_MATCH":
+                raise ValueError("independent LAN endpoints require ON_DOMAIN_MATCH")
+            if endpoint.findtext("auto_configure_qos") not in ("true", "false"):
+                raise ValueError("independent LAN auto_configure_qos must be explicit")
+        else:
+            for endpoint in endpoints:
+                if (endpoint.findtext("creation_mode") != "IMMEDIATE" or
+                        endpoint.findtext("auto_configure_qos") != "false"):
+                    raise ValueError("hub ports require IMMEDIATE and explicit QoS")
+                if endpoint.find("datareader_qos") is None and endpoint.find("datawriter_qos") is None:
+                    raise ValueError("hub ports require explicit QoS")
+        for endpoint in endpoints:
+            flat.append(copy.deepcopy(endpoint))
+    if hub is None:
+        raise ValueError("missing always-on WAN hub")
+    families = ("Event", "State", "Periodic") if common.get("act.wan_contract") == "three_topic_union" else (
+        "Event", "Status")
+    expected = {("input", "wan_in_" + family) for family in families}
+    expected.update(("output", "wan_out_" + family) for family in families)
+    if common.get("act.monitoring") == "true":
+        expected.add(("input", "monitor_command"))
+        expected.update(("output", "monitor_" + name)
+                        for name in ("ack", "status", "mesh", "links", "diagnostics"))
+    actual = [(endpoint.tag, endpoint.attrib.get("name")) for endpoint in
+              hub.findall("input") + hub.findall("output")]
+    if len(actual) != len(set(actual)) or set(actual) != expected:
+        raise ValueError("hub must declare exactly one native pair per WAN family and its monitor ports")
+    for endpoint in hub.findall("input") + hub.findall("output"):
+        wan_port = endpoint.attrib["name"].startswith("wan_")
+        if endpoint.attrib.get("participant") != common.get(
+                "act.wan_participant" if wan_port else "act.lan_participant"):
+            raise ValueError("hub port participant mismatch")
+        qos = endpoint.find("datareader_qos" if endpoint.tag == "input" else "datawriter_qos")
+        if qos is None or not qos.attrib.get("base_name"):
+            raise ValueError("hub ports require an explicit XML QoS profile")
+        if wan_port:
+            family = endpoint.attrib["name"].split("_", 2)[2]
+            if endpoint.findtext("topic_name") != family or endpoint.findtext("registered_type_name") != (
+                    "WanEvent" if family in ("Event", "State") else "WanStatus"):
+                raise ValueError("hub WAN port topic/type mismatch")
+    for route in routes:
+        sessions[0].remove(route)
+    sessions[0].append(flat)
+    # Avoid a scratch file and a second parser by accepting an ElementTree internally.
+    return preflight(ET.ElementTree(root), service_name)
 
 
 def write_bundle(model, library, data_plane_only, path):

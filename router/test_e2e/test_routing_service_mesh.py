@@ -19,7 +19,7 @@ from harness_v2.receive_policy import ReceivePolicyHistory
 from harness_v2.scripts.delivery_audit_report import expected_receivers
 from test_routing_service import rs_build, rs_contract, rs_mesh, configure_contract
 from conftest import REPO_ROOT, RouterProcess, render_config, set_wan_qos_env
-from util.dds_probe import reader_qos, writer_qos, write_until_seen
+from util.dds_probe import Probe, reader_qos, writer_qos, write_until_seen
 
 
 RS_WAN_CONTRACT = "three_topic_union"
@@ -82,6 +82,8 @@ def test_native_startup_rejects_lan_endpoint_ownership(
         rs_build, unique_domains, e2e_tmp_dir, kind, wrong_domain):
     """Bypass Python preflight: the native processor must reject the actual endpoint."""
     set_wan_qos_env()
+    for index in range(1, 12):
+        os.environ["WAN_PEER" + (str(index) if index > 1 else "")] = "[0-15]@builtin.udpv4://127.0.0.1"
     path = render_config("control-platform.yaml", unique_domains, e2e_tmp_dir)
     config = yaml.safe_load(path.read_text())
     configure_contract(config, "three_topic_union")
@@ -96,17 +98,22 @@ def test_native_startup_rejects_lan_endpoint_ownership(
     root = ET.parse(prepared)
     domain = root.find(".//domain_route")
     lan = domain.find("participant[@name='platform_lan']")
+    direction = "output" if kind == "output" else "input"
+    topic = "Mission" if direction == "output" else "ContactReport"
+    port = next(port for port in root.findall(".//topic_route/" + direction)
+                if port.get("participant") == "platform_lan" and port.findtext("topic_name") == topic)
+    actual_domain = unique_domains["platform_lan"]
     if kind == "participant":
         lan.find("domain_id").text = str(unique_domains["control_lan"])
+        actual_domain = unique_domains["control_lan"]
     else:
         other = copy.deepcopy(lan)
         other.set("name", "wrong_lan")
         other.find("domain_participant_qos/participant_name/name").text = "Boat30/rs/wrong_lan"
         if wrong_domain:
             other.find("domain_id").text = str(unique_domains["control_lan"])
+            actual_domain = unique_domains["control_lan"]
         domain.insert(0, other)
-        port = next(port for port in root.findall(".//topic_route/" + kind)
-                    if port.get("participant") == "platform_lan")
         port.set("participant", "wrong_lan")
     root.write(prepared)
     home = Path(os.environ["NDDSHOME"])
@@ -119,17 +126,53 @@ def test_native_startup_rejects_lan_endpoint_ownership(
         process = RouterProcess(subprocess.Popen(
             [str(executable), "-cfgFile", str(prepared), "-cfgName", "ACTGateway",
              "-verbosity", "WARN"], env=environment, stdout=log, stderr=subprocess.STDOUT), log_path)
-    try:
+    with ExitStack() as cleanup:
+        cleanup.callback(process.stop)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
+            assert process.is_alive(), log_path.read_text()
+            if "rs.gateway.started" in log_path.read_text():
+                break
+            time.sleep(0.05)
+        assert "rs.gateway.started" in log_path.read_text(), log_path.read_text()
+        # Discovery now activates only the deliberately misbound child. The hub
+        # is allowed to run, but no rejected native handle may enter its registry.
+        application = Probe(actual_domain)
+        cleanup.callback(application.close)
+        observer = Probe(unique_domains["wan"], participant_profile="wan_three_topic_participant",
+                         participant_partition=["SHARED"])
+        cleanup.callback(observer.close)
+        marker = "ownership-rejection"
+        if direction == "input":
+            writer = application.writer(topic, "contact_report", writer_qos("lan_event"))
+            sample = application.sample("contact_report", source="Boat30", source_node="Boat30",
+                                        contact_id=marker)
+            received = observer.reader("State", "WanEvent", reader_qos("wan_union_contacts"))
+        else:
+            received = application.reader(topic, "control_command", reader_qos("lan_event"))
+            writer = observer.writer("Event", "WanEvent", writer_qos("wan_event"))
+            payload = observer.sample("control_command", source=marker, destination="Boat30",
+                                      command_id=marker)
+            sample = observer.sample("WanEvent", schema_version=3, source_id="OwnershipPeer",
+                                     source_role="control", original_topic=topic, instance_id=marker)
+            sample["audience.destination_ids"] = ["Boat30"]
+            sample["payload.command"] = payload
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            writer.write(sample)
             if "LAN participant/domain mismatch" in log_path.read_text() or not process.is_alive():
                 break
             time.sleep(0.05)
         text = log_path.read_text()
         assert "LAN participant/domain mismatch" in text, text
-        assert "rs.gateway.started" not in text, text
-    finally:
-        process.stop()
+        assert f"event=rs.gateway.lan_active direction={'tx' if direction == 'input' else 'rx'} topic={topic}" not in text
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            writer.write(sample)
+            for data, info in received.take():
+                if info.valid:
+                    assert data["instance_id" if direction == "input" else "command_id"] != marker
+            time.sleep(0.03)
 
 
 def test_rejected_oversized_team_diagnostic_keeps_ack_and_heartbeat_serializable(rs_mesh):
@@ -152,6 +195,114 @@ def test_rejected_oversized_team_diagnostic_keeps_ack_and_heartbeat_serializable
     assert health["heartbeat_seq"] > heartbeat
     assert len(health["receive_filter_error"].encode()) <= 255
     assert "x" * 254 + ";" in nodes["Boat30"][0].log_path.read_text()
+
+
+@pytest.mark.parametrize("rs_contract", ["two_topic_union", "three_topic_union"])
+@pytest.mark.parametrize("output_ready", [False, True])
+def test_invalid_status_never_revives_peer(rs_mesh, rs_contract, output_ready):
+    nodes, observer = rs_mesh
+    process, control = nodes["Control_20"]
+    mesh = control.reader("ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
+    family = "Periodic" if rs_contract == "three_topic_union" else "Status"
+    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+    health = wait_sample(frames, lambda data: dds.DynamicData(data)
+                         if data["original_topic"] == "RouterHealth" else None)
+    health["source_id"] = "InvalidStatus"
+    health["instance_id"] = "InvalidStatus/rs"
+    health["payload.health.router"] = "InvalidStatus/rs"
+    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_status"))
+    navigation = (control.reader("PlatformStatus", "platform_init_status", reader_qos("lan_status"))
+                  if output_ready else None)
+
+    def presence(data, expected):
+        return any(peer["health"]["router"] == "InvalidStatus/rs"
+                   and str(peer["presence"]) == expected for peer in data["peers"])
+
+    wait_sample(mesh, lambda data: presence(data, "PRESENCE_ALIVE"),
+                send=lambda: writer.write(health))
+    writer.unregister_instance(writer.register_instance(health))
+    wait_sample(mesh, lambda data: presence(data, "PRESENCE_STALE"), timeout=6)
+    invalid = dds.DynamicData(health)
+    invalid["schema_version"] = 999
+    invalid["original_topic"] = "PlatformStatus"
+    invalid["instance_id"] = "InvalidStatus"
+    invalid["audience.control"] = True
+    invalid["audience.global"] = True
+    invalid["payload.navigation"] = observer.sample(
+        "platform_init_status", source="InvalidStatus", audit_sequence=98765)
+    observed = 0
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        writer.write(invalid)
+        for sample in mesh.take():
+            if sample.info.valid:
+                assert not presence(sample.data, "PRESENCE_ALIVE")
+                observed += presence(sample.data, "PRESENCE_STALE")
+        if navigation is not None:
+            assert not any(info.valid and data["audit_sequence"] == 98765
+                           for data, info in navigation.take())
+        time.sleep(0.03)
+    assert observed > 0
+    assert "unsupported schema version" in process.log_path.read_text()
+    invalid["schema_version"] = 3
+    wait_sample(mesh, lambda data: presence(data, "PRESENCE_ALIVE"),
+                send=lambda: writer.write(invalid))
+
+
+@pytest.mark.parametrize("rs_contract", ["two_topic_union", "three_topic_union"])
+def test_status_burst_observes_every_consumed_instance(rs_mesh, rs_contract):
+    nodes, observer = rs_mesh
+    process, control = nodes["Control_20"]
+    mesh = control.reader("ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
+    navigation = control.reader("PlatformStatus", "platform_init_status", reader_qos("lan_status"))
+    family = "Periodic" if rs_contract == "three_topic_union" else "Status"
+    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+    template = wait_sample(frames, lambda data: dds.DynamicData(data)
+                           if data["original_topic"] == "RouterHealth" else None)
+    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_status"))
+    peers = {f"Burst{index}/rs" for index in range(40)}
+
+    def present(data, expected):
+        return {peer["health"]["router"] for peer in data["peers"]
+                if str(peer["presence"]) == expected} & peers
+
+    health = []
+    for index in range(40):
+        frame = dds.DynamicData(template)
+        frame["source_id"] = f"Burst{index}"
+        frame["instance_id"] = f"Burst{index}/rs"
+        frame["payload.health.router"] = f"Burst{index}/rs"
+        wait_sample(mesh, lambda data: frame["instance_id"] in present(data, "PRESENCE_ALIVE"),
+                    send=lambda: writer.write(frame))
+        health.append(frame)
+    for frame in health:
+        writer.unregister_instance(writer.register_instance(frame))
+    wait_sample(mesh, lambda data: present(data, "PRESENCE_STALE") == peers, timeout=8)
+    wait_sample(mesh, lambda data: navigation.subscription_matched_status.current_count > 0)
+    children = Path(f"/proc/{process._popen.pid}/task/{process._popen.pid}/children").read_text().split()
+    assert len(children) == 1, children
+    service_pid = int(children[0])
+    os.kill(service_pid, signal.SIGSTOP)
+    try:
+        for index, frame in enumerate(health):
+            frame["original_topic"] = "PlatformStatus"
+            frame["instance_id"] = f"Burst{index}"
+            frame["audience.control"] = True
+            frame["audience.global"] = True
+            frame["payload.navigation"] = observer.sample(
+                "platform_init_status", source=f"Burst{index}", audit_sequence=98000 + index)
+            writer.write(frame)
+        time.sleep(0.3)
+    finally:
+        os.kill(service_pid, signal.SIGCONT)
+    wait_sample(mesh, lambda data: present(data, "PRESENCE_ALIVE") == peers, timeout=3)
+    received = set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and len(received) < 40:
+        received.update((data["source"], data["audit_sequence"]) for data, info in navigation.take()
+                        if info.valid and 98000 <= data["audit_sequence"] < 98040)
+        time.sleep(0.03)
+    assert received == {(f"Burst{index}", 98000 + index) for index in range(40)}
 
 
 def test_periodic_lifecycle_never_revives_peer_and_health_loss_uses_countdown(rs_mesh):
@@ -189,8 +340,15 @@ def test_periodic_lifecycle_never_revives_peer_and_health_loss_uses_countdown(rs
     navigation["payload.navigation"] = observer.sample("platform_init_status", source="Lifecycle")
     for action in ("unregister", "dispose"):
         wait_sample(mesh, lambda data: state(data, "PRESENCE_ALIVE"), send=send_health)
-        # Materialize a nonhealth key without waiting for a health deadline.
+        # Confirm actual Status reception before changing health lifecycle. With
+        # no LAN consumer, submission does not prove that the hub observed it:
+        # a later valid Status must legitimately recover a missing heartbeat.
+        wait_sample(mesh, lambda data: found if
+                    (found := state(data, "PRESENCE_ALIVE")) and found["health_age_ms"] >= 100 else None)
         writer.write(navigation)
+        wait_sample(mesh, lambda data: found if
+                    (found := state(data, "PRESENCE_ALIVE")) and
+                    found["health_age_ms"] - found["last_seen_delta_ms"] >= 50 else None, timeout=2)
         handle = writer.register_instance(template)
         if action == "unregister":
             writer.unregister_instance(handle)
@@ -226,6 +384,9 @@ def test_periodic_lifecycle_never_revives_peer_and_health_loss_uses_countdown(rs
         # Any valid Status (not only a heartbeat) restores reachability.
         wait_sample(mesh, lambda data: state(data, "PRESENCE_ALIVE"),
                     send=lambda: writer.write(navigation))
+    for process, _ in nodes.values():
+        assert "rs.lifecycle.error" not in process.log_path.read_text()
+        assert "event=rs.gateway.lan_active direction=rx topic=PlatformStatus" not in process.log_path.read_text()
 
 
 @pytest.fixture

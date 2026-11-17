@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GatewayModel.hpp"
+#include "GatewayPorts.hpp"
 #include "core/LinkStatsCollector.hpp"
 #include "core/PresenceMonitor.hpp"
 
@@ -13,7 +14,8 @@ public:
     using Data = dds::core::xtypes::DynamicData;
     using Route = rti::routing::processor::Route;
 
-    GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types);
+    GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types,
+                   GatewayPorts* ports = nullptr);
     ~GatewayMonitor();
     void tick();
     void received(const std::string& family, const Data& frame, const dds::sub::SampleInfo& info);
@@ -46,6 +48,7 @@ private:
     static std::string key(const std::string& topic, bool source);
 
     Route& route_;
+    GatewayPorts* ports_;
     GatewayModel& model_;
     rti::core::cond::AsyncWaitSet waitset_;
     std::shared_ptr<router::WanStatusCallbacks> status_callbacks_;

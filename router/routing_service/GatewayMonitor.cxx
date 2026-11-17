@@ -22,8 +22,9 @@ bool active(const std::vector<Binding>& bindings) {
 
 } // namespace
 
-GatewayMonitor::GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types)
-    : route_(route), model_(model) {
+GatewayMonitor::GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types,
+                               GatewayPorts* ports)
+    : route_(route), ports_(ports), model_(model) {
     auto writer = status_writer();
     auto reader = status_reader();
     auto mesh = route_.output<Data>("monitor_mesh").dds_data_writer();
@@ -162,16 +163,34 @@ RouterStatus GatewayMonitor::snapshot() const {
                 status.output_write_timeouts = count->second.timeouts;
                 status.last_error = count->second.error;
             }
-            auto reader = route_.input<Data>(source ? model_.input_port(topic.name)
-                    : "wan_in_" + status.wan_family).dds_data_reader();
-            auto writer = route_.output<Data>(source ? "wan_out_" + status.wan_family
-                    : model_.output_port(topic.name)).dds_data_writer();
-            status.input_matched = reader.subscription_matched_status().current_count();
-            status.output_matched = writer.publication_matched_status().current_count();
+            const auto input_name = source ? model_.input_port(topic.name) : "wan_in_" + status.wan_family;
+            const auto output_name = source ? "wan_out_" + status.wan_family : model_.output_port(topic.name);
+            const bool registered = !ports_ || (source ? ports_->inputs.count(topic.name)
+                                                       : ports_->outputs.count(topic.name));
+            if (!ports_ || !source)
+                status.input_matched = route_.input<Data>(input_name).dds_data_reader()
+                        .subscription_matched_status().current_count();
+            else if (registered)
+                status.input_matched = ports_->inputs.at(topic.name).subscription_matched_status().current_count();
+            if (!ports_ || source)
+                status.output_matched = route_.output<Data>(output_name).dds_data_writer()
+                        .publication_matched_status().current_count();
+            else if (registered)
+                status.output_matched = ports_->outputs.at(topic.name).publication_matched_status().current_count();
             status.reader_qos_summary = source ? found->second.front().qos : status.wan_family;
             status.writer_qos_summary = source ? status.wan_family : found->second.front().qos;
             status.match_reason = source ? "WAN matches are shared-family connectivity"
-                                         : "Static LAN output";
+                                         : "Native LAN output";
+            const bool available = registered && (!ports_ ||
+                    (source ? status.input_matched > 0 : status.output_matched > 0));
+            if (!available) {
+                status.topic_state = RouterRouteTopicState::TOPIC_IDLE;
+                status.type_resolved = false;
+                status.discovery_state = RouterRouteDiscoveryState::DISCOVERY_PARTIAL;
+                status.match_reason = "Waiting for native LAN domain match; WAN history retained";
+                route.discovery_state = status.discovery_state;
+                route.state = RouterRouteOperationalState::ROUTE_DEGRADED;
+            }
             if (!status.last_error.empty()) {
                 status.topic_state = RouterRouteTopicState::TOPIC_ERROR;
                 route.state = RouterRouteOperationalState::ROUTE_ERROR;
