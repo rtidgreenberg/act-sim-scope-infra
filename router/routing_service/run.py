@@ -121,7 +121,8 @@ def render(model, config, library, data_plane_only):
     service = child(root, "routing_service", name="ACTGateway", group_name=model["node"])
     domain = child(service, "domain_route", name="gateway")
     needed_types = {}
-    inputs = list(model.get("inputs", []))
+    inputs = [spec for spec in model.get("inputs", [])
+              if data_plane_only or spec["topic"] != "ActRouterDiagnostics"]
     outputs = list(model.get("outputs", []))
     if not data_plane_only:
         lan = model["admin_participant"]
@@ -183,6 +184,12 @@ def render(model, config, library, data_plane_only):
     properties = child(child(processor, "property"), "value")
     explicit = dict(model["properties"])
     explicit["act.monitoring"] = str(not data_plane_only).lower()
+    if not data_plane_only:
+        for name, value in list(explicit.items()):
+            if name.endswith(".topic_name") and value == "ActRouterDiagnostics":
+                port_name = name[:-len("topic_name")] + "tx.port"
+                if port_name in explicit:
+                    explicit[port_name] = "monitor_diagnostics"
     for name, value in explicit.items():
         entry = child(properties, "element")
         child(entry, "name", name)
@@ -249,6 +256,8 @@ def render(model, config, library, data_plane_only):
     for kind, specs, role in (("input", model.get("inputs", []), "tx"),
                               ("output", model.get("outputs", []), "rx")):
         for spec in specs:
+            if not data_plane_only and role == "tx" and spec["topic"] == "ActRouterDiagnostics":
+                continue
             endpoint = route.find(f"./{kind}[@name='{spec['name']}']")
             route.remove(endpoint)
             lan_route = child(session, "topic_route", name=role + "_" + spec["name"])
@@ -376,7 +385,10 @@ def preflight(path, service_name="ACTGateway"):
                 raise ValueError(f"binding {identifier}: missing {direction}.recipients")
             if binding.get(direction + ".enabled", "true") not in ("true", "false"):
                 raise ValueError(f"binding {identifier}: invalid {direction}.enabled")
-            if name not in ports or ports[name][0] != kind or name in used:
+            internal_diagnostics = (properties["act.monitoring"] == "true" and direction == "tx"
+                                    and topic == "ActRouterDiagnostics" and name == "monitor_diagnostics")
+            port_kind = "output" if internal_diagnostics else kind
+            if name not in ports or ports[name][0] != port_kind or name in used:
                 raise ValueError(f"binding {identifier}: missing/duplicate {kind} port {name}")
             used.add(name)
             port = ports[name][1]

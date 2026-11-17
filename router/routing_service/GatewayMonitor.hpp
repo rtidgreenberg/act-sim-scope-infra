@@ -14,7 +14,8 @@ public:
     using Data = dds::core::xtypes::DynamicData;
     using Route = rti::routing::processor::Route;
 
-    GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types,
+    GatewayMonitor(Route& route, GatewayModel& model, router::WanCodec& codec,
+                   dds::core::QosProvider types,
                    GatewayPorts* ports = nullptr);
     ~GatewayMonitor();
     void tick();
@@ -45,11 +46,13 @@ private:
     void command(const RouterCommand& command);
     void update_teams(const std::vector<std::string>& teams);
     void check_deadline();
+    void publish_diagnostics(const RouterDiagnostics& diagnostics);
     static std::string key(const std::string& topic, bool source);
 
     Route& route_;
     GatewayPorts* ports_;
     GatewayModel& model_;
+    router::WanCodec& codec_;
     rti::core::cond::AsyncWaitSet waitset_;
     std::shared_ptr<router::WanStatusCallbacks> status_callbacks_;
     std::shared_ptr<router::WanConfigCallbacks> config_callbacks_;

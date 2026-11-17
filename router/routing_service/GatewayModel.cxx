@@ -287,10 +287,12 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
                 }
                 continue;
             }
+            const bool internal_diagnostics = source && topic == "ActRouterDiagnostics" &&
+                    !config.presence_participant.empty() && port->second == "monitor_diagnostics";
             if (port->second.empty() || !ports.insert(port->second).second ||
                 port->second.compare(0, 7, "wan_in_") == 0 ||
                 port->second.compare(0, 8, "wan_out_") == 0 ||
-                port->second.compare(0, 8, "monitor_") == 0) {
+                (port->second.compare(0, 8, "monitor_") == 0 && !internal_diagnostics)) {
                 throw std::runtime_error("invalid or duplicate LAN port for " + topic);
             }
             any = true;

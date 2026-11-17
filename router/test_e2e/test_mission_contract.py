@@ -382,6 +382,9 @@ def backend(mission_modules, monkeypatch, tmp_path):
     bridge.audit_sent = {}
     bridge.audit_received = {}
     bridge.audit_versions = {}
+    bridge.audit_policy_history = module.ReceivePolicyHistory()
+    bridge.audit_policy_errors = set()
+    bridge.audit_policy_record_errors = {}
     bridge.wire_delivery = module.WireDelivery()
     bridge.traffic_cache = {}
     bridge.traffic_observers = set()

@@ -7,6 +7,7 @@
 #include <rti/pub/WriteParams.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <set>
 #include <limits>
@@ -139,7 +140,7 @@ public:
             }
         }
         if (!model_.config.presence_participant.empty()) {
-            monitor_.reset(new GatewayMonitor(route, model_, types_, independent_ ? &ports : nullptr));
+            monitor_.reset(new GatewayMonitor(route, model_, codec_, types_, independent_ ? &ports : nullptr));
         }
         router::Log::info("rs.gateway.started", {{"node", model_.config.node_name},
                           {"mode", monitor_ ? "mesh" : "data_plane_only"}});
@@ -288,12 +289,29 @@ private:
 
     void observe_admission(Reader reader, const std::string& family) {
         const auto rejected = reader.sample_rejected_status().total_count();
-        const auto lost = reader.sample_lost_status().total_count();
+        const auto lost_status = reader.sample_lost_status();
+        const auto lost = lost_status.total_count();
         auto& previous = admission_[family];
         if (rejected == previous.first && lost == previous.second) return;
+        const bool rejected_changed = rejected != previous.first;
         previous = {rejected, lost};
-        const auto message = "native WAN history admission failure: rejected=" +
-                std::to_string(rejected) + " lost=" + std::to_string(lost);
+        const bool best_effort = reader.qos().policy<dds::core::policy::Reliability>().kind() ==
+                dds::core::policy::ReliabilityKind::BEST_EFFORT;
+        const bool latest_state = model_.three_topic() && family == "State";
+        if (!rejected_changed && (best_effort || latest_state) &&
+            lost_status->last_reason() == rti::core::status::SampleLostState::lost_by_writer()) {
+            const auto now = std::chrono::steady_clock::now();
+            auto& reported = replaceable_loss_reported_[family];
+            if (now - reported >= std::chrono::seconds(1)) {
+                router::Log::warn(best_effort ? "rs.gateway.best_effort_loss" : "rs.gateway.latest_state_loss",
+                                 {{"family", family}, {"lost", std::to_string(lost)}});
+                reported = now;
+            }
+            return;
+        }
+        const auto message = "native WAN history loss/rejection: rejected=" +
+                std::to_string(rejected) + " lost=" + std::to_string(lost) +
+                " last_loss_reason=" + std::to_string(lost_status->last_reason().to_ulong());
         router::Log::error("rs.gateway.history_error", {{"family", family}, {"error", message}});
         if (monitor_) for (const auto& destination : model_.destinations) {
             if (family == model_.transport_mapping(destination.first).family)
@@ -419,6 +437,7 @@ private:
     std::unique_ptr<GatewayMonitor> monitor_;
     bool independent_;
     std::map<std::string, std::pair<int, int>> admission_;
+    std::map<std::string, std::chrono::steady_clock::time_point> replaceable_loss_reported_;
 };
 
 class IndependentProcessor : public rti::routing::processor::NoOpProcessor {

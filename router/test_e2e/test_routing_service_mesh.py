@@ -74,6 +74,97 @@ def absent(reader, sequence, seconds=0.8):
         time.sleep(0.04)
 
 
+def test_internal_diagnostics_forward_without_an_external_lan_producer(rs_mesh):
+    nodes, observer = rs_mesh
+    local = nodes["Boat30"][1].reader(
+        "ActRouterDiagnostics", "RouterDiagnostics", reader_qos("lan_status"))
+    snapshot = wait_sample(local, lambda data: data)
+    local_route = next(route for route in snapshot["routes"]
+                       if route["route_name"] == "ActRouterDiagnostics.tx")
+    assert str(local_route["state"]) == "ROUTE_ENABLED", str(local_route)
+    reader = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_status"))
+    frame = wait_sample(reader, lambda data: data
+                        if data["source_id"] == "Boat30"
+                        and data["original_topic"] == "ActRouterDiagnostics" else None)
+    assert frame["payload.diagnostics.router"] == "Boat30/rs"
+    assert frame["payload.diagnostics.snapshot_seq"] > 0
+    route = next(route for route in frame["payload.diagnostics.routes"]
+                 if route["route_name"] == "ActRouterDiagnostics.tx")
+    assert str(route["state"]) == "ROUTE_ENABLED"
+    assert route["topic_status"][0]["input_matched"] == 0
+    assert "Internal diagnostics producer" in route["topic_status"][0]["match_reason"]
+    assert "rs.gateway.lan_active direction=tx topic=ActRouterDiagnostics" not in (
+        nodes["Boat30"][0].log_path.read_text())
+
+
+@pytest.mark.parametrize("rs_contract", ["two_topic_union", "three_topic_union"])
+def test_internal_diagnostics_failure_preserves_monitoring_cadence(
+        rs_build, rs_contract, unique_domains, e2e_tmp_dir):
+    set_wan_qos_env()
+    for index in range(1, 12):
+        os.environ["WAN_PEER" + (str(index) if index > 1 else "")] = "[0-15]@builtin.udpv4://127.0.0.1"
+    path = render_config("control-platform.yaml", unique_domains, e2e_tmp_dir)
+    config = yaml.safe_load(path.read_text())
+    configure_contract(config, rs_contract)
+    config["router"]["admin_participant"] = "platform_lan"
+    config["routing_service"] = {"receive_policy": "static"}
+    path.write_text(yaml.safe_dump(config))
+    prepared = e2e_tmp_dir / "diagnostics_failure.xml"
+    subprocess.run([sys.executable, str(REPO_ROOT / "router/routing_service/run.py"),
+                    "--config", str(path), "--role", "platform", "--node-name", "Boat30",
+                    "--name", "rs", "--build-dir", str(rs_build), "--render", str(prepared)],
+                   check=True, capture_output=True, text=True)
+    root = ET.parse(prepared)
+    family = "Periodic" if rs_contract == "three_topic_union" else "Status"
+    qos = root.find(f".//output[@name='wan_out_{family}']/datawriter_qos")
+    # Health occupies the only WAN instance; diagnostics must fail on every tick.
+    limits = ET.SubElement(qos, "resource_limits")
+    ET.SubElement(limits, "max_instances").text = "1"
+    ET.SubElement(limits, "initial_instances").text = "1"
+    root.write(prepared)
+    with ExitStack() as cleanup:
+        observer = Probe(unique_domains["wan"], participant_name="Control_20/observer",
+                         role_name="act.router", participant_partition=["SHARED"],
+                         participant_profile=("wan_three_topic_participant"
+                                              if rs_contract == "three_topic_union"
+                                              else "wan_two_topic_participant"))
+        cleanup.callback(observer.close)
+        health = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+        local = Probe(unique_domains["platform_lan"])
+        cleanup.callback(local.close)
+        diagnostics = local.reader("ActRouterDiagnostics", "RouterDiagnostics", reader_qos("lan_status"))
+        links = local.reader("ActRouterLinkStats", "RouterLinkStats", reader_qos("router_link_stats"))
+        log_path = e2e_tmp_dir / "diagnostics_failure.log"
+        with log_path.open("w") as log:
+            process = RouterProcess(subprocess.Popen(
+                [sys.executable, str(REPO_ROOT / "router/routing_service/run.py"),
+                 "--xml", str(prepared)], cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT), log_path)
+        cleanup.callback(process.stop)
+
+        def diagnostics_failed(data):
+            return any(route["route_name"] == "ActRouterDiagnostics.tx" and route["last_error"]
+                       for route in data["routes"])
+
+        wait_sample(diagnostics, diagnostics_failed)
+        health.take()
+        links.take()
+        sequences, captures = set(), set()
+        deadline = time.monotonic() + 3.2
+        while time.monotonic() < deadline:
+            assert process.is_alive(), log_path.read_text()
+            for data, info in health.take():
+                if info.valid and data["original_topic"] == "RouterHealth":
+                    sequences.add(data["payload.health.heartbeat_seq"])
+            for data, info in links.take():
+                if info.valid and data["peer_router"] == "Control_20/observer":
+                    captures.add(data["capture_seq"])
+            time.sleep(0.02)
+        assert len(sequences) >= 2, sequences
+        assert max(sequences) - min(sequences) <= 5, sequences
+        assert len(captures) >= 2, captures
+        assert "event=rs.diagnostics.error" in log_path.read_text()
+
+
 @pytest.mark.parametrize("kind,wrong_domain", [
     ("input", False), ("output", False), ("input", True), ("output", True),
     ("participant", True),
@@ -303,6 +394,78 @@ def test_status_burst_observes_every_consumed_instance(rs_mesh, rs_contract):
                         if info.valid and 98000 <= data["audit_sequence"] < 98040)
         time.sleep(0.03)
     assert received == {(f"Burst{index}", 98000 + index) for index in range(40)}
+
+
+@pytest.mark.skipif(os.environ.get("ROUTER_CONFIG_LOSS_TEST") != "1",
+                    reason="requires an explicitly owned isolated network with NET_ADMIN")
+@pytest.mark.parametrize("rs_contract,family", [
+    ("two_topic_union", "Status"), ("three_topic_union", "Periodic"),
+    ("three_topic_union", "State"),
+])
+def test_replaceable_packet_loss_does_not_poison_router_health(rs_mesh, rs_contract, family):
+    nodes, observer = rs_mesh
+    process, control = nodes["Control_20"]
+    remote = nodes["Boat30"][1].reader(
+        "ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
+    state = family == "State"
+    type_name, profile = (("WanEvent", "wan_union_contacts") if state
+                          else ("WanStatus", "wan_union_status"))
+    frames = observer.reader(family, type_name, reader_qos(profile))
+    if state:
+        frame = observer.sample("WanEvent", schema_version=3, source_id="PacketLossPeer",
+                                source_role="platform", original_topic="ContactReport",
+                                instance_id="latest")
+        frame["audience.control"] = True
+        frame["payload.contact_report"] = observer.sample(
+            "contact_report", source="PacketLossPeer", contact_id="latest")
+        contacts = control.reader("ContactReport", "contact_report", reader_qos("lan_event"))
+    else:
+        frame = wait_sample(frames, lambda data: dds.DynamicData(data)
+                            if data["original_topic"] == "RouterHealth" else None)
+        frame["source_id"] = "PacketLossPeer"
+        frame["instance_id"] = "PacketLossPeer/rs"
+        frame["payload.health.router"] = "PacketLossPeer/rs"
+    writer = observer.writer(family, type_name, writer_qos(profile))
+    event = "rs.gateway.latest_state_loss" if state else "rs.gateway.best_effort_loss"
+
+    def control_health(data):
+        return next((peer["health"] for peer in data["peers"]
+                     if peer["health"]["router"] == "Control_20/rs"), None)
+
+    initial = wait_sample(remote, control_health)
+    assert str(initial["overall_state"]) != "ROUTER_ERROR"
+    wait_sample(frames, lambda data: data["source_id"] == "PacketLossPeer",
+                send=lambda: writer.write(frame))
+    subprocess.run(["tc", "qdisc", "add", "dev", "lo", "root", "netem", "loss", "100%"],
+                   check=True, capture_output=True, text=True)
+    try:
+        for sequence in range(1, 31):
+            if state:
+                frame["payload.contact_report.audit_sequence"] = sequence
+            writer.write(frame)
+            time.sleep(0.02)
+        counters = subprocess.run(["tc", "-s", "qdisc", "show", "dev", "lo"],
+                                  check=True, capture_output=True, text=True).stdout
+        assert "loss 100%" in counters
+    finally:
+        subprocess.run(["tc", "qdisc", "del", "dev", "lo", "root"],
+                       check=True, capture_output=True, text=True)
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        writer.write(frame)
+        if event in process.log_path.read_text():
+            break
+        time.sleep(0.05)
+    text = process.log_path.read_text()
+    assert event in text, text
+    assert "rs.gateway.history_error" not in text, text
+    recovered = wait_sample(remote, lambda data: (
+        health if (health := control_health(data))
+        and health["heartbeat_seq"] > initial["heartbeat_seq"] else None))
+    assert recovered["overall_state"] == initial["overall_state"]
+    if state:
+        wait_sample(contacts, lambda data: data["source"] == "PacketLossPeer"
+                    and data["contact_id"] == "latest" and data["audit_sequence"] == 30)
 
 
 def test_periodic_lifecycle_never_revives_peer_and_health_loss_uses_countdown(rs_mesh):

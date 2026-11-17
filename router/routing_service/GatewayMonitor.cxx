@@ -22,9 +22,10 @@ bool active(const std::vector<Binding>& bindings) {
 
 } // namespace
 
-GatewayMonitor::GatewayMonitor(Route& route, GatewayModel& model, dds::core::QosProvider types,
+GatewayMonitor::GatewayMonitor(Route& route, GatewayModel& model, router::WanCodec& codec,
+                               dds::core::QosProvider types,
                                GatewayPorts* ports)
-    : route_(route), ports_(ports), model_(model) {
+    : route_(route), ports_(ports), model_(model), codec_(codec) {
     auto writer = status_writer();
     auto reader = status_reader();
     auto mesh = route_.output<Data>("monitor_mesh").dds_data_writer();
@@ -165,12 +166,14 @@ RouterStatus GatewayMonitor::snapshot() const {
             }
             const auto input_name = source ? model_.input_port(topic.name) : "wan_in_" + status.wan_family;
             const auto output_name = source ? "wan_out_" + status.wan_family : model_.output_port(topic.name);
-            const bool registered = !ports_ || (source ? ports_->inputs.count(topic.name)
+            const bool internal_diagnostics = source && ports_ &&
+                    model_.input_port(topic.name) == "monitor_diagnostics";
+            const bool registered = internal_diagnostics || !ports_ || (source ? ports_->inputs.count(topic.name)
                                                        : ports_->outputs.count(topic.name));
             if (!ports_ || !source)
                 status.input_matched = route_.input<Data>(input_name).dds_data_reader()
                         .subscription_matched_status().current_count();
-            else if (registered)
+            else if (registered && !internal_diagnostics)
                 status.input_matched = ports_->inputs.at(topic.name).subscription_matched_status().current_count();
             if (!ports_ || source)
                 status.output_matched = route_.output<Data>(output_name).dds_data_writer()
@@ -181,7 +184,8 @@ RouterStatus GatewayMonitor::snapshot() const {
             status.writer_qos_summary = source ? status.wan_family : found->second.front().qos;
             status.match_reason = source ? "WAN matches are shared-family connectivity"
                                          : "Native LAN output";
-            const bool available = registered && (!ports_ ||
+            if (internal_diagnostics) status.match_reason = "Internal diagnostics producer; shared WAN output";
+            const bool available = registered && (internal_diagnostics || !ports_ ||
                     (source ? status.input_matched > 0 : status.output_matched > 0));
             if (!available) {
                 status.topic_state = RouterRouteTopicState::TOPIC_IDLE;
@@ -205,6 +209,32 @@ RouterStatus GatewayMonitor::snapshot() const {
         result.routes.push_back(route);
     }
     return result;
+}
+
+void GatewayMonitor::publish_diagnostics(const RouterDiagnostics& diagnostics) {
+    presence_->publish_diagnostics(diagnostics);
+    const std::string topic = "ActRouterDiagnostics";
+    const auto source = model_.sources.find(topic);
+    if (!ports_ || source == model_.sources.end() || !active(source->second) ||
+        model_.input_port(topic) != "monitor_diagnostics") return;
+    try {
+        const auto data = rti::core::xtypes::convert(diagnostics);
+        const auto frame = codec_.pack(topic, data, model_.metadata(topic, data));
+        auto writer = route_.output<Data>(
+                "wan_out_" + std::string(model_.transport_mapping(topic).family)).dds_data_writer();
+        rti::pub::WriteParams params;
+        params.priority(model_.publication_priority(topic));
+        writer->write(frame, params);
+        forwarded(topic, true, true);
+    } catch (const dds::core::TimeoutError& error) {
+        failed(topic, true, error.what(), true);
+        router::Log::error("rs.diagnostics.error",
+                          {{"topic", topic}, {"error", error.what()}, {"timeout", "true"}});
+    } catch (const std::exception& error) {
+        failed(topic, true, error.what(), false);
+        router::Log::error("rs.diagnostics.error",
+                          {{"topic", topic}, {"error", error.what()}, {"timeout", "false"}});
+    }
 }
 
 void GatewayMonitor::update_teams(const std::vector<std::string>& teams) {
@@ -362,7 +392,7 @@ void GatewayMonitor::tick() {
         diagnostics.send_timestamp = health.send_timestamp;
         diagnostics.state_revision = revision_;
         diagnostics.routes = state.routes;
-        presence_->publish_diagnostics(diagnostics);
+        publish_diagnostics(diagnostics);
         last_heartbeat_ = now;
     }
     if (now - last_links_ >= std::chrono::milliseconds(model_.config.link_stats_period_ms)) {

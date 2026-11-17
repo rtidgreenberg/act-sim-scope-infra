@@ -68,7 +68,7 @@ class TrafficDashboardTests(unittest.TestCase):
             page.add_script_tag(path=str(STATIC / "vendor/vis-network.min.js"))
             page.add_script_tag(path=str(STATIC / "traffic_rates.js"))
             page.add_script_tag(url=f"http://telemetry.test/{graph_src}")
-            self.assertIn("?v=20261112-optional-filter-snapshots-v1", graph_src)
+            self.assertIn("?v=20261114-mission-cft-v2", graph_src)
             self.assertTrue(page.locator(f'script[src="http://telemetry.test/{graph_src}"]').count())
             page.wait_for_function("window.__network.body.data.edges.length > 0 && window.meshSocket")
             page.evaluate("""() => {

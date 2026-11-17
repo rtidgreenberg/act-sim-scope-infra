@@ -82,12 +82,14 @@ def rs_mesh(rs_build, rs_contract, unique_domains, extra_domains, e2e_tmp_dir,
             config["routing_service"].setdefault(
                 "receive_policy", getattr(request.module, "RS_RECEIVE_POLICY", "static"))
             config["qos_profiles"].update(getattr(request.module, "RS_QOS_PROFILES", {}))
+            enabled_topics = {"Mission", "Team", "ActPlatformStatusMode",
+                              "PlatformCommandAck", "ContactReport"}
+            if getattr(request.module, "RS_MONITORING", False):
+                enabled_topics.add("ActRouterDiagnostics")
             for route in config["routes"]:
                 route["enabled"] = True
                 if route.get("topics") and all(
-                        topic["name"] not in ("Mission", "Team",
-                                              "ActPlatformStatusMode", "PlatformCommandAck",
-                                              "ContactReport") for topic in route["topics"]):
+                        topic["name"] not in enabled_topics for topic in route["topics"]):
                     route["enabled"] = False
             path.write_text(yaml.safe_dump(config))
             log_path = work / "routing_service.log"
