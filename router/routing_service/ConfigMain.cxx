@@ -90,14 +90,21 @@ int main(int argc, char** argv) {
             }
         }
         for (const auto& family : model.families()) {
-            const auto alias = family == "Event" ? "wan_event"
-                             : family == "State" ? "wan_contacts" : "wan_status";
+            const auto alias = model.is_event_family(family) ? "wan_event"
+                             : model.is_state_family(family) ? "wan_contacts" : "wan_status";
             YAML::Node entry;
             entry["name"] = family;
             entry["type"] = model.transport_type(family);
             entry["participant"] = model.wan.name;
             entry["profile"] = explicit_config ? "" : model.profile(alias, true);
-            entry["writer_profile"] = model.three_topic()
+            entry["writer_profile"] = model.six_topic()
+                ? (family == "P1_Event" ? "ACT_QOS_LIB::rs_six_topic_p1_event"
+                   : family == "P1_Periodic" ? "ACT_QOS_LIB::rs_six_topic_p1_periodic"
+                   : family == "P2_Event" ? "ACT_QOS_LIB::rs_six_topic_p2_event"
+                   : family == "P2_State" ? "ACT_QOS_LIB::rs_six_topic_p2_state"
+                   : family == "P2_Periodic" ? "ACT_QOS_LIB::rs_six_topic_p2_periodic"
+                                             : "ACT_QOS_LIB::rs_six_topic_p3_periodic")
+                : model.three_topic()
                 ? (family == "Event" ? "ACT_QOS_LIB::rs_three_topic_event"
                    : family == "State" ? "ACT_QOS_LIB::rs_three_topic_state"
                                        : "ACT_QOS_LIB::rs_three_topic_periodic")

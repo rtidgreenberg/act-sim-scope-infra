@@ -63,7 +63,7 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
             "node": "Boat30", "role": "platform", "router": "rs", "teams": ["TEAM_A"],
             "types": "harness_v2/datamodel/gen/ActTypes.xml",
             "qos_libraries": ["harness_v2/qos/act_qos_profiles.xml"],
-            "async_bandwidth_bps": 2000000,
+            "async_bandwidth_bps": 4000000,
             "properties": explicit_properties("two_topic_union"),
             "admin_participant": "lan",
             "participants": [
@@ -143,7 +143,7 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
                 self.assertIsNone(limits)
         variables = {entry.findtext("name"): entry.findtext("value") for entry in
                      self.xml.findall("./configuration_variables/value/element")}
-        self.assertEqual(variables["RS_FLOW_BYTES_PER_PERIOD"], "2500")
+        self.assertEqual(variables["RS_FLOW_BYTES_PER_PERIOD"], "5000")
 
     def test_embedded_channels_include_schema_required_multicast_settings(self):
         channels = self.xml.findall(
@@ -694,6 +694,60 @@ class NativeConfigurationTests(unittest.TestCase):
                         wan = next(participant for participant in snapshot["participants"]
                                    if participant["name"] == "platform_wan")
                         self.assertEqual(wan["team_partition"], expected)
+
+    def test_six_topic_union_with_p3_opt_in_and_ipv6_profiles(self):
+        root = Path(__file__).resolve().parents[2]
+        binary = Path(os.environ["ACT_RS_BUILD_DIR"]) / "act_rs_config"
+        config = yaml.safe_load((root / "router/config/control-platform.yaml").read_text())
+        config["router"]["wan_contract"] = "six_topic_union"
+        config["router"]["admin_participant"] = "platform_lan"
+        config["types"]["xml"] = str(root / "harness_v2/datamodel/gen/ActTypes.xml")
+        config["qos_libraries"] = [str(root / "harness_v2/qos/act_qos_profiles.xml")]
+        config["qos_profiles"].update({
+            "wan_participant": "ACT_QOS_LIB::rs_six_topic_participant_v6",
+            "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
+            "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
+            "wan_status": "ACT_QOS_LIB::wan_union_status",
+        })
+        config["routing_service"] = {"topic_priorities": {"PlatformDetailStatus": "low"}}
+        with tempfile.TemporaryDirectory(dir=TEST_WORKDIR) as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(yaml.safe_dump(config))
+            result = subprocess.run(
+                [str(binary), str(path), "platform", "Boat30", "rs", "TEAM_A"],
+                cwd=root, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            model = yaml.safe_load(result.stdout)
+            self.assertEqual(
+                [entry["name"] for entry in model["wan"]],
+                ["P1_Event", "P1_Periodic", "P2_Event", "P2_State", "P2_Periodic", "P3_Periodic"])
+            self.assertEqual(model["topic_families"]["RouterConfig"], "P1_Event")
+            self.assertEqual(model["topic_families"]["RouterHealth"], "P1_Periodic")
+            self.assertEqual(model["topic_families"]["Mission"], "P2_Event")
+            self.assertEqual(model["topic_families"]["ContactReport"], "P2_State")
+            self.assertEqual(model["topic_families"]["PlatformStatus"], "P2_Periodic")
+            self.assertEqual(model["topic_families"]["PlatformDetailStatus"], "P3_Periodic")
+            self.assertEqual(model["publication_priorities"]["RouterConfig"], 600)
+            self.assertEqual(model["publication_priorities"]["RouterHealth"], 600)
+            self.assertEqual(model["publication_priorities"]["Mission"], 400)
+            self.assertEqual(model["publication_priorities"]["ContactReport"], 250)
+            self.assertEqual(model["publication_priorities"]["PlatformStatus"], 200)
+            self.assertEqual(model["publication_priorities"]["PlatformDetailStatus"], 100)
+            rendered = render(model, str(path), "plugin.so", False)
+            preflight(ET.ElementTree(ET.fromstring(rendered)))
+            xml_root = ET.fromstring(rendered)
+            p1_in = xml_root.find(".//input[@name='wan_in_P1_Event']/content_filter/expression")
+            p1_h_in = xml_root.find(".//input[@name='wan_in_P1_Periodic']/content_filter/expression")
+            self.assertIn("RouterConfig", p1_in.text)
+            self.assertIn("RouterHealth", p1_h_in.text)
+
+            for bad_topic in ("Mission", "ContactReport", "RouterHealth"):
+                config["routing_service"] = {"topic_priorities": {bad_topic: "low"}}
+                path.write_text(yaml.safe_dump(config))
+                bad = subprocess.run(
+                    [str(binary), str(path), "platform", "Boat30", "rs", "TEAM_A"],
+                    cwd=root, text=True, capture_output=True)
+                self.assertNotEqual(bad.returncode, 0)
 
     def test_explicit_rejects_missing_conflicting_catalog_keys_and_wrong_family(self):
         cases = [

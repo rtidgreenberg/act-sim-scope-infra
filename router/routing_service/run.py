@@ -223,8 +223,9 @@ def render(model, config, library, data_plane_only):
         cft = child(incoming, "content_filter")
         expression = family["expression"]
         if not data_plane_only:
-            internal = ("RouterConfig" if family["name"] == "Event" else
-                        "RouterHealth" if family["name"] in ("Periodic", "Status") else None)
+            contract = model.get("wan_contract") or model["properties"].get("act.wan_contract")
+            internal = ("RouterConfig" if family["name"] == ("P1_Event" if contract == "six_topic_union" else "Event") else
+                        "RouterHealth" if family["name"] in ("P1_Periodic", "Periodic", "Status") else None)
             if internal and f"original_topic = '{internal}'" not in expression:
                 expression = (f"({expression}) OR "
                               f"(source_id <> %0 AND original_topic = '{internal}')")
@@ -308,7 +309,7 @@ def preflight(path, service_name="ACTGateway"):
         raise ValueError("act.monitoring must be true or false")
     if properties.get("act.receive_policy", "mission") not in ("mission", "static"):
         raise ValueError("act.receive_policy must be mission or static")
-    if properties["act.wan_contract"] not in ("two_topic_union", "three_topic_union"):
+    if properties["act.wan_contract"] not in ("two_topic_union", "three_topic_union", "six_topic_union"):
         raise ValueError("unsupported act.wan_contract")
     participants = service.findall("./domain_route/participant")
     lan = [item for item in participants
@@ -370,8 +371,11 @@ def preflight(path, service_name="ACTGateway"):
         if topic in topics:
             raise ValueError(f"duplicate binding topic: {topic}")
         topics.add(topic)
-        if channel not in {family + "_" + priority for family in ("event", "state", "periodic")
-                           for priority in ("high", "normal")}:
+        allowed_channels = {family + "_" + priority for family in ("event", "state", "periodic")
+                            for priority in ("high", "normal")}
+        if properties["act.wan_contract"] == "six_topic_union":
+            allowed_channels.add("periodic_low")
+        if channel not in allowed_channels:
             raise ValueError(f"unsupported channel: {channel}")
         directions = 0
         for direction, kind in (("tx", "input"), ("rx", "output")):
@@ -484,8 +488,12 @@ def _preflight_independent(root, service, service_name):
             flat.append(copy.deepcopy(endpoint))
     if hub is None:
         raise ValueError("missing always-on WAN hub")
-    families = ("Event", "State", "Periodic") if common.get("act.wan_contract") == "three_topic_union" else (
-        "Event", "Status")
+    contract = common.get("act.wan_contract")
+    families = (
+        ("P1_Event", "P1_Periodic", "P2_Event", "P2_State", "P2_Periodic", "P3_Periodic")
+        if contract == "six_topic_union" else
+        ("Event", "State", "Periodic") if contract == "three_topic_union" else ("Event", "Status")
+    )
     expected = {("input", "wan_in_" + family) for family in families}
     expected.update(("output", "wan_out_" + family) for family in families)
     if common.get("act.monitoring") == "true":
@@ -507,7 +515,7 @@ def _preflight_independent(root, service, service_name):
         if wan_port:
             family = endpoint.attrib["name"].split("_", 2)[2]
             if endpoint.findtext("topic_name") != family or endpoint.findtext("registered_type_name") != (
-                    "WanEvent" if family in ("Event", "State") else "WanStatus"):
+                    "WanEvent" if family in ("Event", "State", "P1_Event", "P2_Event", "P2_State") else "WanStatus"):
                 raise ValueError("hub WAN port topic/type mismatch")
     for route in routes:
         sessions[0].remove(route)

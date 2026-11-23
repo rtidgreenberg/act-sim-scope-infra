@@ -198,7 +198,7 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     if (config.node_role != "platform" && config.node_role != "control") {
         throw std::runtime_error("act.role must be platform or control");
     }
-    if (!three_topic() && config.wan_contract != "two_topic_union") {
+    if (!three_topic() && !six_topic() && config.wan_contract != "two_topic_union") {
         throw std::runtime_error("unsupported act.wan_contract");
     }
     const auto monitoring = required(properties, "act.monitoring");
@@ -252,8 +252,8 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
             const auto channel_family = channel.substr(0, separator);
             const std::string family = channel_family == "event" ? "Event" :
                 channel_family == "state" ? "State" :
-                channel_family == "periodic" ? (three_topic() ? "Periodic" : "Status") : "";
-            if (family.empty() || (family == "State" && !three_topic())) {
+                channel_family == "periodic" ? (three_topic() || six_topic() ? "Periodic" : "Status") : "";
+            if (family.empty() || (family == "State" && !three_topic() && !six_topic())) {
                 throw std::runtime_error("unsupported channel for " + topic);
             }
             custom_mappings_[topic] = router::wan_full_type_mapping(
@@ -269,8 +269,12 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
             throw std::runtime_error("binding " + group.first + " disagrees with fixed ACT codec catalog for " + topic);
         }
         const auto family = std::string(transport_mapping(topic).family);
-        const auto prefix = family == "Event" ? "event_" : family == "State" ? "state_" : "periodic_";
-        if (channel != std::string(prefix) + "high" && channel != std::string(prefix) + "normal") {
+        const auto prefix = is_event_family(family) ? "event_" :
+                            is_state_family(family) ? "state_" : "periodic_";
+        const bool allow_low = six_topic() && is_periodic_family(family) && topic != "RouterHealth";
+        if (channel != std::string(prefix) + "high" &&
+            channel != std::string(prefix) + "normal" &&
+            !(allow_low && channel == "periodic_low")) {
             throw std::runtime_error("binding " + group.first + ": channel/family mismatch for " + topic);
         }
         topic_priorities[topic] = channel.substr(channel.find('_') + 1);
@@ -335,9 +339,9 @@ GatewayModel::GatewayModel(const std::string& path, const std::string& role,
         throw std::runtime_error(error);
     }
     if (!name.empty()) config.router_name = name;
-    if (config.wan_contract != "two_topic_union" && !three_topic()) {
+    if (config.wan_contract != "two_topic_union" && !three_topic() && !six_topic()) {
         throw std::runtime_error(
-                "Routing Service variant requires wan_contract: two_topic_union or three_topic_union");
+                "Routing Service variant requires wan_contract: two_topic_union, three_topic_union or six_topic_union");
     }
     if (!router::validate_wan_contract(config, error) ||
         !router::validate_qos_aliases(config, error)) {
@@ -395,8 +399,10 @@ GatewayModel::GatewayModel(const std::string& path, const std::string& role,
                 const auto topic = priority.first.as<std::string>();
                 router::wan_mapping(topic);
                 const auto level = priority.second.as<std::string>();
-                if (level != "high" && level != "normal") {
-                    throw std::runtime_error("priority for " + topic + " must be high or normal");
+                const bool allow_low = six_topic() &&
+                    is_periodic_family(transport_mapping(topic).family) && topic != "RouterHealth";
+                if (level != "high" && level != "normal" && !(allow_low && level == "low")) {
+                    throw std::runtime_error("invalid priority for " + topic + ": " + level);
                 }
                 topic_priorities[topic] = level;
             }
@@ -577,11 +583,20 @@ void GatewayModel::peer_interests() {
 }
 
 int GatewayModel::publication_priority(const std::string& topic) const {
-    const bool high = topic_priorities.at(topic) == "high";
+    const auto& level = topic_priorities.at(topic);
+    const bool high = level == "high";
+    if (six_topic()) {
+        const std::string family = transport_mapping(topic).family;
+        if (family == "P1_Event" || family == "P1_Periodic") return 600;
+        if (family == "P2_Event") return high ? 400 : 300;
+        if (family == "P2_State") return high ? 350 : 250;
+        if (family == "P2_Periodic") return high ? 300 : 200;
+        return 100;
+    }
     if (three_topic()) {
         const std::string family = transport_mapping(topic).family;
-        if (family == "Event") return high ? 600 : 300;
-        if (family == "State") return high ? 400 : 200;
+        if (is_event_family(family)) return high ? 600 : 300;
+        if (is_state_family(family)) return high ? 400 : 200;
         return high ? 500 : 100;
     }
     return transport_mapping(topic).family == "Event"
@@ -592,21 +607,65 @@ bool GatewayModel::three_topic() const {
     return config.wan_contract == "three_topic_union";
 }
 
+bool GatewayModel::six_topic() const {
+    return config.wan_contract == "six_topic_union";
+}
+
+std::string GatewayModel::health_family() const {
+    return six_topic() ? "P1_Periodic" : three_topic() ? "Periodic" : "Status";
+}
+
+std::string GatewayModel::config_family() const {
+    return six_topic() ? "P1_Event" : "Event";
+}
+
+bool GatewayModel::is_state_family(const std::string& family) const {
+    return (three_topic() && family == "State") || (six_topic() && family == "P2_State");
+}
+
+bool GatewayModel::is_periodic_family(const std::string& family) const {
+    return family == "Status" || family == "Periodic" ||
+           family == "P1_Periodic" || family == "P2_Periodic" || family == "P3_Periodic";
+}
+
+bool GatewayModel::is_event_family(const std::string& family) const {
+    return family == "Event" || family == "P1_Event" || family == "P2_Event";
+}
+
 std::vector<std::string> GatewayModel::families() const {
+    if (six_topic()) {
+        return {"P1_Event", "P1_Periodic", "P2_Event", "P2_State", "P2_Periodic", "P3_Periodic"};
+    }
     return three_topic() ? std::vector<std::string>{"Event", "State", "Periodic"}
                          : std::vector<std::string>{"Event", "Status"};
 }
 
 router::WanMapping GatewayModel::transport_mapping(const std::string& topic) const {
     const auto custom = custom_mappings_.find(topic);
+    router::WanMapping mapping = custom != custom_mappings_.end()
+        ? custom->second
+        : router::wan_transport_mapping(topic, three_topic() || six_topic());
     if (custom != custom_mappings_.end()) {
-        auto mapping = custom->second;
         mapping.family = custom_families_.at(topic);
         if (mapping.family == "State") mapping.qos_profile = "wan_contacts";
-        return mapping;
+    } else if (std::string(mapping.family) == "Telemetry") {
+        mapping.family = "Periodic";
     }
-    auto mapping = router::wan_transport_mapping(topic, three_topic());
-    if (std::string(mapping.family) == "Telemetry") mapping.family = "Periodic";
+    if (six_topic()) {
+        if (topic == "RouterConfig") {
+            mapping.family = "P1_Event";
+        } else if (topic == "RouterHealth") {
+            mapping.family = "P1_Periodic";
+        } else if (std::string(mapping.family) == "Event") {
+            mapping.family = "P2_Event";
+        } else if (std::string(mapping.family) == "State") {
+            mapping.family = "P2_State";
+        } else {
+            const auto prio = topic_priorities.find(topic);
+            mapping.family = (prio != topic_priorities.end() && prio->second == "low")
+                ? "P3_Periodic" : "P2_Periodic";
+        }
+    }
     return mapping;
 }
 
@@ -628,7 +687,7 @@ std::string GatewayModel::transport_type(const std::string& family) const {
     if (std::find(supported.begin(), supported.end(), family) == supported.end()) {
         throw std::runtime_error("unsupported Routing Service WAN family: " + family);
     }
-    return router::wan_transport_type(family == "Periodic" ? "Telemetry" : family);
+    return (is_event_family(family) || is_state_family(family)) ? "WanEvent" : "WanStatus";
 }
 
 std::string GatewayModel::input_port(const std::string& topic) const {
@@ -740,8 +799,8 @@ std::map<std::string, std::string> GatewayModel::properties() const {
         result[prefix + "branch"] = mapping.branch;
         result[prefix + "instance_id"] = mapping.instance_field;
         const std::string family = mapping.family;
-        result[prefix + "channel"] = (family == "Event" ? "event_" :
-            family == "State" ? "state_" : "periodic_") + topic_priorities.at(topic);
+        result[prefix + "channel"] = (is_event_family(family) ? "event_" :
+            is_state_family(family) ? "state_" : "periodic_") + topic_priorities.at(topic);
         for (bool source : {true, false}) {
             const auto& bindings = source ? sources : destinations;
             const auto found = bindings.find(topic);
@@ -794,15 +853,16 @@ router::WanReceiveFilter GatewayModel::receive_filter(const std::string& family)
     }
     transport_type(family);
     std::vector<router::WanMapping> mappings;
-    if (!custom_mappings_.empty()) {
+    if (!custom_mappings_.empty() || six_topic()) {
         for (auto mapping : codec_mappings()) {
             mapping = transport_mapping(mapping.topic);
-            if (mapping.family == "Periodic") mapping.family = "Telemetry";
+            if (!six_topic() && mapping.family == "Periodic") mapping.family = "Telemetry";
             mappings.push_back(std::move(mapping));
         }
     }
-    auto filter = router::wan_receive_filter(family == "Periodic" ? "Telemetry" : family,
-                                            config.node_name, interests, three_topic(), mappings);
+    auto filter = router::wan_receive_filter(
+        (!six_topic() && family == "Periodic") ? "Telemetry" : family,
+        config.node_name, interests, three_topic() || six_topic(), mappings);
     if (mission_policy()) {
         // Preserve the qualified discriminator-first audience clauses. An outer
         // role/topic disjunction changes Connext's sequence-filter evaluation.

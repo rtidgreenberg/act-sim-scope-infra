@@ -297,7 +297,7 @@ private:
         previous = {rejected, lost};
         const bool best_effort = reader.qos().policy<dds::core::policy::Reliability>().kind() ==
                 dds::core::policy::ReliabilityKind::BEST_EFFORT;
-        const bool latest_state = model_.three_topic() && family == "State";
+        const bool latest_state = model_.is_state_family(family);
         if (!rejected_changed && (best_effort || latest_state) &&
             lost_status->last_reason() == rti::core::status::SampleLostState::lost_by_writer()) {
             const auto now = std::chrono::steady_clock::now();
@@ -362,7 +362,7 @@ private:
             const auto forward = [&](const Data& frame, const dds::sub::SampleInfo& info, bool valid) {
                 if (frame.value<std::string>("source_id") == model_.config.node_name) return;
                 auto decoded = decode(family, frame, valid);
-                if (monitor_ && (!independent_ || family == "Event" || family == "State" || !valid))
+                if (monitor_ && (!independent_ || model_.is_event_family(family) || model_.is_state_family(family) || !valid))
                     monitor_->received(family, frame, info);
                 if (decoded.topic == "RouterHealth" || decoded.topic == "RouterConfig") return;
                 const auto found = model_.destinations.find(decoded.topic);
@@ -381,8 +381,7 @@ private:
             else {
                 auto reader = route.input<Data>("wan_in_" + family).dds_data_reader();
                 observe_admission(reader, family);
-                const bool observe_status = monitor_ &&
-                        family == (model_.three_topic() ? "Periodic" : "Status");
+                const bool observe_status = monitor_ && family == model_.health_family();
                 if (observe_status) {
                     // Observe any received status for presence even if its LAN
                     // destination is pending. Only this pass marks Status READ;
@@ -409,8 +408,8 @@ private:
                         family == model_.transport_mapping(destination.first).family)
                         consume_native(reader, destination.first, forward, observe_status);
                 }
-                if (family == "Event") consume_native(reader, "RouterConfig", forward);
-                if (family == (model_.three_topic() ? "Periodic" : "Status"))
+                if (family == model_.config_family()) consume_native(reader, "RouterConfig", forward);
+                if (family == model_.health_family())
                     consume_native(reader, "RouterHealth", forward, observe_status);
             }
         }

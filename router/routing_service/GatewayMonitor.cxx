@@ -58,12 +58,12 @@ void GatewayMonitor::bind_config(std::shared_ptr<router::WanConfigCallbacks> cal
 }
 
 dds::pub::DataWriter<GatewayMonitor::Data> GatewayMonitor::status_writer() const {
-    return route_.output<Data>(model_.three_topic() ? "wan_out_Periodic" : "wan_out_Status")
+    return route_.output<Data>("wan_out_" + model_.health_family())
             .dds_data_writer();
 }
 
 dds::sub::DataReader<GatewayMonitor::Data> GatewayMonitor::status_reader() const {
-    return route_.input<Data>(model_.three_topic() ? "wan_in_Periodic" : "wan_in_Status")
+    return route_.input<Data>("wan_in_" + model_.health_family())
             .dds_data_reader();
 }
 
@@ -75,7 +75,7 @@ void GatewayMonitor::write_status(const Data& frame) {
 }
 
 void GatewayMonitor::write_config(const Data& frame) {
-    auto writer = route_.output<Data>("wan_out_Event").dds_data_writer();
+    auto writer = route_.output<Data>("wan_out_" + model_.config_family()).dds_data_writer();
     rti::pub::WriteParams params;
     params.priority(model_.publication_priority("RouterConfig"));
     writer->write(frame, params);
@@ -322,7 +322,7 @@ void GatewayMonitor::received(const std::string& family, const Data& frame,
                 && status_callbacks_->health_missing) {
             status_callbacks_->health_missing(frame);
         }
-    } else if (family == "Event" && frame.value<std::string>("original_topic") == "RouterConfig"
+    } else if (family == model_.config_family() && frame.value<std::string>("original_topic") == "RouterConfig"
                && config_callbacks_) {
         std::lock_guard<std::mutex> lock(config_callbacks_->mutex);
         if (config_callbacks_->data) config_callbacks_->data(frame, info);
@@ -334,7 +334,7 @@ void GatewayMonitor::check_deadline() {
     const auto status = reader.requested_deadline_missed_status();
     if (status.total_count() == deadline_total_) return;
     deadline_total_ = status.total_count();
-    Data key = route_.input<Data>(model_.three_topic() ? "wan_in_Periodic" : "wan_in_Status")
+    Data key = route_.input<Data>("wan_in_" + model_.health_family())
             .create_data();
     reader.key_value(key, status.last_instance_handle());
     if (key.value<std::string>("original_topic") != "RouterHealth" || !status_callbacks_) return;

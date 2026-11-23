@@ -30,6 +30,12 @@ public:
     std::string profile(const std::string& alias, bool reader) const;
     int publication_priority(const std::string& topic) const;
     bool three_topic() const;
+    bool six_topic() const;
+    std::string health_family() const;
+    std::string config_family() const;
+    bool is_state_family(const std::string& family) const;
+    bool is_periodic_family(const std::string& family) const;
+    bool is_event_family(const std::string& family) const;
     std::vector<std::string> families() const;
     router::WanMapping transport_mapping(const std::string& topic) const;
     std::string transport_type(const std::string& family) const;
@@ -52,7 +58,7 @@ public:
     std::map<std::string, std::vector<Binding>> destinations;
     std::map<std::string, std::string> topic_priorities;
     std::map<std::string, std::string> periodic_input_profiles;
-    int async_bandwidth_bps = 2000000;
+    int async_bandwidth_bps = 4000000;
 
 private:
     bool explicit_ = false;

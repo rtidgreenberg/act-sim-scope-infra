@@ -56,7 +56,7 @@ def model(direction, domain):
         "node": "Boat30", "role": "platform", "router": "rs",
         "types": properties["act.types_uri"],
         "qos_libraries": [str(ROOT / "harness_v2/qos/act_qos_profiles.xml"), str(FIXTURE)],
-        "async_bandwidth_bps": 2000000,
+        "async_bandwidth_bps": 4000000,
         "properties": properties, "admin_participant": "lan",
         "participants": [
             {"name": "lan", "domain": domain, "profile": "AUTOQOS_TEST::participant",

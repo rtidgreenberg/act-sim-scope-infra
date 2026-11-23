@@ -168,8 +168,9 @@ bool parse_route_config(const std::string &path, RouteConfig &out, std::string &
         out.router_name = get_str(router, "name", "router");
         out.wan_contract = get_str(router, "wan_contract", "legacy");
         if (out.wan_contract != "legacy" && out.wan_contract != "two_topic_union"
-                && out.wan_contract != "three_topic_union") {
-            error = "router.wan_contract must be legacy, two_topic_union or three_topic_union";
+                && out.wan_contract != "three_topic_union"
+                && out.wan_contract != "six_topic_union") {
+            error = "router.wan_contract must be legacy, two_topic_union, three_topic_union or six_topic_union";
             return false;
         }
         // router.type_name retired (7c, D70): topic types are wire-learned. A leftover
@@ -413,7 +414,8 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
         return true;
     }
     try {
-        const bool separate_contacts = cfg.wan_contract == "three_topic_union";
+        const bool separate_contacts =
+                cfg.wan_contract == "three_topic_union" || cfg.wan_contract == "six_topic_union";
         if (cfg.wan_contract != "two_topic_union" && !separate_contacts) {
             throw std::runtime_error("unknown WAN contract");
         }
@@ -445,9 +447,14 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
                 (participant.role.empty() || participant.role == cfg.node_role)) {
                 ++count;
                 const auto profile = cfg.qos_profiles.at(participant.qos_profile_alias);
-                const std::string required = separate_contacts ? "ACT_QOS_LIB::wan_three_topic_participant"
-                                                              : "ACT_QOS_LIB::wan_two_topic_participant";
-                if (profile != required && profile != required + "_emane") {
+                const bool six_topic = cfg.wan_contract == "six_topic_union";
+                const std::string required = six_topic ? "ACT_QOS_LIB::rs_six_topic_participant_v6"
+                    : separate_contacts ? "ACT_QOS_LIB::wan_three_topic_participant"
+                                        : "ACT_QOS_LIB::wan_two_topic_participant";
+                const std::string emane_required = six_topic
+                    ? "ACT_QOS_LIB::rs_six_topic_participant_emane_v6"
+                    : required + "_emane";
+                if (profile != required && profile != emane_required) {
                     throw std::runtime_error(cfg.wan_contract + " requires its opt-in WAN participant profile");
                 }
                 if (participant.team_scoped && !participant.team_partitions_on_endpoints) {

@@ -46,6 +46,35 @@ development settings remain supported.
 
 ## Runtime correctness safeguards
 
+The isolated [LBED spike](../../spikes/routing_service_lbed/README.md) verifies
+native Routing Service forwarding of fixed binary envelopes on three WAN topics
+with either classic SPDP + LBED or SPDP2 + LBED, with zero SEDP exchanges.
+Its dynamic-CFT follow-up verifies receiver selection after runtime parameter
+changes, but **not writer-side suppression with LBED**: all offered samples
+cross the WAN, unlike the SEDP control. It is not a drop-in replacement for our
+WAN-saving audience filters. ACT processor integration, production endpoint
+catalogs and lifecycle/loss qualification remain separate. No mesh configuration
+or deployed discovery mode is changed.
+
+The isolated [binary-envelope compression spike](../../spikes/binary_wan_compression/README.md)
+verifies native LZ4/zlib forwarding, automatic decompression and sender-side
+metadata filtering, including a compressed Event runtime-interest update.
+Structured binary fixtures shrink substantially; random/already-compressed
+bytes do not. Bzip2 emits native errors and is rejected. This is not ACT
+binary-codec integration, a radio-performance guarantee or a deployed QoS change.
+
+The [open WAN investigations](../../docs/open-wan-investigations.md) track
+compression with the current asynchronous/shared-controller configuration,
+runtime RTPX suppression, conditional WAN ServiceRequest-channel removal and
+automatic envelope-key derivation from discovered topic keys.
+
+The source-only [startup optimization](../../docs/startup-optimization.md)
+retains application-reader preemptive-request suppression, adds 0–1 second
+SEDP/SPDP2 configuration response windows, and spaces owned container gateway
+launches across one second. It is isolated-qualified, not deployed; regenerate
+native XML through the owned lifecycle before adoption. Discovery requests are
+not claimed to be suppressed.
+
 Prepared XML must give the LAN participant the DDS identity
 `act.node/act.router/act.lan_participant` in
 `domain_participant_qos/participant_name/name`. The renderer supplies it.
@@ -81,6 +110,15 @@ Native loss accounting distinguishes the family policies. BEST_EFFORT
 rate-limited warnings when no new rejection accompanies them. State intentionally
 uses writer KEEP_LAST(1); this is not required Event history. Rejections, other
 loss reasons and reliable Event history loss remain explicit errors.
+
+WAN reader profiles now set
+`dds.data_reader.protocol.disable_preemptive_nack=true` in external XML.
+Event/State startup preemptive ACKNACKs are suppressed; normal heartbeat
+responses, positive acknowledgments and loss repair remain enabled. The
+BEST_EFFORT Status/Periodic profiles inherit the same property without changing
+their delivery policy. This source configuration change requires coordinated
+mesh regeneration/restart; it has not been applied to the retained live mesh.
+See the [packet-capture spike](../../spikes/preemptive_acknack/README.md).
 
 ## Retained deployment (2026-11-17)
 
@@ -424,7 +462,7 @@ Optional globals:
 - `act.teams`: semicolon-separated initial exact team names; empty/omitted means
   no teams. Semicolons are list delimiters, with no escaping syntax. Empty or
   duplicate entries reject.
-- `act.async_bandwidth_bps`: default `2000000`; positive 32-bit integer at least
+- `act.async_bandwidth_bps`: default `4000000`; positive 32-bit integer at least
   2,000,000 and divisible by 800. The native XML flow-controller values must
   express the intended budget; this property is not runtime QoS construction.
 
@@ -719,7 +757,8 @@ inherited from the selected WAN base profile.
 | Periodic / Normal | 100 | All other periodic cases |
 
 Event retains reliable KEEP_ALL. State inherits reliable writer KEEP_LAST(1)
-and reader KEEP_ALL. Periodic remains best effort KEEP_LAST(1). All three
+and reader KEEP_ALL. Event and State cap each NACK repair response at 64 KiB
+(65,536 bytes). Periodic remains best effort KEEP_LAST(1). All three
 writers share the same nominal 2 Mbps controller. The retained two-topic
 profiles `rs_wan_event` / `rs_wan_status` and their 400/300/200/100 ordering
 are unchanged. Priority preferences do not guarantee starvation-free health
@@ -735,7 +774,7 @@ Optional root-level YAML settings override the defaults:
 
 ```yaml
 routing_service:
-  async_bandwidth_bps: 2000000
+  async_bandwidth_bps: 4000000
   topic_priorities:
     ContactReport: normal
     RouterHealth: high
