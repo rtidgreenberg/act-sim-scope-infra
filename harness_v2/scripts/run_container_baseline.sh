@@ -16,8 +16,8 @@ EMANE_ENABLED=0
 TOPOLOGY=
 WITH_DASHBOARD=0
 DASHBOARD_PORT=8080
-WAN_CONTRACT=legacy
-ROUTER_BACKEND=custom
+WAN_CONTRACT=six_topic_union
+ROUTER_BACKEND=routing_service
 PLATFORM_IDS=()
 declare -A EMANE_NEM_ID EMANE_IP EMANE_CONTROL_IP
 WAN_PEERS=()
@@ -34,21 +34,21 @@ while [[ $# -gt 0 ]]; do
         --dashboard-port) DASHBOARD_PORT="$2"; shift 2 ;;
         --wan-contract) WAN_CONTRACT="$2"; shift 2 ;;
         --router-backend) ROUTER_BACKEND="$2"; shift 2 ;;
-        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union|three_topic_union] [--router-backend custom|routing_service] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
+        --help) echo "Usage: $0 {up|render|smoke|audit|isolation|down} --emane [--topology FILE|--platforms N] [--wan-contract legacy|two_topic_union|three_topic_union|six_topic_union] [--router-backend custom|routing_service] [--with-dashboard] [--dashboard-port PORT] [--workdir DIR] [--test-id ID] [--verbosity 0-3]"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
 case "$WAN_CONTRACT" in
-    legacy|two_topic_union|three_topic_union) ;;
-    *) echo "--wan-contract must be legacy, two_topic_union or three_topic_union" >&2; exit 1 ;;
+    legacy|two_topic_union|three_topic_union|six_topic_union) ;;
+    *) echo "--wan-contract must be legacy, two_topic_union, three_topic_union or six_topic_union" >&2; exit 1 ;;
 esac
 case "$ROUTER_BACKEND" in
     custom|routing_service) ;;
     *) echo "--router-backend must be custom or routing_service" >&2; exit 1 ;;
 esac
-if [[ "$ROUTER_BACKEND" == routing_service && "$WAN_CONTRACT" != three_topic_union ]]; then
-    echo "Routing Service mesh requires --wan-contract three_topic_union" >&2
+if [[ "$ROUTER_BACKEND" == routing_service && "$WAN_CONTRACT" != three_topic_union && "$WAN_CONTRACT" != six_topic_union ]]; then
+    echo "Routing Service mesh requires --wan-contract three_topic_union or six_topic_union" >&2
     exit 1
 fi
 
@@ -143,18 +143,25 @@ apply_wan_contract() {
         -e 's/ACT_QOS_LIB::wan_router_participant_emane\b/ACT_QOS_LIB::wan_two_topic_participant_emane/g' \
         -e 's/ACT_QOS_LIB::wan_router_participant\b/ACT_QOS_LIB::wan_two_topic_participant/g' \
         -e 's/ACT_QOS_LIB::wan_status\b/ACT_QOS_LIB::wan_union_status/g' "$1"
-    [[ "$WAN_CONTRACT" == three_topic_union ]] || return 0
-    python3 - "$1" <<'PY'
+    [[ "$WAN_CONTRACT" == three_topic_union || "$WAN_CONTRACT" == six_topic_union ]] || return 0
+    python3 - "$1" "$WAN_CONTRACT" <<'PY'
 import sys
 import yaml
 
-path = sys.argv[1]
+path, contract = sys.argv[1], sys.argv[2]
 with open(path) as source:
     config = yaml.safe_load(source)
-config["router"]["wan_contract"] = "three_topic_union"
+config["router"]["wan_contract"] = contract
 aliases = config["qos_profiles"]
-for alias, profile in aliases.items():
-    aliases[alias] = profile.replace("wan_two_topic_participant", "wan_three_topic_participant")
+if contract == "six_topic_union":
+    for alias, profile in aliases.items():
+        if profile == "ACT_QOS_LIB::wan_two_topic_participant_emane":
+            aliases[alias] = "ACT_QOS_LIB::rs_six_topic_participant_emane_v6"
+        elif profile == "ACT_QOS_LIB::wan_two_topic_participant":
+            aliases[alias] = "ACT_QOS_LIB::rs_six_topic_participant_v6"
+else:
+    for alias, profile in aliases.items():
+        aliases[alias] = profile.replace("wan_two_topic_participant", "wan_three_topic_participant")
 aliases["wan_event"] = "ACT_QOS_LIB::wan_three_topic_event"
 aliases["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts"
 with open(path, "w") as destination:
@@ -198,13 +205,16 @@ container_user_yaml() {
 }
 
 wan_peer_yaml() {
-    local index peer
+    local index peer peer_v6
     for index in $(seq 1 11); do
         peer="${WAN_PEERS[$((index - 1))]:-${WAN_PEERS[0]}}"
+        peer_v6="${WAN_PEERS_V6[$((index - 1))]:-${WAN_PEERS_V6[0]}}"
         if [[ "$index" == 1 ]]; then
             printf '      WAN_PEER: %s\n' "$peer"
+            printf '      WAN_PEER_V6: %s\n' "$peer_v6"
         else
             printf '      WAN_PEER%s: %s\n' "$index" "$peer"
+            printf '      WAN_PEER_V6_%s: %s\n' "$index" "$peer_v6"
         fi
     done
 }
@@ -217,7 +227,7 @@ emane_environment_yaml() {
     local nem_id=$1 emane_ip=$2
     [[ "$EMANE_ENABLED" == 1 ]] || return 0
     printf '%s\n' '      EMANE_ENABLED: "1"' "      EMANE_NEM_ID: \"$nem_id\"" \
-        "      EMANE_IP: $emane_ip"
+        "      EMANE_IP: $emane_ip" "      EMANE_IPV6: fd42:88::${nem_id}"
 }
 
 emane_network_yaml() {
@@ -252,20 +262,30 @@ dashboard_port_yaml() {
     printf '%s\n' '    ports:' "      - \"${DASHBOARD_PORT}:8080\""
 }
 
+startup_delay_sec() {
+    local slot=$1 count=${#PLATFORM_IDS[@]}
+    printf '%d.%09d' "$((slot / count))" "$(((slot % count) * 1000000000 / count))"
+}
+
 write_compose() {
     local compose_file="$WORKDIR/compose.yaml" id policy_environment
     policy_environment="$(python3 "$REPO_ROOT/harness_v2/qos/wan_policy.py")"
     source /dev/stdin <<< "$policy_environment"
     WAN_PEERS=()
+    WAN_PEERS_V6=()
     if [[ "$EMANE_ENABLED" == 1 ]]; then
         WAN_PEERS+=("1@builtin.udpv4://${EMANE_IP[control_20]}")
+        WAN_PEERS_V6+=("fd42:88::${EMANE_NEM_ID[control_20]}")
         for id in $(platform_ids); do
             WAN_PEERS+=("1@builtin.udpv4://${EMANE_IP[platform_${id}]}")
+            WAN_PEERS_V6+=("fd42:88::${EMANE_NEM_ID[platform_${id}]}")
         done
     else
         WAN_PEERS+=("1@control-20")
+        WAN_PEERS_V6+=("control-20")
         for id in $(platform_ids); do
             WAN_PEERS+=("1@platform-${id}")
+            WAN_PEERS_V6+=("platform-${id}")
         done
     fi
     cat > "$compose_file" <<EOF
@@ -284,6 +304,7 @@ $(container_user_yaml)
       NODE_DEBUG_DIR: /node-debug
       NODE_CONFIG_PATH: /run/node-config.yaml
       ROUTER_BACKEND: ${ROUTER_BACKEND}
+      WAN_STARTUP_DELAY_SEC: "0"
       SIM_DESTINATION: Platform_30
       SIM_VERBOSITY: "${VERBOSITY}"
       NDDSHOME: /opt/rti.com/rti_connext_dds-7.7.0
@@ -310,8 +331,9 @@ $(traffic_monitor_environment_yaml)
 $(dashboard_port_yaml)
 $(emane_network_yaml "${EMANE_CONTROL_IP[control_20]}")
 EOF
-    local id
+    local id slot=0
     for id in $(platform_ids); do
+        slot=$((slot + 1))
         cat >> "$compose_file" <<EOF
   platform-${id}:
     image: connext:7.7.0
@@ -328,6 +350,7 @@ $(platform_router_name_yaml "$id")
       NODE_DEBUG_DIR: /node-debug
       NODE_CONFIG_PATH: /run/node-config.yaml
       ROUTER_BACKEND: ${ROUTER_BACKEND}
+      WAN_STARTUP_DELAY_SEC: "$(startup_delay_sec "$slot")"
       SIM_DESTINATION: Control_20
       SIM_VERBOSITY: "${VERBOSITY}"
       NDDSHOME: /opt/rti.com/rti_connext_dds-7.7.0
@@ -446,9 +469,10 @@ prepare_routing_service_configs() {
                        -e "WAN_HB_PERIOD_SEC=$WAN_HB_PERIOD_SEC")
     for index in $(seq 1 11); do
         if [[ "$index" == 1 ]]; then
-            environment+=(-e "WAN_PEER=${WAN_PEERS[0]}")
+            environment+=(-e "WAN_PEER=${WAN_PEERS[0]}" -e "WAN_PEER_V6=${WAN_PEERS_V6[0]}")
         else
-            environment+=(-e "WAN_PEER${index}=${WAN_PEERS[$((index - 1))]:-${WAN_PEERS[0]}}")
+            environment+=(-e "WAN_PEER${index}=${WAN_PEERS[$((index - 1))]:-${WAN_PEERS[0]}}"
+                          -e "WAN_PEER_V6_${index}=${WAN_PEERS_V6[$((index - 1))]:-${WAN_PEERS_V6[0]}}")
         fi
     done
     for id in 20 "${PLATFORM_IDS[@]}"; do

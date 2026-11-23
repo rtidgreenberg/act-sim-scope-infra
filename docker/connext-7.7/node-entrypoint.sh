@@ -10,6 +10,11 @@ WORKSPACE="${ACT_WORKSPACE:-/workspace}"
 ROUTER_BINARY="${WORKSPACE}/router/build/router_main"
 CONFIG_PATH="${NODE_CONFIG_PATH:-/run/node-config.yaml}"
 ROUTER_BACKEND="${ROUTER_BACKEND:-custom}"
+WAN_STARTUP_DELAY_SEC="${WAN_STARTUP_DELAY_SEC-0}"
+if [[ ! "$WAN_STARTUP_DELAY_SEC" =~ ^(0(\.[0-9]{1,9})?|1(\.0{1,9})?)$ ]]; then
+    echo "WAN_STARTUP_DELAY_SEC must be between 0 and 1 second" >&2
+    exit 1
+fi
 case "$ROUTER_BACKEND" in
     custom) ;;
     routing_service) CONFIG_PATH="/run/mesh-config/control-platform-${NODE_ID}.xml" ;;
@@ -99,7 +104,12 @@ EOF
         emane -l 3 "$config_dir/platform.xml" > "$LOG_DIR/emane.log" 2>&1 &
         PIDS+=("$!")
         for _ in {1..30}; do
-                ip -4 addr show dev emane0 2>/dev/null | grep -q "$EMANE_IP" && return 0
+                if ip -4 addr show dev emane0 2>/dev/null | grep -q "$EMANE_IP"; then
+                        if [[ -n "${EMANE_IPV6:-}" ]]; then
+                                ip -6 addr replace "${EMANE_IPV6}/64" dev emane0 nodad
+                        fi
+                        return 0
+                fi
                 sleep 1
         done
         echo "EMANE did not create emane0 with $EMANE_IP" >&2
@@ -159,6 +169,9 @@ if [[ "${EMANE_ENABLED:-0}" == "1" ]]; then
         exit 1
     }
 fi
+
+printf 'WAN gateway startup delay: %ss\n' "$WAN_STARTUP_DELAY_SEC"
+sleep "$WAN_STARTUP_DELAY_SEC"
 
 if [[ "$ROUTER_BACKEND" == routing_service ]]; then
     python3 "$WORKSPACE/router/routing_service/run.py" --xml "$CONFIG_PATH" \
