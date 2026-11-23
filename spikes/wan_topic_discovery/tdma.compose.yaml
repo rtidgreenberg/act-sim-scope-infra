@@ -1,0 +1,6 @@
+services:
+  node_1:
+    environment: &tdma
+      FEASIBILITY_MAC_XML: /usr/share/emane/xml/models/mac/tdmaeventscheduler/tdmaradiomodel.xml
+  node_2:
+    environment: *tdma

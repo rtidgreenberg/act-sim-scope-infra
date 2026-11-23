@@ -22,7 +22,7 @@ cat > "$config_dir/nem.xml" <<EOF
 <!DOCTYPE nem SYSTEM "file:///usr/share/emane/dtd/nem.dtd">
 <nem name="RF Pipe feasibility NEM">
   <transport definition="transvirtual.xml"/>
-  <mac definition="rfpipemac.xml"/>
+  <mac definition="mac.xml"/>
   <phy>
     <param name="fixedantennagain" value="0.0"/>
     <param name="fixedantennagainenable" value="on"/>
@@ -40,7 +40,7 @@ cat > "$config_dir/transvirtual.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE transport SYSTEM "file:///usr/share/emane/dtd/transport.dtd">
 <transport name="RF Pipe feasibility transport" library="transvirtual">
-  <param name="bitrate" value="1M"/>
+  <param name="bitrate" value="${TAP_BITRATE:-1M}"/>
   <param name="devicepath" value="/dev/net/tun"/>
   <param name="device" value="emane0"/>
   <param name="address" value="$EMANE_IP"/>
@@ -48,12 +48,15 @@ cat > "$config_dir/transvirtual.xml" <<EOF
 </transport>
 EOF
 
-cat > "$config_dir/rfpipemac.xml" <<'EOF'
+if [ -n "${FEASIBILITY_MAC_XML:-}" ]; then
+  cp "$FEASIBILITY_MAC_XML" "$config_dir/mac.xml"
+else
+  cat > "$config_dir/mac.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mac SYSTEM "file:///usr/share/emane/dtd/mac.dtd">
 <mac name="RF Pipe feasibility MAC" library="rfpipemaclayer">
   <param name="enablepromiscuousmode" value="off"/>
-  <param name="datarate" value="1M"/>
+  <param name="datarate" value="${RFPIPE_DATARATE:-1M}"/>
   <param name="jitter" value="0"/>
   <param name="delay" value="0"/>
   <param name="flowcontrolenable" value="off"/>
@@ -61,5 +64,6 @@ cat > "$config_dir/rfpipemac.xml" <<'EOF'
   <param name="pcrcurveuri" value="file:///usr/share/emane/xml/models/mac/rfpipe/rfpipepcr.xml"/>
 </mac>
 EOF
+fi
 
 exec emane -l 3 "$config_dir/platform.xml"

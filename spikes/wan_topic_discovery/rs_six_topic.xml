@@ -1,0 +1,210 @@
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.7.0/rti_routing_service.xsd">
+  <routing_service name="rs_six_tx">
+    <domain_route name="lan_to_wan">
+      <participant name="lan">
+        <domain_id>101</domain_id>
+        <participant_qos base_name="RS_SIX::lan_v4"/>
+      </participant>
+      <participant name="wan">
+        <domain_id>102</domain_id>
+        <participant_qos base_name="RS_SIX::emane_v4"/>
+      </participant>
+      <session name="six_topic_session">
+        <topic_route name="p1_event">
+          <input participant="lan">
+            <topic_name>LAN_P1_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_event"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P1_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p1_event"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p1_periodic">
+          <input participant="lan">
+            <topic_name>LAN_P1_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_periodic"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P1_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p1_periodic"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_event">
+          <input participant="lan">
+            <topic_name>LAN_P2_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_event"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P2_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p2_event"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_state">
+          <input participant="lan">
+            <topic_name>LAN_P2_State</topic_name>
+            <registered_type_name>SixTopicState</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_state"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P2_State</topic_name>
+            <registered_type_name>SixTopicState</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p2_state"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_periodic">
+          <input participant="lan">
+            <topic_name>LAN_P2_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_periodic"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P2_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p2_periodic"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p3_periodic">
+          <input participant="lan">
+            <topic_name>LAN_P3_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::lan_periodic"/>
+          </input>
+          <output participant="wan">
+            <topic_name>WAN_P3_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::wan_p3_periodic"/>
+          </output>
+        </topic_route>
+      </session>
+    </domain_route>
+  </routing_service>
+
+  <routing_service name="rs_six_rx">
+    <domain_route name="wan_to_lan">
+      <participant name="wan">
+        <domain_id>102</domain_id>
+        <participant_qos base_name="RS_SIX::emane_v4"/>
+      </participant>
+      <participant name="lan">
+        <domain_id>103</domain_id>
+        <participant_qos base_name="RS_SIX::lan_v4"/>
+      </participant>
+      <session name="six_topic_session">
+        <topic_route name="p1_event">
+          <input participant="wan">
+            <topic_name>WAN_P1_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p1_event"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P1_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_event"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p1_periodic">
+          <input participant="wan">
+            <topic_name>WAN_P1_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p1_periodic"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P1_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_periodic"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_event">
+          <input participant="wan">
+            <topic_name>WAN_P2_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p2_event"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P2_Event</topic_name>
+            <registered_type_name>SixTopicEvent</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_event"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_state">
+          <input participant="wan">
+            <topic_name>WAN_P2_State</topic_name>
+            <registered_type_name>SixTopicState</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p2_state"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P2_State</topic_name>
+            <registered_type_name>SixTopicState</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_state"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p2_periodic">
+          <input participant="wan">
+            <topic_name>WAN_P2_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p2_periodic"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P2_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_periodic"/>
+          </output>
+        </topic_route>
+
+        <topic_route name="p3_periodic">
+          <input participant="wan">
+            <topic_name>WAN_P3_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datareader_qos base_name="RS_SIX::wan_p3_periodic"/>
+          </input>
+          <output participant="lan">
+            <topic_name>LAN_P3_Periodic</topic_name>
+            <registered_type_name>SixTopicPeriodic</registered_type_name>
+            <creation_mode>IMMEDIATE</creation_mode>
+            <datawriter_qos base_name="RS_SIX::lan_periodic"/>
+          </output>
+        </topic_route>
+      </session>
+    </domain_route>
+  </routing_service>
+</dds>

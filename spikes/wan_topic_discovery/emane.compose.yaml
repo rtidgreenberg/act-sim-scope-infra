@@ -1,0 +1,24 @@
+services:
+  node_1:
+    networks:
+      emane_ctrl:
+        ipv4_address: !reset null
+    environment: &probe_env
+      RFPIPE_DATARATE: 2M
+      TAP_BITRATE: "0"
+      RTI_LICENSE_FILE: /shared/rti_license.dat
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: &probe_mounts
+      - ../../spikes/wan_topic_discovery:/probe:ro
+      - ${CONNEXT_SHARED_DIR:-/home/dgreenberg/rti_connext_dds-7.7.0}:/shared:ro
+  node_2:
+    networks:
+      emane_ctrl:
+        ipv4_address: !reset null
+    environment: *probe_env
+    volumes: *probe_mounts
+
+networks:
+  emane_ctrl:
+    internal: true
+    ipam: !reset null

@@ -1,0 +1,20 @@
+<dds>
+  <types>
+    <struct name="SixTopicEvent">
+      <member name="seq" type="int32"/>
+      <member name="sent_ns" type="int64"/>
+      <member name="payload" type="octet" sequenceMaxLength="1024"/>
+    </struct>
+    <struct name="SixTopicState">
+      <member name="key_id" type="string" stringMaxLength="64" key="true"/>
+      <member name="seq" type="int32"/>
+      <member name="sent_ns" type="int64"/>
+      <member name="payload" type="octet" sequenceMaxLength="1024"/>
+    </struct>
+    <struct name="SixTopicPeriodic">
+      <member name="seq" type="int32"/>
+      <member name="sent_ns" type="int64"/>
+      <member name="payload" type="octet" sequenceMaxLength="1024"/>
+    </struct>
+  </types>
+</dds>

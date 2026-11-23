@@ -1,0 +1,7 @@
+services:
+  node_1:
+    volumes:
+      - ../../:/workspace:ro
+  node_2:
+    volumes:
+      - ../../:/workspace:ro
