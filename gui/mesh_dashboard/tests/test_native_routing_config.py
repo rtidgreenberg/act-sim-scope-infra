@@ -299,6 +299,64 @@ class NativeXmlProviderTests(unittest.TestCase):
             self.assertEqual(lan["profile"], "ACT_QOS_LIB::lan_status")
             self.assertEqual(lan["settings"]["minimum_separation_seconds"], 0.25)
 
+    def test_six_topic_union_displays_flow_controller_dscp_and_aligned_priorities(self):
+        import subprocess
+        import rti.connextdds as dds
+        import yaml
+        config = yaml.safe_load((ROOT / "router/config/control-platform.yaml").read_text())
+        config["router"]["wan_contract"] = "six_topic_union"
+        config["router"]["admin_participant"] = "platform_lan"
+        config["types"]["xml"] = str(ROOT / "harness_v2/datamodel/gen/ActTypes.xml")
+        config["qos_libraries"] = [str(ROOT / "harness_v2/qos/act_qos_profiles.xml")]
+        config["qos_profiles"].update({
+            "wan_participant": "ACT_QOS_LIB::rs_six_topic_participant_v6",
+            "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
+            "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
+            "wan_status": "ACT_QOS_LIB::wan_union_status",
+        })
+        config["routing_service"] = {"topic_priorities": {"PlatformDetailStatus": "low"}}
+        with tempfile.TemporaryDirectory(dir=WORKDIR) as directory:
+            yaml_path = Path(directory) / "config.yaml"
+            xml_path = Path(directory) / "gateway.xml"
+            yaml_path.write_text(yaml.safe_dump(config))
+            env = {
+                **os.environ,
+                "CONTROL_LAN_PEER1": "127.0.0.1", "CONTROL_LAN_PEER2": "127.0.0.1",
+                "CONTROL_LAN_PEER3": "127.0.0.1", "PLATFORM_LAN_PEER1": "127.0.0.1",
+                "PLATFORM_LAN_PEER2": "127.0.0.1", "PLATFORM_LAN_PEER3": "127.0.0.1",
+                "WAN_PEER": "127.0.0.1", "WAN_PEER_V6": "::1",
+                "WAN_TIMEOUT_SEC": "300", "WAN_HB_PERIOD_SEC": "3",
+                "WAN_MAX_BLOCKING_SEC": "1", "WAN_TTL": "1", "WAN_RECEIVE_MULTICAST": "0",
+            }
+            subprocess.run(
+                ["python3", str(ROOT / "router/routing_service/run.py"),
+                 "--config", str(yaml_path), "--role", "platform", "--node-name", "Platform_30",
+                 "--name", "rs-plat", "--build-dir", os.environ["ACT_RS_BUILD_DIR"],
+                 "--render", str(xml_path)],
+                env=env, check=True, capture_output=True, text=True)
+            system = load_system_config(xml_path, dds.QosProvider, dds.Duration.infinite)
+            delivery = load_delivery_config(xml_path, dds.QosProvider, dds.Duration.infinite)
+            sections = {section["id"]: section for section in system["sections"]}
+            overview = {row[0]: row[1] for row in sections["system"]["rows"]}
+            self.assertEqual(overview["WAN contract"], "Six-topic union")
+            self.assertEqual(overview["Asynchronous WAN bandwidth"], "4000000 bit/s")
+            self.assertEqual(overview["WAN flow controller"], "DDS_HPF_FLOW_CONTROLLER_SCHED_POLICY (5000 B / 10 ms)")
+            wan_writers = {row[0]: row[-1] for row in sections["wan-qos"]["rows"] if row[1] == "Writer"}
+            self.assertEqual(wan_writers["P1_Event"], "192 (DSCP 48)")
+            self.assertEqual(wan_writers["P1_Periodic"], "192 (DSCP 48)")
+            self.assertEqual(wan_writers["P2_Event"], "136 (DSCP 34)")
+            self.assertEqual(wan_writers["P2_State"], "136 (DSCP 34)")
+            self.assertEqual(wan_writers["P2_Periodic"], "136 (DSCP 34)")
+            self.assertEqual(wan_writers["P3_Periodic"], "104 (DSCP 26)")
+            prio_rows = {row[1]: int(row[4]) for row in sections["priorities"]["rows"]}
+            self.assertEqual(prio_rows["RouterConfig"], 600)
+            self.assertEqual(prio_rows["RouterHealth"], 600)
+            self.assertEqual(prio_rows["Mission"], 400)
+            self.assertEqual(prio_rows["ContactReport"], 250)
+            self.assertEqual(prio_rows["PlatformStatus"], 200)
+            self.assertEqual(prio_rows["PlatformDetailStatus"], 100)
+            self.assertEqual(delivery["topics"]["PlatformDetailStatus"][0]["family"], "P3_Periodic")
+
 
 if __name__ == "__main__":
     unittest.main()

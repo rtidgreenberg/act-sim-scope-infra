@@ -133,7 +133,7 @@ def _load_native_xml(path, text, provider_factory):
     if required("act.version") != "1":
         raise ValueError(f"{path}: unsupported act.version")
     contract = required("act.wan_contract")
-    if contract not in ("two_topic_union", "three_topic_union"):
+    if contract not in ("two_topic_union", "three_topic_union", "six_topic_union"):
         raise ValueError(f"Unknown WAN contract: {contract}")
     monitoring = required("act.monitoring")
     if monitoring not in ("true", "false"):
@@ -235,7 +235,11 @@ def _load_native_xml(path, text, provider_factory):
                 native["wan"][family][endpoint] = spec
             elif independent and owner_role == "hub" and not name.startswith("monitor_"):
                 raise ValueError(f"{path}: application LAN port {name} must have an independent route")
-    expected = {"Event", "State", "Periodic"} if contract == "three_topic_union" else {"Event", "Status"}
+    expected = (
+        {"P1_Event", "P1_Periodic", "P2_Event", "P2_State", "P2_Periodic", "P3_Periodic"}
+        if contract == "six_topic_union" else
+        {"Event", "State", "Periodic"} if contract == "three_topic_union" else {"Event", "Status"}
+    )
     if set(native["wan"]) != expected or any(set(ports) != {"reader", "writer"}
                                              for ports in native["wan"].values()):
         raise ValueError(f"{path}: native WAN endpoints must be exactly {sorted(expected)} reader/writer pairs")
@@ -248,7 +252,13 @@ def _load_native_xml(path, text, provider_factory):
             groups.setdefault(parts[2], {})[parts[3]] = value
     priorities = {"event_high": 600, "periodic_high": 500, "state_high": 400,
                   "event_normal": 300, "state_normal": 200, "periodic_normal": 100}
-    if contract == "two_topic_union":
+    if contract == "six_topic_union":
+        priorities = {
+            "event_high": 400, "event_normal": 300,
+            "state_high": 350, "state_normal": 250,
+            "periodic_high": 300, "periodic_normal": 200, "periodic_low": 100,
+        }
+    elif contract == "two_topic_union":
         priorities.update(event_high=400, event_normal=200, periodic_high=300)
     used_ports = set()
     for identifier, binding in groups.items():
@@ -258,11 +268,38 @@ def _load_native_xml(path, text, provider_factory):
         channel = binding["channel"]
         if channel not in priorities or (contract == "two_topic_union" and channel.startswith("state_")):
             raise ValueError(f"{path}: unsupported channel: {channel}")
-        family = {"event": "Event", "state": "State", "periodic":
-                  "Periodic" if contract == "three_topic_union" else "Status"}[channel.split("_")[0]]
+        if contract == "six_topic_union":
+            family = {
+                "event": "P2_Event",
+                "state": "P2_State",
+                "periodic": "P3_Periodic" if channel == "periodic_low" else "P2_Periodic",
+            }[channel.split("_")[0]]
+        else:
+            family = {"event": "Event", "state": "State", "periodic":
+                      "Periodic" if contract == "three_topic_union" else "Status"}[channel.split("_")[0]]
         for direction, endpoint in (("tx", "reader"), ("rx", "writer")):
             port_name = binding.get(direction + ".port")
             if port_name is None:
+                continue
+            internal_diagnostics = (
+                direction == "tx" and binding["topic_name"] == "ActRouterDiagnostics" and
+                port_name == "monitor_diagnostics" and native["monitoring"]
+            )
+            if internal_diagnostics:
+                used_ports.add(port_name)
+                enabled = binding.get(direction + ".enabled", "true")
+                if enabled not in ("true", "false") or not binding.get(direction + ".recipients"):
+                    raise ValueError(f"{path}: binding {identifier}: invalid {direction} metadata")
+                name = f"{identifier}.{direction}"
+                native["bindings"].append({
+                    "name": name, "topic": binding["topic_name"], "type": binding["type"],
+                    "branch": binding["branch"], "instance_id": binding["instance_id"],
+                    "channel": channel, "family": family, "priority": priorities[channel],
+                    "direction": direction, "port": port_name, "enabled": enabled == "true",
+                    "recipients": binding[direction + ".recipients"], "internal": True})
+                config["routes"].append({"name": name, "enabled": enabled == "true",
+                                         "topics": [{"name": binding["topic_name"]}],
+                                         "forwarding_mode": "dynamic_data"})
                 continue
             port = native["ports"].get(port_name)
             if (not port or port_name in used_ports or port["endpoint"] != endpoint or
@@ -289,7 +326,8 @@ def _load_native_xml(path, text, provider_factory):
     if not native["bindings"]:
         raise ValueError(f"{path}: no explicit native bindings")
     if independent:
-        expected = {(binding["direction"], binding["topic"]) for binding in native["bindings"]}
+        expected = {(binding["direction"], binding["topic"])
+                    for binding in native["bindings"] if not binding.get("internal")}
         if registrations != expected:
             raise ValueError(f"{path}: native route registrations must match declared bindings")
         for route, _, current in processors:
@@ -346,6 +384,8 @@ def _native_delivery_config(path, config, libraries, provider, infinite_duration
         family = binding["family"]
         endpoint = "writer" if binding["direction"] == "tx" else "reader"
         value = entry(native["wan"][family][endpoint], family, [binding["name"]], binding["enabled"])
+        if binding.get("internal"):
+            continue
         lan = native["ports"][binding["port"]]
         value.update(channel=binding["channel"], publication_priority=binding["priority"],
                      recipients=binding["recipients"],
@@ -356,13 +396,18 @@ def _native_delivery_config(path, config, libraries, provider, infinite_duration
                           "settings": native_port_settings(lan, provider, infinite_duration)})
         topics.setdefault(binding["topic"], []).append(value)
     if native["monitoring"]:
-        for topic, family in (("RouterConfig", "Event"),
-                              ("RouterHealth", "Periodic" if "Periodic" in native["wan"] else "Status")):
+        six_topic = config["router"]["wan_contract"] == "six_topic_union"
+        monitoring_specs = (
+            (("RouterConfig", "P1_Event", "event_high", 600),
+             ("RouterHealth", "P1_Periodic", "periodic_high", 600))
+            if six_topic else
+            (("RouterConfig", "Event", "event_normal", 300 if "Periodic" in native["wan"] else 200),
+             ("RouterHealth", "Periodic" if "Periodic" in native["wan"] else "Status",
+              "periodic_high", 500 if "Periodic" in native["wan"] else 300))
+        )
+        for topic, family, channel, priority in monitoring_specs:
             if topic in topics:
                 continue
-            channel = "event_normal" if topic == "RouterConfig" else "periodic_high"
-            priority = (300 if topic == "RouterConfig" else 500) if "Periodic" in native["wan"] else (
-                200 if topic == "RouterConfig" else 300)
             topics[topic] = [dict(entry(port, family, ["Internal service-owned monitoring"]),
                                   channel=channel, publication_priority=priority)
                              for port in native["wan"][family].values()]
@@ -382,7 +427,7 @@ def load_delivery_config(path, provider_factory, infinite_duration):
     participants = config["participants"]
     topics = {}
     contract = config["router"].get("wan_contract", "legacy")
-    if contract not in ("legacy", "two_topic_union", "three_topic_union"):
+    if contract not in ("legacy", "two_topic_union", "three_topic_union", "six_topic_union"):
         raise ValueError(f"Unknown WAN contract: {contract}")
 
     def add(topic, route, participant, endpoint, profile, enabled=True):

@@ -27,11 +27,13 @@ def load_system_config(path, provider_factory, infinite_duration):
     router = config["router"]
     native = config.get("native")
     contract = router.get("wan_contract", "legacy")
-    if contract not in ("legacy", "two_topic_union", "three_topic_union"):
+    if contract not in ("legacy", "two_topic_union", "three_topic_union", "six_topic_union"):
         raise ValueError(f"Unknown WAN contract: {contract}")
     shared = contract != "legacy"
-    separate_contacts = contract == "three_topic_union"
-    health_family = ("Periodic" if native else "Telemetry") if separate_contacts else "Status"
+    six_topic = contract == "six_topic_union"
+    separate_contacts = contract in ("three_topic_union", "six_topic_union")
+    health_family = ("P1_Periodic" if (six_topic and native) else
+                     ("Periodic" if native else "Telemetry")) if separate_contacts else "Status"
     aliases = config.get("qos_profiles", {})
     sections = []
 
@@ -48,7 +50,10 @@ def load_system_config(path, provider_factory, infinite_duration):
                         "Node identity and admin participant may be overridden by launcher arguments."),
                        ["Setting", "Configured value", "Meaning"])
     overview.extend([
-        ["WAN contract", "Three-topic union" if separate_contacts else "Two-topic union" if shared else "Legacy per-topic",
+        ["WAN contract",
+         "Six-topic union" if six_topic else "Three-topic union" if separate_contacts else
+         "Two-topic union" if shared else "Legacy per-topic",
+         "Shared P1 (CS6), P2 (AF41), and P3 (AF31) Event, State and Periodic topics." if six_topic else
          f"Shared Event, State and {health_family} topics." if separate_contacts else
          "Shared Event and Status topics." if shared else "Application topics have separate WAN endpoints."],
         ["Configuration set", router.get("config_set", "Not specified"), "Deployment configuration family."],
@@ -68,6 +73,9 @@ def load_system_config(path, provider_factory, infinite_duration):
             ["Type registry URI", native["types_uri"], "act.types_uri; no YAML or registry file is read by this snapshot."],
             ["Asynchronous WAN bandwidth", f"{native['async_bandwidth_bps']} bit/s",
              "act.async_bandwidth_bps; shared configured budget, not measured throughput."],
+            ["WAN flow controller",
+             f"DDS_HPF_FLOW_CONTROLLER_SCHED_POLICY ({native['async_bandwidth_bps'] // 800} B / 10 ms)",
+             "act_rs token bucket shared across WAN writers; orders queued samples by publication priority."],
             ["Platform receive policy",
              "Mission-state CFT selection" if native["receive_policy"] == "mission" else "Static CFT bindings",
              "act.receive_policy; applies to platforms only. Live applied profile is shown in node health, "
@@ -122,12 +130,12 @@ def load_system_config(path, provider_factory, infinite_duration):
                        "Resolved configured profiles, not discovered remote endpoint settings. "
                        "Reader and writer policies are shown separately.",
                        ["Topic", "Endpoint", "Profile", "Reliability", "History", "Durability",
-                        "Deadline", "Liveliness", "Lease"])
+                        "Deadline", "Liveliness", "Lease", "Transport priority / DSCP"])
     for topic, profile, endpoint in profiles:
         display_profile = native["profile_labels"].get(profile, profile) if native else profile
         if profile is None:
             qos_rows.append([topic, endpoint.title(), "Automatic QoS",
-                             *["Not resolved (wire-learned)"] * 6])
+                             *["Not resolved (wire-learned)"] * 7])
             continue
         qos = (provider.datawriter_qos_from_profile(profile) if endpoint == "writer"
                else provider.datareader_qos_from_profile(profile))
@@ -135,22 +143,29 @@ def load_system_config(path, provider_factory, infinite_duration):
         history = settings["history"].replace("_", " ").title()
         if settings["history_depth"] is not None:
             history += f" / {settings['history_depth']} per instance"
+        if endpoint == "writer":
+            tp = getattr(getattr(qos, "transport_priority", None), "value", 0)
+            tp_display = f"{tp} (DSCP {tp >> 2})" if tp else "0 (DSCP 0)"
+        else:
+            tp_display = "Not applicable"
         qos_rows.append([
             topic, endpoint.title(), display_profile,
             settings["reliability"].replace("_", " ").title(), history,
             settings["durability"].replace("_", " ").title(),
             duration(settings["deadline_seconds"]),
             settings["liveliness"].replace("_", " ").title(), duration(settings["lease_seconds"]),
+            tp_display,
         ])
-        if topic == "Event" and endpoint == "writer":
+        if topic in ("Event", "P1_Event", "P2_Event") and endpoint == "writer":
             protocol = qos.protocol.rtps_reliable_writer
-            presence.extend([
-                ["Reliable heartbeat period", duration(float(protocol.heartbeat_period)),
-                 "WAN_HB_PERIOD_SEC; separate from application health publication."],
-                ["Reliable-reader heartbeat retries", str(protocol.max_heartbeat_retries),
-                 "Derived as ceil(WAN_TIMEOUT_SEC / WAN_HB_PERIOD_SEC). "
-                 "A nominal inactivity budget, not an exact delivery or wall-clock guarantee."],
-            ])
+            if not any(row[0] == "Reliable heartbeat period" for row in presence):
+                presence.extend([
+                    ["Reliable heartbeat period", duration(float(protocol.heartbeat_period)),
+                     "WAN_HB_PERIOD_SEC; separate from application health publication."],
+                    ["Reliable-reader heartbeat retries", str(protocol.max_heartbeat_retries),
+                     "Derived as ceil(WAN_TIMEOUT_SEC / WAN_HB_PERIOD_SEC). "
+                     "A nominal inactivity budget, not an exact delivery or wall-clock guarantee."],
+                ])
         if endpoint != "reader" or topic != (health_family if shared else "RouterHealth") or not presence_names:
             continue
         presence.append(["ALIVE to STALE", duration(settings["deadline_seconds"]),
@@ -233,14 +248,19 @@ def load_system_config(path, provider_factory, infinite_duration):
         for binding in native["bindings"]:
             priorities.append([binding["name"], binding["topic"], binding["family"], binding["channel"],
                                str(binding["priority"]), binding["recipients"]])
-            lan = native["ports"][binding["port"]]["participant"]
+            lan = wan if binding.get("internal") else native["ports"][binding["port"]]["participant"]
             routes.append([binding["name"], lan if binding["direction"] == "tx" else wan,
                            wan if binding["direction"] == "tx" else lan, binding["topic"],
                            "Yes" if binding["enabled"] else "No"])
         if native["monitoring"]:
-            for topic, family, channel, priority in (
-                    ("RouterConfig", "Event", "event_normal", 300 if separate_contacts else 200),
-                    ("RouterHealth", health_family, "periodic_high", 500 if separate_contacts else 300)):
+            monitoring_specs = (
+                (("RouterConfig", "P1_Event", "event_high", 600),
+                 ("RouterHealth", health_family, "periodic_high", 600))
+                if six_topic else
+                (("RouterConfig", "Event", "event_normal", 300 if separate_contacts else 200),
+                 ("RouterHealth", health_family, "periodic_high", 500 if separate_contacts else 300))
+            )
+            for topic, family, channel, priority in monitoring_specs:
                 if any(binding["topic"] == topic for binding in native["bindings"]):
                     continue
                 priorities.append(["Internal monitoring", topic, family, channel, str(priority),
