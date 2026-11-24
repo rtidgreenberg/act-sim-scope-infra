@@ -38,7 +38,7 @@ def test_selected_production_qos():
     for qos in (event, contacts):
         assert qos.reliability.kind == dds.ReliabilityKind.RELIABLE
         assert qos.publish_mode.flow_controller_name == "dds.flow_controller.token_bucket.wan_priority"
-        assert qos.protocol.rtps_reliable_writer.max_bytes_per_nack_response == 524288
+        assert qos.protocol.rtps_reliable_writer.max_bytes_per_nack_response == 65536
         assert qos.multi_channel.filter_name == "DDSPRIFLTR"
         assert [channel.filter_expression for channel in qos.multi_channel.channels] == [
             "@priority >= 100", "@priority < 100"]

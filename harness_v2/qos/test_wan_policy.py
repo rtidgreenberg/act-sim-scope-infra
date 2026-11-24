@@ -35,6 +35,57 @@ class WanPolicyTests(unittest.TestCase):
 
 
 class NativeWanPolicyTests(unittest.TestCase):
+    def test_wan_discovery_responses_span_one_second(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required")
+        provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
+        for profile in (
+                "wan_router_participant", "wan_router_participant_emane",
+                "wan_two_topic_participant", "wan_two_topic_participant_emane",
+                "wan_three_topic_participant", "wan_three_topic_participant_emane",
+                "rs_six_topic_participant_v6", "rs_six_topic_participant_emane_v6"):
+            qos = provider.participant_qos_from_profile("ACT_QOS_LIB::" + profile)
+            effective = ET.fromstring(qos.to_string(print_all=True))
+            for name in ("publication_reader", "subscription_reader", "participant_configuration_reader"):
+                with self.subTest(profile=profile, reader=name):
+                    reader = effective.find("./discovery_config/" + name)
+                    for field, seconds in (("min_heartbeat_response_delay", "0"),
+                                           ("max_heartbeat_response_delay", "1")):
+                        self.assertEqual(reader.findtext(field + "/sec"), seconds)
+                        self.assertEqual(reader.findtext(field + "/nanosec"), "0")
+
+    def test_wan_readers_inherit_preemptive_nack_suppression(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required")
+        provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
+        for profile in (
+                "wan_event", "wan_status", "wan_union_status", "wan_three_topic_event",
+                "wan_union_contacts", "rs_wan_event", "rs_wan_status",
+                "rs_three_topic_event", "rs_three_topic_state", "rs_three_topic_periodic",
+                "rs_six_topic_p1_event", "rs_six_topic_p1_periodic",
+                "rs_six_topic_p2_event", "rs_six_topic_p2_state",
+                "rs_six_topic_p2_periodic", "rs_six_topic_p3_periodic"):
+            with self.subTest(profile=profile):
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertEqual(
+                    reader.property.get("dds.data_reader.protocol.disable_preemptive_nack"),
+                    "true")
+                self.assertFalse(reader.protocol.disable_positive_acks)
+        for profile in ("lan_event", "lan_status"):
+            with self.subTest(profile=profile):
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertNotIn(
+                    "dds.data_reader.protocol.disable_preemptive_nack",
+                    dict(reader.property.get_all()))
+
     def test_effective_xml_defaults_and_custom_policy(self):
         try:
             import rti.connextdds as dds
