@@ -41,13 +41,14 @@ def message(sequence=1, payload=b"hello", prefix=PREFIX, writer=WRITER, fragment
     if destination:
         header += bytes([0x0e, flags]) + struct.pack(endian + "H", 12) + destination
     fixed = b"\x00\x00" + struct.pack(
-        endian + "H", 28 if fragment else 24 if virtual_sequence is not None else 16)
+        endian + "H", (36 if virtual_sequence is not None else 28) if fragment
+        else 24 if virtual_sequence is not None else 16)
     fixed += reader + writer + struct.pack(endian + "iI", sequence >> 32, sequence & 0xffffffff)
     if virtual_sequence is not None:
         fixed += struct.pack(endian + "iI", virtual_sequence >> 32, virtual_sequence & 0xffffffff)
     if fragment:
         fixed += struct.pack(endian + "IHHI", *fragment)
-        kind = 0x16
+        kind = 0x81 if virtual_sequence is not None else 0x16
     else:
         flags |= 4
         kind = 0x14 if virtual_sequence is not None else 0x15
@@ -103,6 +104,23 @@ def observation(kind="sent", sequence=1, timestamp=NOW - 20_000_000_000, **chang
 
 
 class WireParserTests(unittest.TestCase):
+    def test_session_fragments_use_wire_identity_and_validate_dimensions(self):
+        for little in (True, False):
+            with self.subTest(little=little):
+                packet = message(7, payload=b"hello", fragment=(1, 1, 5, 9),
+                                 virtual_sequence=99, little=little)
+                item, = submessages(packet)
+                self.assertEqual((item["writer_guid"], item["sequence"], item["payload"]),
+                                 (GUID, 7, b"hello"))
+                self.assertEqual((item["first"], item["fragment_size"], item["sample_size"]),
+                                 (1, 5, 9))
+                self.assertEqual(list(submessages(
+                    packet[:21] + bytes([packet[21] | 4]) + packet[22:])), [])
+                for fragment in ((0, 1, 5, 9), (3, 1, 5, 9), (1, 2, 5, 9)):
+                    with self.assertRaises(ValueError):
+                        list(submessages(message(7, payload=b"hello", fragment=fragment,
+                                                 virtual_sequence=99, little=little)))
+
     def test_session_data_uses_wire_sequence_and_skips_virtual_sequence(self):
         for little in (True, False):
             endian = "<" if little else ">"

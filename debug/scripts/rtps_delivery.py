@@ -79,8 +79,8 @@ def submessages(payload):
                         "kind": "repair_request", "writer_guid": destination + body[4:8].hex(),
                         "reader_guid": prefix.hex() + body[:4].hex(), "sequence": number,
                     }
-        elif kind in (0x14, 0x15, 0x16):
-            minimum = {0x14: 28, 0x15: 20, 0x16: 32}[kind]
+        elif kind in (0x14, 0x15, 0x16, 0x81):
+            minimum = {0x14: 28, 0x15: 20, 0x16: 32, 0x81: 40}[kind]
             if len(body) < minimum:
                 raise ValueError("truncated DATA_SESSION/DATA/DATA_FRAG")
             inline_offset = 4 + struct.unpack_from(endian + "H", body, 2)[0]
@@ -99,7 +99,7 @@ def submessages(payload):
                     if cursor > len(body):
                         raise ValueError("truncated inline QoS parameter")
             # DATA's D flag and DATA_FRAG's K flag have different meanings.
-            has_data = not flags & 4 if kind == 0x16 else bool(flags & 4)
+            has_data = not flags & 4 if kind in (0x16, 0x81) else bool(flags & 4)
             if has_data:
                 # DATA_SESSION adds a virtual sequence at offset 20; ACKNACK uses the wire sequence.
                 high, low = struct.unpack_from(endian + "iI", body, 12)
@@ -112,8 +112,10 @@ def submessages(payload):
                     "reader_id": body[4:8].hex(),
                     "payload": body[cursor:],
                 }
-                if kind == 0x16:
-                    first, count, fragment_size, sample_size = struct.unpack_from(endian + "IHHI", body, 20)
+                if kind in (0x16, 0x81):
+                    fragment_offset = 28 if kind == 0x81 else 20
+                    first, count, fragment_size, sample_size = struct.unpack_from(
+                        endian + "IHHI", body, fragment_offset)
                     if not first or not count or not fragment_size or not sample_size:
                         raise ValueError("invalid DATA_FRAG dimensions")
                     total = (sample_size + fragment_size - 1) // fragment_size
