@@ -2,13 +2,65 @@
 
 | Deck | Main decision | Source | PDF |
 |---|---|---|---|
+| WAN architecture and QoS | Why the qualified Routing Service design chose three delivery policies, platform-selected receive filters, and shared WAN pacing | [Editable PowerPoint](wan-architecture-and-qos.pptx) | [PDF](wan-architecture-and-qos.pdf) |
+| Bandwidth Optimization | Send less through audience/rate selection; separate tested discovery, delivery and compression strategies from unqualified options | [Markdown](bandwidth-optimization.md) | [PDF](bandwidth-optimization.pdf) |
+| Adaptive runtime tuning | RTT and protocol pressure drive bounded policy messages; a qualified actuator applies supported live settings | [Markdown](adaptive-runtime-tuning.md) | [PDF](adaptive-runtime-tuning.pdf) |
+| Startup optimization | Suppress application startup requests; spread gateway launches and discovery responses over one second | [Markdown](startup-optimization.md) | [PDF](startup-optimization.pdf) |
+| DDIL recovery | Active-reader repair succeeds; inactivity/restart and unread-sample expiry can lose deletions | [Markdown](ddil-recovery.md) | [PDF](ddil-recovery.pdf) |
 | WAN schema propagation options | Two architectures: generated typed unions versus fixed binary envelopes using local payload types; tested versus source-inspected | [Markdown](wan-schema-propagation-options.md) | [PDF](wan-schema-propagation-options.pdf) |
 | Event / State / Telemetry | Three-topic WAN names and delivery contracts: required occurrences, current instance state and fresh observations | [Markdown](event-state-telemetry.md) | [PDF](event-state-telemetry.pdf) |
 | Telemetry: typed or catalog-driven | One-slide payload comparison; State catalog drives application-managed Telemetry filters | [Markdown](telemetry-typed-or-catalog.md) | [PDF](telemetry-typed-or-catalog.pdf) |
 | Link health | Measure presence, RTT, and delivery pressure separately | [Markdown](connext-ddil-link-health.md) | [PDF](connext-ddil-link-health.pdf) |
-| Connext Edge Mesh Overview | Five slides: system diagram, isolation scope/runtime control, data-filtering strategies, discovery options, and DDIL link-health measurements | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) |
-| Discovery strategies | Four steps for mesh radio: router isolation, smaller discovery announcements, multicast vs. unicast, and peer setup | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
+| Connext Edge Mesh Overview | System diagram, three WAN delivery rules, contact report outage spike, sample scheduling versus four network priority tiers, typed versus binary payloads, LAN auto-QoS versus explicit WAN QoS, isolation, filtering, discovery, and link health | [Markdown](connext-edge-mesh-overview.md) | [PDF](connext-edge-mesh-overview.pdf) · [PowerPoint](connext-edge-mesh-overview.pptx) |
+| Discovery strategies | Four mesh-radio steps plus the measured LBED rejection: receiver filtering works, but unwanted data still crosses the WAN | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 | System presence and liveliness | Compare writer liveliness, participant discovery, and periodic application health in Connext 7.7 | [Markdown](system-presence-liveliness.md) | [PDF](system-presence-liveliness.pdf) |
+
+The twenty-one-slide Bandwidth Optimization deck also has a
+[PowerPoint export](bandwidth-optimization.pptx).
+It consolidates repository evidence for data filtering, source-side rate reduction,
+three-family delivery, shared pacing, discovery isolation, startup spreading,
+binary envelopes and native compression. Data filtering distinguishes reader
+configuration from actual sender-side execution, with measured transmission
+counts and the current ACT workload's remaining byte-qualification gap.
+It explicitly rejects the tested LBED and bzip2 configurations and separates
+current implementation, source-only qualification, isolated experiments and the
+adaptive-control proposal. Synthetic compression percentages are not fleet-wide
+savings. Speaker notes retain source citations, conditions and limits.
+The PowerPoint contains rendered slides; edit the Markdown source.
+
+The eleven-slide adaptive runtime tuning deck also has a
+[PowerPoint export](adaptive-runtime-tuning.pptx).
+It outlines runtime-capable options, a proposed local policy/status topic loop,
+RTT and protocol-pressure thresholds, hysteresis, safe expiry and qualification.
+Native Connext capabilities are separated from unverified Routing Service actuator
+access. It preserves required Event delivery and the three-topic WAN contract.
+This is a design proposal, not an implemented or deployed adaptive controller.
+The final slide contains key takeaways; speaker notes preserve API references and
+integration limits. Edit the Markdown source.
+
+The eight-slide startup optimization deck also has a
+[PowerPoint export](startup-optimization.pptx) and a detailed
+[configuration/qualification record](../startup-optimization.md).
+It separates proven application-reader suppression from unresolved discovery
+suppression, shows one-second gateway slots and 0–1 second discovery response
+windows, and records the native seven-participant capture.
+The final slide contains key takeaways. This is a source-only change, not a
+deployment or radio-bandwidth guarantee. Edit the Markdown source.
+
+The fourteen-slide DDIL recovery deck also has a
+[PowerPoint export](ddil-recovery.pptx) and a detailed
+[findings record](../instance-state-through-ddil.md).
+It explicitly traces ContactReport instance recovery through the shared WAN State
+topic and separates the actual processor WAN tests from native-reader cache controls,
+and positive recovery results from the two reproduced recovery limitations.
+Two ISC slides distinguish normal reliable repair from same-writer state recovery,
+retained-state requirements and the historical data-less ALIVE relay limitation.
+The current processor's ContactReport tests are not presented as ISC qualification.
+The startup ACKNACK experiment is a separate protocol result, not a fix for
+restart recovery. Measurements are from 2026-11-19; local reports/captures were
+deleted by the requested 2026-11-20 debug cleanup and were not regenerated.
+The PowerPoint contains rendered slide images; edit the Markdown source.
+Speaker notes preserve test conditions, observation windows and limitations.
 
 The schema-propagation comparison also has a
 [PowerPoint export](wan-schema-propagation-options.pptx) and a detailed
@@ -49,6 +101,12 @@ installed Marp image, use `--pptx` instead of `--pdf` with the same theme, local
 read-only source mount, and disposable output-directory options in `render.py`.
 
 The discovery-strategies deck is a separate, simplified mesh-radio walkthrough.
+Its five slides include the 2026-11-20 Routing Service comparison: SPDP2 + LBED
+supports dynamic receiver filters but transmits all offered samples, unlike the
+SEDP control. LBED is therefore rejected for our current WAN audience-filtering
+requirements. Speaker notes link the [measured spike](../../spikes/routing_service_lbed/README.md)
+and distinguish working binary-envelope forwarding from missing sender-side
+suppression. No production discovery change is implied.
 Its first slide uses a block diagram matching the edge-mesh overview:
 gray node groups, blue routers, and an orange shared WAN block.
 Its type-propagation reduction is explicitly scoped to Connext versions before 7.7;
@@ -61,6 +119,8 @@ application-directory evidence. The simplified deck does not claim measured radi
 The Connext Edge Mesh Overview deck contains a current-system block diagram, the scope matrix,
 a comparison of route-based exposure and reader-driven interest, a discovery-options comparison,
 and a simple link-health summary adapted from the link-health deck.
+Its PDF and PowerPoint use a 3:4 portrait layout, a portrait architecture diagram,
+and reserved footer/logo space. Layout overrides are local to this deck.
 Each uses the [shared RTI theme](rti-theme.css):
 white content pages, blue title pages where included, a consistent footer/logo, and orange
 takeaway markers. Comparison tables distinguish the benefit from the cost;

@@ -12,19 +12,19 @@ footer: "RTI Connext | WAN delivery semantics | 2026-11-13"
 
 # Event / State / Telemetry
 
-**Three delivery contracts, not just three topic names.**
+**Three delivery contracts—defined by what the data means, not its topic name.**
 
-| Class | Meaning | Delivery intent | Examples |
+| Class | Meaning | How it is delivered | Examples |
 |---|---|---|---|
-| **Event** | A required occurrence | Reliable; preserve required messages | Commands, acknowledgments, configuration changes |
-| **State** | Current state of a keyed instance | Reliable; latest value per instance plus dispose / unregister lifecycle | Contacts; other authoritative objects as needed |
-| **Telemetry** | A fresh observation | Best effort; prefer new measurements over stale replay | Position, power, thrusters, diagnostics, health |
+| **Event** | Something that must happen | **Reliable:** keeps every required message | Commands, acks, config changes |
+| **State** | Current state of an object | **Reliable:** latest value per item (including deletes) | Contacts and tracked objects |
+| **Telemetry** | A fresh reading | **Best effort:** prefers new data over old resends | Position, power, thrusters, health |
 
-- **State bootstrap:** consider transient local so late joiners get retained state.
-- **Lifecycle:** verify deletion recovery, late join and restart; transient local is not a restart-persistent store.
-- **Classification:** a contact transition that must be recorded is also an Event.
+- **Late joiners:** consider keeping recent `State` in writer memory (`transient local`).
+- **Restarts:** `transient local` does not survive a full process restart—test deletion recovery separately.
+- **When history matters:** if a contact change must never be missed, also send it as an `Event`.
 
-> **State reconstructs the current world. Telemetry observes it.<br>Events record required occurrences.**
+> **State tracks the current world. Telemetry observes it. Events record required occurrences.**
 
 <!--
 Captured agreement, 2026-11-13. The main router's three_topic_union contract

@@ -12,21 +12,21 @@ footer: "RTI Connext | Proposed telemetry options | 2026-11-13"
 
 # Telemetry: typed or catalog-driven?
 
-**Same delivery intent: best effort, freshness first. Different data models.**
+**Same goal: best-effort, freshness-first delivery. Different ways to structure the data.**
 
 | | Typed telemetry | Catalog-driven telemetry |
 |---|---|---|
-| **Data model** | Schema-defined structures / union branches | State-defined catalog; generic IDs + typed values |
-| **Example** | Power: battery ID, voltage, temperature, timestamp | Value: object ID, measurement ID, value, timestamp |
-| **Reader selection** | Filter by source, kind and declared fields | Read catalog; select IDs; application updates value filter |
-| **Strength / cost** | Grouped values; schema evolution for new fields | Flexible selection; catalog/version coordination |
+| **Data model** | Fixed data types defined up front | `State` catalog lists items; `Telemetry` sends ID + value pairs |
+| **Example** | `Power`: battery ID, voltage, temp, time | `Value`: object ID, metric ID, value, time |
+| **How readers filter** | Filter by source, type, and declared fields | Read catalog, pick IDs, filter `Telemetry` to those IDs |
+| **Strength / cost** | Grouped fields; new fields need schema update | Runtime selection; must keep catalog & versions in sync |
 
-**Catalog path:** State catalog -> application selection -> Telemetry ID filter.
+**Catalog flow:** 1. Read `State` catalog → 2. App picks IDs → 3. Filter `Telemetry` by IDs.
 
-- State catalog: current objects, keys, types and units; consider transient local.
-- Use source-qualified IDs and versions; handle unknown definitions and object removal.
+- **Catalog:** current objects, keys, types, and units (consider `transient local`).
+- **Safety:** include source + version in every ID; handle deleted items or early values.
 
-> **Application-managed filters, not cross-topic joins. Neither option selected here.**
+> **Application-managed filters, not automatic cross-topic joins. Neither option selected.**
 
 <!--
 Proposed alternatives captured on 2026-11-13, not implemented or benchmarked.

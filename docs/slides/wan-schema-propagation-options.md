@@ -14,15 +14,15 @@ footer: "RTI Connext | WAN schema cost unmeasured | 2026-11-16"
 
 | | Typed unions | Binary payloads |
 |---|---|---|
-| **WAN schema** | Envelope + all declared payload branches | Fixed envelope + serialized payload bytes |
-| **Application types** | Generate from LAN; discover over WAN or preload XML | Local LAN discovery or preload; no WAN payload schema |
-| **Inspection / CFTs** | Typed branches; filter discovered labels / supported fields | Outer metadata only; decode payload locally |
-| **New payload type** | Version/rebuild shared union contract | Same outer schema; verify payload type + encoding |
-| **Evidence** | Command union spikes passed (one Event) | Zenoh source pattern; our Connext path untested |
+| **What crosses the WAN** | Shared outer envelope wrapping all declared message types | Fixed outer envelope carrying raw serialized payload bytes |
+| **How routers learn types** | Built from LAN types; shared over WAN via discovery or preloaded XML | Learned locally on the LAN (or preloaded); no app types sent over WAN |
+| **Filtering & inspection** | Routers and tools can inspect fields and filter by payload contents | WAN routers see outer envelope fields only; inner bytes decoded locally |
+| **Adding a new message type** | Update and version the shared union definition | Outer envelope stays the same; both ends still need matching local types |
+| **Current evidence** | Tested in prototype spikes (`Event` union passed) | Pattern seen in Zenoh bridge code; not yet tested in our Connext router |
 
-**Both retain Event / State / Periodic (currently Telemetry), plus priority.**
+**Both keep the three WAN families: `Event` / `State` / `Periodic` (currently `Telemetry`), plus message priority.**
 
-> **Binary avoids WAN application schemas, not all schemas.** The fixed envelope and compatible local payload definitions are still required.
+> **Binary payloads avoid sending application schemas over the WAN—not schemas altogether.** Both ends still need the fixed outer envelope and compatible local payload definitions.
 
 <!--
 Companion record: ../wan-schema-propagation-options.md.

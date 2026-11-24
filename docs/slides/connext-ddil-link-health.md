@@ -34,6 +34,37 @@ RTT = round-trip time. DDS = Data Distribution Service.
 
 ---
 
+<!-- _class: compact -->
+
+# Two levels of presence awareness
+
+| Level | Mechanism | Plain-language role |
+|---|---|---|
+| **Application level** | `RouterHealth` topic + deadline / grace policy | Tells the application and dashboard whether we are still hearing from a peer (`ALIVE`, `STALE`, or `DEAD`), along with its health metadata |
+| **DDS middleware level** | `SPDP2` participant assertions + discovery lease | Keeps the peer in DDS's internal discovery database; if assertions stop and the lease expires, DDS prunes the participant and its endpoints |
+
+- **Why keep them separate?** `SPDP2` manages middleware discovery and cleanup; `RouterHealth` drives application-visible reachability and status.
+
+> **Takeaway:** `SPDP2` prunes the DDS discovery database; `RouterHealth` informs the application.
+
+---
+
+<!-- _class: compact -->
+
+# What happens when a platform restarts?
+
+| Level | What stays the same | What changes | How cleanup works |
+|---|---|---|---|
+| **Application** (`RouterHealth`) | Same node instance key (e.g., `Platform_30`) | New `session_id` and new writer GUID | Receiver detects the new `session_id`, knows the peer restarted, and resets RTT / counter baselines |
+| **DDS middleware** (`SPDP2`) | Same network address / port (locator) | New participant GUID | **Clean exit:** removed immediately. **Crash:** old GUID stays until its `SPDP2` discovery lease expires (`WAN_TIMEOUT_SEC` = 300 s) |
+
+- DDS does **not** overwrite an old participant just because the new one has the same IP/port.
+- Until the discovery lease expires, both the old (dead) participant and the new one exist in the database.
+
+> **Takeaway:** the app detects restarts immediately via `session_id`; DDS prunes crashed participants when the `SPDP2` lease expires.
+
+---
+
 # Measure each peer, not just the router total
 
 | Local endpoint | Remote peer | Useful evidence |
@@ -53,16 +84,16 @@ RTT = round-trip time. DDS = Data Distribution Service.
 
 # Separate network symptoms from local pressure
 
-| Signal | Useful interpretation | Not proof of |
+| Signal | Useful interpretation | Does NOT by itself prove |
 |---|---|---|
-| Repair requests and retransmissions | Data needed recovery | RF loss alone; late joins and replay also matter |
-| Unacknowledged backlog | Sender is waiting for progress | Network congestion alone |
-| Samples waiting behind a sequence gap | In-order delivery is blocked | The source of the missing sample |
-| Rejected samples / full resources | Receiver or sender pressure | A failed radio link |
+| Repair requests (`NACK`s) and resends | Data needed recovery | Radio loss alone (late joiners and replay also cause resends) |
+| Unacknowledged backlog | Sender is waiting for confirmation | Network congestion alone |
+| Samples waiting behind a gap | In-order delivery is waiting for an earlier missing packet | Why that packet went missing |
+| Rejected samples / full buffers | Receiver or sender memory pressure | A failed radio link |
 
-NACK = request to repair missing data.
+`NACK` = a reader's request to resend missing data.
 
-> **Takeaway:** correlate counters with packet capture, host load, and controlled tests.
+> **Takeaway:** compare counters with packet captures, host CPU/memory load, and controlled tests.
 
 ---
 
@@ -107,11 +138,11 @@ Reject duplicate, superseded, or invalid acknowledgments.
 
 | Approach | Benefit | Trade-off |
 |---|---|---|
-| Passive heartbeat RTT: current | No extra probe publication schedule | Cadence, loss, and bounded history limit sample availability |
-| DDS protocol counters: current | Detailed repair and queue evidence without a new WAN measurement protocol | Local polling/state; reliable-channel evidence is not every topic's delivery audit |
-| Dedicated probe: alternative | Independent test cadence | Additional endpoints and packets; not the current RTT design |
+| Passive heartbeat RTT (current) | No extra test-probe traffic on the link | Sample rate depends on heartbeat schedule, loss, and history size |
+| DDS protocol counters (current) | Detailed repair and queue evidence without a new WAN protocol | Local polling only; reliable-channel counters do not cover best-effort topics |
+| Dedicated probe (alternative) | Independent, controllable test cadence | Adds extra endpoints and packets (not our current RTT design) |
 
-> **Takeaway:** reuse existing traffic first; add probes only for a measured requirement.
+> **Takeaway:** reuse existing traffic first; add dedicated probes only for a measured need.
 
 ---
 
