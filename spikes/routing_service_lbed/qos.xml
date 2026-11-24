@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="LBEDSpike">
+    <qos_profile name="partition_A">
+      <publisher_qos><partition><name><element>A</element></name></partition></publisher_qos>
+      <subscriber_qos><partition><name><element>A</element></name></partition></subscriber_qos>
+    </qos_profile>
+    <qos_profile name="partition_B">
+      <publisher_qos><partition><name><element>B</element></name></partition></publisher_qos>
+      <subscriber_qos><partition><name><element>B</element></name></partition></subscriber_qos>
+    </qos_profile>
+    <qos_profile name="participant">
+      <domain_participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <discovery>
+          <initial_peers><element>[0-15]@builtin.udpv4://127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+        </discovery>
+        <discovery_config>
+          <builtin_discovery_plugins>SPDP2 | SEDP</builtin_discovery_plugins>
+          <request_types_filter>*</request_types_filter>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="lbed" base_name="LBEDSpike::participant">
+      <domain_participant_qos>
+        <discovery_config><builtin_discovery_plugins>SPDP2</builtin_discovery_plugins></discovery_config>
+        <property><value>
+          <element><name>dds.discovery.endpoint.load_plugins</name><value>dds.discovery.endpoint.lbediscovery</value></element>
+          <element><name>dds.discovery.endpoint.lbediscovery.library</name><value>rtilbedisc</value></element>
+          <element><name>dds.discovery.endpoint.lbediscovery.create_function</name><value>DDS_LBEDiscoveryPlugin_create</value></element>
+          <element><name>dds.discovery.endpoint.lbediscovery.config_file</name><value>$(LBED_CATALOG)</value></element>
+          <element><name>dds.discovery.endpoint.lbediscovery.verbosity</name><value>1</value></element>
+        </value></property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="classic_lbed" base_name="LBEDSpike::lbed">
+      <domain_participant_qos>
+        <discovery_config><builtin_discovery_plugins>SPDP</builtin_discovery_plugins></discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="event">
+      <datawriter_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_ALL_HISTORY_QOS</kind></history>
+        <protocol><rtps_reliable_writer>
+          <heartbeat_period><sec>1</sec><nanosec>0</nanosec></heartbeat_period>
+          <fast_heartbeat_period><sec>1</sec><nanosec>0</nanosec></fast_heartbeat_period>
+          <late_joiner_heartbeat_period><sec>1</sec><nanosec>0</nanosec></late_joiner_heartbeat_period>
+        </rtps_reliable_writer></protocol>
+        <writer_data_lifecycle><autodispose_unregistered_instances>false</autodispose_unregistered_instances></writer_data_lifecycle>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_ALL_HISTORY_QOS</kind></history>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="state" base_name="LBEDSpike::event">
+      <datawriter_qos><history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history></datawriter_qos>
+    </qos_profile>
+    <qos_profile name="periodic">
+      <datawriter_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

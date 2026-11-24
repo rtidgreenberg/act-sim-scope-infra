@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="BinaryTelemetry">
+      <member name="id" type="string" stringMaxLength="64" key="true"/>
+      <member name="sequence" type="unsignedLong"/>
+      <member name="timestamp" type="longLong"/>
+      <member name="readings" type="double" sequenceMaxLength="2048"/>
+      <member name="blob" type="octet" sequenceMaxLength="40000"/>
+    </struct>
+  </types>
+</dds>

@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="ContactDisposal">
+    <qos_profile name="probe" base_name="ACT_QOS_LIB::lan_event">
+      <domain_participant_qos>
+        <transport_builtin><mask>UDPv4</mask></transport_builtin>
+        <discovery>
+          <initial_peers><element>[0-15]@builtin.udpv4://127.0.0.1</element></initial_peers>
+          <multicast_receive_addresses/>
+        </discovery>
+        <property><value><element>
+          <name>dds.transport.UDPv4.builtin.parent.allow_interfaces</name>
+          <value>127.0.0.1</value>
+        </element></value></property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="zero" base_name="ContactDisposal::probe">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>0</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="zero_forget" base_name="ContactDisposal::zero">
+      <datareader_qos><reader_resource_limits>
+        <keep_minimum_state_for_instances>false</keep_minimum_state_for_instances>
+      </reader_resource_limits></datareader_qos>
+    </qos_profile>
+    <qos_profile name="finite_2" base_name="ContactDisposal::probe">
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>2</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="delay_zero" base_name="ContactDisposal::probe">
+      <datawriter_qos><writer_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>0</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </writer_data_lifecycle></datawriter_qos>
+      <datareader_qos><reader_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec></autopurge_disposed_instances_delay>
+        <autopurge_disposed_samples_delay><sec>DURATION_INFINITE_SEC</sec><nanosec>DURATION_INFINITE_NSEC</nanosec></autopurge_disposed_samples_delay>
+      </reader_data_lifecycle></datareader_qos>
+    </qos_profile>
+    <qos_profile name="delay_ten" base_name="ContactDisposal::delay_zero">
+      <datawriter_qos><writer_data_lifecycle>
+        <autopurge_disposed_instances_delay><sec>10</sec><nanosec>0</nanosec></autopurge_disposed_instances_delay>
+      </writer_data_lifecycle></datawriter_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

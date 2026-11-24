@@ -1,0 +1,113 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="PREEMPTIVE_SPIKE">
+    <qos_profile name="immediate_discovery" base_name="ACT_QOS_LIB::wan_three_topic_participant">
+      <domain_participant_qos>
+        <discovery_config>
+          <publication_reader>
+            <min_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></min_heartbeat_response_delay>
+            <max_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></max_heartbeat_response_delay>
+          </publication_reader>
+          <subscription_reader>
+            <min_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></min_heartbeat_response_delay>
+            <max_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></max_heartbeat_response_delay>
+          </subscription_reader>
+          <participant_configuration_reader>
+            <min_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></min_heartbeat_response_delay>
+            <max_heartbeat_response_delay><sec>0</sec><nanosec>0</nanosec></max_heartbeat_response_delay>
+          </participant_configuration_reader>
+        </discovery_config>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="participant_baseline" base_name="ACT_QOS_LIB::wan_three_topic_participant">
+      <domain_participant_qos>
+        <property><value><element>
+          <name>dds.participant.inter_participant_data_reader.protocol.disable_preemptive_nack</name>
+          <value>false</value>
+        </element></value></property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="participant_disabled" base_name="ACT_QOS_LIB::wan_three_topic_participant">
+      <domain_participant_qos>
+        <property><value><element>
+          <name>dds.participant.inter_participant_data_reader.protocol.disable_preemptive_nack</name>
+          <value>true</value>
+        </element></value></property>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="observer" base_name="ACT_QOS_LIB::wan_three_topic_participant">
+      <domain_participant_qos>
+        <partition><name><element>SHARED</element></name></partition>
+      </domain_participant_qos>
+    </qos_profile>
+    <qos_profile name="baseline_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>false</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="mcp_key_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.participant.inter_participant_data_reader.protocol.disable_preemptive_nack</name>
+          <value>true</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="disabled_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>true</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="baseline_state" base_name="ACT_QOS_LIB::wan_union_contacts">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>false</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="disabled_state" base_name="ACT_QOS_LIB::wan_union_contacts">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>true</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="baseline_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>false</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="disabled_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+      <datareader_qos>
+        <property><value><element>
+          <name>dds.data_reader.protocol.disable_preemptive_nack</name>
+          <value>true</value>
+        </element></value></property>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="event_writer" base_name="ACT_QOS_LIB::rs_wan_event">
+      <datawriter_qos>
+        <protocol><rtps_reliable_writer>
+          <heartbeat_period><sec>2</sec><nanosec>0</nanosec></heartbeat_period>
+          <fast_heartbeat_period><sec>2</sec><nanosec>0</nanosec></fast_heartbeat_period>
+          <late_joiner_heartbeat_period><sec>2</sec><nanosec>0</nanosec></late_joiner_heartbeat_period>
+        </rtps_reliable_writer></protocol>
+        <property><value><element>
+          <name>dds.data_writer.protocol.disable_preemptive_heartbeat</name>
+          <value>true</value>
+        </element></value></property>
+      </datawriter_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

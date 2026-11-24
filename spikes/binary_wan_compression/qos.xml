@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="CompressionSpike">
+    <qos_profile name="none">
+      <datawriter_qos>
+        <representation><compression_settings>
+          <compression_ids>MASK_NONE</compression_ids>
+        </compression_settings></representation>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="lz4">
+      <datawriter_qos>
+        <representation><compression_settings>
+          <compression_ids>LZ4</compression_ids>
+          <writer_compression_level>BEST_SPEED</writer_compression_level>
+          <writer_compression_threshold>0</writer_compression_threshold>
+        </compression_settings></representation>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="zlib">
+      <datawriter_qos>
+        <representation><compression_settings>
+          <compression_ids>ZLIB</compression_ids>
+          <writer_compression_level>BEST_SPEED</writer_compression_level>
+          <writer_compression_threshold>0</writer_compression_threshold>
+        </compression_settings></representation>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="bzip2">
+      <datawriter_qos>
+        <representation><compression_settings>
+          <compression_ids>BZIP2</compression_ids>
+          <writer_compression_level>BEST_SPEED</writer_compression_level>
+          <writer_compression_threshold>0</writer_compression_threshold>
+        </compression_settings></representation>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="lz4_8k">
+      <datawriter_qos>
+        <representation><compression_settings>
+          <compression_ids>LZ4</compression_ids>
+          <writer_compression_level>BEST_SPEED</writer_compression_level>
+          <writer_compression_threshold>8192</writer_compression_threshold>
+        </compression_settings></representation>
+      </datawriter_qos>
+    </qos_profile>
+    <qos_profile name="reader">
+      <datareader_qos>
+        <representation><compression_settings>
+          <compression_ids>MASK_ALL</compression_ids>
+        </compression_settings></representation>
+      </datareader_qos>
+    </qos_profile>
+    <qos_profile name="reader_none">
+      <datareader_qos>
+        <representation><compression_settings>
+          <compression_ids>MASK_NONE</compression_ids>
+        </compression_settings></representation>
+      </datareader_qos>
+    </qos_profile>
+  </qos_library>
+</dds>
