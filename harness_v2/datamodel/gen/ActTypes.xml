@@ -372,7 +372,7 @@
   <member name="team_partition" sequenceMaxLength="16" stringMaxLength="255" type="string"/>
   <member name="peers_seen" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterPeerRef"/>
   <member name="routes" sequenceMaxLength="100" type="nonBasic"  nonBasicTypeName= "RouterCompactRouteHealth"/>
-  <member name="wan_writer_filters" sequenceMaxLength="3" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation" optional="true"/>
+  <member name="wan_writer_filters" sequenceMaxLength="6" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation" optional="true"/>
 </struct>
 <struct name= "RouterConfig">
   <member name="router" stringMaxLength="255" type="string" key="true"/>
@@ -381,7 +381,7 @@
   <member name="snapshot_seq" type="uint64"/>
   <member name="send_timestamp" type="int64"/>
   <member name="state_revision" type="uint64"/>
-  <member name="wan_writer_filters" sequenceMaxLength="3" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation"/>
+  <member name="wan_writer_filters" sequenceMaxLength="6" type="nonBasic"  nonBasicTypeName= "RouterWriterFilterObservation"/>
 </struct>
 <struct name= "RouterMeshPeer">
   <member name="health" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>

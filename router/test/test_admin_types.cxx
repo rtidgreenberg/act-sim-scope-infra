@@ -236,6 +236,20 @@ int main() {
         rti::core::xtypes::convert(three_topic_health));
     CHECK(health_roundtrip.wan_writer_filters.get().size() == 3);
 
+    RouterConfig six_topic;
+    for (const auto* name : {"P1_Event", "P1_Periodic", "P2_Event",
+                             "P2_State", "P2_Periodic", "P3_Periodic"}) {
+        RouterWriterFilterObservation entry;
+        entry.topic_name = name;
+        six_topic.wan_writer_filters.push_back(entry);
+    }
+    rti::topic::to_cdr_buffer(buffer, six_topic);
+    CHECK(rti::topic::from_cdr_buffer<RouterConfig>(buffer) == six_topic);
+    RouterHealth six_topic_health;
+    six_topic_health.wan_writer_filters.set(six_topic.wan_writer_filters);
+    rti::topic::to_cdr_buffer(buffer, six_topic_health);
+    CHECK(rti::topic::from_cdr_buffer<RouterHealth>(buffer) == six_topic_health);
+
     if (g_failures == 0) {
         std::printf("test_admin_types: OK\n");
         return 0;

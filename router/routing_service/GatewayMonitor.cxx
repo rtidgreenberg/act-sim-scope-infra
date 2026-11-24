@@ -315,7 +315,7 @@ void GatewayMonitor::command(const RouterCommand& command) {
 void GatewayMonitor::received(const std::string& family, const Data& frame,
                               const dds::sub::SampleInfo& info) {
     if (frame.value<std::string>("source_id") == model_.config.node_name) return;
-    if ((family == "Periodic" || family == "Status") && status_callbacks_) {
+    if ((family == model_.health_family() || family == "Periodic" || family == "Status") && status_callbacks_) {
         std::lock_guard<std::mutex> lock(status_callbacks_->mutex);
         if (info.valid() && status_callbacks_->data) status_callbacks_->data(frame, info);
         if (!info.valid() && frame.value<std::string>("original_topic") == "RouterHealth"
