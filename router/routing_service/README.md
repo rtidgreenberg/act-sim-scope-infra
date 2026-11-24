@@ -101,6 +101,16 @@ compression with the current asynchronous/shared-controller configuration,
 runtime RTPX suppression, conditional WAN ServiceRequest-channel removal and
 automatic envelope-key derivation from discovered topic keys.
 
+The [full union compression comparison](../../spikes/full_union_compression/README.md)
+now verifies none/LZ4/zlib with the current six-topic IPv6 contract, full
+monitoring, asynchronous publishing and shared 4 Mbps controller. This bounded
+gate includes exact commands/ACKs, contact dispose/revival and final periodic
+values, not binary-codec integration or load/loss/radio qualification.
+Two user-authorized six-topic monitoring repairs are source-only: RouterConfig
+and the LAN filter cache now admit six writer records, and health dispatch
+recognizes P1_Periodic. The changed type bounds require rebuilding consumers
+together before any deployment; no persistent binary or live mesh was changed.
+
 The source-only [startup optimization](../../docs/startup-optimization.md)
 retains application-reader preemptive-request suppression, adds 0–1 second
 SEDP/SPDP2 configuration response windows, and spaces owned container gateway

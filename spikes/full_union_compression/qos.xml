@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<dds>
+  <qos_library name="FullCompressionProbe">
+    <qos_profile name="wan" base_name="ACT_QOS_LIB::rs_six_topic_participant_v6">
+      <domain_participant_qos>
+        <partition><name><element>SHARED</element></name></partition>
+      </domain_participant_qos>
+    </qos_profile>
+  </qos_library>
+</dds>

@@ -34,6 +34,18 @@ Rebuild development helpers and regenerate older bundles before using renamed
 profiles. Persistent binaries, generated live configs and retained evidence are
 untouched. See [the native XML guide](../router/routing_service/README.md).
 
+**2026-11-24 source-only compression follow-up:** the current six-topic IPv6
+baseline exposed a three-record RouterConfig/cache bound and a health callback
+that did not dispatch P1_Periodic. The user authorized repairing both and
+regenerating types before private off/LZ4/zlib qualification. Matched full
+monitoring/async/shared 4 Mbps union comparisons pass; see
+[the bounded results](../spikes/full_union_compression/README.md).
+Consumers must be rebuilt together before deploying the changed bounds.
+Persistent binaries and mesh deployment are untouched; binary/load/loss/radio
+qualification remains separate. Native wire parsing now recognizes
+DATA_FRAG_SESSION (0x81); experimental capture attribution includes native
+priority-channel writers rather than silently omitting their bytes.
+
 Read the [baseline record](../docs/two-topic-refactor-baseline.md) and
 [eight-phase migration plan](../docs/two-topic-wan-migration-plan.md) before resuming.
 These documents hold the detailed evidence, code surfaces, decisions, and test gates.

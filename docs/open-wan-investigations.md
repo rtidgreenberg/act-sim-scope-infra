@@ -11,7 +11,7 @@ full-type unions.
 
 | ID | Investigation | Status |
 |---|---|---|
-| WAN-01 | Compression in the existing router with asynchronous publishing and its shared flow controller | Open: isolated compression works; combined integration unqualified |
+| WAN-01 | Compression in the existing router with asynchronous publishing and its shared flow controller | Partial: full union comparison and effective post-compression pacing passed; binary, lifecycle/load/recovery gates remain |
 | WAN-02 | Disable RTPX default-domain announcements throughout the runtime | Open audit: shared LAN/WAN profiles already disable them |
 | WAN-03 | Disable the WAN built-in ServiceRequest channel when its dependencies are unnecessary | Open: establish dependencies and qualify a disabled-channel control |
 | WAN-04 | Automatically derive envelope DDS keys from original topic key values | Open: limited string-key spike exists; generic key mapping unqualified |
@@ -29,6 +29,29 @@ on actual Routing Service-owned endpoints. Bzip2 emitted native errors and was
 rejected. The current [WAN QoS profiles](../harness_v2/qos/act_qos_profiles.xml)
 assign Event, State and Periodic to the shared controller.
 
+**2026-11-24 integration evidence:** the
+[full union processor comparison](../spikes/full_union_compression/README.md)
+uses the current six-topic IPv6 setup and shared nominal 4 Mbps controller,
+complete monitoring and two priority bands. After user-authorized repairs to
+the six-record RouterConfig/cache bounds and P1_Periodic health dispatch,
+matched off/LZ4/zlib runs preserve all 1,536 command/ACK round trips.
+Repeated-value 8 KiB command-family DATA shrinks 86.8%/90.9%; random command
+DATA shrinks 0.0%/3.3%. Contact dispose/revival and final periodic markers pass.
+This is an isolated typed-union processor gate, not binary-codec, arbitrary
+filter-transition, unregister, sustained overload, loss/repair or radio
+qualification. Source fixes and experimental compression are not deployed.
+
+**2026-11-24 accounting follow-up:** a separate
+[six-topic union accounting comparison](../spikes/full_union_compression/README.md#flow-controller-accounting-follow-up-2026-11-24)
+passes all 16 trials at supported 2/4 Mbps allowances, with 2,048 exact command/ACK
+exchanges and independently replayed captures. At 4 Mbps, the repeated-value
+8 KiB burst completes in 5.162 s off versus 0.227 s zlib; random bytes remain
+5.179/5.088 s. Halving the allowance approximately doubles the uncompressed
+duration. Effective pacing thus tracks the compressed representation, not the
+original size. Captures include two native WAN destinations; this is not a
+single-destination result. Exact per-token overhead/rounding, packet repair,
+sustained load and radio capacity remain unqualified. No deployment occurred.
+
 **Investigation and acceptance checks:**
 
 - Compare uncompressed, LZ4 and zlib using the actual processor and effective
@@ -41,9 +64,9 @@ assign Event, State and Periodic to the shared controller.
   required Event coverage, State replacement and dispose/unregister/revival.
 - Exercise overload, packet loss and recovery. Measure command round-trip time,
   queue/repair progress, CPU, user-DATA bytes and total WAN bytes.
-- Confirm how compression interacts with token accounting and retransmissions;
-  do not assume the controller charges compressed bytes or improves usable
-  throughput in direct proportion to the compression ratio.
+- Effective post-compression pacing is now measured in the current union path.
+  Quantify exact token rounding/header costs and retransmissions separately;
+  do not extrapolate usable throughput directly from the compression ratio.
 - Require zero unexpected native errors and capture drops. Retain explicit
   incompatible-reader controls. Select a threshold from representative data;
   the previous 8 KiB threshold missed useful savings on a 4 KiB fixture.
