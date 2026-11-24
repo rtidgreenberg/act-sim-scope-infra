@@ -127,6 +127,13 @@
 - **Local evidence:** the [union + auto-QoS spike](../spikes/union_auto_qos/README.md) forwards typed payloads with independent LAN activation and exactly one WAN reader/writer pair per family, but achieves sharing through a **plugin-owned WAN endpoint owner**, not native route-port sharing. The [serialized-envelope spike](../spikes/serialized_wan_envelope/README.md) proves selected binary forwarding/filtering cases, not full lifecycle or auto-QoS integration. Neither spike is production qualification.
 - **Source:** [Routing Service resource model](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/manuals/connext_dds_professional/services/routing_service/core_concepts.html); [schema propagation options](wan-schema-propagation-options.md); product discussion and Jira review, 2026-11-16.
 
+## 🟡 LP-11 — Selectively suppress SPDP2 preemptive ACKNACKs
+
+- **Product ask:** confirm or provide a supported QoS setting that suppresses the initial preemptive ACKNACK on SPDP2's reliable `participant_configuration_reader` without disabling SPDP2 or normal heartbeat-driven discovery repair. This is separate from SPDP2's best-effort bootstrap and from SEDP endpoint discovery.
+- **Why it matters:** reduce discovery bursts when multiple gateways start together on a constrained WAN.
+- **Evidence:** no selective switch was found in the [Connext 7.7.0 reader protocol reference](https://community.rti.com/static/documentation/connext-dds/7.7.0/doc/api/connext_dds/api_c/structDDS__RtpsReliableReaderProtocol__t.html). In [controlled packet captures](../spikes/preemptive_acknack/README.md#participant-scoped-follow-up-2026-11-20), the SPDP2 configuration writer (`0x00010182`) received two startup ACKNACKs per trial with the participant-level `disable_preemptive_nack` property either off or on. The working application-reader setting does not establish support for this built-in reader.
+- **Mitigation for now:** [stagger gateway starts and spread heartbeat-triggered replies over 0–1 second](startup-optimization.md#current-wan-qos-discovery-response-spreading). Neither measure selectively disables the initial request. Keep this verify-first until RTI confirms the supported scope.
+
 ---
 
 ## Known constraints (workarounds exist / inherent — inform, don't block)
@@ -148,3 +155,4 @@
 8. **LP-8** is the finite-liveliness/ISC versus full writer-side filtering tradeoff: preserve sender-side bandwidth savings with separate application health today; ask RTI to support both capabilities together.
 9. **LP-9** first qualifies Routing Service's existing `auto_configure_qos` setting. Our required setup workflow still captures endpoint QoS and validates generated configurations, reusing native behavior where qualified; LAN compatibility must not implicitly change WAN delivery policies.
 10. **LP-10** requests native many-topic consolidation/deconsolidation using typed unions or binary envelopes, with shared WAN endpoints and independent topic activation. Reuse existing features first; avoid making the plugin own an endpoint manager merely to reduce WAN endpoint count.
+11. **LP-11** asks for a supported way to suppress SPDP2 startup ACKNACKs without disabling reliable discovery repair.
