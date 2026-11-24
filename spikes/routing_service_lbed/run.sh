@@ -9,8 +9,18 @@ esac
 REPORT="debug/test_reports/routing_service_lbed${suffix}"
 CAPTURE="debug/pcap/routing_service_lbed${suffix}"
 name="act-routing-service-lbed-$$"
+lock_id="$(stat -c '%d-%i' .)"
+exec {lock_fd}>"/tmp/act-routing-service-lbed-${lock_id}.lock"
+if ! flock -n "$lock_fd"; then
+    echo "Unable to acquire the LBED launch lock; another launch may be active" >&2
+    exit 1
+fi
 mkdir -p "$REPORT" "$CAPTURE"
-if [[ -n "$(sg docker -c "docker ps -q --filter name=^/act-routing-service-lbed-")" ]]; then
+if ! active="$(sg docker -c "docker ps -q --filter name=^/act-routing-service-lbed-")"; then
+    echo "Unable to check LBED container ownership; artifacts were not cleared" >&2
+    exit 1
+fi
+if [[ -n "$active" ]]; then
     echo "An LBED spike already owns these report paths" >&2
     exit 1
 fi

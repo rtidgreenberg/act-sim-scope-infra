@@ -47,11 +47,23 @@ read-only. Exact report/capture roots are cleared before each run:
   image identity and generated configuration snapshots.
 - `debug/pcap/routing_service_lbed/`: bounded WAN-only packet captures.
 
+The launcher holds a nonblocking lock in `/tmp`, keyed by checkout device/inode,
+from before the ownership check through container cleanup. Both the default and
+`--cft` runs share this lock. A concurrent launch or failed Docker ownership query
+exits without clearing artifacts. The lock file is deliberately not unlinked:
+removing it could let another launch lock a different inode while cleanup runs.
+
 `report.json` and the `PASS` marker are written only after the entire matrix
 passes. Failures write an explicit `failure.json` and return nonzero.
 Every child is stopped/reaped; the owned container is removed on success/failure.
 No production binaries, IDL, generated mesh configuration or mesh lifecycle
 state are changed. The operator mesh remains stopped.
+
+Launcher safety checks use a fake Docker command and do not start DDS:
+
+```bash
+python3 -m unittest discover -s spikes/routing_service_lbed -p test_run.py
+```
 
 ## Configuration that works
 
