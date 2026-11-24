@@ -22,6 +22,18 @@ across forced termination; use the owned harness lifecycle for cleanup.
 
 ## Active work handoff: two-topic WAN refactor (2026-11-09)
 
+**2026-11-24 source-only Periodic QoS naming:** the base/shared/RS profiles and
+configuration alias now use `wan_periodic`, `wan_union_periodic` and
+`rs_wan_periodic`. Best-effort Periodic readers omit preemptive-NACK suppression;
+reliable Event/State readers retain it. Wire topics and payload types are
+unchanged. Fresh build: 10 C++ targets, 57 targeted Python checks and five
+real-DDS forwarding/filtering checks passed; one unchanged browser check skipped
+for missing Playwright. Sixteen resolved WAN profile comparisons verify that
+writer QoS is unchanged and only the requested Periodic reader property differs.
+Rebuild development helpers and regenerate older bundles before using renamed
+profiles. Persistent binaries, generated live configs and retained evidence are
+untouched. See [the native XML guide](../router/routing_service/README.md).
+
 Read the [baseline record](../docs/two-topic-refactor-baseline.md) and
 [eight-phase migration plan](../docs/two-topic-wan-migration-plan.md) before resuming.
 These documents hold the detailed evidence, code surfaces, decisions, and test gates.
@@ -115,7 +127,7 @@ binary remain unchanged. See [checkpoint 3.55](../docs/two-topic-wan-migration-p
   two-topic Event/Status names are unchanged. This is a naming-only change:
   payloads/schema 3, LAN topics, keys, audience rules, QoS, priorities, pacing
   and health timing are preserved. Internal `WanEvent`/`WanStatus` types and
-  `wan_contacts`/`wan_status` aliases are intentionally retained. No transient
+  `wan_contacts`/`wan_periodic` aliases are intentionally retained. No transient
   local or catalog-driven telemetry model was introduced.
   Fresh source gate: 9/9 C++, 16/16 native three-topic DDS (256.40 s), three
   targeted two-topic regressions (166.09 s), 56 launcher/display/wire checks
@@ -344,7 +356,7 @@ binary remain unchanged. See [checkpoint 3.55](../docs/two-topic-wan-migration-p
   WAN source into the existing payload source. The health transport slice
   of Phase 6 was brought forward: presence now uses the health branch of Status,
   sharing one Status writer/reader with applications, retaining LAN summaries
-  and passive RTT. The user-approved simplification uses `wan_union_status`
+  and passive RTT. The user-approved simplification uses `wan_union_periodic`
   (BE/volatile/KEEP_LAST(1), 2s deadline, infinite liveliness); a health deadline
   or health NO_WRITERS/dispose starts STALE -> 30s DEAD. Any valid received
   Status restores ALIVE; repeated misses never restart the countdown. Only the
@@ -957,7 +969,7 @@ directory markers. Stop the associated mesh, test, or capture process before cle
   representation, transport, discovery, resource-limit, or application-ack behavior in C++
   or Python code. Add or update profiles in `harness_v2/qos/act_qos_profiles.xml`, then load
   them through `dds::core::QosProvider` / `QosResolver`.
-- Route endpoint aliases such as `wan_event`, `wan_status`, and internal profiles such as
+- Route endpoint aliases such as `wan_event`, `wan_periodic`, and internal profiles such as
   `router_health`, `router_link_probe`, `router_link_stats`, `router_mesh_status`,
   `router_admin_status`, `router_admin_command`, `router_admin_command_ack`,
   `router_controller_journal`, `router_default_reader`, and `router_default_writer` are the

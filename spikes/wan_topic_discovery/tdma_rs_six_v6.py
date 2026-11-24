@@ -19,7 +19,7 @@ def build_config(out_path: Path, role: str) -> None:
             "wan_participant": "ACT_QOS_LIB::rs_six_topic_participant_emane_v6",
             "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
             "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-            "wan_status": "ACT_QOS_LIB::wan_union_status",
+            "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
         }
     )
     base["routing_service"] = {

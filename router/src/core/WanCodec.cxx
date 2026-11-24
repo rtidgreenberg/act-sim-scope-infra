@@ -83,23 +83,23 @@ const std::vector<WanMapping>& wan_mappings() {
         {"ContactReport", "contact_report", "Event", "contact_report", 5, "contact_id", "wan_event"},
         {"RouterConfig", "RouterConfig", "Event", "router_config", 6, "router", "wan_event"},
         {"PlatformStatus", "platform_init_status", "Status", "navigation", 1,
-         "source", "wan_status"},
-        {"PlatformData", "platform_data", "Status", "data", 2, "source", "wan_status"},
+         "source", "wan_periodic"},
+        {"PlatformData", "platform_data", "Status", "data", 2, "source", "wan_periodic"},
         {"PlatformMissionStatus", "platform_mission_status", "Status", "mission", 3,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"PlatformWaypointStatus", "platform_waypoint_status", "Status", "waypoint", 4,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"PlatformDetailStatus", "platform_detail_status", "Status", "detail", 5,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"PlatformDebugStatus", "platform_debug_status", "Status", "debug", 6,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"PlatformThrusterStatus", "platform_thruster_status", "Status", "thruster", 7,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"PlatformPowerStatus", "platform_power_status", "Status", "power", 8,
-         "source", "wan_status"},
+         "source", "wan_periodic"},
         {"ActRouterDiagnostics", "RouterDiagnostics", "Status", "diagnostics", 9,
-         "router", "wan_status"},
-        {"RouterHealth", "RouterHealth", "Status", "health", 10, "router", "wan_status"}
+         "router", "wan_periodic"},
+        {"RouterHealth", "RouterHealth", "Status", "health", 10, "router", "wan_periodic"}
     };
     return mappings;
 }
@@ -157,7 +157,7 @@ WanMapping wan_full_type_mapping(dds::core::QosProvider types,
         }
     }
     return {topic, type, family, branch, static_cast<uint32_t>(labels.front()),
-            instance_field, family == "Event" ? "wan_event" : "wan_status"};
+            instance_field, family == "Event" ? "wan_event" : "wan_periodic"};
 }
 
 WanCodec::WanCodec(dds::core::QosProvider types)

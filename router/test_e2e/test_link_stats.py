@@ -44,7 +44,7 @@ from conftest import (  # noqa: E402
 from util.dds_probe import (  # noqa: E402
     Probe, reader_qos, read_status_revision)
 
-# e2e_link_stats.yaml loads the canonical QoS XML (for the wan_status/wan_event route
+# e2e_link_stats.yaml loads the canonical QoS XML (for the wan_periodic/wan_event route
 # endpoint aliases); its participant profiles are env-templated, so set loopback defaults for
 # the router_main subprocesses that inherit this env. (The in-process probes below use plain
 # default QoS and never load the WAN lib, so this only needs to run before the routers launch.)

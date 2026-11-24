@@ -56,7 +56,7 @@ class IndependentGateway:
                 self.wan, family, self.types.type("WanStatus" if family == "Periodic" else "WanEvent"))
             profile = "ACT_QOS_LIB::" + {
                 "Event": "wan_three_topic_event", "State": "wan_union_contacts",
-                "Periodic": "wan_union_status"}[family]
+                "Periodic": "wan_union_periodic"}[family]
             reader = dds.DynamicData.DataReader(
                 dds.Subscriber(self.wan), topic, self.wan_qos.datareader_qos_from_profile(profile))
             writer = dds.DynamicData.DataWriter(
@@ -101,7 +101,7 @@ class IndependentGateway:
         for family in model["wan"]:
             family["profile"] = "ACT_QOS_LIB::" + {
                 "Event": "wan_three_topic_event", "State": "wan_union_contacts",
-                "Periodic": "wan_union_status"}[family["name"]]
+                "Periodic": "wan_union_periodic"}[family["name"]]
         self.path = write_bundle(model, build / "libact_gateway_processor.so", True, work / "service.xml")
         root = ET.parse(self.path)
         for identifier, *_ in CASES:

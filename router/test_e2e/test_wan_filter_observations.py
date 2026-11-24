@@ -69,7 +69,7 @@ def remote_filter(latest, reporter, topic, peer):
 
 def test_observer_health_matches_transmitted_acknowledgments(mesh):
     nodes, wan, provider = mesh
-    health_reader = wan.reader("Status", "WanStatus", qos=reader_qos("wan_union_status"))
+    health_reader = wan.reader("Status", "WanStatus", qos=reader_qos("wan_union_periodic"))
     mesh_view = mesh_reader(nodes["Control_20"][1], provider)
     transmitted = {}
     cached = {}
@@ -105,7 +105,7 @@ def test_observer_health_matches_transmitted_acknowledgments(mesh):
 def test_reliable_config_snapshots_leave_every_heartbeat_compact(mesh, wan_contract):
     nodes, wan, provider = mesh
     health_family = "Telemetry" if wan_contract == "three_topic_union" else "Status"
-    reader = wan.reader(health_family, "WanStatus", qos=reader_qos("wan_union_status"))
+    reader = wan.reader(health_family, "WanStatus", qos=reader_qos("wan_union_periodic"))
     config_reader = wan.reader("Event", "WanEvent", qos=reader_qos("wan_event"))
     assert config_reader.qos.reliability.kind == dds.ReliabilityKind.RELIABLE
     assert config_reader.qos.history.kind == dds.HistoryKind.KEEP_ALL
@@ -175,7 +175,7 @@ def test_reliable_config_snapshots_leave_every_heartbeat_compact(mesh, wan_contr
 @pytest.mark.parametrize("cache_pressure", ["none", "other_sessions", "unseen_routers"])
 def test_config_before_health_replay_session_change_and_empty_snapshot(mesh, cache_pressure):
     nodes, wan, provider = mesh
-    reader = wan.reader("Status", "WanStatus", qos=reader_qos("wan_union_status"))
+    reader = wan.reader("Status", "WanStatus", qos=reader_qos("wan_union_periodic"))
     configs = wan.reader("Event", "WanEvent", qos=reader_qos("wan_event"))
     template = None
     deadline = time.monotonic() + 35
@@ -187,7 +187,7 @@ def test_config_before_health_replay_session_change_and_empty_snapshot(mesh, cac
                 break
         time.sleep(0.1)
     assert template is not None
-    writer = wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_status"))
+    writer = wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_periodic"))
     config_writer = wan.writer("Event", "WanEvent", qos=writer_qos("wan_event"))
     config_template = None
     deadline = time.monotonic() + 40

@@ -546,7 +546,7 @@ Deliver (slice order per D66: 7a ✓ → 7m → 7b → 7c → 7d):
 
 Evidence (mapped 1:1 to named Python e2e tests — D59, E3/E-M reshaped by D66):
 
-- **E1/E2** (7a) a route using `wan_status`/`wan_event` aliases forwards; the participant
+- **E1/E2** (7a) a route using `wan_periodic`/`wan_event` aliases forwards; the participant
   `*_wan_udpv4_qos` profile is applied → `test_qos_alias_route.py` + `config/e2e_qos_alias.yaml`.
 - **E-M** (7m) an enabled route on an empty domain reaches `TOPIC_FORWARDING` with both
   matched counts 0 and `match_reason` set, then matches and forwards when the peer appears

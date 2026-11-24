@@ -67,7 +67,7 @@ class WanTimeFilterTests(unittest.TestCase):
         self.subscriber = dds.Subscriber(self.participants[1])
         self.writer = dds.DynamicData.DataWriter(
             self.publisher, self.topics[0],
-            self.qos.datawriter_qos_from_profile("ACT_QOS_LIB::wan_union_status"))
+            self.qos.datawriter_qos_from_profile("ACT_QOS_LIB::wan_union_periodic"))
         self.cleanup.callback(self.writer.close)
         self.readers = []
 

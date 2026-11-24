@@ -473,7 +473,7 @@ caller-provided metadata; reading current controller state, deriving audience
 rules, and updating interests are still Phase 3/4 work. Identity/protected
 partition entries must retain their existing matching meaning in that wiring.
 
-Catalog QoS classes are `wan_event` for the five Event cases, `wan_status` for
+Catalog QoS classes are `wan_event` for the five Event cases, `wan_periodic` for
 the nine application/diagnostic Status cases, and `router_health` for health.
 Those names do not assert that endpoint sharing/health isolation is already wired.
 The new opt-in XML profile `wan_two_topic_participant` inherits the legacy WAN
@@ -795,7 +795,7 @@ variant/topic/original-key instance ID. Session stays non-key. Original LAN
 payload fields, including fields named `source_node`, are unchanged. IDL and
 committed generated XML agree.
 
-The new XML `wan_union_status` profile is best effort, volatile, KEEP_LAST(1),
+The new XML `wan_union_periodic` profile is best effort, volatile, KEEP_LAST(1),
 with a 2-second deadline and infinite liveliness. Its
 `act.presence.dead_after_stale_ms=30000` property supplies the presence countdown.
 Legacy profiles and the default legacy WAN contract remain unchanged.
@@ -830,7 +830,7 @@ Verification used fresh isolated Connext builds, not the live mesh binary:
 - **20/20 production qualification cases passed** (**29.48 s**, eight unrelated
   historical/backlog cases deselected), including all fifteen union branches,
   stable two-key handles and sixteen-team native writer-side suppression with
-  the actual `wan_union_status` profile.
+  the actual `wan_union_periodic` profile.
 - Installed QosProvider assertions verified BE/volatile/KEEP_LAST(1), matching
   2-second deadlines, infinite reader/writer liveliness and the 30000 ms property.
 
@@ -850,7 +850,7 @@ The user authorized replacing the retained legacy mesh and running the full
 mission-level gate. The owned `down --emane` action stopped that mesh before
 rebuilding the persistent router binary. The launcher now supports
 `--wan-contract two_topic_union`: both control/platform renderers select the
-union participant profiles and `wan_union_status`, and audit readiness recognizes
+union participant profiles and `wan_union_periodic`, and audit readiness recognizes
 the new factory's interest-application events. Legacy remains the default.
 
 The fresh five-platform EMANE mesh was launched with:
@@ -949,7 +949,7 @@ remained open; the next checkpoint closes them.
   per-source isolation, capacity handling and cancellation without another miss.
 - **Presence-only Status QoS:** one shared validation path checks the catalog
   profile for both application routes and presence. Event-only or route-free
-  configurations with presence reject missing/legacy `wan_status` mappings.
+  configurations with presence reject missing/legacy `wan_periodic` mappings.
   Correct profiles pass for control and platform roles; Event-only configurations
   without presence need no unused Status alias. Legacy validation is unchanged.
 
@@ -2280,7 +2280,7 @@ This affects `three_topic_union` only. Legacy names and the two-topic Event /
 Status contract are unchanged. The whole-structure payload catalog, schema
 version 3, LAN topics/types, keys, audience rules, priorities, pacing, suppression
 and health timing remain unchanged. The internal `WanEvent`/`WanStatus` types
-and existing `wan_contacts`/`wan_status` QoS aliases are deliberately retained:
+and existing `wan_contacts`/`wan_periodic` QoS aliases are deliberately retained:
 State uses the original WanEvent contact branch; Telemetry uses WanStatus.
 Physical topic selection is separate from those historical implementation names.
 
@@ -2971,7 +2971,7 @@ Preserve the invariants in the
   Source-level presence intentionally accepts any Status, as specified below.
 
 The user explicitly approved the shared-Status policy in §3.12:
-`wan_union_status` is best effort, volatile, KEEP_LAST(1), with a 2-second deadline
+`wan_union_periodic` is best effort, volatile, KEEP_LAST(1), with a 2-second deadline
 and infinite liveliness. There is no separate health reader/writer or finite
 writer liveliness lease in this opt-in mode. Native deadline accounting remains
 per instance, but source presence intentionally resets on **any received Status**.

@@ -75,7 +75,7 @@ class FullTypeConfigurationTests(unittest.TestCase):
         for family in model["wan"]:
             family["profile"] = "ACT_QOS_LIB::" + {
                 "Event": "wan_three_topic_event", "State": "wan_union_contacts",
-                "Periodic": "wan_union_status"}[family["name"]]
+                "Periodic": "wan_union_periodic"}[family["name"]]
         return model
 
     def test_native_model_render_and_frozen_bundle(self):

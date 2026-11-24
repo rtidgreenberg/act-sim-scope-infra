@@ -424,8 +424,8 @@ bool validate_wan_contract(const RouteConfig &cfg, std::string &error) {
         }
         const auto validate_qos_class = [&](const WanMapping& mapping) {
             const auto alias = std::string(mapping.qos_profile);
-            const auto profile = alias == "wan_status"
-                    ? "ACT_QOS_LIB::wan_union_status"
+            const auto profile = alias == "wan_periodic"
+                    ? "ACT_QOS_LIB::wan_union_periodic"
                     : alias == "wan_contacts"
                         ? "ACT_QOS_LIB::wan_union_contacts"
                         : separate_contacts ? "ACT_QOS_LIB::wan_three_topic_event"

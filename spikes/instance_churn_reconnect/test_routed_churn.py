@@ -29,11 +29,11 @@ def test_routed_churn(mesh, family, outage, e2e_tmp_dir):
     topic, type_name = (("ContactReport", "contact_report") if family == "Event"
                         else ("PlatformStatus", "platform_init_status"))
     writer = (source.writer(topic, type_name) if family == "Event"
-              else wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_status")))
+              else wan.writer("Status", "WanStatus", qos=writer_qos("wan_union_periodic")))
     reader = receiver.reader(topic, type_name)
     qos, types = providers()
     dead_timeout = int(qos.datareader_qos_from_profile(
-        "ACT_QOS_LIB::wan_union_status").property.get("act.presence.dead_timeout_sec"))
+        "ACT_QOS_LIB::wan_union_periodic").property.get("act.presence.dead_timeout_sec"))
     run_id = f"routed-churn-{family}-{time.time_ns()}"
     truth, actual, observations = {}, {}, []
     counts, outage_counts = Counter(), Counter()

@@ -142,7 +142,7 @@ apply_wan_contract() {
     sed -i -e '/^router:$/a\  wan_contract: two_topic_union' \
         -e 's/ACT_QOS_LIB::wan_router_participant_emane\b/ACT_QOS_LIB::wan_two_topic_participant_emane/g' \
         -e 's/ACT_QOS_LIB::wan_router_participant\b/ACT_QOS_LIB::wan_two_topic_participant/g' \
-        -e 's/ACT_QOS_LIB::wan_status\b/ACT_QOS_LIB::wan_union_status/g' "$1"
+        -e 's/ACT_QOS_LIB::wan_periodic\b/ACT_QOS_LIB::wan_union_periodic/g' "$1"
     [[ "$WAN_CONTRACT" == three_topic_union || "$WAN_CONTRACT" == six_topic_union ]] || return 0
     python3 - "$1" "$WAN_CONTRACT" <<'PY'
 import sys

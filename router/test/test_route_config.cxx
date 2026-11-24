@@ -111,7 +111,7 @@ int main() {
 
                 CHECK(cfg.qos_profiles.size() == 9);
         CHECK(cfg.qos_profiles.at("wan_event") == "ACT_QOS_LIB::wan_event");
-        CHECK(cfg.qos_profiles.at("wan_status") == "ACT_QOS_LIB::wan_status");
+        CHECK(cfg.qos_profiles.at("wan_periodic") == "ACT_QOS_LIB::wan_periodic");
                 CHECK(cfg.qos_profiles.at("router_health") == "ACT_QOS_LIB::router_health");
                 CHECK(cfg.qos_profiles.at("lan_event") == "ACT_QOS_LIB::lan_event");
         // Regression guard for the now-fixed broken alias (spikes/qos_alias/ PLAN.md

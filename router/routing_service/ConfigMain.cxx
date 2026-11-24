@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
         }
         for (const auto& family : model.families()) {
             const auto alias = model.is_event_family(family) ? "wan_event"
-                             : model.is_state_family(family) ? "wan_contacts" : "wan_status";
+                             : model.is_state_family(family) ? "wan_contacts" : "wan_periodic";
             YAML::Node entry;
             entry["name"] = family;
             entry["type"] = model.transport_type(family);
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
                    : family == "State" ? "ACT_QOS_LIB::rs_three_topic_state"
                                        : "ACT_QOS_LIB::rs_three_topic_periodic")
                 : (family == "Event" ? "ACT_QOS_LIB::rs_wan_event"
-                                    : "ACT_QOS_LIB::rs_wan_status");
+                                    : "ACT_QOS_LIB::rs_wan_periodic");
             const auto filter = model.receive_filter(family);
             entry["expression"] = filter.expression;
             entry["parameters"] = filter.parameters;

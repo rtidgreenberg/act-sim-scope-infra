@@ -3,6 +3,13 @@
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:noNamespaceSchemaLocation="http://community.rti.com/schema/7.3.0/rti_dds_qos_profiles.xsd">
 
+  <!--
+    Production runtime profiles for the custom router and native Routing Service.
+    Keep shared bases and legacy/two-topic, three-topic and six-topic policies here.
+    Test overrides and experimental discovery/compression profiles belong in
+    test fixtures or spikes, not in this production library.
+  -->
+
   <configuration_variables>
     <element>
       <name>ACT_PARTICIPANT_NAME</name>
@@ -155,6 +162,7 @@
   </configuration_variables>
 
   <qos_library name="ACT_QOS_LIB">
+    <!-- Shared participant discovery and LAN transport bases. -->
     <qos_profile name="participant_discovery_base">
       <domain_participant_qos>
         <discovery_config>
@@ -189,12 +197,7 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <!--
-    ____________________________________________________________________________
-
-                      QOS Profiles used on the LAN side
-    ____________________________________________________________________________
-    -->
+    <!-- LAN participant and application endpoint policies. -->
 
     <qos_profile name="lan_transport_loopback" base_name="ACT_QOS_LIB::lan_participant_base">
       <domain_participant_qos>
@@ -256,12 +259,7 @@
     </qos_profile>
 
     <qos_profile name="lan_status" base_name="BuiltinQosLib::Generic.Common">
-      <!-- 
-        This profile is intended for Periodic "STATUS" data. 
-
-        Deadline: INF [Default]
-        Liveliness: INF [Default]
-        -->
+      <!-- LAN periodic data; deadline and liveliness remain infinite. -->
 
       <datawriter_qos>
         <!-- Messages are sent once, does NOT ensure delivery -->
@@ -269,7 +267,7 @@
           <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
         </reliability>
 
-        <!-- How many samples to keep around. BEST_EFFORT only needs 1 as it doesn't resend -->
+        <!-- Retain only the latest sample per instance on the writer. -->
         <history>
           <kind>KEEP_LAST_HISTORY_QOS</kind>
           <depth>1</depth>
@@ -284,7 +282,7 @@
           <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
         </reliability>
 
-        <!-- KEEP_LAST will overwrite data if cache is "full" -->
+        <!-- Retain up to 50 samples per instance on the reader. -->
         <history>
           <kind>KEEP_LAST_HISTORY_QOS</kind>
           <depth>50</depth>
@@ -295,14 +293,8 @@
 
     <qos_profile name="lan_status_1s" base_name="ACT_QOS_LIB::lan_status">
 
-      <!-- Inheriting the status_qos profile and just adding a time based filter to downsample -->
-
       <datareader_qos>
-        <!-- 
-          We want to downsample on the LAN "Input" Routing Service reader before 
-          it goes into Routing Service 
-          This minimizes resource usage as high rate data is not processed at full rate
-          -->
+        <!-- Downsample periodic LAN input before routing. -->
         <time_based_filter>
           <minimum_separation>
             <sec>1</sec>
@@ -336,19 +328,11 @@
 
     </qos_profile>
 
-    <!--              
-    ____________________________________________________________________________
-    
-                      QOS Profiles used across the WAN/COMMS link       
-    ____________________________________________________________________________
-    -->
+    <!-- WAN participant policies and custom-router flow control. -->
 
     <qos_profile name="wan_router_participant_base" base_name="ACT_QOS_LIB::participant_discovery_base">
 
-      <!-- 
-        This profile is intended for use across a network comms link. 
-        It assumes an instance of RTI's Routing Service is on both ends and is using Connext 7.3.0 
-        -->
+      <!-- Shared WAN discovery/transport base, validated with Connext 7.7.0. -->
       <domain_participant_qos>
 
 
@@ -388,24 +372,12 @@
             -->
           <participant_liveliness_assert_period>
             <sec>30</sec>
-            <!-- nanosec defaults to infinite- ensure a value is always set -->
             <nanosec>0</nanosec>
           </participant_liveliness_assert_period>
 
           <!-- 
-            This is the timeout period by which other applications will consider this to
-            be "offline" and remove from internal database.
-
-            Must be > participant_liveliness_assert_period
-
-            If you are getting a lot of timeout's due to lossy comms this can be 
-            extended to minimize re-discovery events.
-
-            Adjust per system behavior/requirements
-
-            Currently set to WAN System Timeout
-
-            DEFAULT: 100 secs 
+            Discovery lease from the WAN system timeout, default 300 seconds.
+            Keep it longer than participant_liveliness_assert_period.
             -->
           <participant_liveliness_lease_duration>
             <sec>$(WAN_TIMEOUT_SEC)</sec>
@@ -523,8 +495,7 @@
           <mask>UDPv4</mask>
 
           <udpv6>
-
-            <!-- Adjust Multicast TTL as required using ENV variable -->
+            <!-- Inherited by the six-topic profiles that enable UDPv6. -->
             <multicast_ttl>$(WAN_TTL)</multicast_ttl>
 
             <!-- Increase the receive socket buffer size to improve performance. -->
@@ -586,7 +557,8 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <!-- Opt-in three-topic baseline: nominal 2 Mbps per participant, not RF airtime. -->
+    <!-- Custom-router three-topic controller: nominal 2 Mbps, not RF airtime.
+         Native Routing Service uses rs_priority_participant instead. -->
     <qos_profile name="wan_three_topic_participant"
                  base_name="ACT_QOS_LIB::wan_two_topic_participant">
       <domain_participant_qos>
@@ -635,13 +607,9 @@
       </domain_participant_qos>
     </qos_profile>
 
-    <qos_profile name="wan_status" base_name="BuiltinQosLib::Generic.Common">
-      <!-- 
-        This profile is intended for Periodic "STATUS" data. 
-
-        Deadline: INF [Default]
-        Liveliness: INF [Default]
-        -->
+    <!-- Shared WAN endpoint bases; wire names are selected by the contract. -->
+    <qos_profile name="wan_periodic" base_name="BuiltinQosLib::Generic.Common">
+      <!-- Base periodic data; deadline and liveliness remain infinite. -->
 
       <datawriter_qos>
         <!-- Messages are sent once, does NOT ensure delivery -->
@@ -649,10 +617,7 @@
           <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
         </reliability>
 
-        <!-- 
-            How many samples to keep around on a PER INSTANCE basis. 
-            BEST_EFFORT only needs 1 as it doesn't resend 
-          -->
+        <!-- Retain only the latest sample per instance on the writer. -->
         <history>
           <kind>KEEP_LAST_HISTORY_QOS</kind>
           <depth>1</depth>
@@ -667,26 +632,17 @@
           <kind>BEST_EFFORT_RELIABILITY_QOS</kind>
         </reliability>
 
-        <!-- KEEP_LAST will overwrite data if cache is "full" -->
+        <!-- Base reader keeps 50 samples; wan_union_periodic overrides this to one. -->
         <history>
           <kind>KEEP_LAST_HISTORY_QOS</kind>
           <depth>50</depth>
         </history>
 
-        <property>
-          <value>
-            <element>
-              <name>dds.data_reader.protocol.disable_preemptive_nack</name>
-              <value>true</value>
-            </element>
-          </value>
-        </property>
-
       </datareader_qos>
     </qos_profile>
 
-    <!-- Two-topic Status policy. Legacy wan_status and router_health stay unchanged. -->
-    <qos_profile name="wan_union_status" base_name="ACT_QOS_LIB::wan_status">
+    <!-- Shared Periodic policy; legacy wire topic/type names remain unchanged. -->
+    <qos_profile name="wan_union_periodic" base_name="ACT_QOS_LIB::wan_periodic">
       <datawriter_qos>
         <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
         <deadline><period><sec>2</sec><nanosec>0</nanosec></period></deadline>
@@ -741,10 +697,7 @@
           </max_blocking_time>
         </reliability>
 
-        <!-- 
-          KEEP_ALL will not overwrite any samples, only removed from queue if 
-          acknowledged by ALL readers
-        -->
+        <!-- Retention is subject to resource limits and reader-inactivity policy. -->
         <history>
           <kind>KEEP_ALL_HISTORY_QOS</kind>
         </history>
@@ -753,12 +706,8 @@
 
           <rtps_reliable_writer>
 
-            <!-- 
-              Will give up on needing acknowledgement per reader if no response received from
-              reader after $WAN_TIMEOUT_SEC
-
-              Will still send messages but will be BEST_EFFORT
-              -->
+            <!-- Bounds retries before an unresponsive reader is marked inactive.
+                 This does not change writer reliability or guarantee a wall-clock timeout. -->
             <max_heartbeat_retries>$(WAN_HB_RETRIES)</max_heartbeat_retries>
 
             <!-- Adjust Heartbeat per RTT of WAN network -->
@@ -865,6 +814,7 @@
       <!-- Reader KEEP_ALL and default heartbeat suppression are inherited. -->
     </qos_profile>
 
+    <!-- Legacy WAN health and shared LAN monitoring endpoints. -->
     <qos_profile name="router_health" base_name="ACT_QOS_LIB::wan_event">
       <!--
         RouterHealth presence heartbeat on the WAN participant.
@@ -975,7 +925,8 @@
       </datareader_qos>
     </qos_profile>
 
-    <!-- Opt-in Routing Service scheduling; existing router aliases are unchanged. -->
+    <!-- Runtime Routing Service controller shared by all WAN writer families.
+         Default allowance: 5000 bytes per 10 ms (4 Mbps), not RF airtime. -->
     <qos_profile name="rs_priority_participant">
       <domain_participant_qos>
         <resource_limits>
@@ -1016,6 +967,7 @@
       </domain_participant_qos>
     </qos_profile>
 
+    <!-- Two-topic Routing Service writers: physical Event and Status. -->
     <qos_profile name="rs_wan_event" base_name="ACT_QOS_LIB::wan_event">
       <datawriter_qos>
         <publish_mode>
@@ -1041,7 +993,7 @@
       </datawriter_qos>
     </qos_profile>
 
-    <qos_profile name="rs_wan_status" base_name="ACT_QOS_LIB::wan_union_status">
+    <qos_profile name="rs_wan_periodic" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datawriter_qos>
         <publish_mode>
           <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
@@ -1066,6 +1018,7 @@
       </datawriter_qos>
     </qos_profile>
 
+    <!-- Three-topic Routing Service writers: physical Event, State and Periodic. -->
     <qos_profile name="rs_three_topic_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
       <datawriter_qos>
         <publish_mode>
@@ -1096,7 +1049,7 @@
       </datawriter_qos>
     </qos_profile>
 
-    <qos_profile name="rs_three_topic_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+    <qos_profile name="rs_three_topic_periodic" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datawriter_qos>
         <publish_mode>
           <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
@@ -1113,7 +1066,9 @@
       </datawriter_qos>
     </qos_profile>
 
-    <!-- Opt-in six-topic UDPv6 WAN participant and DSCP-marked writer profiles (CS6=48, AF41=34, AF31=26). -->
+    <!-- Six-topic runtime UDPv6 participant and writers:
+         P1_Event/P1_Periodic, P2_Event/P2_State/P2_Periodic, P3_Periodic.
+         DSCP markings: CS6=48, AF41=34, AF31=26. -->
     <qos_profile name="rs_six_topic_participant_v6" base_name="ACT_QOS_LIB::wan_router_participant">
       <domain_participant_qos>
         <resource_limits>
@@ -1237,7 +1192,8 @@
       </datawriter_qos>
     </qos_profile>
 
-    <!-- Composed only into union adapter input readers; legacy profiles are unchanged. -->
+    <!-- Runtime reader lifecycle and LAN administration/diagnostics.
+         Lifecycle retention is composed into union adapter inputs. -->
     <qos_profile name="router_lifecycle_reader">
       <datareader_qos>
         <reader_data_lifecycle>

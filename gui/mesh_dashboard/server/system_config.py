@@ -104,7 +104,7 @@ def load_system_config(path, provider_factory, infinite_duration):
         profiles = [(family, port["resolved_profile"], endpoint)
                     for family, ports in native["wan"].items() for endpoint, port in ports.items()]
     elif shared:
-        families = [("Event", "wan_event"), (health_family, "wan_status")]
+        families = [("Event", "wan_event"), (health_family, "wan_periodic")]
         if separate_contacts:
             families.insert(1, ("State", "wan_contacts"))
         profiles = [(topic, aliases[alias], endpoint)

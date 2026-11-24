@@ -406,7 +406,7 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
                           "payload.navigation.speed_knots > 5) OR payload._d = 2)", {"'Boat31'"}));
     dds::topic::ContentFilteredTopic<Data> event_filter(
         event_in, "selected-event", dds::topic::Filter("destination = %0", {"'Boat31'"}));
-    Reader status_reader(wan_subscriber, status_filter, qos.datareader_qos("ACT_QOS_LIB::wan_status"));
+    Reader status_reader(wan_subscriber, status_filter, qos.datareader_qos("ACT_QOS_LIB::wan_periodic"));
     Reader event_reader(wan_subscriber, event_filter, qos.datareader_qos("ACT_QOS_LIB::wan_event"));
     std::map<std::string, Writer> wan_writers;
     for (const auto& rule : rules) {
@@ -572,7 +572,7 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
         } else {
             context.destination = "OtherBoat";
         }
-        wan_writers.at("wan_status").write(codec.pack(navigation, unwanted, context));
+        wan_writers.at("wan_periodic").write(codec.pack(navigation, unwanted, context));
     }
     const auto quiet_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     while (std::chrono::steady_clock::now() < quiet_until) {
@@ -582,7 +582,7 @@ int run(const std::string& xml, const std::string& qos_xml, const std::string& m
     require(pushed() == baseline && wan_received == 5 && legs[0]->received == 1,
             "Rejected union content/audience was transmitted or decoded");
     legs[0]->expected = fixture(types, legs[0]->rule, 2);
-    wan_writers.at("wan_status").write(codec.pack(navigation, legs[0]->expected,
+    wan_writers.at("wan_periodic").write(codec.pack(navigation, legs[0]->expected,
                                                 metadata(legs[0]->rule, legs[0]->expected)));
     wait_until([&] { pump(); return legs[0]->received == 2; }, "selected union after filtering");
     require(pushed() == baseline + 1 && wan_received == 6, "Selected union did not add exactly one WAN DATA");

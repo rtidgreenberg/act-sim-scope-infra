@@ -183,7 +183,7 @@
         <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
       </datareader_qos>
     </qos_profile>
-    <qos_profile name="status_reader" base_name="ACT_QOS_LIB::wan_union_status">
+    <qos_profile name="status_reader" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datareader_qos>
         <reader_data_lifecycle>
           <autopurge_nowriter_instances_delay>

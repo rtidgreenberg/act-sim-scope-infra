@@ -70,7 +70,7 @@ def prepared_model():
             for family, type_name, profile in (
                 ("Event", "WanEvent", "wan_three_topic_event"),
                 ("State", "WanEvent", "wan_union_contacts"),
-                ("Periodic", "WanStatus", "wan_union_status"))],
+                ("Periodic", "WanStatus", "wan_union_periodic"))],
     }
 
 
@@ -312,7 +312,7 @@ class NativeXmlProviderTests(unittest.TestCase):
             "wan_participant": "ACT_QOS_LIB::rs_six_topic_participant_v6",
             "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
             "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-            "wan_status": "ACT_QOS_LIB::wan_union_status",
+            "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
         })
         config["routing_service"] = {"topic_priorities": {"PlatformDetailStatus": "low"}}
         with tempfile.TemporaryDirectory(dir=WORKDIR) as directory:

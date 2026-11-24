@@ -79,11 +79,12 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
             "wan": [
                 {"name": family, "participant": "wan", "profile": profile,
                  "type": "Wan" + family,
-                 "writer_profile": "ACT_QOS_LIB::rs_wan_" + family.lower(),
+                 "writer_profile": "ACT_QOS_LIB::rs_wan_" +
+                                   ("event" if family == "Event" else "periodic"),
                  "expression": "source_id <> %0", "parameters": ["'Boat30'"]}
                 for family, profile in (
                     ("Event", "ACT_QOS_LIB::wan_event"),
-                    ("Status", "ACT_QOS_LIB::wan_union_status"))
+                    ("Status", "ACT_QOS_LIB::wan_union_periodic"))
             ],
         }
         self.xml = ET.fromstring(render(self.model, "unused.yaml", "plugin.so", True))
@@ -112,11 +113,12 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
 
     def test_wan_writers_share_controller_and_have_two_priority_bands(self):
         for family, threshold in (("Event", 300), ("Status", 200)):
+            profile_name = "rs_wan_event" if family == "Event" else "rs_wan_periodic"
             output = self.xml.find(f".//topic_route/output[@name='wan_out_{family}']")
             self.assertEqual(output.find("datawriter_qos").attrib["base_name"],
-                             "ACT_QOS_LIB::rs_wan_" + family.lower())
+                             "ACT_QOS_LIB::" + profile_name)
             profile = self.xml.find(
-                "./qos_library/qos_profile[@name='rs_wan_" + family.lower() + "']/datawriter_qos")
+                f"./qos_library/qos_profile[@name='{profile_name}']/datawriter_qos")
             self.assertEqual(profile.findtext("publish_mode/kind"),
                              "ASYNCHRONOUS_PUBLISH_MODE_QOS")
             self.assertEqual(profile.findtext("publish_mode/flow_controller_name"),
@@ -163,7 +165,7 @@ class RoutingServiceConfigurationTests(unittest.TestCase):
             for family, type_name, profile in (
                 ("Event", "WanEvent", "wan_three_topic_event"),
                 ("State", "WanEvent", "wan_union_contacts"),
-                ("Periodic", "WanStatus", "wan_union_status"))
+                ("Periodic", "WanStatus", "wan_union_periodic"))
         ]
         model["properties"] = explicit_properties()
         root = ET.fromstring(render(model, "unused.yaml", "plugin.so", True))
@@ -442,7 +444,7 @@ class NativeConfigurationTests(unittest.TestCase):
                     "wan_participant": "ACT_QOS_LIB::wan_three_topic_participant",
                     "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
                     "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-                    "wan_status": "ACT_QOS_LIB::wan_union_status",
+                    "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
                 })
                 path = Path(directory) / "config.yaml"
                 for empty in (False, True):
@@ -485,7 +487,7 @@ class NativeConfigurationTests(unittest.TestCase):
                     config["types"]["xml"] = str(root / "harness_v2/datamodel/gen/ActTypes.xml")
                     config["qos_libraries"] = [str(root / "harness_v2/qos/act_qos_profiles.xml")]
                     config["qos_profiles"]["wan_participant"] = "ACT_QOS_LIB::wan_two_topic_participant"
-                    config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
+                    config["qos_profiles"]["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic"
                     config["routes"] = [route for route in config["routes"]
                                         if "destination_side" in route]
                     for route in config["routes"]:
@@ -527,7 +529,7 @@ class NativeConfigurationTests(unittest.TestCase):
             "wan_participant": "ACT_QOS_LIB::wan_three_topic_participant",
             "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
             "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-            "wan_status": "ACT_QOS_LIB::wan_union_status",
+            "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
             "filtered_periodic": "ACT_QOS_LIB::lan_status_1s",
         })
         with tempfile.TemporaryDirectory(dir=TEST_WORKDIR) as directory:
@@ -669,7 +671,7 @@ class NativeConfigurationTests(unittest.TestCase):
             "wan_participant": "ACT_QOS_LIB::wan_three_topic_participant",
             "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
             "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-            "wan_status": "ACT_QOS_LIB::wan_union_status",
+            "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
         })
         with tempfile.TemporaryDirectory(dir=TEST_WORKDIR) as directory:
             path = Path(directory) / "config.yaml"
@@ -707,7 +709,7 @@ class NativeConfigurationTests(unittest.TestCase):
             "wan_participant": "ACT_QOS_LIB::rs_six_topic_participant_v6",
             "wan_event": "ACT_QOS_LIB::wan_three_topic_event",
             "wan_contacts": "ACT_QOS_LIB::wan_union_contacts",
-            "wan_status": "ACT_QOS_LIB::wan_union_status",
+            "wan_periodic": "ACT_QOS_LIB::wan_union_periodic",
         })
         config["routing_service"] = {"topic_priorities": {"PlatformDetailStatus": "low"}}
         with tempfile.TemporaryDirectory(dir=TEST_WORKDIR) as directory:

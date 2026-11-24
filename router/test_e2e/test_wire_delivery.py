@@ -688,7 +688,7 @@ class ProductionTestQosTests(unittest.TestCase):
         profiles = ("lan_event", "lan_status", "router_admin_status",
                     "router_admin_command", "router_admin_command_ack",
                     "router_controller_journal", "router_link_stats", "router_mesh_status",
-                    "router_default_reader", "router_default_writer", "wan_event", "wan_status")
+                    "router_default_reader", "router_default_writer", "wan_event", "wan_periodic")
         for profile in profiles:
             with self.subTest(profile=profile):
                 qualified = "ACT_QOS_LIB::" + profile
@@ -765,8 +765,8 @@ class ContainerDiscoveryTests(unittest.TestCase):
                         rendered = (output / f"control-platform-{node}.yaml").read_text()
                         self.assertEqual("  wan_contract: two_topic_union\n" in rendered,
                                          contract == "two_topic_union")
-                        self.assertIn("ACT_QOS_LIB::wan_union_status" if contract != "legacy"
-                                      else "ACT_QOS_LIB::wan_status", rendered)
+                        self.assertIn("ACT_QOS_LIB::wan_union_periodic" if contract != "legacy"
+                                      else "ACT_QOS_LIB::wan_periodic", rendered)
                         self.assertIn("ACT_QOS_LIB::wan_three_topic_participant" if contract == "three_topic_union"
                                       else "ACT_QOS_LIB::wan_two_topic_participant" if contract == "two_topic_union"
                                       else "ACT_QOS_LIB::wan_router_participant", rendered)

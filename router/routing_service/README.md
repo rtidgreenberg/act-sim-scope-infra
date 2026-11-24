@@ -44,6 +44,39 @@ XML bindings select one logical channel (`event_high`, `event_normal`,
 family and priority together. The three physical topics and prototype YAML
 development settings remain supported.
 
+**2026-11-24 source-only QoS naming:** Periodic profiles are now `wan_periodic`,
+`wan_union_periodic` and `rs_wan_periodic`; the configuration alias is
+`wan_periodic`. Update older source configurations, rebuild development helpers
+and regenerate deployment bundles before using these names. Legacy/two-topic `Status` wire topics and
+`WanStatus` payload types are unchanged. Best-effort Periodic profiles no longer
+carry `disable_preemptive_nack`; reliable Event/State suppression remains.
+Retained captures/bundles use their original names and are not rewritten.
+No persistent binary or live mesh is changed by this source rename.
+Fresh qualification passes 10 C++ targets, 57 targeted Python checks and five
+real-DDS forwarding/filtering checks. One unchanged browser check skips for
+missing Playwright. Sixteen resolved WAN profile comparisons confirm unchanged
+writer QoS and reliable-reader QoS; only the redundant Periodic reader property
+is removed.
+
+### Production QoS boundary
+
+[act_qos_profiles.xml](../../harness_v2/qos/act_qos_profiles.xml) contains runtime
+profiles only: shared participant/endpoint bases, LAN administration/monitoring,
+legacy and two-topic support, the current three-topic policies, and the six-topic
+IPv6 policies. The `rs_priority_participant` controller and `rs_wan_*` /
+`rs_three_topic_*` profiles are runtime dependencies, not test profiles; the
+six-topic writers also inherit the three-topic bases.
+
+Test-only profiles remain in [fixtures](fixtures/), and experimental profiles
+remain in their own spikes, including [LBED QoS](../../spikes/routing_service_lbed/qos.xml).
+Production preparation does not load those files unless they are explicitly
+added to its QoS library list. The production XML comment/section cleanup on
+2026-11-24 changes no profile names, inheritance, configuration defaults or
+QoS values. It does not deploy or retune the router.
+Native review resolves all 47 production profiles and confirms 235 unchanged
+participant/reader/writer/publisher/subscriber QoS results. All 29 WAN-policy
+and renderer checks pass, with no skips.
+
 ## Runtime correctness safeguards
 
 The isolated [LBED spike](../../spikes/routing_service_lbed/README.md) verifies
@@ -356,14 +389,14 @@ Run from the repository root with an offline copy of the production YAML:
   (or its `_emane` variant for the owned EMANE environment).
 - Select `ACT_QOS_LIB::wan_three_topic_event` for `wan_event` and
   `ACT_QOS_LIB::wan_union_contacts` for `wan_contacts`.
-- Select `ACT_QOS_LIB::wan_union_status` for `wan_status`.
+- Select `ACT_QOS_LIB::wan_union_periodic` for `wan_periodic`.
 - Set `router.admin_participant` to the local-role LAN participant.
 - Enable the desired Event/State bindings in that copy. Periodic bindings are
   enabled automatically; old reporting-mode gates do not suppress them.
 
 For the retained two-topic mode, use `two_topic_union`, the
 `wan_two_topic_participant` profile and `wan_event: ACT_QOS_LIB::wan_event`;
-`wan_status` still resolves to `ACT_QOS_LIB::wan_union_status`.
+`wan_periodic` still resolves to `ACT_QOS_LIB::wan_union_periodic`.
 
 For example:
 
@@ -760,7 +793,7 @@ Event retains reliable KEEP_ALL. State inherits reliable writer KEEP_LAST(1)
 and reader KEEP_ALL. Event and State cap each NACK repair response at 64 KiB
 (65,536 bytes). Periodic remains best effort KEEP_LAST(1). All three
 writers share the same nominal 2 Mbps controller. The retained two-topic
-profiles `rs_wan_event` / `rs_wan_status` and their 400/300/200/100 ordering
+profiles `rs_wan_event` / `rs_wan_periodic` and their 400/300/200/100 ordering
 are unchanged. Priority preferences do not guarantee starvation-free health
 delivery or bounded application latency.
 
@@ -920,7 +953,7 @@ monitoring/health parity.
 
 Three native Connext 7.7.0 checks passed in an isolated, UDPv4-only container
 (12.79 seconds), using the committed schema-version-3 `WanStatus` type and
-production `wan_union_status` endpoints. Five existing renderer tests also pass.
+production `wan_union_periodic` endpoints. Five existing renderer tests also pass.
 The [test profiles](fixtures/wan_time_filter.xml) only add reader minimum
 separations; they do not change production profiles or the running mesh.
 

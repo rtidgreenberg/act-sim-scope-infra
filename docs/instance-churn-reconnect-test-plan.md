@@ -99,7 +99,7 @@ For that key, the final assertion is absence of an ALIVE ghost.
 Use the isolated-container pattern in
 [run_checks.sh](../router/qualification/run_checks.sh) and the existing
 [pending-backlog test](../router/qualification/test_two_topic_qualification.py).
-Compare production `wan_event` and `wan_union_status` XML profiles without
+Compare production `wan_event` and `wan_union_periodic` XML profiles without
 retuning policies. Verify effective QoS, writer identities, matching, filtering,
 resource limits, and inactivity/retry settings in the report.
 

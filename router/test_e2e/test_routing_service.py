@@ -46,7 +46,7 @@ def configure_contract(config, contract):
     config["qos_profiles"]["wan_event"] = (
         "ACT_QOS_LIB::wan_three_topic_event" if three_topic else "ACT_QOS_LIB::wan_event")
     config["qos_profiles"]["wan_contacts"] = "ACT_QOS_LIB::wan_union_contacts"
-    config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
+    config["qos_profiles"]["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic"
 
 
 @pytest.fixture
@@ -329,10 +329,11 @@ def test_rs_four_classes_overtake_pending_lower_classes(priority_config, unique_
             reader = dds.DynamicData.DataReader(
                 subscriber, topic, provider.datareader_qos_from_profile(
                     "ACT_QOS_LIB::wan_event" if family == "Event"
-                    else "ACT_QOS_LIB::wan_union_status"))
+                    else "ACT_QOS_LIB::wan_union_periodic"))
             writer = dds.DynamicData.DataWriter(
                 publisher, topic, provider.datawriter_qos_from_profile(
-                    "ACT_QOS_LIB::rs_wan_" + family.lower()))
+                    "ACT_QOS_LIB::rs_wan_event" if family == "Event"
+                    else "ACT_QOS_LIB::rs_wan_periodic"))
             cleanup.callback(reader.close)
             cleanup.callback(writer.close)
             endpoints[family] = (writer, reader)
@@ -447,7 +448,7 @@ def test_rs_periodic_lan_input_is_one_hz_per_instance(rs_mesh, rs_contract):
     source = nodes["Boat30"][1]
     writer = source.writer("PlatformStatus", "platform_init_status", writer_qos("lan_event"))
     reader = observer.reader("Periodic" if rs_contract == "three_topic_union" else "Status",
-                             "WanStatus", reader_qos("wan_union_status"))
+                             "WanStatus", reader_qos("wan_union_periodic"))
     sample = source.sample("platform_init_status", source="rate-test", run_id="rs-rate")
     deadline = time.monotonic() + 10
     while writer.publication_matched_status.current_count == 0 and time.monotonic() < deadline:

@@ -436,7 +436,7 @@ def load_delivery_config(path, provider_factory, infinite_duration):
             return
         if contract != "legacy":
             alias = "wan_contacts" if contract == "three_topic_union" and topic == "ContactReport" else (
-                "wan_event" if topic in WAN_EVENT_TOPICS else "wan_status")
+                "wan_event" if topic in WAN_EVENT_TOPICS else "wan_periodic")
             profile = aliases[alias]
         settings = None
         if profile is not None:

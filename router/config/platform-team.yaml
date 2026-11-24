@@ -34,7 +34,7 @@ qos_libraries:
 qos_profiles:
   router_lan_participant: ACT_QOS_LIB::lan_router_participant
   wan_participant: ACT_QOS_LIB::wan_router_participant
-  wan_status: ACT_QOS_LIB::wan_status
+  wan_periodic: ACT_QOS_LIB::wan_periodic
 
 participants:
   platform_lan:
@@ -63,7 +63,7 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
     topics:
       - name: PlatformData
 
@@ -75,7 +75,7 @@ routes:
     source_side:
       input:
         participant: platform_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
       output:
         participant: platform_lan
     topics:

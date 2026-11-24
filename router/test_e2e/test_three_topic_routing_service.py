@@ -82,7 +82,7 @@ def test_six_priority_classes_overtake_pending_lower_classes(priority_config, un
         for family, type_name, profile in (
             ("Event", "WanEvent", "wan_three_topic_event"),
             ("State", "WanEvent", "wan_union_contacts"),
-            ("Periodic", "WanStatus", "wan_union_status"),
+            ("Periodic", "WanStatus", "wan_union_periodic"),
         ):
             topic = dds.DynamicData.Topic(participant, family, types.type(type_name))
             reader = dds.DynamicData.DataReader(

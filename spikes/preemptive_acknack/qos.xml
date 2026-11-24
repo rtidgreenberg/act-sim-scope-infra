@@ -80,7 +80,7 @@
         </element></value></property>
       </datareader_qos>
     </qos_profile>
-    <qos_profile name="baseline_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+    <qos_profile name="baseline_periodic" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datareader_qos>
         <property><value><element>
           <name>dds.data_reader.protocol.disable_preemptive_nack</name>
@@ -88,7 +88,7 @@
         </element></value></property>
       </datareader_qos>
     </qos_profile>
-    <qos_profile name="disabled_periodic" base_name="ACT_QOS_LIB::wan_union_status">
+    <qos_profile name="disabled_periodic" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datareader_qos>
         <property><value><element>
           <name>dds.data_reader.protocol.disable_preemptive_nack</name>

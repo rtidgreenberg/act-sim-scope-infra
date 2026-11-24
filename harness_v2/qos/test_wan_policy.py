@@ -67,24 +67,46 @@ class NativeWanPolicyTests(unittest.TestCase):
             self.skipTest("Installed Connext binding required")
         provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
         for profile in (
-                "wan_event", "wan_status", "wan_union_status", "wan_three_topic_event",
-                "wan_union_contacts", "rs_wan_event", "rs_wan_status",
-                "rs_three_topic_event", "rs_three_topic_state", "rs_three_topic_periodic",
-                "rs_six_topic_p1_event", "rs_six_topic_p1_periodic",
+                "wan_event", "wan_three_topic_event",
+                "wan_union_contacts", "rs_wan_event",
+                "rs_three_topic_event", "rs_three_topic_state",
+                "rs_six_topic_p1_event",
                 "rs_six_topic_p2_event", "rs_six_topic_p2_state",
-                "rs_six_topic_p2_periodic", "rs_six_topic_p3_periodic"):
+        ):
             with self.subTest(profile=profile):
                 reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
                 self.assertEqual(
                     reader.property.get("dds.data_reader.protocol.disable_preemptive_nack"),
                     "true")
                 self.assertFalse(reader.protocol.disable_positive_acks)
-        for profile in ("lan_event", "lan_status"):
+        for profile in ("lan_event", "lan_status", "wan_periodic", "wan_union_periodic",
+                        "rs_wan_periodic", "rs_three_topic_periodic",
+                        "rs_six_topic_p1_periodic", "rs_six_topic_p2_periodic",
+                        "rs_six_topic_p3_periodic"):
             with self.subTest(profile=profile):
                 reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
                 self.assertNotIn(
                     "dds.data_reader.protocol.disable_preemptive_nack",
                     dict(reader.property.get_all()))
+
+    def test_periodic_profiles_remain_best_effort_without_preemptive_nacks(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required")
+        provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
+        for profile in ("wan_periodic", "wan_union_periodic", "rs_wan_periodic",
+                        "rs_three_topic_periodic", "rs_six_topic_p1_periodic",
+                        "rs_six_topic_p2_periodic", "rs_six_topic_p3_periodic"):
+            with self.subTest(profile=profile):
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+                writer = provider.datawriter_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertEqual(reader.reliability.kind, dds.ReliabilityKind.BEST_EFFORT)
+                self.assertEqual(writer.reliability.kind, dds.ReliabilityKind.BEST_EFFORT)
+                self.assertFalse(reader.property.exists(
+                    "dds.data_reader.protocol.disable_preemptive_nack"))
 
     def test_effective_xml_defaults_and_custom_policy(self):
         try:
@@ -103,7 +125,7 @@ class NativeWanPolicyTests(unittest.TestCase):
                 self.assertEqual(float(protocol.heartbeat_period), int(policy["WAN_HB_PERIOD_SEC"]))
                 self.assertEqual(writer.liveliness.lease_duration, dds.Duration.infinite)
                 self.assertEqual(writer.durability.kind, dds.DurabilityKind.VOLATILE)
-                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::wan_union_status")
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::wan_union_periodic")
                 self.assertEqual(reader.property.get("act.presence.dead_timeout_sec"),
                                  policy["WAN_TIMEOUT_SEC"])
                 self.assertEqual(float(reader.deadline.period), 2)

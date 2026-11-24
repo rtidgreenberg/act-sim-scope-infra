@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <dds>
   <qos_library name="ACT_RS_TBF_TEST">
-    <qos_profile name="unfiltered" base_name="ACT_QOS_LIB::wan_union_status"/>
+    <qos_profile name="unfiltered" base_name="ACT_QOS_LIB::wan_union_periodic"/>
     <qos_profile name="one_second" base_name="ACT_RS_TBF_TEST::unfiltered">
       <datareader_qos>
         <time_based_filter>

@@ -100,7 +100,7 @@ def main():
                 wan_participant="ACT_QOS_LIB::wan_three_topic_participant",
                 wan_event="ACT_QOS_LIB::wan_three_topic_event",
                 wan_contacts="ACT_QOS_LIB::wan_union_contacts",
-                wan_status="ACT_QOS_LIB::wan_union_status")
+                wan_periodic="ACT_QOS_LIB::wan_union_periodic")
             config["routing_service"] = {"receive_policy": "static"}
             config["qos_libraries"] = [str(qos_path)]
             for name, participant in config["participants"].items():

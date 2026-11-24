@@ -150,7 +150,7 @@ class NativeEndpoints:
     def endpoint_profiles(self):
         return {
             "Event": ("WanEvent", self.event_writer_profile, self.event_reader_profile),
-            "Status": ("WanStatus", PROFILE + "wan_union_status", "ChurnSpike::status_reader"),
+            "Status": ("WanStatus", PROFILE + "wan_union_periodic", "ChurnSpike::status_reader"),
         }
 
     def __init__(self, family, filtered, event_durability="production",

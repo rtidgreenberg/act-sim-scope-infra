@@ -128,11 +128,11 @@ def routed_parent(participant, publisher, partition):
 
 
 @contextmanager
-def endpoints(peers, types, family="Status", profile="wan_status",
+def endpoints(peers, types, family="Status", profile="wan_periodic",
               expression=None, parameters=(), partition=None, type_name=None):
     participants, qos = peers
-    if type_name == "WanStatus" and profile == "wan_status":
-        profile = "wan_union_status"
+    if type_name == "WanStatus" and profile == "wan_periodic":
+        profile = "wan_union_periodic"
     type_ = types.type(type_name or "Qualification" + family)
     topics = [dds.DynamicData.Topic(p, family, type_) for p in participants]
     publisher = routed_parent(participants[0], True, partition)
@@ -175,22 +175,22 @@ def pushed(writer):
     ("Event", "ActPlatformStatusMode", "status_mode", "PlatformStatusMode", "platform_node", "wan_event"),
     ("Event", "PlatformCommandAck", "command_ack", "control_command_ack", "source", "wan_event"),
     ("Event", "ContactReport", "contact_report", "contact_report", "contact_id", "wan_event"),
-    ("Status", "PlatformStatus", "navigation", "platform_init_status", "source", "wan_status"),
-    ("Status", "PlatformData", "data", "platform_data", "source", "wan_status"),
-    ("Status", "PlatformMissionStatus", "mission", "platform_mission_status", "source", "wan_status"),
-    ("Status", "PlatformWaypointStatus", "waypoint", "platform_waypoint_status", "source", "wan_status"),
-    ("Status", "PlatformDetailStatus", "detail", "platform_detail_status", "source", "wan_status"),
-    ("Status", "PlatformDebugStatus", "debug", "platform_debug_status", "source", "wan_status"),
-    ("Status", "PlatformThrusterStatus", "thruster", "platform_thruster_status", "source", "wan_status"),
-    ("Status", "PlatformPowerStatus", "power", "platform_power_status", "source", "wan_status"),
-    ("Status", "ActRouterDiagnostics", "diagnostics", "RouterDiagnostics", "router", "wan_status"),
+    ("Status", "PlatformStatus", "navigation", "platform_init_status", "source", "wan_periodic"),
+    ("Status", "PlatformData", "data", "platform_data", "source", "wan_periodic"),
+    ("Status", "PlatformMissionStatus", "mission", "platform_mission_status", "source", "wan_periodic"),
+    ("Status", "PlatformWaypointStatus", "waypoint", "platform_waypoint_status", "source", "wan_periodic"),
+    ("Status", "PlatformDetailStatus", "detail", "platform_detail_status", "source", "wan_periodic"),
+    ("Status", "PlatformDebugStatus", "debug", "platform_debug_status", "source", "wan_periodic"),
+    ("Status", "PlatformThrusterStatus", "thruster", "platform_thruster_status", "source", "wan_periodic"),
+    ("Status", "PlatformPowerStatus", "power", "platform_power_status", "source", "wan_periodic"),
+    ("Status", "ActRouterDiagnostics", "diagnostics", "RouterDiagnostics", "router", "wan_periodic"),
     ("Status", "RouterHealth", "health", "RouterHealth", "router", "router_health"),
 ])
 def test_production_cases_round_trip_and_stable_keys(
     peers, qualification_types, family, topic, branch, type_name, key, profile,
 ):
     if family == "Status":
-        profile = "wan_union_status"
+        profile = "wan_union_periodic"
     frame = dds.DynamicData(qualification_types.type("Wan" + family))
     frame["source_id"] = "Boat30"
     frame["instance_id"] = "Boat30"
@@ -489,7 +489,7 @@ def test_event_commands_and_acks_survive_pending_backlog(peers, qualification_ty
 
 
 @pytest.mark.parametrize("partition", [None, "qualification-health"])
-@pytest.mark.parametrize("application_profile", ["wan_status", "router_health"])
+@pytest.mark.parametrize("application_profile", ["wan_periodic", "router_health"])
 def test_health_deadline_not_masked_by_other_status(
     peers, qualification_types, partition, application_profile
 ):

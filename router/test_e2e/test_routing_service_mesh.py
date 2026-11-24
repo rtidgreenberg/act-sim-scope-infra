@@ -82,7 +82,7 @@ def test_internal_diagnostics_forward_without_an_external_lan_producer(rs_mesh):
     local_route = next(route for route in snapshot["routes"]
                        if route["route_name"] == "ActRouterDiagnostics.tx")
     assert str(local_route["state"]) == "ROUTE_ENABLED", str(local_route)
-    reader = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_status"))
+    reader = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_periodic"))
     frame = wait_sample(reader, lambda data: data
                         if data["source_id"] == "Boat30"
                         and data["original_topic"] == "ActRouterDiagnostics" else None)
@@ -129,7 +129,7 @@ def test_internal_diagnostics_failure_preserves_monitoring_cadence(
                                               if rs_contract == "three_topic_union"
                                               else "wan_two_topic_participant"))
         cleanup.callback(observer.close)
-        health = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+        health = observer.reader(family, "WanStatus", reader_qos("wan_union_periodic"))
         local = Probe(unique_domains["platform_lan"])
         cleanup.callback(local.close)
         diagnostics = local.reader("ActRouterDiagnostics", "RouterDiagnostics", reader_qos("lan_status"))
@@ -295,13 +295,13 @@ def test_invalid_status_never_revives_peer(rs_mesh, rs_contract, output_ready):
     process, control = nodes["Control_20"]
     mesh = control.reader("ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
     family = "Periodic" if rs_contract == "three_topic_union" else "Status"
-    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_periodic"))
     health = wait_sample(frames, lambda data: dds.DynamicData(data)
                          if data["original_topic"] == "RouterHealth" else None)
     health["source_id"] = "InvalidStatus"
     health["instance_id"] = "InvalidStatus/rs"
     health["payload.health.router"] = "InvalidStatus/rs"
-    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_status"))
+    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_periodic"))
     navigation = (control.reader("PlatformStatus", "platform_init_status", reader_qos("lan_status"))
                   if output_ready else None)
 
@@ -347,10 +347,10 @@ def test_status_burst_observes_every_consumed_instance(rs_mesh, rs_contract):
     mesh = control.reader("ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
     navigation = control.reader("PlatformStatus", "platform_init_status", reader_qos("lan_status"))
     family = "Periodic" if rs_contract == "three_topic_union" else "Status"
-    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_status"))
+    frames = observer.reader(family, "WanStatus", reader_qos("wan_union_periodic"))
     template = wait_sample(frames, lambda data: dds.DynamicData(data)
                            if data["original_topic"] == "RouterHealth" else None)
-    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_status"))
+    writer = observer.writer(family, "WanStatus", writer_qos("wan_union_periodic"))
     peers = {f"Burst{index}/rs" for index in range(40)}
 
     def present(data, expected):
@@ -409,7 +409,7 @@ def test_replaceable_packet_loss_does_not_poison_router_health(rs_mesh, rs_contr
         "ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
     state = family == "State"
     type_name, profile = (("WanEvent", "wan_union_contacts") if state
-                          else ("WanStatus", "wan_union_status"))
+                          else ("WanStatus", "wan_union_periodic"))
     frames = observer.reader(family, type_name, reader_qos(profile))
     if state:
         frame = observer.sample("WanEvent", schema_version=3, source_id="PacketLossPeer",
@@ -472,13 +472,13 @@ def test_periodic_lifecycle_never_revives_peer_and_health_loss_uses_countdown(rs
     nodes, observer = rs_mesh
     mesh = nodes["Control_20"][1].reader(
         "ActRouterMeshStatus", "RouterMeshStatus", reader_qos("router_mesh_status"))
-    frames = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_status"))
+    frames = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_periodic"))
     template = wait_sample(frames, lambda data: dds.DynamicData(data)
                            if data["original_topic"] == "RouterHealth" else None)
     template["source_id"] = "Lifecycle"
     template["instance_id"] = "Lifecycle/rs"
     template["payload.health.router"] = "Lifecycle/rs"
-    writer = observer.writer("Periodic", "WanStatus", writer_qos("wan_union_status"))
+    writer = observer.writer("Periodic", "WanStatus", writer_qos("wan_union_periodic"))
 
     def peer(data):
         return next((peer for peer in data["peers"]
@@ -1190,7 +1190,7 @@ def test_service_health_deadline_and_status_recovery(rs_mesh):
                    and str(peer["presence"]) == state for peer in data["peers"])
 
     wait_sample(reader, lambda data: presence(data, "PRESENCE_ALIVE"))
-    frames = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_status"))
+    frames = observer.reader("Periodic", "WanStatus", reader_qos("wan_union_periodic"))
     navigation = wait_sample(frames, lambda data: dds.DynamicData(data)
                              if data["source_id"] == "Boat30"
                              and data["original_topic"] == "RouterHealth" else None)
@@ -1200,7 +1200,7 @@ def test_service_health_deadline_and_status_recovery(rs_mesh):
     navigation["audience.global"] = True
     navigation["payload.navigation"] = observer.sample(
         "platform_init_status", source="Boat30", audit_sequence=97531)
-    writer = observer.writer("Periodic", "WanStatus", writer_qos("wan_union_status"))
+    writer = observer.writer("Periodic", "WanStatus", writer_qos("wan_union_periodic"))
     navigation_reader = control.reader("PlatformStatus", "platform_init_status", reader_qos("lan_status"))
     assert write_until_seen(lambda: writer.write(navigation), navigation_reader,
                             lambda data: data["audit_sequence"], 97531).get(97531)

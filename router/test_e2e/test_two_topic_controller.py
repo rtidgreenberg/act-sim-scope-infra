@@ -71,8 +71,8 @@ def mesh(router_binary, admin_types_xml, e2e_tmp_dir, unique_domains, extra_doma
             text = path.read_text().replace("router:\n", "router:\n  wan_contract: two_topic_union\n", 1)
             text = text.replace("ACT_QOS_LIB::wan_router_participant\n",
                                 "ACT_QOS_LIB::wan_two_topic_participant\n")
-            text = text.replace("ACT_QOS_LIB::wan_status\n",
-                                "ACT_QOS_LIB::wan_union_status\n")
+            text = text.replace("ACT_QOS_LIB::wan_periodic\n",
+                                "ACT_QOS_LIB::wan_union_periodic\n")
             if wan_contract == "three_topic_union":
                 config = yaml.safe_load(text)
                 config["router"]["wan_contract"] = wan_contract
@@ -283,7 +283,7 @@ def test_application_instance_lifecycle_through_route(
     nodes, wan, _ = mesh
     source = nodes["Boat30"][1]
     control = nodes["Control_20"][1]
-    qos_profile = "wan_event" if family == "Event" else "wan_union_status"
+    qos_profile = "wan_event" if family == "Event" else "wan_union_periodic"
     frame_type = "Wan" + family
     if family == "Status" and wan_contract == "three_topic_union":
         family = "Telemetry"
@@ -617,7 +617,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary, 
     mesh_view = mesh_reader(control, provider)
     stats_view = link_stats_reader(control, provider)
     health_family = "Telemetry" if wan_contract == "three_topic_union" else "Status"
-    health_view = wan.reader(health_family, "WanStatus", qos=reader_qos("wan_union_status"))
+    health_view = wan.reader(health_family, "WanStatus", qos=reader_qos("wan_union_periodic"))
     identities = {node + "/phase4" for node in nodes}
 
     def wait_health(predicate, timeout=20):
@@ -680,7 +680,7 @@ def test_status_health_presence_rtt_stale_dead_and_restart(mesh, router_binary, 
         time.sleep(0.1)
     assert measured == received == pushed == expected, (measured, received, pushed)
 
-    probe_writer = wan.writer(health_family, "WanStatus", qos=writer_qos("wan_union_status"))
+    probe_writer = wan.writer(health_family, "WanStatus", qos=writer_qos("wan_union_periodic"))
     navigation_reader = control.reader("PlatformStatus", "platform_init_status")
     navigation_discovery = control.writer("PlatformStatus", "platform_init_status")
     ready(nodes, "Control_20", "platform_init_status")

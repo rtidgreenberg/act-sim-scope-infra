@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
     dds::core::QosProvider profiles(argv[2]);
     QosResolver resolver(std::make_shared<dds::core::QosProvider>(profiles), {
         {"event", "ACT_QOS_LIB::wan_event"},
-        {"status", "ACT_QOS_LIB::wan_union_status"},
+        {"status", "ACT_QOS_LIB::wan_union_periodic"},
         {"lan", "ACT_QOS_LIB::lan_event"}
     });
     for (const auto& alias : {"", "default", "event", "status", "lan"}) {
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     cfg.presence_participant.clear();
     cfg.qos_profiles["wan_participant"] = "ACT_QOS_LIB::wan_two_topic_participant";
     cfg.qos_profiles["wan_event"] = "ACT_QOS_LIB::wan_event";
-    cfg.qos_profiles["wan_status"] = "ACT_QOS_LIB::wan_union_status";
+    cfg.qos_profiles["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic";
     CHECK(validate_wan_contract(cfg, error));
     cfg.presence_participant = "platform_wan";
     CHECK(validate_wan_contract(cfg, error));
@@ -89,24 +89,24 @@ int main(int argc, char** argv) {
         events_only.routes.end());
     CHECK(!events_only.routes.empty());
     CHECK(validate_wan_contract(events_only, error));
-    events_only.qos_profiles["wan_status"] = "ACT_QOS_LIB::wan_status";
+    events_only.qos_profiles["wan_periodic"] = "ACT_QOS_LIB::wan_periodic";
     CHECK(!validate_wan_contract(events_only, error));
-    CHECK(error.find("wan_status") != std::string::npos);
+    CHECK(error.find("wan_periodic") != std::string::npos);
     events_only.presence_participant.clear();
     CHECK(validate_wan_contract(events_only, error));
     events_only.presence_participant = "platform_wan";
-    events_only.qos_profiles.erase("wan_status");
+    events_only.qos_profiles.erase("wan_periodic");
     CHECK(!validate_wan_contract(events_only, error));
-    CHECK(error.find("wan_status") != std::string::npos);
-    events_only.qos_profiles["wan_status"] = "ACT_QOS_LIB::wan_union_status";
+    CHECK(error.find("wan_periodic") != std::string::npos);
+    events_only.qos_profiles["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic";
     CHECK(validate_wan_contract(events_only, error));
     events_only.routes.clear();
     for (const auto& role : {"platform", "control"}) {
         events_only.node_role = role;
         events_only.presence_participant = std::string(role) + "_wan";
-        events_only.qos_profiles["wan_status"] = "ACT_QOS_LIB::wan_union_status";
+        events_only.qos_profiles["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic";
         CHECK(validate_wan_contract(events_only, error));
-        events_only.qos_profiles["wan_status"] = "ACT_QOS_LIB::wan_status";
+        events_only.qos_profiles["wan_periodic"] = "ACT_QOS_LIB::wan_periodic";
         CHECK(!validate_wan_contract(events_only, error));
         events_only.wan_contract = "legacy";
         CHECK(validate_wan_contract(events_only, error));

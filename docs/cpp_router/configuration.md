@@ -29,7 +29,7 @@ profile.
 The router should support four QoS selection mechanisms:
 
 1. **QoS profile alias**: named policies such as `platform_wan_udpv4_qos`, `wan_event`,
-  `wan_status`, `wan_detail_status`, and LAN downsample aliases such as
+  `wan_periodic`, `wan_detail_status`, and LAN downsample aliases such as
   `lan_status_1hz`, each mapped directly to a concrete profile such as
   `ACT_QOS_LIB::wan_event`.
 2. **Endpoint assignment**: `input.reader_qos` and `output.writer_qos` select the QoS for
@@ -42,7 +42,7 @@ The router should support four QoS selection mechanisms:
 For the POC, keep the rule simple:
 
 - WAN participants and WAN endpoints use explicit QoS profile aliases such as
-  `platform_wan_udpv4_qos`, `wan_event`, and `wan_status`.
+  `platform_wan_udpv4_qos`, `wan_event`, and `wan_periodic`.
 - LAN participants use the router's built-in participant defaults. LAN endpoints default to
   `reader_qos: auto` or `writer_qos: auto` and partition `*` when omitted.
 - The only explicit LAN QoS aliases are downsample profiles, for example `lan_status_1hz`,
@@ -154,7 +154,7 @@ QoS when it is intentionally changing the app-facing traffic shape, such as `lan
 qos_profiles:
   wan_participant: ACT_QOS_LIB::wan_router_participant
   wan_event: ACT_QOS_LIB::wan_event
-  wan_status: ACT_QOS_LIB::wan_status
+  wan_periodic: ACT_QOS_LIB::wan_periodic
   lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 ```
 
@@ -249,12 +249,12 @@ routes:
         reader_qos: lan_status_1hz
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: PLATFORM
     destination_side:
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
@@ -271,12 +271,12 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: PLATFORM
     destination_side:
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
@@ -357,7 +357,7 @@ routes:
       participant: platform_lan
     output:
       participant: team_wan
-      writer_qos: wan_status
+      writer_qos: wan_periodic
       publisher_partition: inherit_participant
     topics:
       - name: PlatformData
@@ -367,7 +367,7 @@ routes:
     forwarding_mode: dynamic_data
     input:
       participant: team_wan
-      reader_qos: wan_status
+      reader_qos: wan_periodic
       subscriber_partition: inherit_participant
     output:
       participant: platform_lan

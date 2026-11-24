@@ -2,15 +2,15 @@
 
 Python port of the mechanism spikes/qos_alias/qos_alias_spike.py proved standalone, now
 driven through the real router_main binary (config/e2e_qos_alias.yaml): ONE router, route
-qos_alias_r1, named XML aliases on BOTH legs — reader_qos: wan_status / writer_qos:
+qos_alias_r1, named XML aliases on BOTH legs — reader_qos: wan_periodic / writer_qos:
 wan_event — plus the shared wan_participant profile applied to wan_in/wan_out. Uses
 the real production QoS libraries (`harness_v2/qos/{lan,wan}_qos_lib.xml`) and
 real alias names, not a synthetic stand-in.
 
 Asserts the plan's E1/E2 evidence:
-  1. a route using wan_status/wan_event aliases forwards a sample end-to-end.
+  1. a route using wan_periodic/wan_event aliases forwards a sample end-to-end.
   2. the resolved QoS summaries riding RouterStatus show the named profiles' actual
-     policies (BEST_EFFORT for the wan_status-resolved reader, RELIABLE for the
+     policies (BEST_EFFORT for the wan_periodic-resolved reader, RELIABLE for the
      wan_event-resolved writer) — not the D39 auto-derived baseline.
 
 Run from the repo root (see router/test_e2e/README.md).
@@ -64,7 +64,7 @@ def test_qos_alias_route_resolves_and_forwards(
     # guarantees RxO compatibility, the technique spikes/qos_alias/ already validated.
     qos_files = [str(REPO_ROOT / f) for f in QOS_PROFILE_FILES]
     qos_prov = dds.QosProvider(";".join(qos_files))
-    app_writer_qos = qos_prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_status")
+    app_writer_qos = qos_prov.datawriter_qos_from_profile("ACT_QOS_LIB::wan_periodic")
     app_reader_qos = qos_prov.datareader_qos_from_profile("ACT_QOS_LIB::wan_event")
 
     in_probe = Probe(in_domain, participant_profile="wan_router_participant")
@@ -76,8 +76,8 @@ def test_qos_alias_route_resolves_and_forwards(
             qos=reader_qos("router_admin_status"),
             dtype=status_type)
 
-        # App writer: same wan_status profile the router's input reader (wan_status alias)
-        # resolves to (E1/E2's "a route using wan_status/wan_event aliases forwards").
+        # App writer: same wan_periodic profile the router's input reader (wan_periodic alias)
+        # resolves to (E1/E2's "a route using wan_periodic/wan_event aliases forwards").
         src_writer = in_probe.writer(TOPIC, TYPE, qos=app_writer_qos, dtype=cmd_type)
         # App reader: same wan_event profile the router's output writer (wan_event alias)
         # resolves to.
@@ -92,7 +92,7 @@ def test_qos_alias_route_resolves_and_forwards(
         assert facts["state"] == "ROUTE_ENABLED", (
             f"expected ROUTE_ENABLED, got {facts} — router logs: {router.log_path}")
 
-        # The resolved QoS summaries ride the status (D45): wan_status resolves to a
+        # The resolved QoS summaries ride the status (D45): wan_periodic resolves to a
         # BEST_EFFORT reader, wan_event resolves to a RELIABLE writer — the named
         # profile's actual policies, not the D39 auto-derived baseline (RELIABLE input /
         # derived-deadline output).

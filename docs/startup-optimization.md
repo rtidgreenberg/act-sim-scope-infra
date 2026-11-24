@@ -49,9 +49,11 @@ The working application DataReader property is:
 </datareader_qos>
 ```
 
-It is already in the current WAN reader profile source and remains enabled.
-Native inheritance tests cover Event/State/Periodic and Routing Service aliases;
-LAN profiles remain unchanged. Normal positive acknowledgments are not disabled.
+It remains enabled on reliable Event/State WAN reader profiles and their
+Routing Service aliases. Best-effort Periodic profiles omit it: they do not
+participate in application-data ACKNACK repair. Native inheritance tests cover
+both cases; LAN profiles remain unchanged. Normal positive acknowledgments
+are not disabled.
 
 Earlier repeated four-way controls produced:
 

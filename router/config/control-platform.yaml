@@ -9,7 +9,7 @@
 #
 # Source: docs/cpp_router/configuration.md "Control/Platform Config Example" (authoritative).
 # router_main parses the full route/participant shape below (RouteConfigParser), but the
-# named qos_profiles aliases (wan_event, wan_status, etc.) resolve via the QosProvider
+# named qos_profiles aliases (wan_event, wan_periodic, etc.) resolve via the QosProvider
 # (7a, D65) and topic types are wire-learned (7c, D70) — the full-config two-process run
 # is Phase 7d; see docs/cpp_router/design-decisions.md D66/D70.
 
@@ -50,7 +50,7 @@ qos_profiles:
   wan_participant_emane: ACT_QOS_LIB::wan_router_participant_emane
   wan_event: ACT_QOS_LIB::wan_event
   router_health: ACT_QOS_LIB::router_health
-  wan_status: ACT_QOS_LIB::wan_status
+  wan_periodic: ACT_QOS_LIB::wan_periodic
   lan_event: ACT_QOS_LIB::lan_event
   lan_status_1hz: ACT_QOS_LIB::lan_status_1s
 
@@ -179,12 +179,12 @@ routes:
         reader_qos: lan_status_1hz
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: PLATFORM
     destination_side:
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
@@ -202,7 +202,7 @@ routes:
         reader_qos: lan_status_1hz
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: NAVIGATION
 
   - name: wan_locations_to_platform
@@ -215,7 +215,7 @@ routes:
     source_side:
       input:
         participant: platform_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: NAVIGATION
       output:
         participant: platform_lan
@@ -235,13 +235,13 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: PLATFORM
     destination_side:
       enabled: true   # D120: C2 relay always ready; gating is source-side only
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
@@ -261,13 +261,13 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
         publisher_partition: PLATFORM
     destination_side:
       enabled: true   # D120: C2 relay always ready; gating is source-side only
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
         subscriber_partition: PLATFORM
       output:
         participant: control_lan
@@ -333,7 +333,7 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
     topics:
       - name: PlatformData
 
@@ -345,7 +345,7 @@ routes:
     source_side:
       input:
         participant: platform_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
       output:
         participant: platform_lan
     topics:

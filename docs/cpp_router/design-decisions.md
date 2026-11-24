@@ -1613,7 +1613,7 @@ correctness/robustness, two reuse) — all fixed:
   each carrying its own copy of the `""`/`"default"` rule. `validate_qos_aliases` is **not**
   called by `parse_route_config` itself (parsing stays purely syntactic) — it's there for
   whatever eventually wires a `RouteConfig` into the real route-building pipeline to call
-  first, so an unresolvable alias (both shipped configs use `wan_event`/`wan_status`/
+  first, so an unresolvable alias (both shipped configs use `wan_event`/`wan_periodic`/
   `lan_status_1hz`, which `QosResolver` cannot yet honor) fails once with one clear message
   naming the route and alias, instead of as N per-topic sticky errors discovered piecemeal
   at runtime. `test_route_config` gained a case proving it rejects `control-platform.yaml`
@@ -1670,7 +1670,7 @@ pre-implementation review:
   configs' destination sides (named `reader_qos` + auto output).
 - **XML QoS-alias lookup (QosProvider profiles) is deferred to Phase 7, not Phase 5.**
   Three code comments had promised it for Phase 5, but no Phase 5 deliverable or
-  evidence item exercises a named alias — the first consumers (`wan_event`/`wan_status`
+  evidence item exercises a named alias — the first consumers (`wan_event`/`wan_periodic`
   routes) ship in Phase 7. Resolvable aliases stay `""`/`"default"`
   (QosAliasPolicy.hpp); `validate_qos_aliases` still rejects the shipped configs as a
   tested, explicit fact (D44). Comments updated to say Phase 7.
@@ -1840,7 +1840,7 @@ no real, standalone router to subprocess-launch.
 Two pre-existing, deliberately deferred library boundaries constrain what a wired
 `router_main` can run today, independent of this decision:
 - `QosAliasPolicy`/`QosResolver` only resolve `""`/`"default"` — named aliases (`wan_event`,
-  `wan_status`, `control_wan_udpv4_qos`, ...) are unresolvable until Phase 7's QoS-library
+  `wan_periodic`, `control_wan_udpv4_qos`, ...) are unresolvable until Phase 7's QoS-library
   lookup (D45).
 - `DynamicRouteFactory` binds **one** DynamicData type for its entire process lifetime
   (D34/D35) — multi-type dispatch by discovered type name is not implemented. A route set
@@ -1928,7 +1928,7 @@ e2e_control_command.yaml` and `e2e_platform_status.yaml`, instead of leaving it 
 a real, always-present external reader/writer, exactly like the C++ test rigs) keep `""`.
 
 **Verified not live in production shape.** `control-platform.yaml`'s WAN-crossing legs
-already use non-empty named aliases (`wan_event`, `wan_status`), so `output_uses_auto_qos()`
+already use non-empty named aliases (`wan_event`, `wan_periodic`), so `output_uses_auto_qos()`
 already returns `false` there today, independent of Phase 7 — the production config was
 authored to sidestep this gate by construction, same pattern as this fix. The gate remains a
 real, general landmine for any *future* route/config that puts `""` on a WAN-crossing leg
@@ -2388,7 +2388,7 @@ against 7.7:
 
 - **QoS-alias XML resolution** is deferred *to* Phase 7 (D45/D50): `is_resolvable_qos_alias`
   honors only `""`/`"default"` (`QosAliasPolicy.hpp`), but production `control-platform.yaml`
-  uses `wan_event`/`wan_status`/`lan_status_1hz` and participant `control_wan_udpv4_qos`/
+  uses `wan_event`/`wan_periodic`/`lan_status_1hz` and participant `control_wan_udpv4_qos`/
   `platform_wan_udpv4_qos`. The `qos_profiles:` alias→`LIB::profile` indirection map is not
   even parsed by `RouteConfigParser` today.
 - **Multi-type dispatch** is deferred (D34/D35): `DynamicRouteFactory` binds one type for the
@@ -2421,7 +2421,7 @@ first per Tenet order. All four are in Phase 7 scope (delivers the real producti
 **Evidence→test map** (Python e2e, real `router_main`, probe reads via DynamicData —
 same harness as D56):
 
-- **E1** (7a) a route using `wan_status`/`wan_event` aliases forwards; **E2** the participant
+- **E1** (7a) a route using `wan_periodic`/`wan_event` aliases forwards; **E2** the participant
   `*_wan_udpv4_qos` profile is applied → `router/test_e2e/test_qos_alias_route.py` +
   `router/config/e2e_qos_alias.yaml`.
 - **E3** (7b) a PLATFORM-partitioned route matches only a PLATFORM-partitioned reader;
@@ -2459,7 +2459,7 @@ contracts).
 ## D60 — Phase 7a: QoS-alias XML resolution via a `QosProvider` over `qos_libraries`; named alias short-circuits auto-QoS derivation and the D51 gate (2026-07-14, accepted; Phase 7 review)
 
 **Context.** The deferred D45 work. `control-platform.yaml` names aliases on both endpoints
-(`writer_qos: wan_event`, `reader_qos: wan_status`, `reader_qos: lan_status_1hz`) and on
+(`writer_qos: wan_event`, `reader_qos: wan_periodic`, `reader_qos: lan_status_1hz`) and on
 participants (`qos: control_wan_udpv4_qos`). Three parsing/resolution gaps: `qos_profiles:`
 (the `wan_event → ACT_QOS_LIB::wan_event` indirection) is unparsed; `is_resolvable_qos_alias`
 rejects everything but `""`/`"default"`; participant `qos:` is not applied.
@@ -2467,8 +2467,8 @@ rejects everything but `""`/`"default"`; participant `qos:` is not applied.
 **Validated against 7.7** (`ask_connext_question`, 2026-07-14): construct one
 `dds::core::QosProvider` over several files with
 `rti::core::QosProviderParams params; params.url_profile(urls); dds::core::QosProvider(params);`
-then fetch named QoS with `provider.datareader_qos("ACT_QOS_LIB::wan_status")` /
-`provider.datawriter_qos("ACT_QOS_LIB::wan_status")`. Profile-name format is exactly
+then fetch named QoS with `provider.datareader_qos("ACT_QOS_LIB::wan_periodic")` /
+`provider.datawriter_qos("ACT_QOS_LIB::wan_periodic")`. Profile-name format is exactly
 `"Library::Profile"`.
 
 **Decision.**
@@ -2801,7 +2801,7 @@ in `docs/connext-ai-issues/connext-ai-issues.md`.
   `qos_profiles` map.
 
 **Evidence.** `router/test_e2e/test_qos_alias_route.py` (`config/e2e_qos_alias.yaml`, plan's
-E1/E2) — real production QoS libs, real alias names (`wan_status`/`wan_event`/
+E1/E2) — real production QoS libs, real alias names (`wan_periodic`/`wan_event`/
 `control_wan_udpv4_qos`/`platform_wan_udpv4_qos`), one router process: route reaches
 `ROUTE_ENABLED`, forwards a sample end-to-end, and the RouterStatus QoS summaries show the
 named profiles' actual policies (BEST_EFFORT reader / RELIABLE writer), not the D39 baseline.
@@ -4922,7 +4922,7 @@ the route writer even with a best-effort matched reader; the reader QoS was neve
 the live consumer was.
 
 **On QoS and protocol-stat availability in production (why best-effort legs are not a
-concern).** Per node, `on_wan` participants always carry a QoS mix: `wan_status` →
+concern).** Per node, `on_wan` participants always carry a QoS mix: `wan_periodic` →
 `status_qos` is BEST_EFFORT (periodic status routes — `platform_primary_status`,
 `platform_detail_status`), while `wan_event` → `event_qos` is RELIABLE (`control_command`,
 `platform_events`), plus the reliable RouterHealth bellwether and RouterLinkProbe pair. Because
@@ -4933,7 +4933,7 @@ every leg (best-effort included). So there is always a reliable route per node t
 meaningful reliable protocol stats from — a best-effort status leg contributing zero
 heartbeats/nacks never leaves a peer uncovered. To exercise exactly this, the
 `e2e_link_stats` fixture was given **two** platform_wan data legs mirroring production: a
-best-effort status route (`PlatformPrimaryStatus`/`wan_status`) and a reliable event route
+best-effort status route (`PlatformPrimaryStatus`/`wan_periodic`) and a reliable event route
 (`ContactReport`/`wan_event`), using the real WAN-lib alias names; both are driven with a live
 control-side consumer, and E1b asserts the summed per-peer `pushed_samples` clears the
 bellwether-only floor. The loop waits for that coverage (bounded by a 30 s deadline) so it

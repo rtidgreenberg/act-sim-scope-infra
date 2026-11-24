@@ -58,7 +58,7 @@ The additional opt-in `router.wan_contract: three_topic_union` selects
 transports the existing ContactReport branch of WanEvent, not a new LAN type.
 Use `ACT_QOS_LIB::wan_three_topic_participant` (or `_emane`), map `wan_event`
 to `ACT_QOS_LIB::wan_three_topic_event`, `wan_contacts` to
-`ACT_QOS_LIB::wan_union_contacts`, and keep the shared `wan_status` profile below
+`ACT_QOS_LIB::wan_union_contacts`, and keep the shared `wan_periodic` profile below
 for Telemetry. These internal QoS aliases and `WanEvent`/`WanStatus` type names
 are retained for compatibility; they do not determine the physical topic names.
 The canonical EMANE launcher accepts `--wan-contract three_topic_union`.
@@ -86,7 +86,7 @@ For the two-topic option:
 - Add `wan_contract: two_topic_union` under `router`.
 - Point the WAN participant QoS alias at
   `ACT_QOS_LIB::wan_two_topic_participant` (or its `_emane` variant).
-- Point `wan_status` at `ACT_QOS_LIB::wan_union_status`.
+- Point `wan_periodic` at `ACT_QOS_LIB::wan_union_periodic`.
 - Keep `router.presence_participant` on the local WAN participant to enable
   health/presence. Its `health` branch shares the single Status writer/reader
   with application traffic. Omitting it still disables presence.

@@ -29,7 +29,7 @@ router:
 types:
   xml: harness_v2/datamodel/gen/ActTypes.xml
 
-# Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_status is
+# Real production endpoint QoS aliases (same names control-platform.yaml uses): wan_periodic is
 # BEST_EFFORT (periodic status), wan_event is RELIABLE (events). Loading only the WAN lib —
 # its profiles reference only ACT_QOS_LIB::/BuiltinQosLib:: internally. The shared WAN
 # participant profile is env-templated, so router_pair() initializes those variables before
@@ -40,7 +40,7 @@ qos_libraries:
 qos_profiles:
   router_lan_participant: ACT_QOS_LIB::lan_router_participant
   wan_participant: ACT_QOS_LIB::wan_router_participant
-  wan_status: ACT_QOS_LIB::wan_status
+  wan_periodic: ACT_QOS_LIB::wan_periodic
   wan_event: ACT_QOS_LIB::wan_event
   router_health: ACT_QOS_LIB::router_health
 
@@ -65,7 +65,7 @@ participants:
     on_wan: true   # link-stats WAN-leg coverage (is_wan decomposition)
 
 routes:
-  # STATUS leg — BEST_EFFORT (production platform_init_status uses wan_status). A
+  # STATUS leg — BEST_EFFORT (production platform_init_status uses wan_periodic). A
   # platform_wan data leg that is on_wan but not team_scoped.
   - name: link_stats_route
     enabled: true
@@ -79,11 +79,11 @@ routes:
         participant: platform_lan
       output:
         participant: platform_wan
-        writer_qos: wan_status
+        writer_qos: wan_periodic
     destination_side:
       input:
         participant: control_wan
-        reader_qos: wan_status
+        reader_qos: wan_periodic
       output:
         participant: control_lan
 

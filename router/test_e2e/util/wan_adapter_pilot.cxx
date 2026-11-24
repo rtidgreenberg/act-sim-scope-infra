@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
             {"wan_event", separate_contacts ? "ACT_QOS_LIB::wan_three_topic_event"
                                            : "ACT_QOS_LIB::wan_event"},
             {"wan_contacts", "ACT_QOS_LIB::wan_union_contacts"},
-            {"wan_status", "ACT_QOS_LIB::wan_union_status"},
+            {"wan_periodic", "ACT_QOS_LIB::wan_union_periodic"},
             {"router_health", "ACT_QOS_LIB::router_health"},
             {"lan_event", "ACT_QOS_LIB::lan_event"},
             {"lan_status", "ACT_QOS_LIB::lan_status_1s"}

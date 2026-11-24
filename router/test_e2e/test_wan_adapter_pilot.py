@@ -100,7 +100,7 @@ class Rig:
         self.nav_writer = self.writer(1, "PlatformStatus", "platform_init_status", "lan_status_1s")
         self.nav_reader = self.reader(0, "PlatformStatus", "platform_init_status", "lan_status_1s")
         self.event_reader = self.reader(2, "Event", "WanEvent", "wan_event")
-        self.status_reader = self.reader(2, "Status", "WanStatus", "wan_status")
+        self.status_reader = self.reader(2, "Status", "WanStatus", "wan_periodic")
         wait_until(lambda: self.command_writer.publication_matched_status.current_count == 1)
         wait_until(lambda: self.nav_writer.publication_matched_status.current_count == 1)
         for reader in (self.command_reader, self.nav_reader, self.event_reader, self.status_reader):
@@ -380,7 +380,7 @@ def test_detach_under_active_traffic(pilot, rig):
 def test_restored_lan_writer_does_not_loop_back_to_wan(pilot, rig):
     pilot.command("bind nav_local_destination 40")
     local_reader = rig.reader(1, "PlatformStatus", "platform_init_status", "lan_status_1s")
-    remote_writer = rig.writer(2, "Status", "WanStatus", "wan_union_status")
+    remote_writer = rig.writer(2, "Status", "WanStatus", "wan_union_periodic")
     wait_until(lambda: remote_writer.publication_matched_status.current_count == 3)
     local = rig.sample("platform_init_status", 50)
     local["source"] = "OtherBoat"

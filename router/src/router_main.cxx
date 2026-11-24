@@ -423,7 +423,7 @@ int main(int argc, char **argv) {
             journal_writer_qos = qos_provider->datawriter_qos(kControllerJournalProfile);
             health_reader_qos = qos_provider->datareader_qos(
                     cfg.wan_contract != "legacy"
-                        ? "ACT_QOS_LIB::wan_union_status" : kRouterHealthProfile);
+                        ? "ACT_QOS_LIB::wan_union_periodic" : kRouterHealthProfile);
             health_writer_qos = qos_provider->datawriter_qos(kRouterHealthProfile);
             mesh_writer_qos = qos_provider->datawriter_qos(kRouterMeshStatusProfile);
             link_stats_writer_qos = qos_provider->datawriter_qos(kRouterLinkStatsProfile);

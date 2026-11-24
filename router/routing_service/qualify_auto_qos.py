@@ -68,10 +68,11 @@ def model(direction, domain):
         "outputs": [spec] if direction == "rx" else [],
         "wan": [
             {"name": family, "type": "Wan" + family, "participant": "wan",
-             "profile": profile, "writer_profile": "ACT_QOS_LIB::rs_wan_" + family.lower(),
+             "profile": profile, "writer_profile": "ACT_QOS_LIB::rs_wan_" +
+                                                  ("event" if family == "Event" else "periodic"),
              "expression": "source_id <> %0", "parameters": ["'Boat30'"]}
             for family, profile in (("Event", "ACT_QOS_LIB::wan_event"),
-                                    ("Status", "ACT_QOS_LIB::wan_union_status"))
+                                    ("Status", "ACT_QOS_LIB::wan_union_periodic"))
         ],
     }
 

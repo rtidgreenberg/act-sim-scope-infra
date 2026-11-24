@@ -76,7 +76,7 @@ QOS_LIBS = [str(REPO_ROOT / p) for p in (
 # alias -> LIB::profile, and whether it is used as a participant or endpoint QoS.
 ENDPOINT_ALIASES = {
     "wan_event": "ACT_QOS_LIB::wan_event",
-    "wan_status": "ACT_QOS_LIB::wan_status",
+    "wan_periodic": "ACT_QOS_LIB::wan_periodic",
     "lan_status_1hz": "ACT_QOS_LIB::lan_status_1s",
 }
 PARTICIPANT_ALIASES = {

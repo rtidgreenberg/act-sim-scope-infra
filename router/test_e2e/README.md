@@ -63,7 +63,7 @@ application branches with unchanged LAN payload equality, exactly Event/Status
 WAN publication names, addressed commands, broadcast assignments, status mode,
 team joins/leaves, exact-name isolation, route-specific interests, source-alias
 gates, rejected-command rollback, and wire-type readiness/error containment.
-Presence remains enabled: health shares the single `wan_union_status` writer
+Presence remains enabled: health shares the single `wan_union_periodic` writer
 and reader with application Status. The health controller test checks three-key
 envelope identity/audit fields, exact shared endpoint counts, idle health,
 LAN summaries, passive RTT and physical send/receive counters, health deadline

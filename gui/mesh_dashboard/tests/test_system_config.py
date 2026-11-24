@@ -49,7 +49,7 @@ def configuration():
     return {
         "router": {"wan_contract": "two_topic_union", "presence_participant": {"control": "wan"}},
         "qos_libraries": [str(ROOT / "harness_v2/qos/act_qos_profiles.xml")],
-        "qos_profiles": {"wan_event": "Test::Event", "wan_status": "Test::Status",
+        "qos_profiles": {"wan_event": "Test::Event", "wan_periodic": "Test::Status",
                          "participant": "Test::WAN"},
         "participants": {"wan": {"role": "control", "domain": 200, "on_wan": True, "qos": "participant"}},
         "routes": [{"name": "example", "enabled": True, "source": "control", "destination": "platform",
@@ -128,7 +128,7 @@ class SystemConfigurationTests(unittest.TestCase):
     def test_partial_shared_and_legacy_route_profiles_preserve_optional_configuration(self):
         config = configuration()
         config["router"]["presence_participant"] = {}
-        del config["qos_profiles"]["wan_status"]
+        del config["qos_profiles"]["wan_periodic"]
         result = self.load(config)
         rows = next(s for s in result["sections"] if s["id"] == "wan-qos")["rows"]
         self.assertEqual({row[0] for row in rows}, {"Event"})
@@ -175,7 +175,7 @@ class NativeSystemConfigurationTests(unittest.TestCase):
 
         config = yaml.safe_load((ROOT / "router/config/control-platform.yaml").read_text())
         config["router"]["wan_contract"] = "two_topic_union"
-        config["qos_profiles"]["wan_status"] = "ACT_QOS_LIB::wan_union_status"
+        config["qos_profiles"]["wan_periodic"] = "ACT_QOS_LIB::wan_union_periodic"
         with tempfile.TemporaryDirectory(prefix="native-system-config-") as directory:
             path = Path(directory) / "router.yaml"
             path.write_text(yaml.safe_dump(config))
