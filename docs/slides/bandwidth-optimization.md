@@ -2,10 +2,10 @@
 marp: true
 theme: rti
 paginate: true
-size: 16:9
+size: portrait
 title: "Bandwidth Optimization"
-description: "Repository-tested WAN strategies and options, with data filtering, discovery, binary payloads and compression"
-footer: "RTI Connext | Bandwidth Optimization | Evidence: 2026-11-20"
+description: "Repository-tested WAN strategies and options, with data filtering, discovery, typed unions and compression"
+footer: "RTI Connext | Bandwidth Optimization | Evidence: 2026-11-24"
 ---
 
 <!-- _class: lead -->
@@ -14,15 +14,18 @@ footer: "RTI Connext | Bandwidth Optimization | Evidence: 2026-11-20"
 
 ## Send less. Send selectively. Preserve required data.
 
-**Data filtering, discovery, delivery policy and binary compression**
+**Data filtering, discovery, delivery policy and typed-union compression**
 
 Current implementation, isolated tests, rejected approaches and next options.
 
 <!--
-Evidence snapshot: 2026-11-20, Connext 7.7.0. Repository-wide synthesis,
+Evidence snapshot: 2026-11-24, Connext 7.7.0. Repository-wide synthesis,
 not a new full-suite run, deployment or fleet-bandwidth benchmark.
 The requested mesh was stopped before this deck was created.
-The completed native Routing Service processor uses Event / State / Periodic.
+The current tested native processor uses six physical priority/family topics,
+retaining the three logical Event / State / Periodic delivery classes.
+The 2026-11-17 deployed reference used three physical pairs; the new compression
+comparison is private source qualification, not deployment.
 Older documents' Event/Status and Event/State/Telemetry names describe earlier
 architectures, not the current native processor's physical WAN names.
 Speaker notes preserve evidence, measurement conditions and qualification gaps.
@@ -52,7 +55,7 @@ interact. A writer API call, a physical DATA push, a UDP datagram and an Etherne
 frame are different quantities.
 Sources: ../../router/routing_service/README.md:245-251,299-326,460-464;
 ../../spikes/wan_dp_route_tradeoffs/README.md:112-115;
-../../spikes/binary_wan_compression/README.md:16-43;
+../../spikes/full_union_compression/README.md;
 ../../spikes/mac_rtps_accounting/README.md:50-70.
 -->
 
@@ -65,11 +68,11 @@ Sources: ../../router/routing_service/README.md:245-251,299-326,460-464;
 | Evidence level | Included strategies |
 |---|---|
 | Implemented; prior native/live qualification | Three WAN families; audience/mission receive interests; shared pacing; LAN isolation |
-| Qualified source; not deployed | Application startup-request suppression; one-second startup/response spreading |
-| Isolated proof; not ACT integration | Fixed binary envelopes; native LZ4/zlib; measured dynamic sender filtering |
+| Qualified source; not deployed | Startup suppression/spreading; full six-topic union + LZ4/zlib with async/shared controller |
+| Isolated proof; not ACT integration | Native SEDP/LBED filtering characterization |
 | Proposal / next qualification | Adaptive control topic; fleet-wide allocation; representative radio/compression comparison |
 
-**Current processor:** Routing Service owns three WAN writer/reader pairs per gateway.
+**Current tested setup:** six WAN pairs per gateway; three logical delivery classes.
 
 > Functional qualification is not a measured percentage of fleet bandwidth saved.
 
@@ -80,8 +83,8 @@ Current mission interests: ../../router/routing_service/README.md:15-18.
 Current shared pacing: ../../harness_v2/qos/act_qos_profiles.xml:935-972,1025-1067.
 LAN isolation: ../../harness_v2/qos/act_qos_profiles.xml:114-136.
 Startup source qualification: ../startup-optimization.md, Fresh qualification.
-Binary proof: ../../spikes/serialized_wan_envelope/README.md:21-40.
-Compression proof: ../../spikes/binary_wan_compression/README.md:74-99.
+Current full-processor comparison: ../../spikes/full_union_compression/README.md.
+Its monitoring repairs and compression settings are not deployed.
 Adaptive proposal: adaptive-runtime-tuning.md.
 No mesh was launched or changed for this documentation task.
 -->
@@ -109,13 +112,11 @@ LAN samples -> gateway WAN writer -> selected transmissions -> WAN
 With SEDP endpoint discovery, the tested Connext native filters suppress
 nonmatching samples at the source writer. Do not imply every predicate,
 discovery configuration or time-based filter has this behavior.
-Current ACT receiver-configured interests and native binary-envelope filtering
+Current ACT receiver-configured interests and isolated native filtering
 are separate qualification surfaces.
-Sources: ../../spikes/serialized_wan_envelope/README.md:21-50;
-../../spikes/routing_service_lbed/README.md:110-150;
+Sources: ../../spikes/routing_service_lbed/README.md:110-150;
 ../../router/routing_service/README.md:913-947.
 CFTs do not strip selected fields out of a sample or provide authorization.
-Opaque payload CFTs can inspect the exposed metadata, not arbitrary inner bytes.
 -->
 
 ---
@@ -192,23 +193,17 @@ Changing Deadline alone does not set the producer's publication frequency.
 
 | Test surface | What was actually proven |
 |---|---|
-| Binary-envelope gateway spike | **45/45** wrong-source/topic/destination offers suppressed at writer |
 | Native Routing Service + SEDP | Offer 3 each phase; select 1 / 2 / 3 / 1; WAN transmits **1 / 2 / 3 / 1** |
-| Native compressed Event + dynamic interests | B -> C -> B; offer both destinations; **one** compressed transmission per phase |
 | Current ACT mission/team workflows | Correct applied interests and receive exclusions; full-workload WAN savings not quantified |
 
 > The mechanism is proven. Its current ACT workload benefit still needs measurement.
 
 <!--
 Sources:
-../../spikes/serialized_wan_envelope/README.md:21-40;
 ../../spikes/routing_service_lbed/README.md:110-150;
-../../spikes/binary_wan_compression/README.md:74-99;
 ../../router/test_e2e/test_routing_service_mesh.py:723-850.
-The first rig is custom C++ gateways, not native RS integration.
-The second and third use actual RS-owned endpoints, fixed envelopes and native
-administration; they are not the completed ACT processor's entire route policy.
-The B/C/B check uses a single expression parameter and stable endpoints.
+The SEDP characterization uses actual RS-owned endpoints and native administration;
+it is not the completed ACT processor's entire route policy.
 Older adapter qualification separately checks zero pushed_sample_count growth
 for excluded teams and old-team updates after filter convergence:
 ../../router/qualification/test_two_topic_qualification.py:168-169,330-390.
@@ -220,9 +215,9 @@ These counts come from distinct experiments and must not be added as one gate.
 
 <!-- _class: compact -->
 
-# Keep three different delivery contracts
+# Keep three logical delivery contracts
 
-| WAN family | Current policy | Bandwidth purpose |
+| Delivery class | Current policy | Bandwidth purpose |
 |---|---|---|
 | Event | Reliable; KEEP_ALL | Preserve required occurrences, including commands |
 | State | Reliable; writer KEEP_LAST(1), reader KEEP_ALL | Replace obsolete queued values per instance |
@@ -252,26 +247,28 @@ Required-event retention and current-state convergence have different oracles.
 # Pacing and priority protect the shared link
 
 - Event, State and Periodic share **one asynchronous controller per gateway**.
-- High/Normal channels provide scheduling choices within three physical pairs.
-- Default allowance: **2,500 bytes per 10 ms**, nominally **2 Mbps**.
+- Current six-topic setup separates priority tiers into **six physical pairs**.
+- Tested allowance: **5,000 bytes per 10 ms**, nominally **4 Mbps**.
 - Priority alone did not reorder a single FIFO stream in the isolated test.
 - Fleet load must include receiver copies, discovery, health and repair traffic.
 
-> A 2 Mbps budget at every gateway is not a 2 Mbps fleet-wide allocation.
+> A 4 Mbps budget at every gateway is not a 4 Mbps fleet-wide allocation.
 
 <!--
 Current source: ../../harness_v2/qos/act_qos_profiles.xml:935-972,1025-1067;
 ../../router/routing_service/README.md:460-464,782-784.
-All three current RS writers use dds.flow_controller.token_bucket.act_rs.
-The high-priority-first multichannel split thresholds are Event 500, State 300,
-Periodic 400; do not confuse thresholds with every configured sample priority.
+All six current RS writers use dds.flow_controller.token_bucket.act_rs, each
+with two priority bands. The prior three-pair source used a nominal 2 Mbps budget.
+Current measured effective policies and 4 Mbps configuration:
+../../spikes/full_union_compression/README.md;
+../../harness_v2/qos/act_qos_profiles.xml (six-topic profiles).
 Token allowance is not a demonstrated usable RF rate, fairness guarantee,
 per-class reservation or a cap on all discovery/protocol traffic.
 Historical ordering proof:
 ../../spikes/instance_churn_reconnect/README.md:422-456.
 It shows why sample priority needs a qualified queue/channel/controller setup,
 not guaranteed priority during reliable-history repair.
-Current RF Pipe is 2 Mbps, with virtual transport bitrate=0:
+Historical RF Pipe checkpoint was 2 Mbps, with virtual transport bitrate=0:
 ../two-topic-wan-migration-plan.md:1449-1452,1491-1501.
 The extra combined RX+TX transport cap was removed, not added as an optimization.
 -->
@@ -313,7 +310,7 @@ Current actual-processor recovery evidence remains ../instance-state-through-ddi
 # Discovery: shrink the WAN surface, not the LAN
 
 - Keep application discovery local; expose only prepared gateway bindings.
-- Consolidate WAN participants and endpoints: current gateways use **three pairs**.
+- Consolidate WAN participants and endpoints: current tested gateways use **six pairs**.
 - Keep LAN discovery off `emane0`; disable unnecessary RTPX tool announcements.
 - Older one-WAN-participant test: discovery TX **13.86 -> 7.67 kbps**.
 - After historical LAN-isolation fixes: **zero** other-domain RTPS/RTPX in 45 s.
@@ -321,7 +318,8 @@ Current actual-processor recovery evidence remains ../instance-state-through-ddi
 > Reducing endpoint count is useful; measure actual discovery bytes separately.
 
 <!--
-Current architecture: ../two-topic-wan-migration-plan.md:2786-2795.
+Earlier three-pair deployment: ../two-topic-wan-migration-plan.md:2786-2795.
+Current six-pair tested source: ../../spikes/full_union_compression/README.md.
 Current LAN isolation/RTPX policy:
 ../../harness_v2/qos/act_qos_profiles.xml:114-136.
 Measured participant-consolidation result:
@@ -361,7 +359,8 @@ Options, not a measured ranking or new deployment decision.
 Sources: dds-discovery-strategies.md, Choose multicast or unicast discovery and
 If unicast, choose how peers get addresses; ../wan-schema-propagation-options.md,
 Options explored and Proposed Python setup and deployment workflow.
-Current WAN is explicit unicast UDPv4 with WAN_RECEIVE_MULTICAST=0.
+Current six-topic test uses explicit unicast UDPv6; prior configurations used
+UDPv4. WAN_RECEIVE_MULTICAST=0; loopback tests are not radio qualification.
 Discovery multicast does not require user-data multicast; neither is assumed
 cheaper on a multi-hop radio. A directory introduces its own availability and
 address-maintenance requirements and does not automatically relay user traffic.
@@ -371,8 +370,8 @@ the selected native discovery plugins and Routing Service needs qualification.
 Prepared XML/type knowledge is not evidence that Connext omits all type metadata.
 The earlier discovery deck's reduced-type-propagation suggestion is explicitly
 pre-7.7; do not import it as a tested Connext7.7 knob.
-The binary-envelope spike is the separate proof of avoiding application type
-graphs over the WAN, with local schema/decoder and tooling costs.
+The current typed unions include their declared application branch structures;
+preloading those schemas is not proof that their WAN type traffic disappears.
 -->
 
 ---
@@ -411,95 +410,91 @@ all packets. No persistent binary replacement or deployment was performed.
 
 <!-- _class: compact -->
 
-# Binary payloads: a schema strategy, not free bytes
+# Full processor compression: measured before / after
 
-| Typed WAN union | Fixed envelope + original binary CDR |
-|---|---|
-| WAN DDS tools see nested application fields | WAN tools see metadata and opaque payload bytes |
-| Union contains all declared branch types | WAN type graph excludes application structures |
-| New branch needs coordinated contract preparation | Tested new local payload type without replacing WAN endpoints |
-| Payload-field CFTs are possible | CFTs select exposed metadata; local schema enables decoding |
+**Six-topic typed unions + full monitoring + async publishing + shared 4 Mbps controller**
 
-Binary spike: **15 exact originals restored; 45 metadata exclusions**.
-Its sample buffers grew **2,010 -> 4,554 bytes** after envelope wrapping.
+Random bytes are inside the command branch; compression applies to the serialized union.
 
-> No application type graph over WAN does not mean no schema or automatic size savings.
+| Command/ACK workload | LZ4 DATA saving | zlib DATA saving |
+|---|---:|---:|
+| Small commands | ~0% | 33.4% |
+| Structured 8 KiB commands | 86.8% | 90.9% |
+| Random 8 KiB commands | ~0% | 3.3% |
+| Burst: 64 structured 8 KiB commands | 87.8% | 92.0% |
+
+Burst worst round-trip time: **2,599 ms off -> 181 ms LZ4 / 130 ms zlib**.
+
+> Savings include command/ACK DATA frames and headers, not RF airtime.
 
 <!--
-Primary evidence: ../../spikes/serialized_wan_envelope/README.md:21-40,43-80,
-82-140. CDR means Common Data Representation, the DDS serialization format.
-The 2,010 and 4,554 totals are serialized original/envelope sample buffers,
-excluding discovery, RTPS, repair and network headers; not a typed-union comparison.
-The gateways discover compatible complete types on their respective local LANs.
-This is DynamicData serialize/copy/deserialize, not zero-copy original-wire relay.
-WRITE only, one top-level string key, same-version schema fingerprint.
-Dispose/unregister, generic keys, ACT codec/auto-QoS/lifecycle/restart integration
-remain separate gates. A fixed outer contract does not infer a type from bytes.
-Other tested architecture:
-../../spikes/discovered_union_catalog/README.md:53-124,150-174.
-Runtime discovered unions remove manual authoring, not deployment-specific schemas.
-Context: ../wan-schema-propagation-options.md predates the later binary spike;
-use the spike's completed results, not that older document's untested status.
+Source: ../../spikes/full_union_compression/README.md.
+Primary local report:
+../../debug/test_reports/full_union_compression_20261124T174940Z/report.json.
+Connext 7.7.0; three fresh native gateways; isolated UDPv6 loopback, no EMANE.
+Six physical topics: P1_Event, P1_Periodic, P2_Event, P2_State, P2_Periodic,
+P3_Periodic. All use the shared act_rs controller and two priority bands.
+Two repetitions: none/LZ4/zlib, then zlib/LZ4/none; BEST_SPEED, threshold zero.
+Table compares mean captured P2_Event DATA-frame bytes for a fixed 64 commands
+and 64 ACKs per workload. Include native channel writers, DATA_SESSION,
+DATA_FRAG_SESSION, network headers and retransmitted frames.
+Structured command bytes: off1,219,702 / LZ4 160,703 / zlib110,807.
+Random command bytes: off1,219,840 / LZ4 1,219,702 / zlib1,180,076.
+Random octets themselves do not meaningfully compress; the small zlib benefit
+includes typed-union metadata, ACKs and framing. Header/packetization differences
+also explain the tiny LZ4 differences rounded to approximately zero.
+The burst also carries contacts and periodic traffic; maximum RTT is the worst
+observed across both repetitions, not a promised latency bound.
+Normalized generated XML differs only in writer compression representation.
+Source-only qualification, not deployment or radio qualification.
 -->
 
 ---
 
 <!-- _class: compact -->
 
-# Compression: binary data can still be redundant
+# What the compression test proved
 
-| Synthetic fixture envelope | LZ4 wire saving | zlib wire saving |
-|---|---:|---:|
-| Small nested status: 248 B | 0% | 14.0% |
-| Structured numeric: 4,272 B | 78.8% | 83.2% |
-| Structured numeric: 16,568 B | 93.9% | 94.2% |
-| High-entropy binary: 32,940 B | 0% | 0.17% |
-| Already-compressed content: 32,972 B | 0% | 0.18% |
+**Private three-gateway test, not a live mesh or radio run.**
 
-Savings cover complete user-DATA frames in each status + command/echo workload.
-**Actual fleet-wide savings remain unknown.**
+### Passed with compression off, LZ4 and zlib
 
-> Representative payloads decide the benefit, not the word "binary."
+- **Commands:** all **1,536 command/acknowledgement exchanges** completed with exact payloads.
+- **Data:** **6,110 received payloads** matched their originals, including final periodic values. Contact removal/reappearance also passed.
+- **Monitoring:** both platform peers stayed reachable; all six WAN topics were captured. No native ERROR/FATAL lines or capture drops.
 
-<!--
-Source: ../../spikes/binary_wan_compression/README.md:16-43.
-Two repetitions per cell; algorithms BEST_SPEED, writer threshold zero.
-Each repetition mixes 32 State writes, 32 Periodic writes and 32 bidirectional
-command/echo exchanges. Fixture envelope size is the telemetry size, not the
-size of every sample in the measured mixed workload.
-Wire percentages include captured user-DATA headers, not discovery or
-ACK-only packets. Structured numeric fixtures are deliberately redundant;
-these are not representative production-payload compression ratios.
-The tiny zlib entropy/already-compressed savings include envelope/command bytes.
-LZ4 with an 8KiB threshold misses the useful 4KiB fixture completely.
-No RF emulation, link-rate cap, loss or current ACT workload in this test.
--->
+Older periodic updates may intentionally be replaced by newer values. The data count is **not a claim that every periodic update arrived**.
 
----
+### CPU result: less total gateway work
 
-# Compression: qualified mechanism, not yet deployment
+Burst CPU time, summed across three gateways: **1,150 ms off -> 550 ms LZ4 / 540 ms zlib**.
+Sending fewer bytes shortened the run; this does **not** measure compression's CPU cost alone.
 
-- Actual Routing Service endpoints automatically compress/decompress envelopes.
-- Matrix: **6,403 exact deliveries**, **203 sender exclusions**, zero capture drops.
-- Dynamic compressed filtering works with **SPDP2 + SEDP**.
-- LZ4 is the next radio-test candidate; compare zlib using real payloads.
-- **Reject tested bzip2:** 256 native errors despite correct deliveries.
-
-> Choose algorithm and threshold by wire savings, CPU cost and command latency.
+> Next: changing filters/teams, restart and removal cases, sustained load, packet loss/repair, and real radio tests. Not deployed.
 
 <!--
-Source: ../../spikes/binary_wan_compression/README.md:45-140.
-Counts include the complete matrix, including the explicitly rejected bzip2
-variant; they must not be described as a clean all-variants PASS.
-Report: COMPLETED_WITH_REJECTED_VARIANTS; runner intentionally exits 1.
-Uncompressed/LZ4/zlib/threshold/compatibility/dynamic variants had zero native
-ERROR/FATAL lines. LZ4-writer/compression-disabled-reader control did not deliver.
-Large structured workload CPU (both RS processes): none40ms, LZ4 40ms,
-zlib60ms, bzip2 370ms; command RTT p95 2.18/1.89/2.01/5.91ms.
-CPU resolution was 10ms; do not call LZ4 free or small RTT differences significant.
-RTT includes Python echo/polling and native forwarding, not RF or codec-only work.
-Unique outer instance IDs avoid State replacement; no lifecycle/recovery gate.
-Compression is native on the outer envelope, not hand-compressed inner payloads.
+Source: ../../spikes/full_union_compression/README.md;
+../open-wan-investigations.md (WAN-01 remains partially qualified).
+All algorithms use the same fresh repaired build. The uncompressed baseline
+first exposed two six-topic monitoring bugs: RouterConfig/health-cache filter
+sequences were bounded to three, and health dispatch omitted P1_Periodic.
+The user authorized source repairs and type regeneration before comparison.
+These repairs and experimental compression are not deployed. Rebuild consumers
+together before deployment of the changed six-record type bounds.
+Six cases, 24 stages; 647 offered originals per stage. Required Event coverage,
+distinct contacts and explicit paced final periodic markers passed. KEEP_LAST
+and existing one-second LAN filters can omit periodic intermediates; 6,110
+delivered originals is not all offered samples and not a no-loss Event proxy.
+Mission policy intentionally excludes ActPlatformStatusMode and peer
+PlatformData; negative LAN checks preserve that behavior. This is not a new
+arbitrary dynamic-filter transition or sender-exclusion byte-measurement gate.
+Mean burst wall time: off2.578 / LZ4 1.249 / zlib1.254 seconds, including a
+fixed 1.2-second final-marker settling interval. CPU sums the three native
+gateway processes; it is not isolated compressor cost or fleet radio capacity.
+Native warnings are not claimed absent. Two native type/binding targets and
+21 affected offline wire-parser tests passed; not a new full router test suite.
+Same-key State churn, unregister, incompatible readers, sustained overload,
+loss/repair, exact token charging and EMANE/fleet remain separate.
 -->
 
 ---
@@ -612,15 +607,15 @@ No customer-derived workload statistics are reproduced in this deck.
 |---|---|---|
 | 1. Selection | Current ACT interests versus deliberately broad interests | Native writer / wire reduction; correct mission/team transitions |
 | 2. Offered load | Default Periodic input versus approved spacing/report rates | WAN savings; per-instance freshness; unaffected commands |
-| 3. Representation | Typed baseline versus integrated binary + LZ4/zlib | Real payloads; lifecycle, schema identity and restart correctness |
+| 3. Compression | Union baseline versus LZ4/zlib on representative payloads | Lifecycle, restart, latency and CPU correctness |
 | 4. Shared capacity | Fixed budgets versus bounded adaptive policy | Fleet headroom; bounded queues; full Event coverage and recovery |
 
 > Hold topology, payloads, fanout and link conditions constant between comparisons.
 
 <!--
 This is a proposed sequence, not a performance result or implementation plan
-approved by this deck. Existing isolated experiments must not be mistaken for
-the current completed ACT processor's combined workload.
+approved by this deck. The bounded six-topic union/async/controller compression comparison now passes.
+It does not qualify the broader lifecycle/load/recovery or radio workload.
 Representative radio tests should include small commands, actual status sizes
 and values, mission/team interest changes, multiple readers, packet loss,
 blackout/rejoin, dispose/unregister/revival, slow consumers and admission limits.
@@ -628,7 +623,7 @@ Include discovery, RouterHealth/configuration and repair bytes in total cost.
 Do not relax event-loss, freshness or latency thresholds to make tuning pass.
 Use the owned coordinated mesh lifecycle if deployment is separately requested.
 Sources: ../../router/routing_service/README.md:299-326,1047-1050;
-../../spikes/binary_wan_compression/README.md, Limits and next gate;
+../../spikes/full_union_compression/README.md, Remaining limits;
 ../instance-state-through-ddil.md; adaptive-runtime-tuning.md.
 -->
 
@@ -639,7 +634,7 @@ Sources: ../../router/routing_service/README.md:299-326,1047-1050;
 1. **Data filtering is a first-class bandwidth control:** do not transmit data nobody needs.
 2. **Prove sender suppression:** fewer receiver deliveries are not enough.
 3. **Separate delivery contracts:** preserve Events; replace only appropriate State.
-4. **Binary and compression solve different problems:** schema cost versus sample cost.
+4. **Compress typed unions using measured payloads:** random command bytes offer little saving.
 5. **Keep the evidence boundaries:** no measured fleet saving or adaptive controller yet.
 
 > Select less, then compress what remains, within a measured shared-link budget.
@@ -653,9 +648,8 @@ Repository evidence map / reusable reading list:
 - Filtering: ../platform-mission-cft-plan.md;
   ../../router/qualification/test_two_topic_qualification.py;
   ../../router/test_e2e/test_routing_service_mesh.py
-- Native binary envelope: ../../spikes/serialized_wan_envelope/README.md
 - Runtime typed schema alternative: ../../spikes/discovered_union_catalog/README.md
-- Compression: ../../spikes/binary_wan_compression/README.md
+- Union compression: ../../spikes/full_union_compression/README.md
 - LBED rejection: ../../spikes/routing_service_lbed/README.md
 - Discovery/participants: ../../spikes/wan_dp_route_tradeoffs/README.md
 - Startup: ../startup-optimization.md; ../../spikes/preemptive_acknack/README.md

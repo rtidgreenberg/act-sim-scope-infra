@@ -1,5 +1,10 @@
 # RTI-branded slide decks
 
+New or updated decks must be **portrait**. Marp decks use `size: portrait`
+with [the shared RTI theme](rti-theme.css) (960 x 1280). Check both PDF and
+PowerPoint orientation and review rendered content for logo/footer overlap
+and clipping; reflow crowded content rather than making it hard to read.
+
 | Deck | Main decision | Source | PDF |
 |---|---|---|---|
 | WAN architecture and QoS | Why the qualified Routing Service design chose three delivery policies, platform-selected receive filters, and shared WAN pacing | [Editable PowerPoint](wan-architecture-and-qos.pptx) | [PDF](wan-architecture-and-qos.pdf) |
@@ -15,17 +20,20 @@
 | Discovery strategies | Four mesh-radio steps plus the measured LBED rejection: receiver filtering works, but unwanted data still crosses the WAN | [Markdown](dds-discovery-strategies.md) | [PDF](dds-discovery-strategies.pdf) |
 | System presence and liveliness | Compare writer liveliness, participant discovery, and periodic application health in Connext 7.7 | [Markdown](system-presence-liveliness.md) | [PDF](system-presence-liveliness.pdf) |
 
-The twenty-one-slide Bandwidth Optimization deck also has a
+The twenty-slide Bandwidth Optimization deck also has a
 [PowerPoint export](bandwidth-optimization.pptx).
 It consolidates repository evidence for data filtering, source-side rate reduction,
-three-family delivery, shared pacing, discovery isolation, startup spreading,
-binary envelopes and native compression. Data filtering distinguishes reader
+three logical delivery classes, six-topic shared pacing, discovery isolation, startup spreading,
+typed-union native compression. Data filtering distinguishes reader
 configuration from actual sender-side execution, with measured transmission
 counts and the current ACT workload's remaining byte-qualification gap.
-It explicitly rejects the tested LBED and bzip2 configurations and separates
+It explicitly rejects the tested LBED configuration and separates
 current implementation, source-only qualification, isolated experiments and the
-adaptive-control proposal. Synthetic compression percentages are not fleet-wide
-savings. Speaker notes retain source citations, conditions and limits.
+adaptive-control proposal. The full processor compression comparison includes measured off/LZ4/zlib
+command DATA savings, burst latency/CPU, exact delivery checks and remaining
+load/loss/radio gates. It uses the current six-topic union/async/shared
+4 Mbps setup; source repairs and experimental compression are not deployed.
+Speaker notes retain source citations, conditions and limits.
 The PowerPoint contains rendered slides; edit the Markdown source.
 
 The eleven-slide adaptive runtime tuning deck also has a

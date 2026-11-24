@@ -20,6 +20,14 @@ across forced termination; use the owned harness lifecycle for cleanup.
 - Avoid unnecessary jargon; explain technical terms and acronyms when introducing them.
 - Preserve technical accuracy and use simple examples when they help.
 
+## Slide format
+
+- New or updated slide decks in this repository must be portrait.
+- For Marp decks, use `size: portrait` with the shared RTI theme (960 x 1280).
+- Verify PDF and PowerPoint orientation and review rendered slides for clipped
+  text or overlap with logos and footers. Reflow content rather than shrink it
+  until it becomes hard to read.
+
 ## Active work handoff: two-topic WAN refactor (2026-11-09)
 
 **2026-11-24 source-only Periodic QoS naming:** the base/shared/RS profiles and
