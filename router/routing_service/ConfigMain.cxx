@@ -110,6 +110,9 @@ int main(int argc, char** argv) {
                                        : "ACT_QOS_LIB::rs_three_topic_periodic")
                 : (family == "Event" ? "ACT_QOS_LIB::rs_wan_event"
                                     : "ACT_QOS_LIB::rs_wan_periodic");
+            if (model.six_topic() && model.is_state_family(family)) {
+                entry["profile"] = entry["writer_profile"];
+            }
             const auto filter = model.receive_filter(family);
             entry["expression"] = filter.expression;
             entry["parameters"] = filter.parameters;

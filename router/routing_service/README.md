@@ -44,6 +44,60 @@ XML bindings select one logical channel (`event_high`, `event_normal`,
 family and priority together. The three physical topics and prototype YAML
 development settings remain supported.
 
+### Six-topic common type and retained State (2026-11-25, source only)
+
+The canonical six-topic source configuration now uses **one DDS type,
+`WanFrame`, on all six names**:
+
+| WAN topic | DDS type | Retention |
+| --- | --- | --- |
+| P1_Event | WanFrame | Reliable, volatile, KEEP_ALL |
+| P1_Periodic | WanFrame | Best effort, volatile, KEEP_LAST(1) |
+| P2_Event | WanFrame | Reliable, volatile, KEEP_ALL |
+| P2_State | WanFrame | Reliable, transient local, writer KEEP_LAST(1) / reader KEEP_ALL |
+| P2_Periodic | WanFrame | Best effort, volatile, KEEP_LAST(1) |
+| P3_Periodic | WanFrame | Best effort, volatile, KEEP_LAST(1) |
+
+`WanFramePayload` is one flat, typed union containing all sixteen original ACT
+payload structures. Its discriminator has unique labels: 1-6 for the former
+Event branches and 101-110 for the former Status branches. The envelope keeps
+the existing source/topic/instance keys, audience and audit fields; original
+LAN payloads and authoritative ContactReport source restoration are unchanged.
+Family selection, receive filters, per-sample publication priorities, writer
+transport priorities, compression and pacing remain independent of this shared
+type. Monitoring copies the service's codec so health/configuration use the same
+envelope as application traffic.
+
+This is **schema version 4 for `six_topic_union`**. Rebuild consumers and regenerate
+all six-topic bundles together before adoption; do not mix earlier six-topic
+bundles/binaries with this contract. The two-/three-topic modes retain their
+schema-3 `WanEvent`/`WanStatus` types and original volatile State policy.
+No persistent binary or live mesh was rebuilt, restarted or deployed.
+
+Transient local applies only to the six-topic WAN State writer and reader.
+A newly matching selected WAN reader can recover the live writer's latest
+complete sample per envelope key without another application write. It is not
+persistent storage: source-writer restart clears the cache and requires
+application republishing. LAN durability is unchanged. Do not rely on in-place
+CFT widening to replay earlier data; the subscription spike did not observe
+that during its bounded tests. Late-join disposal/tombstone replay remains a
+separate gate. The spike `Inventory`/manual-subscription protocol is not added
+to production by this change; State still carries ContactReport by default.
+
+Qualification: **10 C++ targets**, **53 QoS/configuration/native-binding checks**
+and one unchanged three-topic native health/RTT/team-filter case pass, with no
+skips. The actual three-gateway, production-default IPv6 workload verifies all
+six topic/type advertisements, 18 writers/readers, 256 exact command/ACK pairs,
+983 exact original deliveries, dispose/unregister/revival, latest-per-key
+filtered late-reader replay, empty history after source restart, republish
+recovery and ALIVE peers. Final native errors and capture drops are zero.
+This is isolated source qualification, not an EMANE/load/loss/live-mission gate.
+Local accepted evidence is
+`debug/test_reports/common_wan_20261125/attempt3/report.json`; its capture is
+`debug/pcap/common_wan_20261125/attempt3-production.pcapng`.
+Repeat the production workload with
+`python3 spikes/full_union_compression/launch.py --production-defaults`.
+
 **2026-11-24 source-only QoS naming:** Periodic profiles are now `wan_periodic`,
 `wan_union_periodic` and `rs_wan_periodic`; the configuration alias is
 `wan_periodic`. Update older source configurations, rebuild development helpers
@@ -306,7 +360,8 @@ retention and local resource budgets still need explicit XML. Development transl
 old inherited `lan_status_1s` default with its unfiltered `lan_status` base unless
 that topic is explicitly selected in `periodic_input_profiles`.
 
-Physical topic names and payload types are independent:
+Physical topic names and payload types are independent. The older
+`three_topic_union` mode remains:
 
 | Three-topic WAN name | DDS type | Payload branches |
 | --- | --- | --- |
@@ -600,14 +655,17 @@ Event and RouterHealth uses Periodic/Status; their WAN CFT cases must retain
 [ACT catalog](../src/core/WanCodec.cxx), with unchanged whole-payload copies and
 authoritative ContactReport source restoration. Built-in ACT topic/type/branch/key
 definitions cannot be overridden. Custom bindings use the same grouped properties
-and frozen `WanEvent`/`WanStatus` envelope layout. Their named payload branch must
+and a frozen envelope layout: `WanFrame` for six topics, or
+`WanEvent`/`WanStatus` for the older modes. Their named payload branch must
 have exactly the declared original type, not merely an assignable type, and one
 nonnegative, non-default union label. Missing/wrong branches, conflicting labels
 or member IDs, duplicate bindings and unsupported keys reject before forwarding.
 No application IDL or generated application classes are needed.
 
-For custom types, `event_*` and `state_*` select branches in `WanEvent`;
-`periodic_*` selects branches in `WanStatus`. The channel still chooses the
+For custom types in six-topic mode, every channel selects a branch in the
+same prepared `WanFrame` payload union; labels and member IDs must be unique
+across that union. Older modes select `event_*` and `state_*` branches in
+`WanEvent`, and `periodic_*` branches in `WanStatus`. The channel still chooses the
 physical family and priority. The configured node is the envelope source, the
 configured existing string key becomes the raw instance ID, and explicit
 `control`, `global`, `teams` or `exact:NAME` recipients supply audiences.

@@ -2872,6 +2872,53 @@ Private qualification state was removed. The checkpoint 3.54 mesh/binaries
 remain untouched; this is source qualification, not deployment or a new live
 mission gate.
 
+### 3.56 Common six-topic type and transient-local State qualified, not deployed (2026-11-25)
+
+The user approved source implementation and private qualification only.
+All six existing production WAN names now use the same schema-4 `WanFrame`:
+P1_Event, P1_Periodic, P2_Event, P2_State, P2_Periodic and P3_Periodic.
+Its flat `WanFramePayload` union includes all sixteen original ACT structures,
+with unique labels 1-6 and 101-110. Original LAN structures, keys, authoritative
+ContactReport source restoration, audiences, filtering and priorities remain
+unchanged. Older two-/three-topic modes retain schema 3 and their original
+`WanEvent`/`WanStatus` types.
+
+Only the six-topic State reader/writer becomes transient local. Reliable writer
+KEEP_LAST(1) and reader KEEP_ALL are retained; Event/Periodic durability,
+compression, pacing and transport priorities are unchanged. Monitoring now
+copies the service codec rather than constructing an independent legacy codec.
+This is a wire-contract change: consumers must be rebuilt and six-topic XML
+bundles regenerated together before adoption.
+
+Fresh private qualification passes **10 C++ targets**, **53 native
+QoS/configuration/binding checks**, and the unchanged three-topic native
+health/RTT/team-filter regression, with no skips. The production-default
+three-gateway IPv6 workload advertises one common type on all six topics,
+with 18 writer/reader pairs. All four stages pass: **256 exact command/ACK
+pairs and 983 exact original deliveries**, live contact dispose/unregister/
+revival, both platform peers ALIVE, zero native errors and zero capture drops.
+A new filtered WAN State reader receives only the latest complete sample for
+each of two selected keys, excluding a third. After isolated source-gateway
+restart, a new reader sees no old history for 1.5 seconds after all writer
+matches; application republish restores delivery.
+
+The first production attempt exposed the old monitoring codec and was fixed.
+A second passed the native behavior but included later reader/restart traffic
+in a capture oracle intentionally limited to the original 18 writers. The
+passing run captures/analyzes workload and live lifecycle first, then performs
+the separate native late-reader/restart checks. No assertion was weakened.
+Accepted local evidence is under
+`debug/test_reports/common_wan_20261125/attempt3/`, with the capture under
+`debug/pcap/common_wan_20261125/attempt3-production.pcapng`.
+Earlier failed attempts remain recorded separately.
+
+Transient local is not persistent storage, does not change LAN late-reader
+behavior, and does not promise cached replay when an existing CFT widens.
+Late-join tombstone replay, manual subscriptions/Inventory, sustained load,
+loss/recovery, EMANE and live missions remain separate gates. No persistent
+binary, live configuration, mesh restart or deployment was performed. See
+the [native XML guide](../router/routing_service/README.md#six-topic-common-type-and-retained-state-2026-11-25-source-only).
+
 ## 4. Audience selection and runtime changes
 
 Use ContentFilteredTopics (CFTs) for sample selection. Keep the selection fields

@@ -119,8 +119,11 @@ def prepare(node, role, domain, directory, algorithm, bandwidth_bps=4000000):
         writer = root.find(f".//output[@name='wan_out_{family}']/datawriter_qos")
         reader = root.find(f".//input[@name='wan_in_{family}']/datareader_qos")
         assert writer is not None and reader is not None, family
-        writer.append(copy.deepcopy(writer_rep))
-        reader.append(copy.deepcopy(reader_rep))
+        if algorithm != "production":
+            writer.append(copy.deepcopy(writer_rep))
+            reader.append(copy.deepcopy(reader_rep))
+        else:
+            assert writer.find("representation") is None and reader.find("representation") is None
         # Read the exact composed writer policy, not just the chosen algorithm.
         library = root.find("./qos_library[@name='ACT_QOS_LIB']")
         profile = ET.SubElement(library, "qos_profile", name="measurement_" + family,
@@ -134,12 +137,21 @@ def prepare(node, role, domain, directory, algorithm, bandwidth_bps=4000000):
     qos_provider = dds.QosProvider(str(path))
     for family in FAMILIES:
         qos = qos_provider.datawriter_qos_from_profile("ACT_QOS_LIB::measurement_" + family)
+        reader_profile = next(port["profile"] for port in model["wan"] if port["name"] == family)
+        incoming_qos = qos_provider.datareader_qos_from_profile(reader_profile)
+        durability = (dds.DurabilityKind.TRANSIENT_LOCAL if family == "P2_State"
+                      else dds.DurabilityKind.VOLATILE)
+        assert qos.durability.kind == incoming_qos.durability.kind == durability, family
         assert qos.publish_mode.kind == dds.PublishModeKind.ASYNCHRONOUS
         assert qos.publish_mode.flow_controller_name == "dds.flow_controller.token_bucket.act_rs"
         assert len(qos.multi_channel.channels) == 2
+        if algorithm == "production":
+            assert qos.data_representation.compression_settings.compression_ids == dds.CompressionIdMask.ZLIB
         effective[family] = {
             "asynchronous": True, "controller": qos.publish_mode.flow_controller_name,
             "reliability": str(qos.reliability.kind), "history": str(qos.history.kind),
+            "durability": str(qos.durability.kind),
+            "reader_durability": str(incoming_qos.durability.kind),
             "priority_channels": [c.filter_expression for c in qos.multi_channel.channels],
             "transport_priority": qos.transport_priority.value,
             "compression": str(qos.data_representation.compression_settings.compression_ids)}
@@ -442,6 +454,77 @@ def verify_xml_equivalence(cases):
     return result
 
 
+def retained_state(probes, writers, readers, observer, processes, logs, cleanup, environment, label):
+    latest = {}
+    for offset, key in enumerate(("retained-a", "retained-b", "excluded-key")):
+        for revision in (1, 2):
+            value = sample(probes, 4, 20000 + offset * 10 + revision, "small")
+            value["contact_id"] = key
+            writers[4].write(value)
+            wait(lambda: any(info.valid and data == value for data, info in readers[4].take()),
+                 f"retained State publication {key}/{revision}")
+        latest[key] = value
+    types = dds.QosProvider(str(ROOT / "harness_v2/datamodel/gen/ActTypes.xml"))
+    topic = dds.DynamicData.Topic(observer, "P2_State", types.type("WanFrame"))
+    subscriber = dds.Subscriber(observer)
+    selected = ("retained-a", "retained-b")
+
+    def reader(name):
+        filtered = dds.DynamicData.ContentFilteredTopic(topic, name, dds.Filter(
+            "source_id = %0 AND original_topic = 'ContactReport' "
+            "AND (instance_id = %1 OR instance_id = %2)",
+            ["'Platform_30'", *["'" + key + "'" for key in selected]]))
+        return dds.DynamicData.DataReader(subscriber, filtered, reader_qos("rs_six_topic_p2_state"))
+
+    first = reader("latest_state")
+    seen = []
+    def collect(target):
+        seen.extend(dds.DynamicData(data) for data, info in target.take() if info.valid)
+        return len(seen) >= len(selected)
+    try:
+        wait(lambda: collect(first), "new State reader's latest-per-key history")
+        time.sleep(0.5)
+        collect(first)
+        assert len(seen) == 2 and {str(frame["instance_id"]) for frame in seen} == set(selected), seen
+        for frame in seen:
+            assert int(frame["schema_version"]) == 4
+            assert frame["payload.contact_report"] == latest[str(frame["instance_id"])]
+    finally:
+        first.close()
+
+    previous = processes[1]
+    stop(previous)
+    log_path = RESULTS / (label + "-Platform_30-restarted.log")
+    opened = cleanup.enter_context(log_path.open("w"))
+    process = subprocess.Popen(previous.args, env=environment, stdout=opened, stderr=subprocess.STDOUT)
+    cleanup.callback(stop, process)
+    processes[1] = process
+    logs.append(log_path)
+    wait(lambda: process.poll() is None and "rs.gateway.started" in log_path.read_text(),
+         "source gateway restart")
+    fresh = reader("state_after_source_restart")
+    try:
+        wait(lambda: fresh.subscription_matched_status.current_count == len(NODES),
+             "all fresh State writer matches")
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            assert not any(info.valid for _, info in fresh.take()), "old State survived writer restart"
+            time.sleep(0.02)
+        wait(lambda: writers[4].publication_matched_status.current_count > 0, "fresh source LAN input")
+        writers[4].write(latest["retained-a"])
+        received = []
+        def republished():
+            received.extend(dds.DynamicData(data) for data, info in fresh.take() if info.valid)
+            return bool(received)
+        wait(republished, "State recovery after application republish")
+        assert all(frame["instance_id"] == "retained-a" and
+                   frame["payload.contact_report"] == latest["retained-a"] for frame in received)
+    finally:
+        fresh.close()
+    return {"late_reader_latest_per_key": list(selected), "excluded_key": "excluded-key",
+            "source_restart_history_empty_seconds": 1.5, "republish_recovered": True}
+
+
 def run_case(algorithm, repetition):
     label = f"{repetition}-{algorithm}"
     directory = Path(tempfile.mkdtemp(prefix=label + "-", dir=WORK))
@@ -540,13 +623,16 @@ def run_case(algorithm, repetition):
         endpoints = {}
         for data, info in publications.read():
             if info.valid and data.topic_name in FAMILIES:
+                assert data.type_name == "WanFrame", (data.topic_name, data.type_name)
                 handle = str(info.instance_handle).lower().replace(":", "").replace("-", "")
                 assert len(handle) == 32, handle
                 endpoints[handle] = data.topic_name
         assert len(endpoints) == 18, endpoints
         assert len([1 for data, info in subscriptions.read()
-                    if info.valid and data.topic_name in FAMILIES]) == 18
+                    if info.valid and data.topic_name in FAMILIES and data.type_name == "WanFrame"]) == 18
         report["endpoint_counts"] = {"writers": 18, "readers": 18}
+        report["common_type"] = {"name": "WanFrame", "schema_version": 4,
+                                 "topics": list(FAMILIES)}
         report["full_monitoring_peers_alive"] = True
         for index, mode in enumerate(("small", "structured", "entropy", "burst")):
             report["stages"].append(stage(mode, 1000 + index * 1000, probes, writers, readers, processes))
@@ -562,16 +648,28 @@ def run_case(algorithm, repetition):
         writers[4].write(value)
         wait(lambda: any(info.valid and data == value for data, info in readers[4].take()), "contact revival")
         report["contact_dispose_revive"] = True
+        writers[4].unregister_instance(handle)
+        wait(lambda: any(info.state.instance_state == dds.InstanceState.NOT_ALIVE_NO_WRITERS
+                         for _, info in readers[4].take()), "contact unregister")
+        writers[4].write(value)
+        wait(lambda: any(info.valid and data == value for data, info in readers[4].take()),
+             "contact revival after unregister")
+        report["contact_unregister_revive"] = True
         stop(recorder)
         report["capture_drops"] = capture_drops(RESULTS / f"{label}-capture.log")
         report["capture_sha256"] = digest(capture)
         wire(capture, report["stages"], endpoints)
-        allowed_ids = {"none": {0}, "lz4": {0, 3}, "zlib": {0, 1}}[algorithm]
+        allowed_ids = {"none": {0}, "lz4": {0, 3}, "zlib": {0, 1}, "production": {0, 1}}[algorithm]
         for result in report["stages"]:
             ids = set(result["wire"]["compression_ids"])
             assert ids <= allowed_ids, (algorithm, ids)
             if algorithm != "none" and result["workload"] == "structured":
                 assert allowed_ids - {0} <= ids, (algorithm, ids)
+        if algorithm == "production":
+            report["capture_scope"] = "workload and live lifecycle, before late-reader/restart checks"
+            report["retained_state"] = retained_state(
+                probes, writers, readers, observer, processes, logs, cleanup, environment, label)
+            wait(all_alive, "both monitored peers ALIVE after source restart")
     errors = [line for path in logs for line in path.read_text().splitlines()
               if re.search(r"level=ERROR|ERROR|FATAL", line)]
     assert not errors, errors[:20]
@@ -582,7 +680,7 @@ def run_case(algorithm, repetition):
     return report
 
 
-def main():
+def main(production_defaults=False):
     report = {"status": "FAIL", "scope": "Latest full monitored union processor, three gateways, "
               "six_topic_union IPv6, shared 4 Mbps async controller; isolated loopback, not EMANE",
               "source_revision": subprocess.check_output(
@@ -600,14 +698,26 @@ def main():
                       ROOT / "harness_v2/qos/act_qos_profiles.xml",
                       ROOT / "harness_v2/datamodel/gen/ActTypes.xml",
                       ROOT / "harness_v2/datamodel/ActTypes.idl",
+                      ROOT / "router/src/core/WanCodec.hpp",
+                      ROOT / "router/src/core/WanCodec.cxx",
+                      ROOT / "router/src/core/PresenceMonitor.cxx",
+                      ROOT / "router/src/core/PresenceMonitor.hpp",
+                      ROOT / "router/routing_service/GatewayModel.cxx",
+                      ROOT / "router/routing_service/GatewayProcessor.cxx",
+                      ROOT / "router/routing_service/ConfigMain.cxx",
                       ROOT / "router/routing_service/GatewayMonitor.cxx",
                       ROOT / "router/routing_service/run.py",
                       ROOT / "debug/scripts/rtps_delivery.py"]}
-        for repetition, algorithms in ((1, ("none", "lz4", "zlib")), (2, ("zlib", "lz4", "none"))):
+        matrix = ((1, ("production",)),) if production_defaults else (
+            (1, ("none", "lz4", "zlib")), (2, ("zlib", "lz4", "none")))
+        for repetition, algorithms in matrix:
             for algorithm in algorithms:
                 report["cases"].append(run_case(algorithm, repetition))
-        report["comparison"] = comparison(report["cases"])
-        report["compression_only_xml_changes"] = verify_xml_equivalence(report["cases"])
+        if production_defaults:
+            report["production_defaults_without_representation_overrides"] = True
+        else:
+            report["comparison"] = comparison(report["cases"])
+            report["compression_only_xml_changes"] = verify_xml_equivalence(report["cases"])
         report["status"] = ("COMPLETED_WITH_BASELINE_FAILURES" if any(
             case["baseline_config_publish_failures"] for case in report["cases"]) else "PASS")
     except Exception:
@@ -625,5 +735,7 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:] == ["--reanalyze"]:
         reanalyze()
+    elif sys.argv[1:] == ["--production-defaults"]:
+        sys.exit(main(True))
     else:
         sys.exit(main())

@@ -515,7 +515,8 @@ def _preflight_independent(root, service, service_name):
         if wan_port:
             family = endpoint.attrib["name"].split("_", 2)[2]
             if endpoint.findtext("topic_name") != family or endpoint.findtext("registered_type_name") != (
-                    "WanEvent" if family in ("Event", "State", "P1_Event", "P2_Event", "P2_State") else "WanStatus"):
+                    "WanFrame" if contract == "six_topic_union" else
+                    "WanEvent" if family in ("Event", "State") else "WanStatus"):
                 raise ValueError("hub WAN port topic/type mismatch")
     for route in routes:
         sessions[0].remove(route)

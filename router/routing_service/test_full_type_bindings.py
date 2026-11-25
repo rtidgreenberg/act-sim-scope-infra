@@ -53,9 +53,11 @@ class FullTypeConfigurationTests(unittest.TestCase):
         self.addCleanup(work.cleanup)
         self.work = Path(work.name).resolve()
 
-    def model(self, node="DeviceA", domain=103, act=False, dotted=False):
+    def model(self, node="DeviceA", domain=103, act=False, dotted=False,
+              contract="three_topic_union"):
         path = self.work / (node + ".yaml")
         config = properties(node, domain, act)
+        config["act.wan_contract"] = contract
         if dotted:
             config["act.binding.command.topic_name"] = "devices.commands"
             config["act.binding.status.topic_name"] = "devices.updates"
@@ -73,9 +75,11 @@ class FullTypeConfigurationTests(unittest.TestCase):
         for port in model["inputs"] + model["outputs"]:
             port["profile"] = "ACT_QOS_LIB::lan_event"
         for family in model["wan"]:
-            family["profile"] = "ACT_QOS_LIB::" + {
-                "Event": "wan_three_topic_event", "State": "wan_union_contacts",
-                "Periodic": "wan_union_periodic"}[family["name"]]
+            family["profile"] = (family["writer_profile"] if contract == "six_topic_union"
+                                 else "ACT_QOS_LIB::" + {
+                "Event": "wan_three_topic_event" if contract == "three_topic_union" else "wan_event",
+                "State": "wan_union_contacts", "Status": "wan_union_periodic",
+                "Periodic": "wan_union_periodic"}[family["name"]])
         return model
 
     def test_native_model_render_and_frozen_bundle(self):
@@ -202,7 +206,22 @@ class FullTypeConfigurationTests(unittest.TestCase):
     def test_native_processor_dotted_topics_round_trip(self):
         self.native_round_trip(dotted=True)
 
-    def native_round_trip(self, act=False, dotted=False):
+    @unittest.skipUnless(os.environ.get("ACT_RS_SCHEMA_ISOLATED") == "1",
+                         "requires an owned private network namespace")
+    def test_native_six_topic_common_type_custom_round_trip(self):
+        self.native_round_trip(contract="six_topic_union")
+
+    @unittest.skipUnless(os.environ.get("ACT_RS_SCHEMA_ISOLATED") == "1",
+                         "requires an owned private network namespace")
+    def test_native_six_topic_common_type_act_round_trip(self):
+        self.native_round_trip(act=True, contract="six_topic_union")
+
+    @unittest.skipUnless(os.environ.get("ACT_RS_SCHEMA_ISOLATED") == "1",
+                         "requires an owned private network namespace")
+    def test_native_two_topic_act_round_trip(self):
+        self.native_round_trip(act=True, contract="two_topic_union")
+
+    def native_round_trip(self, act=False, dotted=False, contract="three_topic_union"):
         import rti.connextdds as dds
 
         with ExitStack() as cleanup:
@@ -213,7 +232,7 @@ class FullTypeConfigurationTests(unittest.TestCase):
             types = dds.QosProvider(str(ACT_TYPES if act else FIXTURE))
             qos = dds.QosProvider(str(ROOT / "harness_v2/qos/act_qos_profiles.xml"))
             for node, domain in (("DeviceA", 103), ("DeviceB", 105)):
-                model = self.model(node, domain, act, dotted)
+                model = self.model(node, domain, act, dotted, contract)
                 path = write_bundle(model, self.build / "libact_gateway_processor.so",
                                     True, self.work / (node + ".xml"))
                 preflight(path)

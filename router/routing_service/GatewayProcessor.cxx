@@ -70,7 +70,8 @@ bool lifecycle(Writer writer, const Data& key, const dds::sub::SampleInfo& info,
 class GatewayProcessor : public rti::routing::processor::NoOpProcessor {
 public:
     explicit GatewayProcessor(const Properties& properties)
-        : model_(properties), types_(model_.config.types_xml_path), codec_(types_, model_.codec_mappings()),
+        : model_(properties), types_(model_.config.types_xml_path),
+          codec_(types_, model_.codec_mappings(), model_.six_topic()),
           independent_(properties.count("act.runtime_mode") != 0) {}
 
     GatewayPorts ports;

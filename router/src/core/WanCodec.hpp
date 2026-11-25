@@ -18,15 +18,15 @@ struct WanMapping {
     std::string qos_profile;
 };
 
-const std::vector<WanMapping>& wan_mappings();
-const WanMapping& wan_mapping(const std::string& topic);
+const std::vector<WanMapping>& wan_mappings(bool common_type = false);
+const WanMapping& wan_mapping(const std::string& topic, bool common_type = false);
 // Physical transport selection does not change the codec's union catalog.
 WanMapping wan_transport_mapping(const std::string& topic, bool separate_contacts);
 std::string wan_transport_type(const std::string& family);
 // Resolve a single, non-default union label from the prepared type registry.
 WanMapping wan_full_type_mapping(dds::core::QosProvider types,
         const std::string& topic, const std::string& type, const std::string& family,
-        const std::string& branch, const std::string& instance_field);
+        const std::string& branch, const std::string& instance_field, bool common_type = false);
 
 struct WanMetadata {
     std::string source_id;
@@ -52,7 +52,8 @@ class WanCodec {
 public:
     explicit WanCodec(dds::core::QosProvider types);
     // Prepared full-type bindings; labels are verified against the frozen XML.
-    WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mappings);
+    WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mappings,
+             bool common_type = false);
     const WanMapping& mapping(const std::string& topic) const;
 
     dds::core::xtypes::DynamicData pack(
@@ -69,6 +70,8 @@ public:
 private:
     dds::core::QosProvider types_;
     std::vector<WanMapping> mappings_;
+    bool common_type_;
+    std::string envelope_type(const WanMapping& mapping) const;
     void validate_frame_type(const dds::core::xtypes::DynamicData& frame,
                              const WanMapping& mapping) const;
 };

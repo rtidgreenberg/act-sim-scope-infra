@@ -723,6 +723,15 @@ class NativeConfigurationTests(unittest.TestCase):
             self.assertEqual(
                 [entry["name"] for entry in model["wan"]],
                 ["P1_Event", "P1_Periodic", "P2_Event", "P2_State", "P2_Periodic", "P3_Periodic"])
+            self.assertEqual({entry["type"] for entry in model["wan"]}, {"WanFrame"})
+            state = next(entry for entry in model["wan"] if entry["name"] == "P2_State")
+            self.assertEqual(state["profile"], "ACT_QOS_LIB::rs_six_topic_p2_state")
+            explicit = self.native_properties(model["properties"])
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            explicit_wan = yaml.safe_load(explicit.stdout)["wan"]
+            self.assertEqual({entry["type"] for entry in explicit_wan}, {"WanFrame"})
+            self.assertEqual(next(entry for entry in explicit_wan if entry["name"] == "P2_State")[
+                "profile"], state["profile"])
             self.assertEqual(model["topic_families"]["RouterConfig"], "P1_Event")
             self.assertEqual(model["topic_families"]["RouterHealth"], "P1_Periodic")
             self.assertEqual(model["topic_families"]["Mission"], "P2_Event")
@@ -738,6 +747,15 @@ class NativeConfigurationTests(unittest.TestCase):
             rendered = render(model, str(path), "plugin.so", False)
             preflight(ET.ElementTree(ET.fromstring(rendered)))
             xml_root = ET.fromstring(rendered)
+            for kind in ("input", "output"):
+                ports = [port for port in xml_root.findall(f".//{kind}")
+                         if port.attrib["name"].startswith("wan_")]
+                self.assertEqual(len(ports), 6)
+                self.assertEqual({port.findtext("registered_type_name") for port in ports}, {"WanFrame"})
+            invalid = ET.fromstring(rendered)
+            invalid.find(".//input[@name='wan_in_P2_State']/registered_type_name").text = "WanEvent"
+            with self.assertRaisesRegex(ValueError, "topic/type mismatch"):
+                preflight(ET.ElementTree(invalid))
             p1_in = xml_root.find(".//input[@name='wan_in_P1_Event']/content_filter/expression")
             p1_h_in = xml_root.find(".//input[@name='wan_in_P1_Periodic']/content_filter/expression")
             self.assertIn("RouterConfig", p1_in.text)

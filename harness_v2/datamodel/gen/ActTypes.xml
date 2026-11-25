@@ -536,6 +536,105 @@
   <member name="audience" type="nonBasic"  nonBasicTypeName= "WanAudience"/>
   <member name="payload" type="nonBasic"  nonBasicTypeName= "WanStatusPayload"/>
 </struct>
+<enum name="WanFrameKind">
+  <enumerator name="WAN_FRAME_COMMAND" value="1"/>
+  <enumerator name="WAN_FRAME_TEAM_ASSIGNMENT" value="2"/>
+  <enumerator name="WAN_FRAME_STATUS_MODE" value="3"/>
+  <enumerator name="WAN_FRAME_COMMAND_ACK" value="4"/>
+  <enumerator name="WAN_FRAME_CONTACT_REPORT" value="5"/>
+  <enumerator name="WAN_FRAME_ROUTER_CONFIG" value="6"/>
+  <enumerator name="WAN_FRAME_NAVIGATION" value="101"/>
+  <enumerator name="WAN_FRAME_DATA" value="102"/>
+  <enumerator name="WAN_FRAME_MISSION" value="103"/>
+  <enumerator name="WAN_FRAME_WAYPOINT" value="104"/>
+  <enumerator name="WAN_FRAME_DETAIL" value="105"/>
+  <enumerator name="WAN_FRAME_DEBUG" value="106"/>
+  <enumerator name="WAN_FRAME_THRUSTER" value="107"/>
+  <enumerator name="WAN_FRAME_POWER" value="108"/>
+  <enumerator name="WAN_FRAME_DIAGNOSTICS" value="109"/>
+  <enumerator name="WAN_FRAME_HEALTH" value="110"/>
+</enum>
+<union name="WanFramePayload" extensibility= "mutable">
+  <discriminator type="nonBasic" nonBasicTypeName="WanFrameKind"/>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_COMMAND)"/>
+      <member name="command" id="10" type="nonBasic"  nonBasicTypeName= "control_command"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_TEAM_ASSIGNMENT)"/>
+      <member name="team_assignment" id="20" type="nonBasic"  nonBasicTypeName= "TeamAssignment"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_STATUS_MODE)"/>
+      <member name="status_mode" id="30" type="nonBasic"  nonBasicTypeName= "PlatformStatusMode"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_COMMAND_ACK)"/>
+      <member name="command_ack" id="40" type="nonBasic"  nonBasicTypeName= "control_command_ack"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_CONTACT_REPORT)"/>
+      <member name="contact_report" id="50" type="nonBasic"  nonBasicTypeName= "contact_report"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_ROUTER_CONFIG)"/>
+      <member name="router_config" id="60" type="nonBasic"  nonBasicTypeName= "RouterConfig"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_NAVIGATION)"/>
+      <member name="navigation" id="1010" type="nonBasic"  nonBasicTypeName= "platform_init_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_DATA)"/>
+      <member name="data" id="1020" type="nonBasic"  nonBasicTypeName= "platform_data"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_MISSION)"/>
+      <member name="mission" id="1030" type="nonBasic"  nonBasicTypeName= "platform_mission_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_WAYPOINT)"/>
+      <member name="waypoint" id="1040" type="nonBasic"  nonBasicTypeName= "platform_waypoint_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_DETAIL)"/>
+      <member name="detail" id="1050" type="nonBasic"  nonBasicTypeName= "platform_detail_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_DEBUG)"/>
+      <member name="debug" id="1060" type="nonBasic"  nonBasicTypeName= "platform_debug_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_THRUSTER)"/>
+      <member name="thruster" id="1070" type="nonBasic"  nonBasicTypeName= "platform_thruster_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_POWER)"/>
+      <member name="power" id="1080" type="nonBasic"  nonBasicTypeName= "platform_power_status"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_DIAGNOSTICS)"/>
+      <member name="diagnostics" id="1090" type="nonBasic"  nonBasicTypeName= "RouterDiagnostics"/>
+  </case>
+  <case>
+    <caseDiscriminator value="(WAN_FRAME_HEALTH)"/>
+      <member name="health" id="1100" type="nonBasic"  nonBasicTypeName= "RouterHealth"/>
+  </case>
+</union>
+<struct name= "WanFrame" extensibility= "mutable">
+  <member name="source_id" stringMaxLength="255" type="string" key="true"/>
+  <member name="original_topic" stringMaxLength="255" type="string" key="true"/>
+  <member name="instance_id" stringMaxLength="512" type="string" key="true"/>
+  <member name="schema_version" type="uint32"/>
+  <member name="source_role" stringMaxLength="255" type="string"/>
+  <member name="run_id" stringMaxLength="255" type="string"/>
+  <member name="session_id" type="uint64"/>
+  <member name="audit_sequence" type="uint64"/>
+  <member name="sent_at_ns" type="int64"/>
+  <member name="membership_revision" type="uint64"/>
+  <member name="audience" type="nonBasic"  nonBasicTypeName= "WanAudience"/>
+  <member name="payload" type="nonBasic"  nonBasicTypeName= "WanFramePayload"/>
+</struct>
 <struct name= "ControllerJournalRecord">
   <member name="target_node" stringMaxLength="255" type="string" key="true"/>
   <member name="target_router" stringMaxLength="255" type="string" key="true"/>

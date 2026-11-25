@@ -120,7 +120,8 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                                  dds::core::QosProvider wan_types,
                                  WanPresenceTransport* shared_status,
                                  dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_mesh_writer,
-                                 dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer)
+                                 dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer,
+                                 const WanCodec* shared_codec)
         : aws_(aws),
           node_name_(node_name),
           router_name_(router_name),
@@ -131,7 +132,8 @@ PresenceMonitor::PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
           shared_status_(shared_status),
           wan_publisher_(shared_status ? dds::core::null : dds::pub::Publisher(wan_participant)),
           wan_subscriber_(shared_status ? dds::core::null : dds::sub::Subscriber(wan_participant)),
-          status_codec_(wan_types == dds::core::null ? nullptr : new WanCodec(wan_types)),
+          status_codec_(shared_codec ? new WanCodec(*shared_codec)
+                        : wan_types == dds::core::null ? nullptr : new WanCodec(wan_types)),
           health_topic_(shared_status ? dds::core::null
                   : dds::topic::Topic<dds::core::xtypes::DynamicData>(
                           wan_participant, health_topic,

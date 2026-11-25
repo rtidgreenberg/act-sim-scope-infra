@@ -3,8 +3,9 @@
 ## Scope and setup
 
 This is the actual ACT Routing Service processor, freshly compiled from current
-source, with Control_20 and Platform_30/31. It uses full original structures in
-WanEvent/WanStatus, the six-topic IPv6 WAN contract, complete native monitoring,
+source, with Control_20 and Platform_30/31. Current source uses full original
+structures in the common schema-4 WanFrame type on the six IPv6 WAN topics,
+complete native monitoring,
 mission receive policy, two priority bands per writer and the shared nominal
 4 Mbps `act_rs` asynchronous flow controller.
 
@@ -15,6 +16,41 @@ All six families appear in the capture. Domains 110-113 and loopback run inside
 an owned container with no external network and private IPC.
 
 **No mesh, persistent binary or deployed QoS was changed.**
+
+The production source now defaults three-/six-topic Routing Service WAN writers
+to zlib, BEST_SPEED, threshold zero. This runner still applies explicit
+off/LZ4/zlib XML overrides for controlled comparisons. Historical reports retain
+their original matched source/configuration hashes; they are not rewritten.
+The numerical compression comparisons below used the earlier
+WanEvent/WanStatus contract, not the new common type.
+
+## Common-type production source gate (2026-11-25)
+
+`--production-defaults` now also verifies the six native topic/type
+advertisements, transient-local State writer/reader QoS, and live contact
+unregister/revival. After capturing and analyzing the measured workload and live
+lifecycle, it separately creates a filtered late State reader: two selected keys
+each replay exactly their latest complete value, while a third key is excluded.
+It then restarts the isolated source gateway, observes empty retained history
+for 1.5 seconds after all State matches, republishes and verifies recovery.
+The workload capture deliberately ends before these extra reader/restart checks;
+its original 18-writer attribution remains exact.
+
+Accepted local evidence:
+`debug/test_reports/common_wan_20261125/attempt3/report.json` and
+`debug/pcap/common_wan_20261125/attempt3-production.pcapng`.
+All four stages pass: 256 exact command/ACK pairs, 983 exact original
+deliveries, dispose/unregister/revival, final ALIVE peers, zero native errors and
+zero capture drops. The State follow-up passes without refreshing the original
+values before the late-reader check. The initial attempt exposed monitoring
+constructing its own old codec; production monitoring now copies the service
+codec. A second attempt passed the native assertions but incorrectly included
+the extra-reader/restart traffic in the fixed-18-writer capture oracle; separating
+the capture phases repairs that test boundary without weakening its checks.
+Earlier failed-attempt evidence is retained separately, not counted as green.
+
+This qualifies source only, not a deployment or new compression-performance
+comparison. Earlier two-/three-topic modes keep schema 3 and their original QoS.
 
 ## Baseline repairs
 
@@ -178,6 +214,29 @@ per-token debit formula. Fragment/header charging, rounding and coalescing,
 different fan-out, repairs under packet loss, sustained load and radio operation
 still require their own measurements. No production QoS, persistent binary or
 live mesh was changed.
+
+## Production-default six-topic baseline (2026-11-24)
+
+```bash
+python3 spikes/full_union_compression/launch.py --production-defaults
+```
+
+This separate mode leaves writer/reader data-representation settings untouched:
+no off/LZ4/zlib comparison overrides are appended. It verifies effective
+production zlib, asynchronous shared controller and priority channels using
+the actual ACT processor, three gateways and the six-topic IPv6 contract.
+It cannot be combined with `--token-accounting`.
+
+[The retained report](../../debug/test_reports/production_six_topic_20261124T223259Z/report.json)
+passed four workload stages, 256 exact command/ACK exchanges and 949 exact
+original deliveries. All 18 WAN writers/readers, ALIVE peers and contact
+dispose/revival passed; native errors and capture drops were zero.
+Worst observed command RTT across the stages was about 157 ms.
+
+This validates the current production-default configuration as a baseline for
+subscription work. It does not implement or qualify six-topic manual selection,
+EMANE/radio performance or the five live mission workflows. No persistent binary,
+deployment or live mesh was changed.
 
 ## Remaining limits
 

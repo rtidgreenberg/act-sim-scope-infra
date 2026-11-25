@@ -71,7 +71,7 @@ void validate_envelope(const dds::core::xtypes::DynamicType& type) {
 
 } // namespace
 
-const std::vector<WanMapping>& wan_mappings() {
+const std::vector<WanMapping>& wan_mappings(bool common_type) {
     static const std::vector<WanMapping> mappings{
         {"Mission", "control_command", "Event", "command", 1, "source", "wan_event"},
         {"Team", "TeamAssignment", "Event", "team_assignment", 2,
@@ -101,7 +101,14 @@ const std::vector<WanMapping>& wan_mappings() {
          "router", "wan_periodic"},
         {"RouterHealth", "RouterHealth", "Status", "health", 10, "router", "wan_periodic"}
     };
-    return mappings;
+    static const std::vector<WanMapping> common = [&] {
+        auto result = mappings;
+        for (auto& mapping : result) {
+            if (mapping.family == "Status") mapping.discriminator += 100;
+        }
+        return result;
+    }();
+    return common_type ? common : mappings;
 }
 
 WanMapping wan_transport_mapping(const std::string& topic, bool separate_contacts) {
@@ -121,8 +128,8 @@ std::string wan_transport_type(const std::string& family) {
     throw std::runtime_error("WAN codec: unknown transport family " + family);
 }
 
-const WanMapping& wan_mapping(const std::string& topic) {
-    for (const auto& mapping : wan_mappings()) {
+const WanMapping& wan_mapping(const std::string& topic, bool common_type) {
+    for (const auto& mapping : wan_mappings(common_type)) {
         if (topic == mapping.topic) {
             return mapping;
         }
@@ -132,9 +139,9 @@ const WanMapping& wan_mapping(const std::string& topic) {
 
 WanMapping wan_full_type_mapping(dds::core::QosProvider types,
         const std::string& topic, const std::string& type, const std::string& family,
-        const std::string& branch, const std::string& instance_field) {
+        const std::string& branch, const std::string& instance_field, bool common_type) {
     require(family == "Event" || family == "Status", "unsupported codec family " + family);
-    const auto envelope = types->type("Wan" + family);
+    const auto envelope = types->type(common_type ? "WanFrame" : "Wan" + family);
     require(envelope.kind() == dds::core::xtypes::TypeKind::STRUCTURE_TYPE,
             "expected envelope structure");
     const auto& payload = static_cast<const Struct&>(envelope).member("payload").type();
@@ -163,8 +170,8 @@ WanMapping wan_full_type_mapping(dds::core::QosProvider types,
 WanCodec::WanCodec(dds::core::QosProvider types)
     : WanCodec(std::move(types), wan_mappings()) {}
 
-WanCodec::WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mappings)
-    : types_(std::move(types)), mappings_(std::move(mappings)) {
+WanCodec::WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mappings, bool common_type)
+    : types_(std::move(types)), mappings_(std::move(mappings)), common_type_(common_type) {
     require(!mappings_.empty(), "empty binding registry");
     std::set<std::string> topics;
     std::set<std::pair<std::string, std::string>> branches;
@@ -176,13 +183,13 @@ WanCodec::WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mapping
         require(mapping.family == "Event" || mapping.family == "Status",
                 "unsupported codec family for " + mapping.topic);
         require(topics.insert(mapping.topic).second, "duplicate topic " + mapping.topic);
-        require(branches.emplace(mapping.family, mapping.branch).second,
+        require(branches.emplace(envelope_type(mapping), mapping.branch).second,
                 "duplicate union branch " + mapping.branch);
         const auto prepared = wan_full_type_mapping(types_, mapping.topic, mapping.type,
-                mapping.family, mapping.branch, mapping.instance_field);
+                mapping.family, mapping.branch, mapping.instance_field, common_type_);
         require(prepared.discriminator == mapping.discriminator,
                 "discriminator mismatch for " + mapping.topic);
-        for (const auto& builtin : wan_mappings()) {
+        for (const auto& builtin : wan_mappings(common_type_)) {
             if (mapping.topic != builtin.topic) continue;
             require(mapping.type == builtin.type && mapping.family == builtin.family &&
                     mapping.branch == builtin.branch &&
@@ -201,7 +208,7 @@ WanCodec::WanCodec(dds::core::QosProvider types, std::vector<WanMapping> mapping
                 "instance key capacity exceeds 512-byte envelope limit for " + mapping.topic);
         Data local(type);
         local.value<std::string>(mapping.instance_field);
-        Data frame(types_->type(std::string("Wan") + mapping.family));
+        Data frame(types_->type(envelope_type(mapping)));
         validate_envelope(frame.type());
         auto payload = frame.loan_value("payload");
         payload.get().value<Data>(mapping.branch, local);
@@ -219,8 +226,12 @@ const WanMapping& WanCodec::mapping(const std::string& topic) const {
     throw std::runtime_error("WAN codec: unmapped topic " + topic);
 }
 
+std::string WanCodec::envelope_type(const WanMapping& mapping) const {
+    return common_type_ ? "WanFrame" : "Wan" + mapping.family;
+}
+
 void WanCodec::validate_frame_type(const Data& frame, const WanMapping& mapping) const {
-    require(frame.type() == types_->type(std::string("Wan") + mapping.family),
+    require(frame.type() == types_->type(envelope_type(mapping)),
             "wrong envelope family/type for " + std::string(mapping.topic));
 }
 
@@ -229,7 +240,7 @@ Data WanCodec::key_frame(const std::string& topic, const Data& local,
     const auto& mapping = this->mapping(topic);
     require(local.type() == types_->type(mapping.type), "wrong input type for " + topic);
     require(!metadata.source_id.empty(), "empty source identity");
-    Data frame(types_->type(std::string("Wan") + mapping.family));
+    Data frame(types_->type(envelope_type(mapping)));
     frame.value<std::string>("source_id", metadata.source_id);
     frame.value<std::string>("original_topic", topic);
     frame.value<std::string>("instance_id",
@@ -242,7 +253,7 @@ Data WanCodec::pack(const std::string& topic, const Data& local,
     require(metadata.destination_ids.size() <= 16, "destination set exceeds 16-entry limit");
     const auto& mapping = this->mapping(topic);
     auto frame = key_frame(topic, local, metadata);
-    frame.value<uint32_t>("schema_version", 3);
+    frame.value<uint32_t>("schema_version", common_type_ ? 4 : 3);
     frame.value<std::string>("source_role", metadata.source_role);
     frame.value<std::string>("run_id", metadata.run_id);
     frame.value<uint64_t>("session_id", metadata.session_id);
@@ -265,7 +276,9 @@ Data WanCodec::pack(const std::string& topic, const Data& local,
 }
 
 WanDecoded WanCodec::unpack_key(const Data& frame) const {
-    require(frame.type() == types_->type("WanEvent") || frame.type() == types_->type("WanStatus"),
+    require(common_type_ ? frame.type() == types_->type("WanFrame")
+                         : frame.type() == types_->type("WanEvent") ||
+                           frame.type() == types_->type("WanStatus"),
             "unsupported envelope type");
     const auto topic = frame.value<std::string>("original_topic");
     const auto& mapping = this->mapping(topic);
@@ -284,7 +297,8 @@ WanDecoded WanCodec::unpack_key(const Data& frame) const {
 WanDecoded WanCodec::unpack(const Data& frame) const {
     auto decoded = unpack_key(frame);
     const auto& mapping = this->mapping(decoded.topic);
-    require(frame.value<uint32_t>("schema_version") == 3, "unsupported schema version");
+    require(frame.value<uint32_t>("schema_version") == (common_type_ ? 4u : 3u),
+            "unsupported schema version");
     const auto payload = frame.value<Data>("payload");
     require(payload.discriminator_value() == mapping.discriminator,
             "inactive or unknown branch for " + decoded.topic);

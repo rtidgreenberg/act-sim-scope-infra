@@ -71,13 +71,8 @@ static void fill_member(Data& data, const Index& index, const Type& type, uint32
     }
 }
 
-int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "Usage: test_wan_codec ActTypes.xml\n");
-        return 2;
-    }
-    dds::core::QosProvider types(argv[1]);
-    router::WanCodec codec(types);
+static void check_codec(dds::core::QosProvider types, bool common_type) {
+    router::WanCodec codec(types, router::wan_mappings(common_type), common_type);
     router::WanMetadata metadata;
     metadata.source_id = std::string(255, 'n');
     metadata.source_role = "platform";
@@ -100,7 +95,7 @@ int main(int argc, char** argv) {
         CHECK(std::string(router::wan_transport_mapping(topic, true).family)
               == router::wan_mapping(topic).family);
     }
-    for (const auto& mapping : router::wan_mappings()) {
+    for (const auto& mapping : router::wan_mappings(common_type)) {
         for (const bool three : {false, true}) {
             const auto transport = router::wan_transport_mapping(mapping.topic, three);
             CHECK(router::wan_transport_type(transport.family) == std::string("Wan") + mapping.family);
@@ -130,7 +125,9 @@ int main(int argc, char** argv) {
         CHECK(decoded.topic == mapping.topic);
         check_decoded(decoded.data, local);
         CHECK(frame.value<Data>("payload").value<Data>(mapping.branch) == local);
-        CHECK(frame.value<uint32_t>("schema_version") == 3);
+        CHECK(frame.type() == types->type(common_type ? "WanFrame" : "Wan" + mapping.family));
+        CHECK(frame.value<Data>("payload").discriminator_value() == mapping.discriminator);
+        CHECK(frame.value<uint32_t>("schema_version") == (common_type ? 4u : 3u));
         CHECK(frame.value<std::string>("original_topic") == mapping.topic);
         CHECK(frame.value<std::string>("source_id") == sample_metadata.source_id);
         CHECK(frame.value<std::string>("source_role") == metadata.source_role);
@@ -178,6 +175,8 @@ int main(int argc, char** argv) {
         rejected([&] { codec.unpack(corrupt); });
         corrupt.value<uint32_t>("schema_version", 2);
         rejected([&] { codec.unpack(corrupt); });
+        corrupt.value<uint32_t>("schema_version", common_type ? 3 : 4);
+        rejected([&] { codec.unpack(corrupt); });
         corrupt = frame;
         corrupt.value<std::string>("original_topic", "RemoteArbitraryTopic");
         rejected([&] { codec.unpack(corrupt); });
@@ -207,11 +206,18 @@ int main(int argc, char** argv) {
     invalid_metadata.source_id.clear();
     rejected([&] { codec.key_frame("PlatformStatus", nav, invalid_metadata); });
     auto frame = codec.pack("PlatformStatus", nav, metadata);
-    for (const auto& topic : {"", "Unknown", "Mission"}) {
+    for (const auto& topic : {"", "Unknown"}) {
         auto corrupt = frame;
         corrupt.value<std::string>("original_topic", topic);
         rejected([&] { codec.unpack_key(corrupt); });
     }
+    auto wrong_topic = frame;
+    wrong_topic.value<std::string>("original_topic", "Mission");
+    rejected([&] { codec.unpack(wrong_topic); });
+    if (!common_type) rejected([&] { codec.unpack_key(wrong_topic); });
+    Data other_schema(types->type(common_type ? "WanStatus" : "WanFrame"));
+    other_schema.value<std::string>("original_topic", "PlatformStatus");
+    rejected([&] { codec.unpack_key(other_schema); });
     Data contact(types->type("contact_report"));
     contact.value<std::string>("source", "untrusted-producer");
     contact.value<std::string>("contact_id", "contact-101");
@@ -243,10 +249,20 @@ int main(int argc, char** argv) {
     Data command(types->type("control_command"));
     command.set_values<uint8_t>("payload", std::vector<uint8_t>(8192, 255));
     CHECK(codec.unpack(codec.pack("Mission", command, metadata)).data == command);
-    // Compiled and XML-loaded envelope types must agree before either lane is wired.
+}
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::fprintf(stderr, "Usage: test_wan_codec ActTypes.xml\n");
+        return 2;
+    }
+    dds::core::QosProvider types(argv[1]);
+    check_codec(types, false);
+    check_codec(types, true);
     CHECK(types->type("WanEvent") == rti::topic::dynamic_type<WanEvent>::get());
     CHECK(types->type("WanStatus") == rti::topic::dynamic_type<WanStatus>::get());
-    std::printf("WAN codec: 15 complete payloads, metadata, keys and rejections; %d failures\n",
+    CHECK(types->type("WanFrame") == rti::topic::dynamic_type<WanFrame>::get());
+    std::printf("WAN codec: 16 complete payloads in both schemas, metadata, keys and rejections; %d failures\n",
                 failures);
     return failures ? 1 : 0;
 }

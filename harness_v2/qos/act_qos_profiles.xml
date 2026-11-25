@@ -1177,6 +1177,7 @@
 
     <qos_profile name="rs_six_topic_p2_state" base_name="ACT_QOS_LIB::rs_three_topic_state">
       <datawriter_qos>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
         <transport_priority><value>136</value></transport_priority>
         <multi_channel>
           <filter_name>DDSPRIFLTR</filter_name>
@@ -1186,6 +1187,9 @@
           </channels>
         </multi_channel>
       </datawriter_qos>
+      <datareader_qos>
+        <durability><kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind></durability>
+      </datareader_qos>
     </qos_profile>
 
     <qos_profile name="rs_six_topic_p2_periodic" base_name="ACT_QOS_LIB::rs_three_topic_periodic">

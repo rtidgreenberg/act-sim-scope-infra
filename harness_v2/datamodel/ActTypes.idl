@@ -627,6 +627,78 @@ struct WanStatus {
     WanStatusPayload payload;
 };
 
+// Six-topic WAN schema 4 uses one flat payload union on every physical topic.
+enum WanFrameKind {
+    WAN_FRAME_COMMAND = 1,
+    WAN_FRAME_TEAM_ASSIGNMENT = 2,
+    WAN_FRAME_STATUS_MODE = 3,
+    WAN_FRAME_COMMAND_ACK = 4,
+    WAN_FRAME_CONTACT_REPORT = 5,
+    WAN_FRAME_ROUTER_CONFIG = 6,
+    WAN_FRAME_NAVIGATION = 101,
+    WAN_FRAME_DATA = 102,
+    WAN_FRAME_MISSION = 103,
+    WAN_FRAME_WAYPOINT = 104,
+    WAN_FRAME_DETAIL = 105,
+    WAN_FRAME_DEBUG = 106,
+    WAN_FRAME_THRUSTER = 107,
+    WAN_FRAME_POWER = 108,
+    WAN_FRAME_DIAGNOSTICS = 109,
+    WAN_FRAME_HEALTH = 110
+};
+
+@mutable
+union WanFramePayload switch (WanFrameKind) {
+    case WAN_FRAME_COMMAND:
+        @id(10) control_command command;
+    case WAN_FRAME_TEAM_ASSIGNMENT:
+        @id(20) TeamAssignment team_assignment;
+    case WAN_FRAME_STATUS_MODE:
+        @id(30) PlatformStatusMode status_mode;
+    case WAN_FRAME_COMMAND_ACK:
+        @id(40) control_command_ack command_ack;
+    case WAN_FRAME_CONTACT_REPORT:
+        @id(50) contact_report contact_report;
+    case WAN_FRAME_ROUTER_CONFIG:
+        @id(60) RouterConfig router_config;
+    case WAN_FRAME_NAVIGATION:
+        @id(1010) platform_init_status navigation;
+    case WAN_FRAME_DATA:
+        @id(1020) platform_data data;
+    case WAN_FRAME_MISSION:
+        @id(1030) platform_mission_status mission;
+    case WAN_FRAME_WAYPOINT:
+        @id(1040) platform_waypoint_status waypoint;
+    case WAN_FRAME_DETAIL:
+        @id(1050) platform_detail_status detail;
+    case WAN_FRAME_DEBUG:
+        @id(1060) platform_debug_status debug;
+    case WAN_FRAME_THRUSTER:
+        @id(1070) platform_thruster_status thruster;
+    case WAN_FRAME_POWER:
+        @id(1080) platform_power_status power;
+    case WAN_FRAME_DIAGNOSTICS:
+        @id(1090) RouterDiagnostics diagnostics;
+    case WAN_FRAME_HEALTH:
+        @id(1100) RouterHealth health;
+};
+
+@mutable
+struct WanFrame {
+    @key string source_id;
+    @key string original_topic;
+    @key string<512> instance_id;
+    uint32 schema_version;
+    string source_role;
+    string run_id;
+    uint64 session_id;
+    uint64 audit_sequence;
+    int64 sent_at_ns;
+    uint64 membership_revision;
+    WanAudience audience;
+    WanFramePayload payload;
+};
+
 // ============================================================================
 // Controller Journal (D55/D56)
 // ============================================================================

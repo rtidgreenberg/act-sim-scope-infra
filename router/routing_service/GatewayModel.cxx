@@ -259,7 +259,7 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
             custom_mappings_[topic] = router::wan_full_type_mapping(
                 dds::core::QosProvider(config.types_xml_path), topic, required(binding, "type"),
                 family == "Event" || family == "State" ? "Event" : "Status",
-                required(binding, "branch"), required(binding, "instance_id"));
+                required(binding, "branch"), required(binding, "instance_id"), six_topic());
             custom_families_[topic] = family;
         }
         const auto mapping = builtin == catalog.end() ? custom_mappings_.at(topic) : *builtin;
@@ -328,7 +328,7 @@ GatewayModel::GatewayModel(const Properties& properties) : explicit_(true) {
     validate_receive_policy();
     update_teams(teams == properties.end() ? std::vector<std::string>{} : split(teams->second));
     validate_receive_policy();
-    router::WanCodec codec{dds::core::QosProvider(config.types_xml_path), codec_mappings()};
+    router::WanCodec codec{dds::core::QosProvider(config.types_xml_path), codec_mappings(), six_topic()};
 }
 
 GatewayModel::GatewayModel(const std::string& path, const std::string& role,
@@ -670,14 +670,15 @@ router::WanMapping GatewayModel::transport_mapping(const std::string& topic) con
 }
 
 std::vector<router::WanMapping> GatewayModel::codec_mappings() const {
-    if (custom_mappings_.empty()) return router::wan_mappings();
+    if (custom_mappings_.empty()) return router::wan_mappings(six_topic());
     std::set<std::string> topics;
     for (const auto& source : sources) topics.insert(source.first);
     for (const auto& destination : destinations) topics.insert(destination.first);
     std::vector<router::WanMapping> result;
     for (const auto& topic : topics) {
         const auto custom = custom_mappings_.find(topic);
-        result.push_back(custom == custom_mappings_.end() ? router::wan_mapping(topic) : custom->second);
+        result.push_back(custom == custom_mappings_.end()
+                ? router::wan_mapping(topic, six_topic()) : custom->second);
     }
     return result;
 }
@@ -687,6 +688,7 @@ std::string GatewayModel::transport_type(const std::string& family) const {
     if (std::find(supported.begin(), supported.end(), family) == supported.end()) {
         throw std::runtime_error("unsupported Routing Service WAN family: " + family);
     }
+    if (six_topic()) return "WanFrame";
     return (is_event_family(family) || is_state_family(family)) ? "WanEvent" : "WanStatus";
 }
 

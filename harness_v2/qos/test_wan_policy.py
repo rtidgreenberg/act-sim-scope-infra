@@ -35,6 +35,34 @@ class WanPolicyTests(unittest.TestCase):
 
 
 class NativeWanPolicyTests(unittest.TestCase):
+    def test_only_six_topic_state_retains_latest_per_key(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required")
+        provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
+        for profile in ("rs_six_topic_p1_event", "rs_six_topic_p1_periodic",
+                        "rs_six_topic_p2_event", "rs_six_topic_p2_state",
+                        "rs_six_topic_p2_periodic", "rs_six_topic_p3_periodic",
+                        "rs_three_topic_event", "rs_three_topic_state", "rs_three_topic_periodic",
+                        "rs_wan_event", "rs_wan_periodic", "wan_union_contacts",
+                        "lan_event", "lan_status"):
+            with self.subTest(profile=profile):
+                writer = provider.datawriter_qos_from_profile("ACT_QOS_LIB::" + profile)
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+                expected = (dds.DurabilityKind.TRANSIENT_LOCAL
+                            if profile == "rs_six_topic_p2_state" else dds.DurabilityKind.VOLATILE)
+                self.assertEqual(writer.durability.kind, expected)
+                self.assertEqual(reader.durability.kind, expected)
+                if profile == "rs_six_topic_p2_state":
+                    self.assertEqual(writer.history.kind, dds.HistoryKind.KEEP_LAST)
+                    self.assertEqual(writer.history.depth, 1)
+                    self.assertEqual(reader.history.kind, dds.HistoryKind.KEEP_ALL)
+                    self.assertEqual(writer.reliability.kind, dds.ReliabilityKind.RELIABLE)
+                    self.assertEqual(reader.reliability.kind, dds.ReliabilityKind.RELIABLE)
+
     def test_only_three_and_six_topic_rs_writers_enable_zlib(self):
         try:
             import rti.connextdds as dds

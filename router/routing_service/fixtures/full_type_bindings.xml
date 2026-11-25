@@ -67,5 +67,30 @@
       <member name="audience" type="nonBasic" nonBasicTypeName="WanAudience"/>
       <member name="payload" type="nonBasic" nonBasicTypeName="DeviceUpdates"/>
     </struct>
+    <union name="DevicePayload" extensibility="mutable">
+      <discriminator type="int32"/>
+      <case>
+        <caseDiscriminator value="41"/>
+        <member name="device_command" id="17" type="nonBasic" nonBasicTypeName="DeviceCommand"/>
+      </case>
+      <case>
+        <caseDiscriminator value="73"/>
+        <member name="device_status" id="29" type="nonBasic" nonBasicTypeName="DeviceStatus"/>
+      </case>
+    </union>
+    <struct name="WanFrame" extensibility="mutable">
+      <member name="source_id" type="string" stringMaxLength="255" key="true"/>
+      <member name="original_topic" type="string" stringMaxLength="255" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="512" key="true"/>
+      <member name="schema_version" type="uint32"/>
+      <member name="source_role" type="string" stringMaxLength="255"/>
+      <member name="run_id" type="string" stringMaxLength="255"/>
+      <member name="session_id" type="uint64"/>
+      <member name="audit_sequence" type="uint64"/>
+      <member name="sent_at_ns" type="int64"/>
+      <member name="membership_revision" type="uint64"/>
+      <member name="audience" type="nonBasic" nonBasicTypeName="WanAudience"/>
+      <member name="payload" type="nonBasic" nonBasicTypeName="DevicePayload"/>
+    </struct>
   </types>
 </dds>

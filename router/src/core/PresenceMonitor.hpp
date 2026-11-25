@@ -166,6 +166,7 @@ public:
     // participant (a control node, or any config without one) — then team_partition is
     // always empty, same as "no team".
     // wan_types selects the Status envelope; null retains the legacy RouterHealth topic.
+    // shared_codec is copied to keep service monitoring on its exact wire catalog.
     PresenceMonitor(rti::core::cond::AsyncWaitSet &aws,
                     dds::domain::DomainParticipant wan_participant,
                     dds::domain::DomainParticipant lan_participant,
@@ -181,7 +182,8 @@ public:
                     dds::core::QosProvider wan_types = dds::core::null,
                     WanPresenceTransport* shared_status = nullptr,
                     dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_mesh_writer = dds::core::null,
-                    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer = dds::core::null);
+                    dds::pub::DataWriter<dds::core::xtypes::DynamicData> service_diagnostics_writer = dds::core::null,
+                    const WanCodec* shared_codec = nullptr);
 
     ~PresenceMonitor();
 

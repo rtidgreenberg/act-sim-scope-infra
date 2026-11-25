@@ -30,6 +30,24 @@ across forced termination; use the owned harness lifecycle for cleanup.
 
 ## Active work handoff: two-topic WAN refactor (2026-11-09)
 
+**2026-11-25 source-only common six-topic type:** all six WAN names now use
+schema-4 `WanFrame` with one flat sixteen-branch payload union. P2_State alone
+uses transient-local WAN writer/reader durability; writer KEEP_LAST(1), reader
+KEEP_ALL, original LAN structures/keys, audiences, priorities, compression and
+pacing remain unchanged. Two-/three-topic modes keep schema 3, old types and
+original State durability. Monitoring copies the service codec. Rebuild
+consumers/regenerate six-topic bundles together before adoption.
+Fresh private gates pass 10 C++ targets, 53 QoS/configuration/native-binding
+checks and the unchanged three-topic health/RTT/team-filter case, with no skips.
+The actual production-default IPv6 run passes 256 exact command/ACK pairs,
+983 exact originals, 18 native writer/reader pairs, ALIVE peers, live
+dispose/unregister/revival and selected latest-per-key State replay. Source
+restart clears retained State; republish recovers. Final errors/drops are zero.
+No persistent binary, live mesh or deployment was changed. Do not infer in-place
+CFT replay, persistent storage, LAN late-join recovery or production Inventory/
+manual-subscription integration. See migration-plan §3.56 and accepted local
+`debug/test_reports/common_wan_20261125/attempt3/report.json`.
+
 **2026-11-24 source-only production zlib:** three-/six-topic Routing Service WAN
 writer profiles enable ZLIB, BEST_SPEED, threshold zero. LAN, custom-router,
 legacy/two-topic and reader QoS remain unchanged. Native comparison verifies

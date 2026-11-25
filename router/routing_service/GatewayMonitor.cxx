@@ -34,7 +34,7 @@ GatewayMonitor::GatewayMonitor(Route& route, GatewayModel& model, router::WanCod
             waitset_, writer.publisher().participant(), mesh.publisher().participant(),
             model_.config.node_name, model_.config.router_name, reader.qos(), writer.qos(),
             mesh.qos(), diagnostics.qos(), dds::core::null, writer.topic().name(),
-            "ActRouterMeshStatus", types, this, mesh, diagnostics));
+            "ActRouterMeshStatus", types, this, mesh, diagnostics, &codec_));
     links_.reset(new router::LinkStatsCollector(
             route_.output<Data>("monitor_links").dds_data_writer(),
             model_.config.node_name + "/" + model_.config.router_name, model_.wan.name,
