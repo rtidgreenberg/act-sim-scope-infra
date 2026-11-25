@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="Report">
+      <member name="sequence" type="long"/>
+      <member name="timestamp" type="longLong"/>
+      <member name="values" type="double" sequenceMaxLength="16"/>
+    </struct>
+    <struct name="TopicEntry">
+      <member name="topic" type="string" stringMaxLength="64"/>
+      <member name="type_name" type="string" stringMaxLength="64"/>
+      <member name="family" type="string" stringMaxLength="16"/>
+      <member name="matched" type="boolean"/>
+    </struct>
+    <struct name="Inventory">
+      <member name="session" type="long"/>
+      <member name="revision" type="long"/>
+      <member name="entries" type="nonBasic" nonBasicTypeName="TopicEntry" sequenceMaxLength="8"/>
+    </struct>
+    <struct name="Selection">
+      <member name="request_id" type="string" stringMaxLength="64"/>
+      <member name="session" type="long"/>
+      <member name="revision" type="long"/>
+      <member name="mode" type="string" stringMaxLength="16"/>
+      <member name="topics" type="string" stringMaxLength="64" sequenceMaxLength="3"/>
+    </struct>
+    <struct name="Applied">
+      <member name="session" type="long"/>
+      <member name="revision" type="long"/>
+      <member name="snapshot_sequence" type="longLong"/>
+      <member name="mode" type="string" stringMaxLength="16"/>
+      <member name="mission" type="string" stringMaxLength="16"/>
+      <member name="team" type="string" stringMaxLength="16"/>
+      <member name="topics" type="string" stringMaxLength="64" sequenceMaxLength="3"/>
+      <member name="user_topics" type="string" stringMaxLength="64" sequenceMaxLength="3"/>
+      <member name="protected_topics" type="string" stringMaxLength="64" sequenceMaxLength="3"/>
+      <member name="request_id" type="string" stringMaxLength="64"/>
+      <member name="accepted" type="boolean"/>
+      <member name="confirmed" type="boolean"/>
+      <member name="error" type="string" stringMaxLength="256"/>
+    </struct>
+    <struct name="LocalMission">
+      <member name="phase" type="string" stringMaxLength="16"/>
+      <member name="sequence" type="longLong"/>
+    </struct>
+    <union name="Payload">
+      <discriminator type="long"/>
+      <case><caseDiscriminator value="17"/><member name="report" type="nonBasic" nonBasicTypeName="Report"/></case>
+      <case><caseDiscriminator value="42"/><member name="inventory" type="nonBasic" nonBasicTypeName="Inventory"/></case>
+      <case><caseDiscriminator value="63"/><member name="selection" type="nonBasic" nonBasicTypeName="Selection"/></case>
+      <case><caseDiscriminator value="81"/><member name="applied" type="nonBasic" nonBasicTypeName="Applied"/></case>
+    </union>
+    <struct name="SubscriptionFrame">
+      <member name="source" type="string" stringMaxLength="64" key="true"/>
+      <member name="original_topic" type="string" stringMaxLength="64" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="64" key="true"/>
+      <member name="destination" type="string" stringMaxLength="64"/>
+      <member name="team" type="string" stringMaxLength="16"/>
+      <member name="payload" type="nonBasic" nonBasicTypeName="Payload"/>
+    </struct>
+  </types>
+</dds>

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Subscription spike</title>
+<style>
+body { font: 16px sans-serif; background: #172631; color: #ddd; margin: 24px; }
+svg { width: 450px; height: 110px; } circle { fill: #245d7a; cursor: pointer; }
+text { fill: white; pointer-events: none; }
+label { display: block; margin: 12px 0; } button { padding: 8px; margin: 8px; }
+#status { white-space: pre-wrap; } [hidden] { display: none; }
+</style>
+<h1>Isolated topic subscription graph</h1>
+<svg aria-label="Router graph">
+  <line x1="80" y1="50" x2="340" y2="50" stroke="gray"/>
+  <circle cx="80" cy="50" r="40"/><text x="45" y="55">Source A</text>
+  <circle id="boat" cx="340" cy="50" r="40"/><text x="313" y="55">Boat B</text>
+</svg>
+<section id="panel" hidden>
+  <h2>Boat B subscriptions</h2>
+  <p id="mode"></p><p id="subscribed"></p>
+  <h3>Available topics</h3><div id="available"></div>
+  <button id="apply">Apply selection</button><button id="auto">Return to mission selection</button>
+  <p id="status" role="status"></p>
+</section>
+<script>
+let snapshot, signature, selectionRevision, pending = false, available = false;
+let pollSequence = 0, pendingResult;
+const topics = ["ContactReport", "PlatformMissionStatus", "PlatformStatus"];
+document.getElementById("boat").onclick = () => {
+  document.getElementById("panel").hidden = false;
+};
+async function refresh() {
+  const poll = ++pollSequence;
+  const nextSnapshot = await window.nativeState();
+  if (poll !== pollSequence) return;
+  if (!nextSnapshot?.applied || !nextSnapshot?.inventory) {
+    throw new Error("No authoritative subscription state");
+  }
+  snapshot = nextSnapshot;
+  available = true;
+  const applied = snapshot.applied;
+  if (pendingResult && (applied.session !== pendingResult.session ||
+      applied.snapshot_sequence >= pendingResult.snapshot_sequence)) {
+    pending = false;
+    pendingResult = undefined;
+  }
+  document.getElementById("apply").disabled = pending || !applied.confirmed;
+  document.getElementById("auto").disabled = pending || !applied.confirmed;
+  const revision = `${applied.session}/${applied.revision}`;
+  const draft = revision === selectionRevision ? new Map(
+    [...document.querySelectorAll("input")].map(input => [input.value, input.checked])) : new Map();
+  selectionRevision = revision;
+  const next = JSON.stringify([applied, snapshot.inventory]);
+  if (signature === next) return;
+  signature = next;
+  document.getElementById("mode").textContent =
+    `Selection: ${applied.mode}; mission: ${applied.mission}; revision: ${applied.revision}`;
+  document.getElementById("subscribed").textContent = applied.confirmed ?
+    `Subscribed topics: ${applied.topics.join(", ") || "(none optional)"}` :
+    "Subscribed topics: unavailable (native filters diverged)";
+  document.getElementById("apply").disabled = pending || !applied.confirmed;
+  document.getElementById("auto").disabled = pending || !applied.confirmed;
+  document.getElementById("available").replaceChildren(...topics.map(topic => {
+    const label = document.createElement("label"), input = document.createElement("input");
+    input.type = "checkbox"; input.value = topic; input.id = topic;
+    input.checked = draft.has(topic) ? draft.get(topic) : applied.topics.includes(topic);
+    input.disabled = applied.protected_topics.includes(topic);
+    input.dataset.userSelected = String(applied.user_topics.includes(topic));
+    const entry = snapshot.inventory.entries.find(entry => entry.topic === topic);
+    label.append(input, `${topic} — ${entry?.matched ? "producer matched" : "producer unavailable"}`);
+    return label;
+  }));
+  document.getElementById("status").textContent = applied.error ||
+    (!applied.confirmed ? "Native state unconfirmed: reconciliation required" :
+      pending ? "Waiting for native applied-state confirmation" : "Native state confirmed");
+}
+async function submit(mode) {
+  if (!available || pending || !snapshot.applied.confirmed) return;
+  pending = true;
+  document.getElementById("apply").disabled = true;
+  document.getElementById("auto").disabled = true;
+  document.getElementById("status").textContent = "Waiting for native applied-state confirmation";
+  const request = { session: snapshot.applied.session, revision: snapshot.applied.revision,
+    mode, topics: mode === "Auto" ? [] :
+      [...document.querySelectorAll("input")].filter(input =>
+        input.disabled ? input.dataset.userSelected === "true" : input.checked)
+        .map(input => input.value) };
+  try {
+    const result = await window.nativeSelect(request);
+    if (!result.accepted) throw new Error(result.error);
+    signature = undefined;
+    pendingResult = result;
+    await refresh();
+  } catch (error) {
+    pending = false;
+    pendingResult = undefined;
+    document.getElementById("apply").disabled = !available || !snapshot.applied.confirmed;
+    document.getElementById("auto").disabled = !available || !snapshot.applied.confirmed;
+    document.getElementById("status").textContent = `Selection failed: ${error.message}`;
+  }
+}
+document.getElementById("apply").onclick = () => submit("User");
+document.getElementById("auto").onclick = () => submit("Auto");
+function unavailable(error) {
+  available = false;
+  signature = undefined;
+  document.getElementById("apply").disabled = true;
+  document.getElementById("auto").disabled = true;
+  document.getElementById("subscribed").textContent = "Subscribed topics: unavailable (state disconnected)";
+  document.getElementById("status").textContent = `State unavailable: ${error.message}`;
+}
+refresh().catch(unavailable);
+setInterval(() => refresh().catch(unavailable), 250);
+</script>
+</html>

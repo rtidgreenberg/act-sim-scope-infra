@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(topic_subscription_spike LANGUAGES CXX)
+list(APPEND CMAKE_MODULE_PATH "$ENV{NDDSHOME}/resource/cmake")
+find_package(RTIConnextDDS "7.7.0" REQUIRED COMPONENTS core routing_service)
+add_library(subscription_processor SHARED processor.cxx)
+target_compile_features(subscription_processor PRIVATE cxx_std_11)
+target_compile_options(subscription_processor PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(subscription_processor PRIVATE RTIConnextDDS::routing_service_cpp2)
