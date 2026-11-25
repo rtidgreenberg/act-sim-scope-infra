@@ -30,6 +30,18 @@ across forced termination; use the owned harness lifecycle for cleanup.
 
 ## Active work handoff: two-topic WAN refactor (2026-11-09)
 
+**2026-11-24 source-only production zlib:** three-/six-topic Routing Service WAN
+writer profiles enable ZLIB, BEST_SPEED, threshold zero. LAN, custom-router,
+legacy/two-topic and reader QoS remain unchanged. Native comparison verifies
+only these nine writers differ across 235 resolved QoS results. Fresh private
+qualification passes 10 C++ targets, 41 WAN-policy/configuration checks and two
+whole-payload forwarding cases. A separate four-stage full six-topic run removes
+all spike representation overrides, verifies the production defaults, 18 WAN
+pairs, ALIVE peers, exact originals and contact dispose/revival, with observed
+zlib wire traffic, zero native errors and zero capture drops. Regenerate prepared
+bundles before adoption; no persistent binary, live mesh or deployment is changed.
+See [the native XML guide](../router/routing_service/README.md).
+
 **2026-11-24 source-only Periodic QoS naming:** the base/shared/RS profiles and
 configuration alias now use `wan_periodic`, `wan_union_periodic` and
 `rs_wan_periodic`. Best-effort Periodic readers omit preemptive-NACK suppression;

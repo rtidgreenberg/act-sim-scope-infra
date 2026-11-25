@@ -1018,9 +1018,17 @@
       </datawriter_qos>
     </qos_profile>
 
-    <!-- Three-topic Routing Service writers: physical Event, State and Periodic. -->
+    <!-- Three-topic Routing Service writers: physical Event, State and Periodic.
+         Zlib applies only to these writers and their six-topic descendants. -->
     <qos_profile name="rs_three_topic_event" base_name="ACT_QOS_LIB::wan_three_topic_event">
       <datawriter_qos>
+        <representation>
+          <compression_settings>
+            <compression_ids>ZLIB</compression_ids>
+            <writer_compression_level>BEST_SPEED</writer_compression_level>
+            <writer_compression_threshold>0</writer_compression_threshold>
+          </compression_settings>
+        </representation>
         <publish_mode>
           <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
         </publish_mode>
@@ -1036,6 +1044,13 @@
 
     <qos_profile name="rs_three_topic_state" base_name="ACT_QOS_LIB::wan_union_contacts">
       <datawriter_qos>
+        <representation>
+          <compression_settings>
+            <compression_ids>ZLIB</compression_ids>
+            <writer_compression_level>BEST_SPEED</writer_compression_level>
+            <writer_compression_threshold>0</writer_compression_threshold>
+          </compression_settings>
+        </representation>
         <publish_mode>
           <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>
         </publish_mode>
@@ -1051,6 +1066,13 @@
 
     <qos_profile name="rs_three_topic_periodic" base_name="ACT_QOS_LIB::wan_union_periodic">
       <datawriter_qos>
+        <representation>
+          <compression_settings>
+            <compression_ids>ZLIB</compression_ids>
+            <writer_compression_level>BEST_SPEED</writer_compression_level>
+            <writer_compression_threshold>0</writer_compression_threshold>
+          </compression_settings>
+        </representation>
         <publish_mode>
           <kind>ASYNCHRONOUS_PUBLISH_MODE_QOS</kind>
           <flow_controller_name>dds.flow_controller.token_bucket.act_rs</flow_controller_name>

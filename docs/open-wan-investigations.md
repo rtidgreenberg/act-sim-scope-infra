@@ -54,6 +54,9 @@ sustained load and radio capacity remain unqualified. No deployment occurred.
 
 **Investigation and acceptance checks:**
 
+- Production source now enables the tested zlib/BEST_SPEED/threshold-zero
+  settings on three-/six-topic Routing Service WAN writers only. This is not a
+  deployment or closure of the remaining load/loss/radio investigations.
 - Compare uncompressed, LZ4 and zlib using the actual processor and effective
   XML profiles. Verify compression, asynchronous publishing, controller
   assignment and priority bands together, not just XML intent.

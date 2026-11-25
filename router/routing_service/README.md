@@ -79,6 +79,24 @@ and renderer checks pass, with no skips.
 
 ## Runtime correctness safeguards
 
+**2026-11-24 source-only production compression:** the three-topic Routing
+Service WAN writer profiles now enable zlib, `BEST_SPEED`, threshold `0`.
+All six-topic WAN writers inherit these settings. LAN, custom-router and
+legacy/two-topic writer profiles are unchanged. Connext 7.7's default WAN
+readers already advertise zlib support; their QoS is unchanged. A reader that
+explicitly excludes zlib cannot match these compressed writers.
+Regenerate prepared XML bundles before adoption. No persistent binary or mesh
+is rebuilt, restarted or deployed by this source change. Compression does not
+replace the outstanding sustained-load, loss/recovery and radio gates.
+Qualification passes a fresh private build and all 10 C++ targets, 41 native
+WAN-policy/configuration checks, and two whole-payload processor forwarding
+cases (unchanged two-topic and compressed three-topic). A separate four-stage
+six-topic run uses production defaults with no spike representation overrides:
+18 writer/reader pairs, both peers ALIVE, exact originals, contact dispose/revive,
+observed zlib wire traffic, zero native errors and zero capture drops. All 235
+resolved QoS comparisons confirm that only compression on the nine intended WAN
+writer profiles changed.
+
 The isolated [LBED spike](../../spikes/routing_service_lbed/README.md) verifies
 native Routing Service forwarding of fixed binary envelopes on three WAN topics
 with either classic SPDP + LBED or SPDP2 + LBED, with zero SEDP exchanges.

@@ -35,6 +35,45 @@ class WanPolicyTests(unittest.TestCase):
 
 
 class NativeWanPolicyTests(unittest.TestCase):
+    def test_only_three_and_six_topic_rs_writers_enable_zlib(self):
+        try:
+            import rti.connextdds as dds
+        except ModuleNotFoundError as error:
+            if error.name not in ("rti", "rti.connextdds"):
+                raise
+            self.skipTest("Installed Connext binding required")
+        provider = dds.QosProvider(str(Path(__file__).with_name("act_qos_profiles.xml")))
+        compressed = (
+            "rs_three_topic_event", "rs_three_topic_state", "rs_three_topic_periodic",
+            "rs_six_topic_p1_event", "rs_six_topic_p1_periodic",
+            "rs_six_topic_p2_event", "rs_six_topic_p2_state",
+            "rs_six_topic_p2_periodic", "rs_six_topic_p3_periodic",
+        )
+        for profile in compressed:
+            with self.subTest(profile=profile):
+                writer = provider.datawriter_qos_from_profile("ACT_QOS_LIB::" + profile)
+                reader = provider.datareader_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertEqual(writer.data_representation.compression_settings.compression_ids,
+                                 dds.CompressionIdMask.ZLIB)
+                settings = ET.fromstring(writer.to_string(print_all=True)).find(
+                    "representation/compression_settings")
+                self.assertEqual(settings.findtext("writer_compression_level"), "1")
+                self.assertEqual(settings.findtext("writer_compression_threshold"), "0")
+                self.assertEqual(reader.data_representation.compression_settings.compression_ids
+                                 & dds.CompressionIdMask.ZLIB, dds.CompressionIdMask.ZLIB)
+                self.assertEqual(writer.publish_mode.kind, dds.PublishModeKind.ASYNCHRONOUS)
+                self.assertEqual(writer.publish_mode.flow_controller_name,
+                                 "dds.flow_controller.token_bucket.act_rs")
+                self.assertEqual(len(writer.multi_channel.channels), 2)
+        for profile in ("lan_event", "lan_status", "wan_event", "wan_periodic",
+                        "wan_three_topic_event", "wan_union_contacts", "wan_union_periodic",
+                        "rs_wan_event", "rs_wan_periodic"):
+            with self.subTest(uncompressed=profile):
+                writer = provider.datawriter_qos_from_profile("ACT_QOS_LIB::" + profile)
+                self.assertEqual(
+                    ET.fromstring(writer.to_string(print_all=True)).findtext(
+                        "representation/compression_settings/compression_ids"), "MASK_NONE")
+
     def test_wan_discovery_responses_span_one_second(self):
         try:
             import rti.connextdds as dds
