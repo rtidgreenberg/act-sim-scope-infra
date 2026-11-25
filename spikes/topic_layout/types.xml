@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<dds>
+  <types>
+    <struct name="Command">
+      <member name="operation" type="string" stringMaxLength="64"/>
+      <member name="arguments" type="octet" sequenceMaxLength="64"/>
+    </struct>
+    <struct name="Report">
+      <member name="values" type="double" sequenceMaxLength="16"/>
+    </struct>
+    <struct name="Inventory">
+      <member name="topics" type="string" stringMaxLength="64" sequenceMaxLength="8"/>
+    </struct>
+    <union name="Payload">
+      <discriminator type="long"/>
+      <case><caseDiscriminator value="17"/><member name="command" type="nonBasic" nonBasicTypeName="Command"/></case>
+      <case><caseDiscriminator value="42"/><member name="report" type="nonBasic" nonBasicTypeName="Report"/></case>
+      <case><caseDiscriminator value="81"/><member name="inventory" type="nonBasic" nonBasicTypeName="Inventory"/></case>
+    </union>
+    <struct name="Frame">
+      <member name="source" type="string" stringMaxLength="32" key="true"/>
+      <member name="instance_id" type="string" stringMaxLength="64" key="true"/>
+      <member name="sample_class" type="long"/>
+      <member name="sequence" type="long"/>
+      <member name="payload" type="nonBasic" nonBasicTypeName="Payload"/>
+    </struct>
+  </types>
+</dds>
